@@ -7,14 +7,22 @@
 #
 # One live region, and it is the transcript. A turn in flight is the only thing on this console
 # that changes without somebody doing anything, so it is the only thing that asks again: the
-# transcript replaces itself every second while it is waiting on an answer, and carries no poll
+# transcript asks for itself once a second while it is waiting on an answer, and carries no poll
 # at all once it has one. A console with nothing running makes no requests.
+#
+# The chrome that navigates the conversation (the search, the key, the dock) is deliberately
+# *outside* that region, so a swap cannot take a control away mid-press and nothing has to be
+# rebuilt a second later. What the chrome projects back onto the transcript (search marks, the
+# panel a reader landed on, which kinds are set aside) is reapplied after each swap by the script,
+# which holds that state as values rather than reading it back out of the markup.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
+from typing import assert_never
 
 from without_html import DOCTYPE
 from without_html import Element
@@ -24,22 +32,30 @@ from without_html import article
 from without_html import aside
 from without_html import body
 from without_html import button
+from without_html import dd
+from without_html import details
 from without_html import div
+from without_html import dl
+from without_html import dt
 from without_html import form
 from without_html import h1
 from without_html import head
 from without_html import header
 from without_html import html
+from without_html import input_
 from without_html import li
 from without_html import link
 from without_html import main
 from without_html import meta
 from without_html import option
 from without_html import p
+from without_html import pre
 from without_html import render
 from without_html import script
+from without_html import section
 from without_html import select
 from without_html import span
+from without_html import summary
 from without_html import textarea
 from without_html import time
 from without_html import title
@@ -48,8 +64,14 @@ from without_web import Reversible
 from without_web import url_for
 
 from mainplate.agent import Choice
-from mainplate.conversation import Exchange
+from mainplate.conversation import Block
+from mainplate.conversation import Kind
+from mainplate.conversation import Panel
+from mainplate.conversation import Prose
+from mainplate.conversation import Reasoning
+from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
+from mainplate.markup import as_markup
 from mainplate.profiles import Config
 from mainplate.profiles import Profile
 from mainplate.service import Conversation
@@ -59,19 +81,56 @@ from mainplate.sessions import Session
 # that takes seconds, so this is short enough to feel like an answer arriving rather than a page
 # refreshing. It costs nothing when nothing is pending, because a settled transcript carries no
 # trigger at all.
-WAITING = "load delay:1s"
+#
+# `every` and not `load delay:1s`, and the difference is not a preference. A `load` trigger fires
+# once per element load, so it repeated only because each answer *replaced* the region and the
+# replacement loaded. Morphing keeps the element, which is the whole point of it, so a `load` poll
+# fires exactly once and a conversation waits forever on an answer that has already arrived. An
+# interval belongs to the element rather than to its arrival, and htmx cancels it when the
+# attribute goes, which is what a settled transcript comes back without.
+WAITING = "every 1s"
 
-# What every swap of the transcript does, which is to replace the region whole and put the reader
-# at the newest thing in it. `scroll:bottom` on the poll as well as on the send, because the
-# answer arriving is exactly the moment the column grows and the reader is looking at the wrong
-# part of it. The cost is that scrolling up to reread something while a reply is in flight is
-# undone on the next poll, which is a second or so; a wait long enough for that to matter is the
-# thing to fix rather than the scroll.
-SWAP: Final = "outerHTML scroll:bottom"
+# What every swap of the transcript does. `outerMorph` rather than `outerHTML`, because the server
+# renders the whole conversation on every poll and a wholesale replacement would throw away
+# everything a reader had done to it: a tool call they had unfolded, the search marks laid over it,
+# the panel they had landed on, and the caret if it were ever in there. Morphing merges the new
+# markup into the DOM already on screen, so a panel that did not change is not touched, and an
+# attribute the new markup omits (the poll's own trigger, when a turn has been answered) is removed
+# rather than left behind. The server stays a pure function of the checkpoint either way, which is
+# the property worth keeping: it is the swap that got cleverer, not the endpoint.
+SWAP: Final = "outerMorph"
+
+# What a send does, which is the same merge plus a scroll: a message just typed is the one thing a
+# reader definitely wants to be looking at, and unlike the poll this cannot fight somebody reading
+# further up, because they were typing. The poll carries no scroll at all; following the end is the
+# dock's to offer and the reader's to switch off.
+SEND_SWAP: Final = "outerMorph scroll:bottom"
 
 TRANSCRIPT_ID: Final = "transcript"
 
 MODEL_ID: Final = "model"
+
+SENDING_ID: Final = "sending"
+
+# What each kind of panel is called where a person reads it: the role label on the panel, and the
+# chip in the key that governs it. One mapping, so the legend and the thing it is a legend for
+# cannot come to disagree about what a kind is called.
+NAMES: Final[tuple[tuple[Kind, str], ...]] = (
+    ("person", "you"),
+    ("thinking", "thinking"),
+    ("assistant", "assistant"),
+    ("tool", "tool"),
+)
+
+# Which side of the exchange a kind is on: what reached the model, and what the model produced.
+# The dock's flanking arrows step one side each, and the palette runs on this same axis, so it is
+# stated once here rather than in both places.
+SIDES: Final[dict[Kind, str]] = {
+    "person": "person",
+    "assistant": "model",
+    "thinking": "model",
+    "tool": "model",
+}
 
 # What a session is called before anyone has said anything in it, and what the tab says on the
 # page where a session does not exist yet.
@@ -128,9 +187,14 @@ class Links:
         return f"{self.assets}/{name}"
 
 
-def document(links: Links, heading: str, children: Node) -> str:
+def document(links: Links, heading: str, children: Node, session: str | None = None) -> str:
     """
     The whole document, which every page is this with something different in the middle.
+
+    `session` is on the body because what the reader has decided about a conversation (which kinds
+    they set aside, which calls they unfolded, whether they are following the end) belongs to that
+    conversation and to no other. Every session on this console shares one origin, so a store not
+    scoped by it would be one conversation's state imposed on all of them.
 
     The stylesheet and htmx are served from this process rather than from a CDN. The reason that
     matters most here is the last one anybody thinks of: a coding agent is pointed at a
@@ -141,6 +205,11 @@ def document(links: Links, heading: str, children: Node) -> str:
     htmx is a plain blocking script tag, which is what the library asks for: `defer`,
     `type="module"`, and injecting it over AJAX are all documented as unreliable, and the failure
     is a page where no attribute does anything.
+
+    The console's own script is blocking and in the head for a different reason: it pins the
+    reader's chosen theme on `<html>` before the first paint, so a page opened dark does not flash
+    light on the way there. Everything else it does waits for the document, which it arranges
+    itself rather than by being deferred.
     """
     return render(
         [
@@ -156,9 +225,10 @@ def document(links: Links, heading: str, children: Node) -> str:
                             link(attrs={"rel": "icon", "href": "data:,"}),
                             link(attrs={"rel": "stylesheet", "href": links.to_asset("mainplate.css")}),
                             script(attrs={"src": links.to_asset("htmx.min.js")}),
+                            script(attrs={"src": links.to_asset("mainplate.js")}),
                         ]
                     ),
-                    body(children=children),
+                    body(attrs={"data-session": session}, children=children),
                 ],
             ),
         ]
@@ -219,6 +289,11 @@ def profile_select(links: Links, config: Config) -> Element:
     profile asks for that profile's models and replaces the select next to this one. Without a
     browser the form still posts, carrying whatever models the page was rendered with, and the
     handler refuses a pair no profile offers.
+
+    `outerHTML` and deliberately not the `outerMorph` the transcript uses. Morphing preserves what
+    a control already holds, which is exactly right for a conversation being reread and exactly
+    wrong here: the whole point of this swap is that the model list is now a *different* list, and
+    a merge would keep a selection the new profile may not even offer.
     """
     return select(
         attrs={
@@ -256,33 +331,150 @@ def chosen_note(chosen: Choice | None) -> Element:
     return span(cls=("picker", "settled"), children=f"{chosen.profile} \N{MIDDLE DOT} {chosen.model}")
 
 
-def bubble(who: str, said: str) -> Element:
+def written(text: str) -> Element:
     """
-    One thing somebody said.
+    Prose, as the Markdown its author almost certainly meant it to be.
 
-    The text is a child, so it is escaped: what the model wrote is not markup, and rendering it
-    as markup would let a model that echoed a prompt back put a script on this page. Turning it
-    into Markdown is a later decision, and it is the one that has to be made carefully rather
-    than by default.
+    `as_markup` is what makes putting this in a child position safe, and it is the only reason
+    this is not simply escaped text: it renders the Markdown and then throws away everything the
+    result is not allowed to contain, so a model that echoed a prompt back cannot put a script or
+    a `javascript:` link on this page. See `markup.py` for why both halves of that are needed.
     """
-    return article(cls=("said", who), children=p(cls="text", children=said))
+    return div(cls="text", children=as_markup(text))
 
 
-def waiting_bubble() -> Element:
-    return article(cls=("said", "assistant", "waiting"), children=p(cls="text", children="\N{HORIZONTAL ELLIPSIS}"))
+def working() -> Element:
+    """
+    Three dots that say something is still happening.
+
+    Not an `hx-indicator`: those show while a *request* is in flight, and this is the opposite
+    case, a fact read off the checkpoint that holds however many polls it takes. The two are drawn
+    alike because a reader is being told the same thing.
+    """
+    return span(
+        cls="waiting",
+        attrs={"role": "status", "aria-label": "working"},
+        children=[span(), span(), span()],
+    )
 
 
-def exchange(said: Exchange) -> tuple[Element, Element]:
-    return bubble("person", said.prompt), bubble("assistant", said.reply)
+def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
+    """
+    One call, folded, with what it was handed and what it gave back.
+
+    Folded because a call's arguments and its output are context a reader reaches for rather than
+    prose they read through, and a real `<details>` because that is what works with no script at
+    all and what the dock's fold controls act on.
+
+    The id is the panel's own plus this block's place in it, which is stable for the same reason
+    the panel's anchor is: a turn is rendered only once its messages are recorded, so the blocks
+    inside a panel never change afterwards. The script needs it to put a reader's unfolded calls
+    back after a swap, since the server renders `open` for one state only and morphing removes an
+    attribute the new markup does not carry.
+
+    A call with no result is drawn open and working. Today that means a turn whose run ended
+    between the call and its return, because a turn is written to the checkpoint whole; when the
+    turn in flight becomes readable from its own model steps, this is already what it looks like.
+    """
+    return details(
+        cls="tool",
+        attrs={"id": f"{anchor}-tool-{at}", "open": used.returned is None},
+        children=[
+            summary(
+                children=[
+                    span(cls="tool__name", children=used.tool),
+                    working()
+                    if used.returned is None
+                    else span(
+                        cls="tool__outcome",
+                        attrs={"data-outcome": used.returned.outcome},
+                        children=used.returned.outcome,
+                    ),
+                ]
+            ),
+            dl(
+                cls="tool__body",
+                children=[
+                    dt(children="called with"),
+                    dd(children=pre(children=used.arguments)),
+                    *(
+                        ()
+                        if used.returned is None
+                        else (dt(children="returned"), dd(children=pre(children=used.returned.content)))
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+def block_element(block: Block, anchor: str, at: int) -> Element:
+    match block:
+        case Prose(text=text):
+            return div(cls=("block", "block--text"), children=written(text))
+        case Reasoning(text=text):
+            return div(cls=("block", "block--thinking"), children=written(text))
+        case ToolUse():
+            return div(cls=("block", "block--tool"), children=tool_block(block, anchor, at))
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def panel_element(panel: Panel) -> Element:
+    """
+    One run of one kind of thing, with the facts about it above it.
+
+    `data-kind` and `data-side` are the whole of what the chrome needs to know: the key filters by
+    kind, the dock's flanking arrows step by side, and the stylesheet draws the edge from the same
+    attribute. Nothing has to keep a list of selectors in step with a list of kinds.
+    """
+    return article(
+        cls="panel",
+        attrs={
+            "id": panel.anchor,
+            "data-kind": panel.kind,
+            "data-side": SIDES[panel.kind],
+            "data-turn": str(panel.turn),
+        },
+        children=[
+            header(
+                cls="panel__meta",
+                children=[
+                    span(cls="panel__role", children=dict(NAMES)[panel.kind]),
+                    a(
+                        cls="panel__anchor",
+                        attrs={"href": f"#{panel.anchor}"},
+                        children=f"#{panel.turn}",
+                    ),
+                ],
+            ),
+            *(block_element(block, panel.anchor, at) for at, block in enumerate(panel.blocks)),
+        ],
+    )
+
+
+def waiting_panel() -> Element:
+    """
+    One panel for however many messages are outstanding, because one reply is what is actually
+    being written: the turns behind it are queued, not in flight.
+    """
+    return article(
+        cls="panel",
+        attrs={"id": "waiting", "data-kind": "assistant", "data-side": "model"},
+        children=[
+            header(cls="panel__meta", children=span(cls="panel__role", children="assistant")),
+            div(cls=("block", "block--text"), children=working()),
+        ],
+    )
 
 
 def transcript_region(links: Links, session: str, said: Transcript, stalled: str | None = None) -> Element:
     """
     The conversation, and whether it is still asking for the rest of it.
 
-    The trigger is on the region itself and the swap is `outerHTML`, so an answer replaces this
-    element attributes and all: a transcript that has been answered comes back carrying no
-    trigger, which is how the polling stops. Nothing has to be told to stop it.
+    The trigger is on the region itself, so a transcript that has been answered comes back
+    carrying no trigger and the polling stops. Nothing has to be told to stop it: morphing removes
+    an attribute the new markup does not have, exactly as replacement did.
 
     A refusal or a fault is refused a swap. htmx 4 swaps every status but `204` and `304`, so
     what a poll does with an error is this page's decision rather than the library's default, and
@@ -298,23 +490,201 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
             "hx-status:4xx": "swap:none",
             "hx-status:5xx": "swap:none",
         }
-        if said.pending and stalled is None
+        if said.awaiting and stalled is None
         else {}
     )
-    spoken: list[Element] = []
-    for each in said.exchanges:
-        spoken.extend(exchange(each))
-    # One waiting bubble for however many messages are outstanding, because one reply is what is
-    # actually being written: the turns behind it are queued, not in flight.
-    spoken.extend(bubble("person", each) for each in said.pending)
-    if said.pending and stalled is None:
-        spoken.append(waiting_bubble())
+    drawn: list[Element] = [panel_element(panel) for panel in said.panels]
+    if said.awaiting and stalled is None:
+        drawn.append(waiting_panel())
     if stalled is not None:
-        spoken.append(p(cls="stalled", children=stalled))
+        drawn.append(p(cls="stalled", children=stalled))
     return div(
         cls="transcript",
         attrs={"id": TRANSCRIPT_ID, **polling},
-        children=spoken or p(cls="empty", children="Ask it something."),
+        children=drawn or p(cls="empty", children="Ask it something."),
+    )
+
+
+def search_card() -> Element:
+    """
+    A field that marks every match in the conversation and steps through them.
+
+    Its own card, and no `hx-` attribute anywhere on it: searching what is already on the page is
+    not a question for the server, and asking one would mean a round trip per keystroke to render
+    a conversation the browser is already holding.
+    """
+    return div(
+        cls="search",
+        children=[
+            input_(
+                cls="search__input",
+                attrs={"type": "search", "placeholder": "find", "aria-label": "Find in conversation"},
+            ),
+            div(
+                cls="search__bar",
+                children=[
+                    span(cls="search__count", attrs={"role": "status"}),
+                    button(
+                        cls="search__nav",
+                        attrs={
+                            "type": "button",
+                            "data-search": "prev",
+                            "aria-label": "Previous match",
+                            "disabled": True,
+                        },
+                        children="\N{UPWARDS ARROW}",
+                    ),
+                    button(
+                        cls="search__nav",
+                        attrs={"type": "button", "data-search": "next", "aria-label": "Next match", "disabled": True},
+                        children="\N{DOWNWARDS ARROW}",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+def key_card() -> Element:
+    """
+    Which kinds are in play, and the legend for every edge in the margin at the same time.
+
+    Every kind is listed whether or not the conversation currently holds one, because this is a
+    legend before it is a filter: a key that grew a row the first time the model reasoned would be
+    a control that moved under the reader's hand. The search and the dock both read it, so a
+    reader says once what they are looking through rather than once per control that looks.
+    """
+    return div(
+        cls="key",
+        children=[
+            button(
+                cls="key__chip",
+                attrs={"type": "button", "data-kind": kind, "aria-pressed": "true"},
+                children=name,
+            )
+            for kind, name in NAMES
+        ],
+    )
+
+
+def dock_button(cls: str | None, label: str, glyph: str, attrs: dict[str, str]) -> Element:
+    return button(
+        cls=("dock__btn", cls),
+        attrs={"type": "button", "aria-label": label, "title": label, **attrs},
+        children=glyph,
+    )
+
+
+def dock_card() -> Element:
+    """
+    Stepping, leaping, folding, and following: everything that moves a reader through a session.
+
+    Three columns of arrows, because the conversation has two sides and a reader usually wants one
+    of them: the flanking columns step what a person said and what the model produced, in each
+    one's own hue, and the middle column steps every panel the key leaves in play.
+    """
+    return div(
+        cls="dock",
+        children=[
+            div(
+                cls="dock__nav",
+                children=[
+                    dock_button(
+                        "dock__btn--person",
+                        "Previous message of yours",
+                        "\N{UPWARDS ARROW}",
+                        {"data-step": "-1", "data-side": "person"},
+                    ),
+                    dock_button(None, "Previous panel", "\N{UPWARDS ARROW}", {"data-step": "-1"}),
+                    dock_button(
+                        "dock__btn--assistant",
+                        "Previous panel from the model",
+                        "\N{UPWARDS ARROW}",
+                        {"data-step": "-1", "data-side": "model"},
+                    ),
+                    dock_button(
+                        "dock__btn--person",
+                        "Next message of yours",
+                        "\N{DOWNWARDS ARROW}",
+                        {"data-step": "1", "data-side": "person"},
+                    ),
+                    dock_button(None, "Next panel", "\N{DOWNWARDS ARROW}", {"data-step": "1"}),
+                    dock_button(
+                        "dock__btn--assistant",
+                        "Next panel from the model",
+                        "\N{DOWNWARDS ARROW}",
+                        {"data-step": "1", "data-side": "model"},
+                    ),
+                ],
+            ),
+            div(
+                cls="dock__leap",
+                children=[
+                    dock_button(None, "To the start", "\N{UPWARDS ARROW TO BAR}", {"data-leap": "start"}),
+                    dock_button(None, "To the end", "\N{DOWNWARDS ARROW TO BAR}", {"data-leap": "end"}),
+                    # A mode rather than a jump, so it says whether it is on: while it is, the end
+                    # stays pinned as answers arrive, and scrolling away is what switches it off.
+                    dock_button(
+                        "dock__btn--follow",
+                        "Follow the end",
+                        "\N{BLACK DOWN-POINTING TRIANGLE}",
+                        {"data-follow": "toggle", "aria-pressed": "true"},
+                    ),
+                ],
+            ),
+            div(
+                cls="dock__fold",
+                children=[
+                    dock_button(None, "Unfold every tool call", "\N{DOWNWARDS DOUBLE ARROW}", {"data-fold": "open"}),
+                    dock_button(None, "Fold every tool call", "\N{UPWARDS DOUBLE ARROW}", {"data-fold": "shut"}),
+                ],
+            ),
+        ],
+    )
+
+
+def theme_card() -> Element:
+    """
+    What the console is read by. Three states, because "follow the machine" is a choice too and a
+    two-way toggle silently takes it away from anybody who had it.
+    """
+    return div(
+        cls="theme",
+        attrs={"role": "group", "aria-label": "Theme"},
+        children=[
+            button(attrs={"type": "button", "data-theme-choice": choice}, children=label)
+            for choice, label in (("light", "day"), ("system", "auto"), ("dark", "night"))
+        ],
+    )
+
+
+def rail() -> Element:
+    """
+    Everything that navigates the conversation, in one column outside the region that swaps.
+
+    Outside deliberately. The transcript is replaced whenever an answer arrives, and a control
+    living inside it would be rebuilt under a reader's finger, lose its focus, and forget what
+    they had typed into it. What the rail *projects* onto the transcript survives instead by being
+    reapplied after each swap, which is the script's job.
+
+    The clasp comes first so that on a window too narrow to stand the rail beside the conversation
+    it is left where the cards' head was, and the cards slide off. Which width that is stays the
+    stylesheet's to say.
+    """
+    return section(
+        cls="rail",
+        attrs={"aria-label": "Conversation controls"},
+        children=[
+            button(
+                cls="rail__clasp",
+                attrs={"type": "button", "aria-expanded": "false", "aria-label": "Conversation controls"},
+                children="\N{EQUALS SIGN}",
+            ),
+            search_card(),
+            key_card(),
+            dock_card(),
+            theme_card(),
+        ],
     )
 
 
@@ -338,12 +708,18 @@ def composer(action: str, beneath: Element, *, live: bool, refusing: bool = Fals
 
     The reset is on `after:swap` rather than on `after:request`, so the box empties when the
     conversation on screen has actually taken the message rather than when the request left.
+
+    `hx-indicator` names what is shown while the post is in flight, which is a different thing
+    from the working dots in the transcript: this one says *your message has not landed yet*, and
+    it is over in a round trip. The one in the transcript says the model has not answered yet, and
+    is read off the checkpoint rather than off a request.
     """
     driving = (
         {
             "hx-post": action,
             "hx-target": f"#{TRANSCRIPT_ID}",
-            "hx-swap": SWAP,
+            "hx-swap": SEND_SWAP,
+            "hx-indicator": f"#{SENDING_ID}",
             "hx-on:htmx:after:swap": "this.reset()",
             "hx-disable": "find button, find textarea",
             # A refusal is not a transcript, so it must not become one. The box is `required`, so
@@ -376,17 +752,34 @@ def composer(action: str, beneath: Element, *, live: bool, refusing: bool = Fals
                     button(attrs={"type": "submit", "disabled": refusing}, children="Send"),
                 ],
             ),
-            beneath,
+            div(
+                cls="row",
+                children=[
+                    beneath,
+                    span(
+                        cls=("sending", "htmx-indicator"),
+                        attrs={"id": SENDING_ID, "role": "status"},
+                        children="sending\N{HORIZONTAL ELLIPSIS}",
+                    ),
+                ],
+            ),
         ],
     )
 
 
-def shell(links: Links, listed: tuple[Session, ...], showing: str | None, pane: Sequence[Element]) -> Element:
+def shell(
+    links: Links,
+    listed: tuple[Session, ...],
+    showing: str | None,
+    pane: Sequence[Element],
+    aside_rail: Iterable[Element] = (),
+) -> Element:
     return div(
         cls="shell",
         children=[
             sidebar(links, listed, showing),
             main(children=[header(children=h1(children="mainplate")), *pane]),
+            *aside_rail,
         ],
     )
 
@@ -407,7 +800,7 @@ def start_page(links: Links, listed: tuple[Session, ...], config: Config) -> str
             listed,
             showing=None,
             pane=[
-                transcript_region(links, session="", said=Transcript(exchanges=(), pending=())),
+                transcript_region(links, session="", said=Transcript(panels=(), awaiting=False, turns=0)),
                 composer(links.to_start(), picker(links, config), live=False),
             ],
         ),
@@ -448,7 +841,12 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     refusing=stalled is not None,
                 ),
             ],
+            # Only where there is a conversation to navigate. On the page where a session does not
+            # exist yet every control in it would be pointed at an empty transcript, which is a
+            # row of dead buttons rather than an offer.
+            aside_rail=[rail()],
         ),
+        session=showing.session.id,
     )
 
 

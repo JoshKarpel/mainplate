@@ -7,10 +7,15 @@ from typing import Never
 import pytest
 from conftest import DEFAULT_CHOICE
 from conftest import Provider
+from pydantic_ai.messages import BinaryContent
+from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ThinkingPart
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from without_durability.interfaces import claimed
 from without_durability.stepwise import Completed
@@ -20,23 +25,43 @@ from without_durability.stepwise import Waiting
 from without_durability.stepwise import resume
 
 from mainplate.conversation import CHOICE_KEY
-from mainplate.conversation import Exchange
 from mainplate.conversation import NeverStarted
+from mainplate.conversation import Panel
+from mainplate.conversation import Prose
 from mainplate.conversation import Reached
+from mainplate.conversation import Reasoning
+from mainplate.conversation import Returned
+from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
+from mainplate.conversation import blocks_of
 from mainplate.conversation import conversing
 from mainplate.conversation import messages_key
+from mainplate.conversation import panelled
 from mainplate.conversation import parse_prompt
 from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
-from mainplate.conversation import replied
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
 from mainplate.durability import stepping
 from mainplate.service import Service
 
 SESSION = "a-session"
+
+
+def spoken(said: Transcript) -> list[tuple[str, str]]:
+    """
+    A transcript as who said what, in order.
+
+    The tests below are about a session being answered rather than about how a panel is cut, so
+    they assert on this rather than on whole `Panel` values; the cutting has its own tests above.
+    """
+    return [
+        (panel.kind, block.text)
+        for panel in said.panels
+        for block in panel.blocks
+        if isinstance(block, Prose | Reasoning)
+    ]
 
 
 async def started(service: Service, said: str, session: str = SESSION) -> None:
@@ -85,12 +110,16 @@ class TestReadingACheckpoint:
         assert [type(message) for message in at.history] == [ModelRequest, ModelResponse, ModelRequest, ModelResponse]
 
     def test_an_empty_checkpoint_is_an_empty_transcript(self) -> None:
-        assert transcript({}) == Transcript(exchanges=(), pending=())
+        assert transcript({}) == Transcript(panels=(), awaiting=False, turns=0)
 
-    def test_a_prompt_with_no_answer_yet_is_pending(self) -> None:
-        assert transcript({prompt_key(0): "what is it"}) == Transcript(exchanges=(), pending=("what is it",))
+    def test_a_prompt_with_no_answer_yet_is_the_persons_panel_and_a_turn_still_awaited(self) -> None:
+        assert transcript({prompt_key(0): "what is it"}) == Transcript(
+            panels=(Panel(turn=0, at=0, kind="person", blocks=(Prose(text="what is it"),)),),
+            awaiting=True,
+            turns=1,
+        )
 
-    def test_an_answered_turn_is_an_exchange(self) -> None:
+    def test_an_answered_turn_is_the_question_and_the_answer_as_two_panels(self) -> None:
         recorded = {
             prompt_key(0): "what is it",
             messages_key(0): [
@@ -99,20 +128,94 @@ class TestReadingACheckpoint:
             ],
         }
         assert transcript(recorded) == Transcript(
-            exchanges=(Exchange(prompt="what is it", reply="a mainplate"),), pending=()
+            panels=(
+                Panel(turn=0, at=0, kind="person", blocks=(Prose(text="what is it"),)),
+                Panel(turn=0, at=1, kind="assistant", blocks=(Prose(text="a mainplate"),)),
+            ),
+            awaiting=False,
+            turns=1,
         )
 
-    def test_a_reply_is_every_response_the_turn_produced(self) -> None:
+    def test_a_panel_is_a_run_of_one_kind_in_the_order_the_model_worked(self) -> None:
+        """Reasoning, then a call, then the answer: three panels in that sequence, not one of each hoisted."""
         turn: list[ModelMessage] = [
-            ModelRequest(parts=[UserPromptPart(content="ask")]),
-            ModelResponse(parts=[TextPart("first")]),
-            ModelResponse(parts=[TextPart("second")]),
+            ModelRequest(parts=[UserPromptPart(content="go")]),
+            ModelResponse(parts=[ThinkingPart(content="have a look"), ToolCallPart("read", {"path": "x"}, "c1")]),
+            ModelRequest(parts=[ToolReturnPart("read", "the body", "c1")]),
+            ModelResponse(parts=[TextPart("it says hello")]),
         ]
-        assert replied(turn) == "first\n\nsecond"
+        assert tuple(panelled(3, blocks_of(turn))) == (
+            Panel(turn=3, at=1, kind="thinking", blocks=(Reasoning(text="have a look"),)),
+            Panel(
+                turn=3,
+                at=2,
+                kind="tool",
+                blocks=(
+                    ToolUse(
+                        tool="read",
+                        arguments='{"path":"x"}',
+                        returned=Returned(outcome="success", content="the body"),
+                    ),
+                ),
+            ),
+            Panel(turn=3, at=3, kind="assistant", blocks=(Prose(text="it says hello"),)),
+        )
+
+    def test_a_call_with_no_result_recorded_is_still_out(self) -> None:
+        """The run ended between the call and its return, which is what a reader has to be able to see."""
+        turn: list[ModelMessage] = [ModelResponse(parts=[ToolCallPart("grep", {"q": "z"}, "c9")])]
+        assert blocks_of(turn) == (ToolUse(tool="grep", arguments='{"q":"z"}', returned=None),)
+
+    def test_a_failed_call_carries_why_rather_than_a_bare_flag(self) -> None:
+        """
+        What the *model* was handed, which for a failure is the error wrapped as Pydantic AI wraps
+        it. A transcript showing something the model never saw would be a second account of the
+        turn rather than a reading of it.
+        """
+        turn: list[ModelMessage] = [
+            ModelResponse(parts=[ToolCallPart("write", {}, "c2")]),
+            ModelRequest(parts=[ToolReturnPart("write", "no such directory", "c2", outcome="failed")]),
+        ]
+        assert blocks_of(turn) == (
+            ToolUse(
+                tool="write",
+                arguments="{}",
+                returned=Returned(outcome="failed", content='{"error":"no such directory"}'),
+            ),
+        )
+
+    def test_a_part_this_console_cannot_draw_is_passed_over_rather_than_refused(self) -> None:
+        """A provider adding a part kind must not break a console that never asked for one."""
+        turn: list[ModelMessage] = [
+            ModelResponse(parts=[FilePart(content=BinaryContent(b"\x00", media_type="image/png")), TextPart("and")])
+        ]
+        assert blocks_of(turn) == (Prose(text="and"),)
 
     def test_a_prompt_that_is_not_text_is_refused_rather_than_rendered(self) -> None:
         with pytest.raises(TypeError):
             parse_prompt({"content": "nice try"})
+
+
+class TestChoosingATurn:
+    def test_the_first_message_goes_into_the_first_turn(self) -> None:
+        assert transcript({}).turns == 0
+
+    def test_a_message_after_an_answer_goes_into_the_next_turn(self) -> None:
+        recorded = {
+            prompt_key(0): "a",
+            messages_key(0): [{"kind": "response", "parts": [{"part_kind": "text", "content": "b"}]}],
+        }
+        assert transcript(recorded).turns == 1
+
+    def test_a_slot_already_asked_in_is_spoken_for_even_unanswered(self) -> None:
+        """Otherwise a second message posted while the first is in flight would overwrite it."""
+        recorded = {
+            prompt_key(0): "a",
+            messages_key(0): [{"kind": "response", "parts": [{"part_kind": "text", "content": "b"}]}],
+            prompt_key(1): "c",
+            prompt_key(2): "d",
+        }
+        assert transcript(recorded).turns == 3
 
 
 class TestAnsweringASession:
@@ -133,9 +236,9 @@ class TestAnsweringASession:
     ) -> None:
         await started(service, said="hello")
         assert await pass_at(service, conversing(provider.agents())) == Waiting(key=prompt_key(1))
-        assert transcript(await service.checkpointer.load(SESSION)) == Transcript(
-            exchanges=(Exchange(prompt="hello", reply="answer 1"),), pending=()
-        )
+        said = transcript(await service.checkpointer.load(SESSION))
+        assert spoken(said) == [("person", "hello"), ("assistant", "answer 1")]
+        assert not said.awaiting
 
     async def test_a_later_pass_replays_the_recorded_answer_rather_than_asking_again(
         self, service: Service, provider: Provider
@@ -156,10 +259,12 @@ class TestAnsweringASession:
         await service.say(SESSION, turn=1, said="again")
         await pass_at(service, body)
         assert provider.asked == 2
-        assert transcript(await service.checkpointer.load(SESSION)).exchanges == (
-            Exchange(prompt="hello", reply="answer 1"),
-            Exchange(prompt="again", reply="answer 2"),
-        )
+        assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
+            ("person", "hello"),
+            ("assistant", "answer 1"),
+            ("person", "again"),
+            ("assistant", "answer 2"),
+        ]
 
     async def test_a_pass_that_died_after_the_model_answered_does_not_ask_it_again(
         self, service: Service, provider: Provider
@@ -201,9 +306,11 @@ class TestAnsweringASession:
         await started(service, said="second session", session="two")
         await pass_at(service, body, session="one")
         await pass_at(service, body, session="two")
-        assert transcript(await service.checkpointer.load("one")).exchanges == (
-            Exchange(prompt="first session", reply="answer 1"),
-        )
-        assert transcript(await service.checkpointer.load("two")).exchanges == (
-            Exchange(prompt="second session", reply="answer 2"),
-        )
+        assert spoken(transcript(await service.checkpointer.load("one"))) == [
+            ("person", "first session"),
+            ("assistant", "answer 1"),
+        ]
+        assert spoken(transcript(await service.checkpointer.load("two"))) == [
+            ("person", "second session"),
+            ("assistant", "answer 2"),
+        ]

@@ -41,6 +41,13 @@ session index (`sessions.py`) is the one row per session that exists, because
 *not* a copy of changing state, because a session is named after its first message and nothing
 ever renames it.
 
+The console's `localStorage` is the other thing that looks like an exception and is not. It holds
+only what a *reader* decided (the theme, which kinds are set aside, which calls are unfolded,
+whether they are following the end), never a word of the conversation, so a browser with it wiped
+renders exactly what one without it does. It is keyed by session id, and that scoping is
+load-bearing rather than tidy: every session shares one origin, so an unscoped key would be one
+conversation's folds imposed on all of them.
+
 ## The key scheme
 
 One key for the session and three per turn, written by four different places and read by three:
@@ -158,6 +165,41 @@ the conversation *and* take away the trigger that would have recovered it.
 Pages are `without-html` node trees, pure functions of already-answered questions. A page and the
 fragment inside it are the same function called at two depths, which is what stops the two
 renderings from disagreeing.
+
+The transcript swaps with **`outerMorph`**, and two things follow from that:
+
+- **The poll is `every 1s`, never `load`.** A `load` trigger fires once per element *load*, so it
+  repeated only because each answer replaced the region. Morphing keeps the element, so a `load`
+  poll fires exactly once and the conversation then waits forever on an answer that already
+  arrived, with nothing on the page saying so. The failure is invisible to a markup assertion,
+  because the markup is identical either way; `test_console.py` pins the trigger for that reason.
+- **A reader's own changes survive an answer arriving.** Morphing merges rather than replaces, so
+  an unfolded tool call, the caret, and a scroll position are not thrown away once a second. The
+  server still renders the whole conversation from the checkpoint, which is the property worth
+  keeping: the swap got cleverer, not the endpoint.
+
+The rail (search, key, dock, theme) lives **outside** the region that swaps, so no control is
+rebuilt under a reader's finger. What it projects back *onto* the transcript — search marks, the
+panel landed on, which kinds are set aside, which calls are unfolded — cannot live in the markup
+either, so `assets/mainplate.js` holds it as values and reapplies it after every swap. That
+projection is one idempotent `repaint()` serving the first render, every swap, and every press.
+Everything it drives is an enhancement: with the file absent the page still renders, posts, polls,
+and folds.
+
+A message is **rendered Markdown, then sanitised**, in `markup.py`. Both halves are required.
+Python-Markdown passes raw HTML through untouched and never looks at URL schemes, so
+`<script>alert(1)</script>` and `[x](javascript:alert(1))` reach the page from a plain `convert`;
+`nh3` is what stops them. Do not drop it because the text "comes from the model": a reply is shaped
+by whatever was pasted into the box, and this project's direction is an agent that reads
+repositories.
+
+A turn is read out of the checkpoint as **panels of blocks**, not as a question-and-answer pair.
+A block is prose, reasoning, or a call with its result; a panel is a run of blocks of one kind, and
+it is what the page draws a coloured edge down. The palette runs on one axis and every kind takes
+its side from it: cool is what reached the model (the person), warm is what the model produced (its
+answer, its reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue
+decided by that rather than chosen for it. A part kind `blocks_of` has no rendering for is passed
+over rather than refused, because the provider and Pydantic AI are both free to add one.
 
 Tests drive the app through `without-http`'s in-memory loopback client (`tests/calling.py`), so
 nothing binds a port and the suite parallelizes. The `app` fixture deliberately runs the console

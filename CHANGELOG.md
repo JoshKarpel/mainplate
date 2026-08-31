@@ -18,6 +18,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   script or a test.
 - `mainplate serve`, which runs the console and the worker that answers its sessions over one
   SQLite file.
+- A conversation read as panels of blocks, so reasoning and a tool call each get their own panel
+  and their own colour beside the answer they belong to. Messages are rendered as Markdown and
+  sanitised before they reach the page.
+- A rail beside the conversation: find-and-step search, a key that filters and doubles as the
+  colour legend, a dock that jumps between the two sides of the exchange and folds every tool call,
+  a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement; with
+  JavaScript off the console still renders, posts, and folds.
 - `mainplate install` and `mainplate uninstall`, which converge and remove a user systemd unit
   pointing at the interpreter that ran them. Any `MAINPLATE_*` setting lives in an
   `EnvironmentFile` created `0600` on the first install and never overwritten.

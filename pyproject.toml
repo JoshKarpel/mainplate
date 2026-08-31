@@ -43,6 +43,8 @@ dependencies = [
     "pydantic>=2.12",
     "pydantic-settings>=2.13",
     "typer>=0.27",
+    "markdown>=3.7",
+    "nh3>=0.2.18",
 ]
 
 [project.scripts]
@@ -88,6 +90,7 @@ dev = [
     "mypy>=2.3.0",
     "ruff>=0.15.22",
     "pre-commit>=4.4",
+    "types-markdown>=3.7",
 ]
 
 [tool.pytest.ini_options]

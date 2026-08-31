@@ -35,15 +35,24 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import groupby
+from typing import Literal
 from typing import Never
+from typing import assert_never
 
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import RetryPromptPart
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ThinkingPart
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.run import AgentRunResult
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
@@ -155,39 +164,175 @@ def reached(recorded: Mapping[str, object]) -> Reached:
     return Reached(turn=turn, history=tuple(history))
 
 
-@dataclass(frozen=True, slots=True)
-class Exchange:
-    """One thing asked and the answer it got, as the page shows it."""
+# What became of a call, as Pydantic AI's own `ToolReturnPart` states it. Carried rather than
+# reduced to a boolean, because the three ways a call can fail to succeed are different things to
+# read: a tool that raised, one a person refused, and one that was cut off partway.
+type Outcome = Literal["success", "failed", "denied", "interrupted"]
 
-    prompt: str
-    reply: str
+# Which pigment a panel is drawn in, and the axis the palette runs on: `person` is what reached the
+# model and the rest is what it produced. A new kind takes its side from that rather than a colour
+# chosen for it.
+type Kind = Literal["person", "assistant", "thinking", "tool"]
+
+
+@dataclass(frozen=True, slots=True)
+class Prose:
+    """Something said in words: the person's message, or the model's own answer."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Reasoning:
+    """What the model worked through on the way to an answer."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Returned:
+    """What a call came back with, which exists only once it has come back."""
+
+    outcome: Outcome
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolUse:
+    """
+    A call the model made, and its result once there is one.
+
+    `returned is None` is the whole of "still out", rather than a separate flag beside a result
+    that would then have to be kept in step with it. It is also the only thing on this console
+    that is genuinely in flight *within* a turn, so it is what a spinner is drawn from.
+    """
+
+    tool: str
+    arguments: str
+    returned: Returned | None
+
+
+type Block = Prose | Reasoning | ToolUse
+
+
+@dataclass(frozen=True, slots=True)
+class Panel:
+    """
+    A run of blocks of one kind, which is the unit the page draws an edge down.
+
+    `at` is the panel's position within its turn, so a panel's identity is `turn` and `at` and
+    nothing else. That is what a permalink can be built on: a turn's panels only ever grow at the
+    end, where a position in the whole transcript would shift under a reader whenever an earlier
+    turn they had typed past was answered.
+    """
+
+    turn: int
+    at: int
+    kind: Kind
+    blocks: tuple[Block, ...]
+
+    @property
+    def anchor(self) -> str:
+        return f"panel-{self.turn}-{self.at}"
 
 
 @dataclass(frozen=True, slots=True)
 class Transcript:
     """
-    A conversation as a reader sees it: what has been answered, and what is still being answered.
+    A conversation as a reader sees it, and whether anything is still being answered.
 
-    `pending` is honestly a separate field rather than an `Exchange` with an empty reply, because
-    the two are different states and the page renders them differently: one is a finished
-    exchange, the other is a question with a spinner under it and a poll that will replace it.
+    `awaiting` is not derivable from the panels, which is why it is a field: a turn with a message
+    and no answer looks exactly like an answered turn whose model said nothing. It is what decides
+    whether the page polls, so it is read from the checkpoint rather than guessed at from a
+    rendering.
 
-    Several of them, because a person can type again while a reply is still coming. Those
-    messages are recorded in the turns after the one in flight and are answered in order, so a
-    transcript that showed only the first would be hiding a message somebody had already sent.
+    `turns` is how many turns have been started, which is also the turn a new message goes into.
+    Counted by the same walk that built the panels rather than recovered from them, and counted
+    from what is recorded rather than from a number the server keeps: a slot with a prompt in it
+    is spoken for whether or not it has been answered, so two messages posted at once land in
+    different slots and neither overwrites the other.
     """
 
-    exchanges: tuple[Exchange, ...]
-    pending: tuple[str, ...]
+    panels: tuple[Panel, ...]
+    awaiting: bool
+    turns: int
 
 
-def spoken(response: ModelResponse) -> str:
-    """The parts of a response a person reads, which for now is its text and nothing else."""
-    return "".join(part.content for part in response.parts if isinstance(part, TextPart))
+def kind_of(block: Block) -> Kind:
+    match block:
+        case Prose():
+            return "assistant"
+        case Reasoning():
+            return "thinking"
+        case ToolUse():
+            return "tool"
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
-def replied(messages: Sequence[ModelMessage]) -> str:
-    return "\n\n".join(said for message in messages if isinstance(message, ModelResponse) and (said := spoken(message)))
+def returns_in(messages: Sequence[ModelMessage]) -> dict[str, Returned]:
+    """
+    Every call's result in a turn, by the call id that names which call it answers.
+
+    A result arrives in the *request* after the response that asked for it, so pairing them is a
+    walk over the whole turn rather than something a single message can answer. A retry is a
+    failure told to the model in a different shape, and reads as one here.
+    """
+    found: dict[str, Returned] = {}
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if isinstance(part, ToolReturnPart):
+                found[part.tool_call_id] = Returned(outcome=part.outcome, content=part.model_response_str())
+            elif isinstance(part, RetryPromptPart) and part.tool_call_id is not None:
+                found[part.tool_call_id] = Returned(outcome="failed", content=part.model_response())
+    return found
+
+
+def blocks_of(messages: Sequence[ModelMessage]) -> tuple[Block, ...]:
+    """
+    What a turn's messages are worth reading as, in the order the model produced them.
+
+    A part this console has no rendering for is passed over rather than refused. That is not a
+    swallowed error: the provider and Pydantic AI are both free to add a part kind, and a console
+    that crashed on one it had never heard of would be broken by somebody else's release. What is
+    *required* here is the text, and a turn that produced none renders as a turn that said
+    nothing, which is the honest report.
+    """
+    returned = returns_in(messages)
+    blocks: list[Block] = []
+    for message in messages:
+        if not isinstance(message, ModelResponse):
+            continue
+        for part in message.parts:
+            match part:
+                case TextPart(content=said) if said.strip():
+                    blocks.append(Prose(text=said))
+                case ThinkingPart(content=thought) if thought.strip():
+                    blocks.append(Reasoning(text=thought))
+                case ToolCallPart(tool_name=tool, tool_call_id=call):
+                    blocks.append(ToolUse(tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call)))
+                case _:
+                    continue
+    return tuple(blocks)
+
+
+def panelled(turn: int, blocks: Sequence[Block]) -> Iterator[Panel]:
+    """
+    One turn's blocks cut into panels, a panel per run of blocks of the same kind.
+
+    Consecutive rather than gathered, so the page shows the order the model worked in: a reply
+    that reasoned, called a tool, and then answered is three panels in that sequence, not a
+    reasoning panel and a tool panel hoisted above the answer.
+    """
+    for at, (kind, run) in enumerate(groupby(blocks, key=kind_of)):
+        yield Panel(turn=turn, at=at + 1, kind=kind, blocks=tuple(run))
+
+
+def said_by(turn: int, prompt: str) -> Panel:
+    """A turn's opening panel, which is the person's own message and is always its first."""
+    return Panel(turn=turn, at=0, kind="person", blocks=(Prose(text=prompt),))
 
 
 def transcript(recorded: Mapping[str, object]) -> Transcript:
@@ -195,28 +340,33 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     The whole conversation, read out of the checkpoint that is the only record of it.
 
     Two walks rather than one, because turns are answered in order: everything up to the first
-    unanswered turn is a finished exchange, and everything from there on is a message waiting for
-    a reply. Written as one loop with a branch, the second case would read as though a turn could
-    be answered after an unanswered one, which the body cannot produce.
+    unanswered turn is a finished turn, and everything from there on is a message waiting for a
+    reply. Written as one loop with a branch, the second case would read as though a turn could be
+    answered after an unanswered one, which the body cannot produce.
 
-    A reply is read from the turn's recorded messages rather than from its model steps, because
-    those messages are what the *agent* concluded the turn was: with tools in the picture a turn
-    is several model responses and several tool returns, and the message list is already the shape
+    A turn is read from its recorded messages rather than from its model steps, because those
+    messages are what the *agent* concluded the turn was: with tools in the picture a turn is
+    several model responses and several tool returns, and the message list is already the shape
     that says which is which.
     """
-    exchanges: list[Exchange] = []
+    panels: list[Panel] = []
     turn = 0
     while (asked := recorded.get(prompt_key(turn))) is not None:
         answered = recorded.get(messages_key(turn))
         if answered is None:
             break
-        exchanges.append(Exchange(prompt=parse_prompt(asked), reply=replied(parse_messages(answered))))
+        panels.append(said_by(turn, parse_prompt(asked)))
+        panels.extend(panelled(turn, blocks_of(parse_messages(answered))))
         turn += 1
-    pending: list[str] = []
+    # Several, because a person can type again while a reply is still coming. Those messages are
+    # recorded in the turns after the one in flight and are answered in order, so a transcript
+    # showing only the first would be hiding a message somebody had already sent.
+    awaiting = False
     while (waiting := recorded.get(prompt_key(turn))) is not None:
-        pending.append(parse_prompt(waiting))
+        panels.append(said_by(turn, parse_prompt(waiting)))
+        awaiting = True
         turn += 1
-    return Transcript(exchanges=tuple(exchanges), pending=tuple(pending))
+    return Transcript(panels=tuple(panels), awaiting=awaiting, turns=turn)
 
 
 def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:

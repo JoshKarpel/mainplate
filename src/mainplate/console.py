@@ -23,7 +23,6 @@ from without_web import post
 from without_web import query_param
 
 from mainplate.agent import Choice
-from mainplate.conversation import Transcript
 from mainplate.pages import Links
 from mainplate.pages import fragment
 from mainplate.pages import model_select
@@ -137,17 +136,6 @@ def seeing(where: str) -> Response:
     return Response(status=303, headers=((LOCATION, where.encode()),))
 
 
-def next_turn(said: Transcript) -> int:
-    """
-    The turn a new message goes into, which is the first one nothing has been said in.
-
-    Counted from what is recorded rather than from a number the server keeps, so two messages
-    posted at once land in different slots and neither overwrites the other: a slot with a prompt
-    in it is spoken for whether or not it has been answered yet.
-    """
-    return len(said.exchanges) + len(said.pending)
-
-
 @get("/", summary="Start a session")
 async def start_here(service: Service) -> Response:
     return page_response(200, start_page(LINKS, await service.listed(), service.config))
@@ -227,7 +215,7 @@ async def say(service: Service, session: str, said: str) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    await service.say(session, turn=next_turn(found.said), said=said)
+    await service.say(session, turn=found.said.turns, said=said)
     asked = await service.read(session)
     if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))

@@ -157,20 +157,35 @@ instance is simply in scope.
 ## The console
 
 Server-rendered HTML with [htmx](https://four.htmx.org/), built from
-[`without-html`](https://without.help/without-html/) node trees. Both the stylesheet and htmx
-are served from the process rather than a CDN, so a console on a machine with no route out still
-renders.
+[`without-html`](https://without.help/without-html/) node trees. The stylesheet, the script, and
+htmx are all served from the process rather than a CDN, so a console on a machine with no route
+out still renders.
 
-One live region, and it is the transcript: while a turn is unanswered it replaces itself every
+One live region, and it is the transcript: while a turn is unanswered it asks for itself once a
 second, and the answer comes back carrying no trigger, which is how the polling stops. A console
-with nothing in flight makes no requests.
+with nothing in flight makes no requests. The answer is *morphed* into the page rather than
+replacing it, so what a reader has done to the conversation, an unfolded tool call, a search, the
+place they had scrolled to, is not thrown away once a second by an answer arriving.
+
+A turn is drawn as panels: a coloured edge per run of one kind, with the person's message, the
+model's reasoning, its calls, and its answer each in their own. The palette runs on one axis, cool
+for what reached the model and warm for what it produced, so a reader scrolling can tell the sides
+apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
+page.
+
+Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
+the colour legend, a dock that jumps between the two sides and folds every call at once, a
+follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
+off the console still renders, still posts messages, and every tool call is still a fold that
+opens; what goes is the rail.
 
 ## What it does not do yet
 
 Named plainly, because they are the next things rather than omissions nobody noticed:
 
 - **No tools.** The agent is a model and some instructions. Tool calls become another kind of
-  recorded step, which is the shape `Stepping.key` already numbers.
+  recorded step, which is the shape `Stepping.key` already numbers. The console reads and draws
+  them already, so a toolset is the change; the panel it appears in is not.
 - **Anthropic only.** A profile's `provider` is a field because the answer varies, and today it
   takes one value. Another provider is an extra on `pydantic-ai-slim` and a branch in
   `build_model`.
@@ -179,7 +194,6 @@ Named plainly, because they are the next things rather than omissions nobody not
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.
-- **No Markdown.** A reply renders as escaped text with its newlines kept.
 - **One machine.** SQLite means every process sharing this store shares a filesystem. That is the
   deployment this is for rather than a defect; a second machine means another store.
 - **`install` is Linux only.** It renders a user systemd unit and knows no other service manager.

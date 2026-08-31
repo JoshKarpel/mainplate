@@ -14,10 +14,8 @@ from mainplate.agent import Choice
 from mainplate.app import build_app
 from mainplate.console import LONGEST_PROMPT
 from mainplate.console import NotAMessage
-from mainplate.console import next_turn
 from mainplate.console import parse_form_prompt
-from mainplate.conversation import Exchange
-from mainplate.conversation import Transcript
+from mainplate.conversation import messages_key
 from mainplate.conversation import prompt_key
 from mainplate.profiles import parse_config
 from mainplate.service import Service
@@ -72,18 +70,6 @@ class TestReadingAForm:
             parse_form_prompt(b"prompt=" + b"x" * LONGEST_PROMPT)
 
 
-class TestChoosingATurn:
-    def test_the_first_message_goes_into_the_first_turn(self) -> None:
-        assert next_turn(Transcript(exchanges=(), pending=())) == 0
-
-    def test_a_message_after_an_answer_goes_into_the_next_turn(self) -> None:
-        assert next_turn(Transcript(exchanges=(Exchange(prompt="a", reply="b"),), pending=())) == 1
-
-    def test_a_slot_already_asked_in_is_spoken_for_even_unanswered(self) -> None:
-        """Otherwise a second message posted while the first is in flight would overwrite it."""
-        assert next_turn(Transcript(exchanges=(Exchange(prompt="a", reply="b"),), pending=("c", "d"))) == 3
-
-
 class TestTheConsole:
     async def test_the_start_page_offers_a_box_and_creates_nothing(self, app: ASGIApp, service: Service) -> None:
         async with calling(app) as caller:
@@ -111,6 +97,35 @@ class TestTheConsole:
         assert answered.status == 200
         assert "what is a mainplate" in answered.text
         assert f'hx-get="/fragments/sessions/{session}"' in answered.text
+
+    async def test_an_unanswered_session_asks_again_on_a_timer_rather_than_on_a_load(self, app: ASGIApp) -> None:
+        """
+        The swap is a morph, which keeps the element rather than replacing it.
+
+        A `load` trigger fires once per element load, so it repeats only where each answer replaces
+        the region. Under a morph it fires exactly once and the conversation then waits forever on
+        an answer that has already arrived, with nothing on the page saying so. Pinned here because
+        that failure is invisible to every other assertion in this file: the markup is identical
+        either way.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session}")
+        assert 'hx-trigger="every 1s"' in answered.text
+        assert 'hx-swap="outerMorph"' in answered.text
+
+    async def test_an_answered_session_carries_no_trigger_at_all(self, app: ASGIApp, service: Service) -> None:
+        """A console with nothing running makes no requests, which is what stops the polling."""
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            [{"kind": "response", "parts": [{"part_kind": "text", "content": "it is a plate"}]}],
+        )
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}")
+        assert "hx-trigger" not in answered.text
+        assert "hx-get" not in answered.text
 
     async def test_a_message_into_a_session_answers_with_the_transcript_alone(self, app: ASGIApp) -> None:
         session = await a_session(app)
@@ -180,9 +195,9 @@ class TestTheConsole:
         assert 'hx-status:4xx="swap:none"' in answered.text
         assert 'hx-status:5xx="swap:none"' in answered.text
 
-    async def test_the_page_serves_its_own_stylesheet_and_script(self, app: ASGIApp) -> None:
+    async def test_the_page_serves_its_own_stylesheet_and_scripts(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            for asset in ("/assets/mainplate.css", "/assets/htmx.min.js"):
+            for asset in ("/assets/mainplate.css", "/assets/mainplate.js", "/assets/htmx.min.js"):
                 assert (await caller.get(asset)).status == 200
 
     async def test_the_start_page_offers_every_profile_and_the_defaults_models(self, app: ASGIApp) -> None:
@@ -243,7 +258,7 @@ class TestTheConsole:
         The one state a person cannot otherwise diagnose: a spinner that will never resolve.
 
         The worker cannot answer the session, so a page that kept polling would show a pending
-        bubble forever with nothing saying why. Naming the profile is the whole of the fix, because
+        panel forever with nothing saying why. Naming the profile is the whole of the fix, because
         putting it back is what makes the conversation continue where it stopped.
         """
         session = await a_session(app)
@@ -254,10 +269,24 @@ class TestTheConsole:
         assert "no longer offers" in answered.text
         assert "hx-get" not in answered.text, "a session nothing will answer must stop asking"
 
-    async def test_what_the_model_says_is_escaped_rather_than_rendered(self, app: ASGIApp, service: Service) -> None:
-        """A prompt is somebody else's text on this page, so markup in it must not become markup."""
-        session = await a_session(app, "<script>alert(1)</script>")
+    async def test_a_message_is_rendered_as_the_markdown_it_was_written_as(self, app: ASGIApp) -> None:
+        session = await a_session(app, "a **strong** point")
         async with calling(app) as caller:
-            answered = await caller.get(f"/sessions/{session}")
-        assert "<script>alert(1)</script>" not in answered.text
-        assert "&lt;script&gt;" in answered.text
+            answered = await caller.get(f"/fragments/sessions/{session}")
+        assert "<strong>strong</strong>" in answered.text
+
+    async def test_markup_in_a_message_does_not_become_markup(self, app: ASGIApp) -> None:
+        """
+        Asserted on the fragment rather than the page, which is not a detail.
+
+        A session is named after its first message, so the page also carries that text in the
+        sidebar, where it is escaped as an ordinary child. A page-level assertion would therefore
+        pass on the sidebar's copy whatever the transcript did with it, which is the check that
+        cannot fail measuring the wrong thing.
+        """
+        session = await a_session(app, "<script>alert(1)</script> and <img src=x onerror=alert(2)>")
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}")
+        assert "<script" not in answered.text
+        assert "alert(1)" not in answered.text
+        assert "onerror" not in answered.text

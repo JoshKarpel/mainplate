@@ -1,38 +1,72 @@
-/* Deliberately plain. Every colour is a token so a change is one line, and both schemes are
-   defined so the console matches whatever the machine is set to rather than picking for it. */
+/*
+ * The console's one stylesheet.
+ *
+ * Every colour is a `light-dark()` pair resolved by `color-scheme`, so the dark side is a second
+ * value rather than a second block of rules, and the theme toggle is one property on <html>
+ * (see `[data-theme]` below) rather than a duplicated palette.
+ *
+ * The palette runs on one axis, and it is the axis a reader learns without being told: COOL is
+ * what reached the model, WARM is what the model produced. A person speaks in lapis; the model
+ * answers in its own orange, reasons in that orange drawn back toward the ink (the same voice,
+ * unvoiced), and reaches for a tool in ochre. A kind added later takes its side from that rather
+ * than from a colour picked for it.
+ */
 
 :root {
     color-scheme: light dark;
 
-    --ground: #fbfaf8;
-    --raised: #ffffff;
-    --edge: #e4e0d8;
-    --ink: #1d1b17;
-    --faint: #6d6759;
-    --accent: #4a5f8a;
-    --person: #eceef5;
-    --assistant: #ffffff;
+    --ground: light-dark(#f4f2ee, #131316);
+    --raised: light-dark(#fbfaf8, #1c1c21);
+    --sunk: light-dark(#eceae4, #232329);
+    --ink: light-dark(#22201c, #e6e4e0);
+    --ink-soft: light-dark(#5f5a51, #a8a49c);
+    --ink-faint: light-dark(#8d877c, #7b766d);
+    --edge: light-dark(#dcd8d0, #33333c);
+    --edge-soft: light-dark(#e8e5df, #2a2a31);
+
+    /* The hues themselves, named for what they are rather than for who uses them, so a kind can
+       be pointed at one without the token having to be renamed. */
+    --lapis: light-dark(#274690, #7f9fe6);
+    --claude: light-dark(#c0603d, #e08a6a);
+    --sienna: light-dark(#8a5a10, #cf9a4c);
+    --vermilion: light-dark(#b0281d, #e0715f);
+    --amber: light-dark(#9a7310, #d9ad4e);
+
+    /* Which hue each kind of panel is drawn in. One indirection, so the axis above is stated once
+       and every rule that draws an edge, a label, or a chip reads the same token. */
+    --person-edge: var(--lapis);
+    --assistant-edge: var(--claude);
+    --thinking-edge: color-mix(in srgb, var(--claude) 55%, var(--ink-faint));
+    --tool-edge: var(--sienna);
+    --error-edge: var(--vermilion);
+
+    /* Not a speaker's hue, and deliberately so: it marks what the console itself is doing (a
+       search hit, the panel you landed on, following the end) and must never read as somebody
+       talking. */
+    --mark: var(--amber);
 
     --gap: 0.75rem;
-    --radius: 0.6rem;
+    --radius: 0.5rem;
     --sidebar: 17rem;
-    --reading: 46rem;
+    --rail: 11rem;
+    --measure: 46rem;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-    :root {
-        --ground: #16151a;
-        --raised: #1e1d24;
-        --edge: #302e39;
-        --ink: #e8e6e3;
-        --faint: #9a958f;
-        --accent: #9db4e8;
-        --person: #262a38;
-        --assistant: #1e1d24;
-    }
+/* The toggle forces one side of every pair by pinning `color-scheme`; with no attribute (or
+   `system`) the :root default of `light dark` follows the machine. */
+:root[data-theme="light"] {
+    color-scheme: light;
 }
 
-* {
+:root[data-theme="dark"] {
+    color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
     box-sizing: border-box;
 }
 
@@ -40,7 +74,7 @@ body {
     margin: 0;
     background: var(--ground);
     color: var(--ink);
-    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 .shell {
@@ -49,7 +83,15 @@ body {
     height: 100dvh;
 }
 
-/* The session list */
+/* The rail is a column of the page rather than something laid over it, which it can be because
+   the conversation scrolls inside its own box and the page does not: nothing has to be pinned to
+   stay put. It therefore takes room instead of covering the text it exists to navigate, and the
+   start page, which has no rail, simply has no third column. */
+.shell:has(> .rail) {
+    grid-template-columns: var(--sidebar) 1fr var(--rail);
+}
+
+/* --- The session list ------------------------------------------------- */
 
 .sessions {
     display: flex;
@@ -83,7 +125,7 @@ body {
 
 .sessions .start:hover,
 .session:hover {
-    border-color: var(--accent);
+    border-color: var(--person-edge);
 }
 
 .session {
@@ -109,11 +151,11 @@ body {
 }
 
 .session .when {
-    color: var(--faint);
+    color: var(--ink-faint);
     font-size: 0.75rem;
 }
 
-/* The conversation */
+/* --- The conversation ------------------------------------------------- */
 
 main {
     display: grid;
@@ -123,6 +165,9 @@ main {
 }
 
 main > header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
     padding: var(--gap) 0;
 }
 
@@ -131,85 +176,413 @@ main > header h1 {
     font-size: 1rem;
     font-weight: 600;
     letter-spacing: 0.02em;
-    color: var(--faint);
+    color: var(--ink-faint);
 }
 
 .transcript {
-    display: flex;
-    flex-direction: column;
-    gap: var(--gap);
     width: 100%;
-    max-width: var(--reading);
+    max-width: var(--measure);
     margin: 0 auto;
     padding-bottom: var(--gap);
+    /* The scroll is this element's, not the document's, so the composer stays put while the
+       conversation moves under it. Everything that navigates measures against this box. */
     overflow-y: auto;
-}
-
-/* A conversation grows downwards from the box you type in, so a short one sits at the bottom
-   rather than floating at the top of an empty column. `margin-top: auto` on the first bubble
-   rather than `justify-content: flex-end` on the column, which overflows past the top edge of a
-   scrolling flex container in a way that cannot be scrolled back to. */
-.transcript > :first-child {
-    margin-top: auto;
+    overscroll-behavior: contain;
+    scroll-behavior: auto;
 }
 
 .transcript .empty {
-    align-self: center;
-    color: var(--faint);
+    margin-top: 2rem;
+    color: var(--ink-faint);
+    text-align: center;
 }
 
-.said {
-    max-width: 85%;
-    padding: 0.55rem 0.85rem;
-    border: 1px solid var(--edge);
+/* --- Panels ----------------------------------------------------------- */
+
+/* A panel is a run of one kind of thing, drawn with that kind's edge down its left. Bubbles were
+   the wrong shape once a turn could hold reasoning and a tool call as well as an answer: the
+   speaker is the edge, and everything the model did stands in one column at one measure. */
+.panel {
+    position: relative;
+    margin: 1.4rem 0;
+    padding: 0.1rem 0 0.1rem 1.1rem;
+    border-left: 2px solid var(--edge);
+    /* Clears the sticky nothing above it so a panel navigated to lands with room over it. */
+    scroll-margin-top: 0.75rem;
+}
+
+.panel[data-kind="person"] {
+    border-left-color: var(--person-edge);
+}
+
+.panel[data-kind="assistant"] {
+    border-left-color: var(--assistant-edge);
+}
+
+.panel[data-kind="thinking"] {
+    border-left-color: var(--thinking-edge);
+}
+
+.panel[data-kind="tool"] {
+    border-left-color: var(--tool-edge);
+}
+
+/* Where the reader is: whether they followed a permalink (`:target`) or the console put them
+   there (`data-landed`, written with `replaceState`, which `:target` does not answer to). The
+   two are drawn identically because they mean the same thing. */
+.panel:target,
+.panel[data-landed] {
+    background: color-mix(in srgb, var(--mark) 10%, transparent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding-right: 1.1rem;
+    margin-right: -1.1rem;
+}
+
+/* A kind the key has switched off. Still drawn, and drawn as struck out rather than removed: a
+   conversation with panels silently missing is one a reader cannot trust the shape of. */
+.panel[data-aside] {
+    opacity: 0.4;
+}
+
+.panel__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3rem 0.8rem;
+    margin-bottom: 0.25rem;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+    color: var(--ink-faint);
+}
+
+.panel__role {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--ink-soft);
+}
+
+/* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
+   tell the kinds apart without reading the word. */
+.panel[data-kind="person"] .panel__role {
+    color: var(--person-edge);
+}
+
+.panel[data-kind="assistant"] .panel__role {
+    color: var(--assistant-edge);
+}
+
+.panel[data-kind="thinking"] .panel__role {
+    color: var(--thinking-edge);
+}
+
+.panel[data-kind="tool"] .panel__role {
+    color: var(--tool-edge);
+}
+
+/* Muted until hovered, so it reads as chrome rather than as prose. */
+.panel__meta .panel__anchor {
+    margin-left: auto;
+    color: var(--ink-faint);
+    text-decoration: none;
+}
+
+.panel__meta .panel__anchor:hover,
+.panel__meta .panel__anchor:focus-visible {
+    color: var(--mark);
+    text-decoration: underline;
+}
+
+/* --- Blocks ----------------------------------------------------------- */
+
+.block {
+    margin: 0.6rem 0;
+}
+
+.block:first-child {
+    margin-top: 0;
+}
+
+.block:last-child {
+    margin-bottom: 0;
+}
+
+/* --- What Markdown produces -------------------------------------------- */
+
+/* A message is rendered Markdown, so what lands here is ordinary flow content and is styled as
+   such. There is deliberately no `white-space: pre-wrap`: line breaks are the renderer's job now,
+   and leaving it on would make the newlines *between* the generated elements visible as gaps. */
+
+.text > :first-child {
+    margin-top: 0;
+}
+
+.text > :last-child {
+    margin-bottom: 0;
+}
+
+.text p,
+.text ul,
+.text ol,
+.text blockquote,
+.text table {
+    margin: 0.6rem 0;
+    overflow-wrap: anywhere;
+}
+
+.text h1,
+.text h2,
+.text h3,
+.text h4,
+.text h5,
+.text h6 {
+    margin: 1rem 0 0.4rem;
+    font-size: 1rem;
+    line-height: 1.3;
+}
+
+.text ul,
+.text ol {
+    padding-left: 1.3rem;
+}
+
+.text li {
+    margin: 0.15rem 0;
+}
+
+.text blockquote {
+    padding-left: 0.8rem;
+    border-left: 2px solid var(--edge);
+    color: var(--ink-soft);
+}
+
+.text code {
+    padding: 0.05rem 0.25rem;
+    border-radius: 3px;
+    background: var(--sunk);
+    font-family: var(--mono);
+    font-size: 0.86em;
+}
+
+.text pre {
+    margin: 0.6rem 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--edge-soft);
     border-radius: var(--radius);
+    background: var(--sunk);
+    /* Its own scroller, so a long line moves the block and never the page. */
+    overflow-x: auto;
 }
 
-.said .text {
+.text pre code {
+    padding: 0;
+    background: none;
+    font-size: 0.82rem;
+}
+
+.text table {
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.text th,
+.text td {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--edge);
+    text-align: left;
+}
+
+.text th {
+    background: var(--sunk);
+}
+
+.text a {
+    color: var(--person-edge);
+}
+
+.text img {
+    max-width: 100%;
+    height: auto;
+}
+
+.text hr {
+    border: none;
+    border-top: 1px solid var(--edge);
+}
+
+.block--thinking {
+    padding: 0.5rem 0.9rem;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    background: var(--sunk);
+    color: var(--ink-soft);
+    font-style: italic;
+}
+
+/* --- Tool calls ------------------------------------------------------- */
+
+/* Folded by default: what a tool was handed and what it gave back is context a reader reaches
+   for, not prose they read through. The fold is a real `<details>`, which is what the dock's
+   fold-all works on and what keeps the whole thing usable with no script at all. */
+.tool {
+    margin: 0.5rem 0;
+    border: 1px solid var(--edge-soft);
+    border-radius: var(--radius);
+    background: var(--raised);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+
+.tool > summary {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.35rem 0.6rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    list-style: none;
+}
+
+.tool > summary::-webkit-details-marker {
+    display: none;
+}
+
+.tool > summary::before {
+    content: "\25B8";
+    color: var(--tool-edge);
+    transition: transform 0.12s ease;
+}
+
+.tool[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.tool__name {
+    color: var(--tool-edge);
+    font-weight: 600;
+}
+
+/* What became of the call, as a word rather than a colour alone: an outcome nobody can name is
+   one a screen reader cannot read out either. */
+.tool__outcome {
+    margin-left: auto;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.tool__outcome[data-outcome="success"] {
+    color: var(--ink-faint);
+}
+
+.tool__outcome[data-outcome="failed"],
+.tool__outcome[data-outcome="denied"],
+.tool__outcome[data-outcome="interrupted"] {
+    color: var(--error-edge);
+}
+
+.tool__body {
     margin: 0;
-    /* The model writes newlines and means them; nothing here renders Markdown yet. */
+    padding: 0 0.6rem 0.5rem;
+}
+
+.tool__body dt {
+    margin-top: 0.4rem;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.tool__body dd {
+    margin: 0.15rem 0 0;
+}
+
+.tool__body pre {
+    margin: 0;
+    padding: 0.4rem 0.55rem;
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    overflow-x: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
 
-.said.person {
-    align-self: flex-end;
-    background: var(--person);
+/* --- Waiting ---------------------------------------------------------- */
+
+/* A turn with a message and no answer, and a call that has gone out and not come back: two
+   different facts, drawn the same way, because to a reader they are the same thing. Neither is a
+   request in flight, so neither can be an `hx-indicator`; both are read off the checkpoint. */
+.waiting {
+    display: inline-flex;
+    gap: 0.25rem;
+    align-items: center;
+    color: var(--ink-faint);
 }
 
-.said.assistant {
-    align-self: flex-start;
-    background: var(--assistant);
+.waiting span {
+    width: 0.32rem;
+    height: 0.32rem;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse 1.2s ease-in-out infinite;
 }
 
-.said.waiting {
-    color: var(--faint);
+.waiting span:nth-child(2) {
+    animation-delay: 0.15s;
 }
 
-.said.waiting .text {
-    animation: breathe 1.4s ease-in-out infinite;
+.waiting span:nth-child(3) {
+    animation-delay: 0.3s;
 }
 
-@keyframes breathe {
-    50% {
-        opacity: 0.35;
+@keyframes pulse {
+    0%,
+    80%,
+    100% {
+        opacity: 0.25;
     }
+
+    40% {
+        opacity: 1;
+    }
+}
+
+/* htmx supplies the `.htmx-indicator` / `.htmx-request` rules that show and hide this; what is
+   here is only what it looks like once shown. */
+.sending {
+    color: var(--ink-faint);
+    font-size: 0.75rem;
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .said.waiting .text {
+    .waiting span,
+    .tool > summary::before {
         animation: none;
+        transition: none;
     }
 }
 
-/* The box you type in */
+/* A session whose profile is no longer configured: readable, and honest about being stuck. */
+.stalled {
+    max-width: 40rem;
+    margin: var(--gap) auto 0;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--error-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--ink-soft);
+    text-align: center;
+}
+
+/* --- The box you type in ---------------------------------------------- */
 
 .composer {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
     width: 100%;
-    max-width: var(--reading);
+    max-width: var(--measure);
     margin: 0 auto;
     padding: var(--gap) 0;
 }
@@ -218,43 +591,6 @@ main > header h1 {
     display: flex;
     gap: var(--gap);
     align-items: flex-end;
-}
-
-/* What a session will be answered on, chosen once before it exists and shown as a fact after. */
-.picker {
-    display: flex;
-    gap: 0.4rem;
-    align-items: center;
-    min-height: 1.6rem;
-    color: var(--faint);
-    font-size: 0.8rem;
-}
-
-.picker select {
-    padding: 0.15rem 0.3rem;
-    border: 1px solid var(--edge);
-    border-radius: 0.35rem;
-    background: var(--raised);
-    color: var(--ink);
-    font: inherit;
-}
-
-.picker select:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-}
-
-/* A session whose profile is no longer configured: readable, and honest about being stuck. */
-.stalled {
-    align-self: center;
-    max-width: 40rem;
-    margin: var(--gap) 0 0;
-    padding: 0.55rem 0.85rem;
-    border: 1px solid var(--edge);
-    border-radius: var(--radius);
-    background: var(--raised);
-    color: var(--faint);
-    text-align: center;
 }
 
 .composer textarea {
@@ -268,17 +604,11 @@ main > header h1 {
     resize: vertical;
 }
 
-.composer textarea:focus-visible,
-.composer button:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-}
-
 .composer button {
     padding: 0.55rem 1.1rem;
-    border: 1px solid var(--edge);
+    border: 1px solid transparent;
     border-radius: var(--radius);
-    background: var(--accent);
+    background: var(--person-edge);
     color: var(--ground);
     font: inherit;
     font-weight: 600;
@@ -291,10 +621,336 @@ main > header h1 {
     cursor: progress;
 }
 
-/* A page nothing could answer */
+/* What a session will be answered on: a control before it exists, a fact after. */
+.picker {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    min-height: 1.6rem;
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+}
+
+.picker select {
+    padding: 0.15rem 0.3rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--raised);
+    color: var(--ink);
+    font: inherit;
+}
+
+/* --- The rail: search, key, and dock ---------------------------------- */
+
+/* One column down the right, mirroring the session list down the left. Everything that navigates
+   the conversation stands in it, so a reader says once what they are looking through rather than
+   once per control that looks. */
+.rail {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    padding: var(--gap) var(--gap) var(--gap) 0;
+    overflow-y: auto;
+}
+
+/* What is put in the rail is a card by being put there, so each rule below carries only its own
+   layout. */
+.rail > * {
+    pointer-events: auto;
+    flex: none;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.75rem;
+    background: var(--raised);
+    box-shadow: 0 2px 12px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
+    font-family: var(--mono);
+    font-size: 0.7rem;
+}
+
+/* Held shut on a window too narrow to stand the rail beside the conversation, since a reading
+   control lying over the text it navigates is the one place it must never be. The threshold is
+   the stylesheet's alone to know, so nothing in the script measures the window and the two
+   cannot disagree about where the rail fits. */
+.rail__clasp {
+    display: none;
+    place-items: center;
+    align-self: flex-end;
+    width: 2.4rem;
+    height: 2.4rem;
+    padding: 0;
+    border-radius: 50%;
+    color: var(--ink-soft);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.rail__clasp[aria-expanded="true"] {
+    background: var(--sunk);
+    color: var(--mark);
+}
+
+/* Below the width at which the rail can stand beside the conversation, giving it a column of its
+   own would take that width from the reading measure instead. So the column goes, the rail lies
+   over the page, and it is drawn shut: the cards slide off and the clasp is left where their head
+   was. Which width that is stays here, so nothing in the script has to measure the window. */
+@media (max-width: 78rem) {
+    .shell:has(> .rail) {
+        grid-template-columns: var(--sidebar) 1fr;
+    }
+
+    .rail {
+        position: fixed;
+        top: 0.8rem;
+        right: 0.8rem;
+        bottom: 0.8rem;
+        z-index: 10;
+        width: var(--rail);
+        padding: 0;
+        overflow: visible;
+        /* The cards are what a reader presses; the column between and around them is nothing, and
+           a fixed box with no background still swallows every click over it. */
+        pointer-events: none;
+    }
+
+    .rail > * {
+        pointer-events: auto;
+    }
+
+    .rail__clasp {
+        display: grid;
+    }
+
+    .rail > :not(.rail__clasp) {
+        visibility: hidden;
+        transform: translateX(calc(100% + 1.6rem));
+        transition:
+            transform 0.2s ease,
+            visibility 0.2s;
+    }
+
+    .rail[data-open] > :not(.rail__clasp) {
+        visibility: visible;
+        transform: none;
+    }
+
+    /* A field under 16px is what makes a phone zoom the page as the reader focuses it. */
+    .search .search__input {
+        font-size: 16px;
+    }
+}
+
+.search {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.search__input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    outline: none;
+}
+
+.search__input::placeholder {
+    color: var(--ink-faint);
+}
+
+.search__bar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.search__count {
+    flex: 1;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.search__nav {
+    padding: 0 0.25rem;
+    border: none;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.search__nav:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+mark.hit {
+    color: inherit;
+    background: color-mix(in srgb, var(--mark) 34%, transparent);
+    border-radius: 2px;
+}
+
+mark.hit.current {
+    background: color-mix(in srgb, var(--mark) 68%, transparent);
+    outline: 1px solid var(--mark);
+}
+
+/* The key: which kinds are in play, and the legend for every edge in the margin at the same time.
+   A column per side of the exchange, so a reader who has learnt the edges already knows which
+   column a kind will be in. */
+.key {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.2rem 0.3rem;
+}
+
+.key__chip {
+    padding: 0.1rem 0.35rem;
+    border: 1px solid color-mix(in srgb, var(--kind-hue) 45%, transparent);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--kind-hue);
+    font: inherit;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.key__chip {
+    --kind-hue: var(--ink-soft);
+}
+
+.key__chip[data-kind="person"] {
+    --kind-hue: var(--person-edge);
+}
+
+.key__chip[data-kind="assistant"] {
+    --kind-hue: var(--assistant-edge);
+}
+
+.key__chip[data-kind="thinking"] {
+    --kind-hue: var(--thinking-edge);
+}
+
+.key__chip[data-kind="tool"] {
+    --kind-hue: var(--tool-edge);
+}
+
+.key__chip[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--kind-hue) 20%, transparent);
+    border-color: var(--kind-hue);
+}
+
+/* Off reads as struck out: dimmed, and no longer searched or stepped through. */
+.key__chip[aria-pressed="false"] {
+    opacity: 0.5;
+    text-decoration: line-through;
+}
+
+/* --- The dock: jump, leap, fold, follow -------------------------------- */
+
+.dock {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+}
+
+/* Three columns of up/down arrows: a person column and an assistant column each seeking one side
+   of the exchange, flanking a middle column that steps every panel in play. */
+.dock__nav {
+    display: grid;
+    grid-template-columns: repeat(3, 2.1rem);
+    gap: 0.15rem;
+}
+
+.dock__leap,
+.dock__fold {
+    display: flex;
+    justify-content: center;
+    gap: 0.15rem;
+}
+
+.dock__btn {
+    --dock-hue: var(--ink-soft);
+    display: grid;
+    place-items: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--dock-hue);
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+/* Each arrow takes the hue of the side it seeks. */
+.dock__btn--person {
+    --dock-hue: var(--person-edge);
+}
+
+.dock__btn--assistant {
+    --dock-hue: var(--assistant-edge);
+}
+
+/* Following lights up, so a live "tailing" reads at a glance and is told apart from the plain
+   leap-to-end beside it. */
+.dock__btn--follow[aria-pressed="true"] {
+    --dock-hue: var(--mark);
+    background: var(--sunk);
+}
+
+.dock__btn:hover,
+.dock__btn:focus-visible {
+    background: var(--sunk);
+    color: color-mix(in srgb, var(--dock-hue), var(--ink) 35%);
+}
+
+.dock__btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+/* --- The theme toggle -------------------------------------------------- */
+
+.theme {
+    display: flex;
+    justify-content: center;
+    gap: 0.15rem;
+}
+
+.theme button {
+    padding: 0.15rem 0.4rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-faint);
+    font: inherit;
+    cursor: pointer;
+}
+
+.theme button[aria-pressed="true"] {
+    border-color: var(--edge);
+    background: var(--sunk);
+    color: var(--ink);
+}
+
+/* --- Focus ------------------------------------------------------------- */
+
+:where(a, button, select, textarea, input, summary):focus-visible {
+    outline: 2px solid var(--mark);
+    outline-offset: 1px;
+}
+
+/* --- A page nothing could answer --------------------------------------- */
 
 .refusal {
-    max-width: var(--reading);
+    max-width: var(--measure);
     margin: 4rem auto;
     padding: 0 var(--gap);
 }
@@ -302,9 +958,9 @@ main > header h1 {
 .refusal h1 {
     margin: 0;
     font-size: 3rem;
-    color: var(--faint);
+    color: var(--ink-faint);
 }
 
 .refusal a {
-    color: var(--accent);
+    color: var(--person-edge);
 }
