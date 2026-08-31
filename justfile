@@ -37,3 +37,19 @@ serve *args:
 [doc("Run it against Pydantic AI's canned model, so a page renders with no provider and no spend")]
 demo *args:
     MAINPLATE_MODEL=test uv run mainplate serve --port {{ DEV_PORT }} --database mainplate-demo.db {{ args }}
+
+# `uv sync` first, and it is not a convenience: the unit names this checkout's interpreter, so an
+# install from a stale environment points systemd at a venv missing whatever was just added. Run
+# it again after any change to put the new code in front of the browser.
+[doc('Install this checkout as a user systemd service, on the default port')]
+install *args:
+    uv sync
+    uv run mainplate install {{ args }}
+
+[doc('Stop and remove the user systemd service, keeping its settings and its sessions')]
+uninstall *args:
+    uv run mainplate uninstall {{ args }}
+
+[doc('Follow the service log')]
+logs *args:
+    journalctl --user -u mainplate -f {{ args }}

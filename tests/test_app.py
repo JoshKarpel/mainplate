@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 from calling import calling
+from conftest import CONFIG
+from conftest import DEFAULT_CHOICE
 from conftest import already
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
@@ -13,6 +15,7 @@ from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
+from mainplate.agent import Agents
 from mainplate.app import build_app
 from mainplate.app import open_console
 from mainplate.durability import StepwiseDurability
@@ -49,10 +52,14 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
         return ModelResponse(parts=[TextPart("an answer")])
 
     agent: Agent[None, str] = Agent(FunctionModel(respond), name="test", capabilities=[StepwiseDurability()])
+    agents = Agents(by_choice={DEFAULT_CHOICE: agent})
 
-    async with open_console(Settings(database=database), agent) as service:
+    async with open_console(Settings(database=database), CONFIG, agents) as service:
         async with calling(build_app(already(service))) as caller:
-            started = await caller.post("/sessions", {"prompt": "hello"})
+            started = await caller.post(
+                "/sessions",
+                {"prompt": "hello", "profile": DEFAULT_CHOICE.profile, "model": DEFAULT_CHOICE.model},
+            )
             assert started.status == 303
             session = started.location.rsplit("/", 1)[-1]
             async with asyncio.timeout(PATIENCE):

@@ -1,12 +1,12 @@
-# Everything the process is told, read once, here.
+# Everything the process is told about *itself*, read once, here.
 #
-# The provider's own credential is deliberately *not* one of these fields. Pydantic AI reads
-# `ANTHROPIC_API_KEY` from the environment itself, and adding a field for it would mean this
-# process holds the secret in a second place in order to hand it back to the library that was
-# going to read it anyway.
+# What it does not hold is anything about which model to talk to or how to authenticate to one.
+# That is per-profile and lives in `config.toml`, because a session chooses among profiles and a
+# process-wide answer would be a second answer to a question each session already answers.
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,11 +14,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
+from mainplate.profiles import config_home
+
 # What a fresh checkout gets with nothing set. A file under the working directory rather than
 # under the user's data directory, because this is a tool you point at a project.
 DEFAULT_DATABASE = Path("mainplate.db")
-
-DEFAULT_MODEL = "anthropic:claude-sonnet-5"
 
 DEFAULT_INSTRUCTIONS = "You are a helpful assistant, working with a software engineer. Be concise and direct."
 
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     The process's configuration, parsed from the environment at startup.
 
     Every field is settable and every field has a default that runs, so the shortest way to a
-    working console is `mainplate serve` with nothing configured but a provider credential.
+    working console is `mainplate serve` with nothing set but a `config.toml` naming one profile.
     """
 
     model_config = SettingsConfigDict(env_prefix="MAINPLATE_", frozen=True)
@@ -36,8 +36,13 @@ class Settings(BaseSettings):
     database: Path = DEFAULT_DATABASE
     """The SQLite file holding every session's checkpoint, its queue, and the session index."""
 
-    model: str = DEFAULT_MODEL
-    """The model every session talks to, in Pydantic AI's `provider:name` form."""
+    config_home: Path = Field(default_factory=lambda: config_home(os.environ))
+    """
+    Where to look for `mainplate/config.toml`, which is where the profiles are.
+
+    A directory rather than the file, so it moves with `XDG_CONFIG_HOME` the way everything else
+    under it does, and so the one place that knows the file's name is the module that parses it.
+    """
 
     instructions: str = DEFAULT_INSTRUCTIONS
 

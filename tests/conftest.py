@@ -12,6 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
@@ -20,9 +21,13 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from without_asgi import ASGIApp
 
+from mainplate.agent import Agents
+from mainplate.agent import Choice
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.durability import StepwiseDurability
+from mainplate.profiles import Config
+from mainplate.profiles import Profile
 from mainplate.service import Service
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
@@ -52,6 +57,22 @@ class Ticking:
 # slow machine into a failing one.
 LEASE = timedelta(seconds=30)
 
+# Two profiles and three pairs, so a test can tell "the default" from "a choice somebody made" and
+# so the model picker has something to cascade between.
+CONFIG = Config(
+    default="here",
+    profiles={
+        "here": Profile(provider="anthropic", api_key=SecretStr("sk-test"), models=("fast", "careful")),
+        "gateway": Profile(provider="anthropic", base_url="https://llm.example.invalid", models=("fast",)),
+    },
+)
+
+CHOICES = tuple(
+    Choice(profile=name, model=model) for name, profile in CONFIG.profiles.items() for model in profile.models
+)
+
+DEFAULT_CHOICE = Choice(profile=CONFIG.default, model=CONFIG.default_model)
+
 
 @dataclass(slots=True)
 class Provider:
@@ -79,6 +100,17 @@ class Provider:
     def agent(self) -> Agent[None, str]:
         return Agent(self.model(), name="test", capabilities=[StepwiseDurability()])
 
+    def agents(self) -> Agents:
+        """
+        Every choice `CONFIG` offers, answered by one stand-in model.
+
+        One model behind every pair rather than one each, so `asked` counts calls across the whole
+        configuration: what a test wants to know is how often the provider was reached, not which
+        of two identical fakes reached it.
+        """
+        shared = self.agent()
+        return Agents(by_choice=dict.fromkeys(CHOICES, shared))
+
 
 @pytest.fixture
 def provider() -> Provider:
@@ -93,11 +125,12 @@ def database(tmp_path: Path) -> Path:
 @pytest.fixture
 async def service(database: Path) -> AsyncIterator[Service]:
     """A store on its own file, with no worker: nothing answers a session unless a test does."""
-    async with open_store(database, LEASE) as opened:
+    async with open_store(database, LEASE, CONFIG) as opened:
         yield Service(
             database=opened.database,
             durable=opened.durable,
             checkpointer=opened.checkpointer,
+            config=CONFIG,
             now=Ticking(),
         )
 

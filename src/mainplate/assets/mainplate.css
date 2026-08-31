@@ -206,12 +206,55 @@ main > header h1 {
 
 .composer {
     display: flex;
-    gap: var(--gap);
-    align-items: flex-end;
+    flex-direction: column;
+    gap: 0.4rem;
     width: 100%;
     max-width: var(--reading);
     margin: 0 auto;
     padding: var(--gap) 0;
+}
+
+.composer .row {
+    display: flex;
+    gap: var(--gap);
+    align-items: flex-end;
+}
+
+/* What a session will be answered on, chosen once before it exists and shown as a fact after. */
+.picker {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    min-height: 1.6rem;
+    color: var(--faint);
+    font-size: 0.8rem;
+}
+
+.picker select {
+    padding: 0.15rem 0.3rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--raised);
+    color: var(--ink);
+    font: inherit;
+}
+
+.picker select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* A session whose profile is no longer configured: readable, and honest about being stuck. */
+.stalled {
+    align-self: center;
+    max-width: 40rem;
+    margin: var(--gap) 0 0;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--faint);
+    text-align: center;
 }
 
 .composer textarea {

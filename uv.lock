@@ -530,6 +530,7 @@ name = "mainplate"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "h11" },
     { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["anthropic"] },
     { name = "pydantic-settings" },
@@ -558,6 +559,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "h11", specifier = ">=0.16" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pydantic-ai-slim", extras = ["anthropic"], specifier = ">=2.33" },
     { name = "pydantic-settings", specifier = ">=2.13" },

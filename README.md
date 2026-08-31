@@ -13,21 +13,99 @@ was doing when its process dies is the failure worth designing out first.
 
 ## Running it
 
+Write `$XDG_CONFIG_HOME/mainplate/config.toml` (usually `~/.config/mainplate/config.toml`), then
+start it:
+
+```toml
+default = "anthropic"
+
+[profiles.anthropic]
+provider = "anthropic"
+api_key  = "sk-ant-..."
+models   = ["claude-sonnet-5", "claude-opus-5"]
+```
+
 ```console
-$ export ANTHROPIC_API_KEY=...
 $ uvx mainplate serve          # once there is a release; from a checkout, `just serve`
 ```
 
-Then open <http://127.0.0.1:8100>. Everything is stored in `mainplate.db` in the working
-directory, so pointing the console at a different project is `--database`, and reading a session
-back is opening the same file again.
+Then open <http://127.0.0.1:8100>. Sessions are stored in `mainplate.db` in the working directory,
+so pointing the console at a different project is `--database`, and reading a session back is
+opening the same file again.
 
-`mainplate serve --help` lists the options; each one is a field of `Settings`, which also reads
-them from `MAINPLATE_`-prefixed environment variables. The provider credential is not among them:
-Pydantic AI reads it from the environment itself, so mainplate never holds it.
+`mainplate serve --help` lists the rest; each option is a field of `Settings`, which also reads
+them from `MAINPLATE_`-prefixed environment variables.
+
+### Profiles
+
+A **profile** is where requests go and how they authenticate. The model is deliberately not part
+of one, because the thing a profile names is often a gateway serving many models behind a single
+hostname: folding the model in would mean a profile per model over identical settings.
+
+So a session records *both*, at the moment it is created, and both are fixed for its life. You
+pick them under the composer on the new-chat page; after that the session says what it is on
+rather than offering a control that could not change it. A conversation that switched model
+halfway would replay its recorded answers from one and continue on another, so what the transcript
+shows and what the next turn reasons from would have different authors. Starting a second session
+is how you change your mind, and it keeps the first one readable.
+
+Credentials live in that file rather than in the environment. A key read from a `0600` file and
+handed to the SDK never becomes an environment variable, so it is not inherited by child
+processes, not in `/proc/<pid>/environ`, and not in a crash dump of anything but this process. A
+profile that names neither `api_key` nor `base_url` falls back to `ANTHROPIC_API_KEY`, which is
+what the Anthropic SDK does for itself.
+
+### On exe.dev, no key at all
+
+An [exe.dev](https://exe.dev) VM with the built-in
+[LLM integration](https://exe.dev/docs/integrations-llm.md) reaches Anthropic through
+`https://llm.int.exe.xyz` with **no credential on the box**: exe.dev injects one at its own edge.
+That is the best version of the secrets story available here, because there is nothing to store,
+rotate, or leak.
+
+`mainplate install` finds it for you. It asks the
+[reflection integration](https://exe.dev/docs/integrations-reflection.md) which integrations are
+attached, writes a keyless profile per LLM integration it finds, and says so:
+
+```console
+$ just install
+mainplate is installed and restarted
+  found    exe.dev llm integration 'llm' at https://llm.int.exe.xyz
+  console  http://127.0.0.1:8100
+  profiles /home/you/.config/mainplate/config.toml
+```
+
+Off exe.dev the lookup finds nothing and the install writes a template to edit. Either way an
+existing `config.toml` is never overwritten. The seeded model list is short because it cannot be
+discovered: the gateway's `/v1/models` lists its OpenAI-compatible models and not its Anthropic
+ones, so add the rest by hand.
 
 To see the console without a provider or any spend, `just demo` runs it against Pydantic AI's own
 canned model.
+
+### Leaving it running
+
+`mainplate install` converges a user systemd unit and restarts the service onto the interpreter
+that ran the command, so an install means "the running service is this installation". Run it again
+after changing anything; from a checkout, `just install` syncs first so the unit points at an
+environment that has what you just added.
+
+```console
+$ just install         # or `mainplate install --port 8100`
+$ just logs            # journalctl --user -u mainplate -f
+$ just uninstall       # keeps the settings and the sessions
+```
+
+The install prints where its files are. `config.toml` is the one to edit, and
+`environment` beside it carries any `MAINPLATE_*` process setting. Both are created `0600` on the
+first install and neither is ever overwritten.
+
+With no usable profile the service fails at startup and restarts every five seconds, because the
+agents are built before anything binds. That is deliberate: a console that could answer nothing
+has nothing honest to serve, and failing at boot is louder than failing on the first message.
+
+Sessions live at `$XDG_DATA_HOME/mainplate/mainplate.db` rather than in whatever directory you
+installed from, since a service has no meaningful working directory.
 
 ## How a session survives
 
@@ -43,6 +121,7 @@ whole of what a session is:
 
 ```python
 async def converse(run: Run) -> Never:
+    agent = agents.for_choice(chosen)  # the profile and model this session recorded at creation
     at = reached(run.recorded)
     while True:
         prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
@@ -92,12 +171,20 @@ Named plainly, because they are the next things rather than omissions nobody not
 
 - **No tools.** The agent is a model and some instructions. Tool calls become another kind of
   recorded step, which is the shape `Stepping.key` already numbers.
+- **Anthropic only.** A profile's `provider` is a field because the answer varies, and today it
+  takes one value. Another provider is an extra on `pydantic-ai-slim` and a branch in
+  `build_model`.
+- **A session cannot be moved to another profile.** Removing a profile that sessions use leaves
+  them readable and stuck; the page names the profile so putting it back is obvious.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.
 - **No Markdown.** A reply renders as escaped text with its newlines kept.
 - **One machine.** SQLite means every process sharing this store shares a filesystem. That is the
   deployment this is for rather than a defect; a second machine means another store.
+- **`install` is Linux only.** It renders a user systemd unit and knows no other service manager.
+  `serve` itself is portable, so elsewhere it is a foreground process and whatever you already use
+  to keep one running.
 - **Nothing deletes a session.** They accumulate, and the only way to remove one is the file.
 
 ## Why the name

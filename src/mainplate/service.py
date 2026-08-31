@@ -20,9 +20,14 @@ from without_durability_sqlite import Database
 from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
 
+from mainplate.agent import Choice
+from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Transcript
+from mainplate.conversation import choice_of
 from mainplate.conversation import prompt_key
+from mainplate.conversation import recorded_choice
 from mainplate.conversation import transcript
+from mainplate.profiles import Config
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
 from mainplate.sessions import mint_session_id
@@ -34,10 +39,19 @@ from mainplate.sessions import read_sessions
 
 @dataclass(frozen=True, slots=True)
 class Conversation:
-    """A session and everything said in it, which is the pair every page is rendered from."""
+    """
+    A session, everything said in it, and what it is being said to.
+
+    `chosen` is absent only for a session enrolled but never spoken to, which is the window between
+    its row and its first message. `answerable` is the separate question of whether that choice is
+    *still* configured: a profile edited out from under a session leaves it readable and stuck, and
+    the page says so rather than showing a spinner that will never resolve.
+    """
 
     session: Session
     said: Transcript
+    chosen: Choice | None
+    answerable: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +59,7 @@ class Service:
     database: Database
     durable: SqliteDurable
     checkpointer: SqliteCheckpointer
+    config: Config
     now: Callable[[], datetime] = now_utc
 
     async def listed(self) -> tuple[Session, ...]:
@@ -61,12 +76,28 @@ class Service:
         found = await read_session(self.database, session)
         if found is None:
             return None
-        return Conversation(session=found, said=transcript(await self.checkpointer.load(session)))
+        recorded = await self.checkpointer.load(session)
+        chosen = choice_of(recorded)
+        return Conversation(
+            session=found,
+            said=transcript(recorded),
+            chosen=chosen,
+            answerable=chosen is not None and self.config.offers(chosen.profile, chosen.model),
+        )
 
-    async def start(self, said: str) -> Session:
-        """A new session, named after the first thing said in it, with that message already sent."""
+    async def start(self, said: str, chosen: Choice) -> Session:
+        """
+        A new session on `chosen`, named after the first thing said in it, with that message sent.
+
+        Three writes, and the order is the whole of the choice. The choice is recorded before the
+        message because the message is what *queues* the session: written the other way round, a
+        worker could take the session between the two and find no profile to answer on. Enrolment
+        comes first for the reason it always did, that a session in the list with nothing in it is
+        visible where work nobody can find is not.
+        """
         session = Session(id=mint_session_id(), created_at=self.now(), title=name_from(said))
         await enrol(self.database, session)
+        await self.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(chosen))
         await self.say(session.id, turn=0, said=said)
         return session
 

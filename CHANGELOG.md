@@ -18,3 +18,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   script or a test.
 - `mainplate serve`, which runs the console and the worker that answers its sessions over one
   SQLite file.
+- `mainplate install` and `mainplate uninstall`, which converge and remove a user systemd unit
+  pointing at the interpreter that ran them. Any `MAINPLATE_*` setting lives in an
+  `EnvironmentFile` created `0600` on the first install and never overwritten.
+- Profiles in `config.toml`: an endpoint and a credential, with the model chosen separately. Each
+  session records the pair it was created on and is answered on it for life, so changing what is
+  configured leaves existing conversations readable. Credentials are read from the `0600` file and
+  handed to the SDK, so they never enter the process environment.
+- exe.dev support: on a VM with the built-in LLM integration, `mainplate install` discovers it
+  through the reflection integration and writes a keyless profile, so the box holds no credential
+  at all.

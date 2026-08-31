@@ -13,12 +13,12 @@ permissions:
 jobs:
   check:
     name: Check
-    # One platform, because nothing here is platform-specific yet and a single locked
-    # environment is also a single toolchain: split across three runners, the legs would
-    # spend more wall-clock checking out and syncing than they save by running in parallel.
-    # The one thing that would justify a matrix is the SQLite the interpreter links against,
-    # which differs per platform and has a floor this store needs (3.42, for `unixepoch`'s
-    # `subsec`); when a test asserts that floor, this becomes a matrix.
+    # One platform, and now for a reason rather than for want of one: `install.py` renders a
+    # systemd unit, so its tests are Linux's and there is nothing for a macOS or Windows runner
+    # to run a meaningful version of. The console itself is portable, which is what would make a
+    # matrix worth adding later; the other thing that would is the SQLite the interpreter links
+    # against, which differs per platform and has a floor this store needs (3.42, for
+    # `unixepoch`'s `subsec`). Neither is asserted by a test yet.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

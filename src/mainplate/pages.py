@@ -34,9 +34,11 @@ from without_html import li
 from without_html import link
 from without_html import main
 from without_html import meta
+from without_html import option
 from without_html import p
 from without_html import render
 from without_html import script
+from without_html import select
 from without_html import span
 from without_html import textarea
 from without_html import time
@@ -45,8 +47,11 @@ from without_html import ul
 from without_web import Reversible
 from without_web import url_for
 
+from mainplate.agent import Choice
 from mainplate.conversation import Exchange
 from mainplate.conversation import Transcript
+from mainplate.profiles import Config
+from mainplate.profiles import Profile
 from mainplate.service import Conversation
 from mainplate.sessions import Session
 
@@ -65,6 +70,8 @@ WAITING = "load delay:1s"
 SWAP: Final = "outerHTML scroll:bottom"
 
 TRANSCRIPT_ID: Final = "transcript"
+
+MODEL_ID: Final = "model"
 
 # What a session is called before anyone has said anything in it, and what the tab says on the
 # page where a session does not exist yet.
@@ -86,6 +93,7 @@ class Links:
     session: Reversible
     say: Reversible
     session_fragment: Reversible
+    profile_models: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -105,6 +113,16 @@ class Links:
 
     def to_session_fragment(self, session: str) -> str:
         return url_for(self.session_fragment, {"session": session})
+
+    def to_profile_models(self) -> str:
+        """
+        The model select, asked for with a profile in the query string.
+
+        A query parameter rather than a path segment, because the profile is *the value of the
+        select that asks*: htmx sends a triggering input's own value, so this URL needs no
+        interpolation and the select needs no script to build one.
+        """
+        return url_for(self.profile_models)
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -176,6 +194,68 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> E
     )
 
 
+def model_select(profile: Profile, chosen: str | None = None) -> Element:
+    """
+    The models one profile offers, as the select the form submits.
+
+    Its own element with a stable id, because changing the profile replaces exactly this and
+    nothing else on the page. A profile always offers at least one model (the parser refuses an
+    empty list), so this is never an empty select nobody can submit.
+    """
+    picked = chosen if chosen in profile.models else profile.models[0]
+    return select(
+        attrs={"id": MODEL_ID, "name": "model", "aria-label": "Model"},
+        children=[
+            option(attrs={"value": model, "selected": model == picked}, children=model) for model in profile.models
+        ],
+    )
+
+
+def profile_select(links: Links, config: Config) -> Element:
+    """
+    Which endpoint to answer on, and the control that swaps the model list beside it.
+
+    htmx sends a triggering input's own value, so the `hx-get` needs no interpolation: choosing a
+    profile asks for that profile's models and replaces the select next to this one. Without a
+    browser the form still posts, carrying whatever models the page was rendered with, and the
+    handler refuses a pair no profile offers.
+    """
+    return select(
+        attrs={
+            "name": "profile",
+            "aria-label": "Profile",
+            "hx-get": links.to_profile_models(),
+            "hx-target": f"#{MODEL_ID}",
+            "hx-swap": "outerHTML",
+            "hx-status:4xx": "swap:none",
+            "hx-status:5xx": "swap:none",
+        },
+        children=[
+            option(attrs={"value": name, "selected": name == config.default}, children=name)
+            for name in sorted(config.profiles)
+        ],
+    )
+
+
+def picker(links: Links, config: Config) -> Element:
+    """The two selects, which appear only where a session is being created."""
+    return div(
+        cls="picker",
+        children=[
+            span(cls="label", children="Answer with"),
+            profile_select(links, config),
+            model_select(config.profiles[config.default]),
+        ],
+    )
+
+
+def chosen_note(chosen: Choice | None) -> Element:
+    """What an existing session is on, as a fact rather than a control: it cannot be changed."""
+    if chosen is None:
+        return span(cls="picker")
+    return span(cls=("picker", "settled"), children=f"{chosen.profile} \N{MIDDLE DOT} {chosen.model}")
+
+
 def bubble(who: str, said: str) -> Element:
     """
     One thing somebody said.
@@ -196,7 +276,7 @@ def exchange(said: Exchange) -> tuple[Element, Element]:
     return bubble("person", said.prompt), bubble("assistant", said.reply)
 
 
-def transcript_region(links: Links, session: str, said: Transcript) -> Element:
+def transcript_region(links: Links, session: str, said: Transcript, stalled: str | None = None) -> Element:
     """
     The conversation, and whether it is still asking for the rest of it.
 
@@ -218,7 +298,7 @@ def transcript_region(links: Links, session: str, said: Transcript) -> Element:
             "hx-status:4xx": "swap:none",
             "hx-status:5xx": "swap:none",
         }
-        if said.pending
+        if said.pending and stalled is None
         else {}
     )
     spoken: list[Element] = []
@@ -227,8 +307,10 @@ def transcript_region(links: Links, session: str, said: Transcript) -> Element:
     # One waiting bubble for however many messages are outstanding, because one reply is what is
     # actually being written: the turns behind it are queued, not in flight.
     spoken.extend(bubble("person", each) for each in said.pending)
-    if said.pending:
+    if said.pending and stalled is None:
         spoken.append(waiting_bubble())
+    if stalled is not None:
+        spoken.append(p(cls="stalled", children=stalled))
     return div(
         cls="transcript",
         attrs={"id": TRANSCRIPT_ID, **polling},
@@ -236,15 +318,23 @@ def transcript_region(links: Links, session: str, said: Transcript) -> Element:
     )
 
 
-def composer(action: str, *, live: bool) -> Element:
+def composer(action: str, beneath: Element, *, live: bool, refusing: bool = False) -> Element:
     """
-    The box you type in, which posts to `action` and is the same control on both pages.
+    The box you type in, which posts to `action`, with `beneath` under it.
 
-    `live` is what differs, and it is not styling: sending into a session that already exists
-    swaps the transcript and leaves the address bar alone, while sending the first message
-    *creates* a session and has to end up at that session's own URL. htmx cannot do the second
-    one, because a redirect's headers never reach it, so the first message is an ordinary form
-    post and the browser follows the `303` itself.
+    `live` is what differs between the two pages, and it is not styling: sending into a session
+    that already exists swaps the transcript and leaves the address bar alone, while sending the
+    first message *creates* a session and has to end up at that session's own URL. htmx cannot do
+    the second one, because a redirect's headers never reach it, so the first message is an
+    ordinary form post and the browser follows the `303` itself.
+
+    `beneath` is the picker on one page and a note saying what a session is already on for the
+    other, because a session's choice is fixed for its life and offering a control that could not
+    change it would be a lie about what the page does.
+
+    `refusing` disables the whole thing, for a session nothing can answer. The disabling is real
+    rather than styling: a box that still submitted would record a message into a session whose
+    profile is gone, which is one more thing to explain and nothing gained.
 
     The reset is on `after:swap` rather than on `after:request`, so the box empties when the
     conversation on screen has actually taken the message rather than when the request left.
@@ -269,17 +359,24 @@ def composer(action: str, *, live: bool) -> Element:
         cls="composer",
         attrs={"method": "post", "action": action, **driving},
         children=[
-            textarea(
-                attrs={
-                    "name": "prompt",
-                    "rows": 3,
-                    "required": True,
-                    "autofocus": True,
-                    "placeholder": "Say something",
-                    "aria-label": "Message",
-                }
+            div(
+                cls="row",
+                children=[
+                    textarea(
+                        attrs={
+                            "name": "prompt",
+                            "rows": 3,
+                            "required": True,
+                            "autofocus": not refusing,
+                            "disabled": refusing,
+                            "placeholder": "Say something",
+                            "aria-label": "Message",
+                        }
+                    ),
+                    button(attrs={"type": "submit", "disabled": refusing}, children="Send"),
+                ],
             ),
-            button(attrs={"type": "submit"}, children="Send"),
+            beneath,
         ],
     )
 
@@ -294,13 +391,13 @@ def shell(links: Links, listed: tuple[Session, ...], showing: str | None, pane: 
     )
 
 
-def start_page(links: Links, listed: tuple[Session, ...]) -> str:
+def start_page(links: Links, listed: tuple[Session, ...], config: Config) -> str:
     """
-    Where a session begins: an empty transcript and a box, with no session behind it yet.
+    Where a session begins: an empty transcript, a box, and what to answer it with.
 
     Nothing is created until something is said, which is why this page has no id in its URL. A
     session that existed with nothing in it would be a row in the list nobody can name and nobody
-    asked for.
+    asked for, and it would have to be recorded on a profile chosen for it rather than by anybody.
     """
     return document(
         links,
@@ -311,13 +408,30 @@ def start_page(links: Links, listed: tuple[Session, ...]) -> str:
             showing=None,
             pane=[
                 transcript_region(links, session="", said=Transcript(exchanges=(), pending=())),
-                composer(links.to_start(), live=False),
+                composer(links.to_start(), picker(links, config), live=False),
             ],
         ),
     )
 
 
+def stalled_by(showing: Conversation) -> str | None:
+    """
+    Why this session cannot be answered, or nothing at all when it can.
+
+    One sentence naming the profile, because that is the only thing a person can act on: the pair
+    was configured when the session started, so putting it back in the configuration file is what
+    makes the conversation continue exactly where it stopped.
+    """
+    if showing.answerable or showing.chosen is None:
+        return None
+    return (
+        f"This session was started on profile {showing.chosen.profile!r} with {showing.chosen.model!r}, "
+        f"which the configuration no longer offers. Put it back to carry on, or start a new session."
+    )
+
+
 def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation) -> str:
+    stalled = stalled_by(showing)
     return document(
         links,
         showing.session.title or UNTITLED,
@@ -326,8 +440,13 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             listed,
             showing=showing.session.id,
             pane=[
-                transcript_region(links, showing.session.id, showing.said),
-                composer(links.to_say(showing.session.id), live=True),
+                transcript_region(links, showing.session.id, showing.said, stalled),
+                composer(
+                    links.to_say(showing.session.id),
+                    chosen_note(showing.chosen),
+                    live=True,
+                    refusing=stalled is not None,
+                ),
             ],
         ),
     )

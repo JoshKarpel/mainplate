@@ -36,6 +36,10 @@ dependencies = [
     "without-http>=0.0.6",
     "without-durability>=0.0.6",
     "without-durability-sqlite>=0.0.6",
+    # Declared because `exe` imports it, though only `without-http` calls it: reflection lives at a
+    # hostname that exists only inside an exe.dev VM, so "not on exe.dev" arrives as h11's own
+    # `RemoteProtocolError` as readily as an `OSError`, and discovery catches it by name.
+    "h11>=0.16",
     "pydantic>=2.12",
     "pydantic-settings>=2.13",
     "typer>=0.27",

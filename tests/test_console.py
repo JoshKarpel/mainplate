@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from calling import calling
+from conftest import CONFIG
+from conftest import DEFAULT_CHOICE
 from conftest import WHEN
+from conftest import already
 from without_asgi import ASGIApp
 
+from mainplate.agent import Choice
+from mainplate.app import build_app
 from mainplate.console import LONGEST_PROMPT
 from mainplate.console import NotAMessage
 from mainplate.console import next_turn
@@ -12,15 +19,32 @@ from mainplate.console import parse_form_prompt
 from mainplate.conversation import Exchange
 from mainplate.conversation import Transcript
 from mainplate.conversation import prompt_key
+from mainplate.profiles import parse_config
 from mainplate.service import Service
 
 
 async def a_session(app: ASGIApp, said: str = "what is a mainplate") -> str:
     """A session started the way a browser starts one, named by the path it was redirected to."""
     async with calling(app) as caller:
-        answered = await caller.post("/sessions", {"prompt": said})
+        answered = await caller.post("/sessions", starting_form(said))
         assert answered.status == 303
         return answered.location.rsplit("/", 1)[-1]
+
+
+# A configuration offering something else entirely, for the session whose profile went away.
+OTHER_CONFIG = """
+default = "elsewhere"
+
+[profiles.elsewhere]
+provider = "anthropic"
+api_key = "sk-other"
+models = ["different"]
+"""
+
+
+def starting_form(said: str, chosen: Choice = DEFAULT_CHOICE) -> dict[str, str]:
+    """What the new-chat form posts: a message and the pair chosen to answer it."""
+    return {"prompt": said, "profile": chosen.profile, "model": chosen.model}
 
 
 class TestReadingAForm:
@@ -144,7 +168,7 @@ class TestTheConsole:
     async def test_an_empty_message_is_refused_rather_than_recorded(self, app: ASGIApp, service: Service) -> None:
         """A client refusal, not a server fault: a request that is not a message did not break anything."""
         async with calling(app) as caller:
-            answered = await caller.post("/sessions", {"prompt": "   "})
+            answered = await caller.post("/sessions", starting_form("   "))
         assert answered.status == 422
         assert await service.listed() == ()
 
@@ -160,6 +184,75 @@ class TestTheConsole:
         async with calling(app) as caller:
             for asset in ("/assets/mainplate.css", "/assets/htmx.min.js"):
                 assert (await caller.get(asset)).status == 200
+
+    async def test_the_start_page_offers_every_profile_and_the_defaults_models(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        for name in CONFIG.profiles:
+            assert f'value="{name}"' in answered.text
+        assert 'value="careful"' in answered.text, "the default profile's second model"
+        assert 'value="fast" selected' in answered.text, "its first, preselected"
+
+    async def test_changing_the_profile_asks_for_that_profiles_models(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert 'hx-get="/fragments/models"' in answered.text
+        assert 'hx-target="#model"' in answered.text
+
+    async def test_the_models_fragment_answers_with_one_profiles_models(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/fragments/models?profile=gateway")
+        assert answered.status == 200
+        assert "<html" not in answered.text
+        assert 'value="fast"' in answered.text
+        assert "careful" not in answered.text, "'careful' belongs to the other profile"
+
+    async def test_the_models_fragment_for_a_profile_nothing_offers_is_refused(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/fragments/models?profile=gone")
+        assert answered.status == 404
+
+    async def test_a_session_records_the_pair_it_was_started_on(self, app: ASGIApp, service: Service) -> None:
+        chosen = Choice(profile="gateway", model="fast")
+        async with calling(app) as caller:
+            answered = await caller.post("/sessions", starting_form("hello", chosen))
+        session = answered.location.rsplit("/", 1)[-1]
+        assert (await service.read(session)).chosen == chosen  # type: ignore[union-attr]
+
+    async def test_a_pair_no_profile_offers_is_refused_rather_than_recorded(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """A select is a suggestion the page made, not a constraint on what somebody can post."""
+        async with calling(app) as caller:
+            answered = await caller.post("/sessions", starting_form("hello", Choice(profile="here", model="nope")))
+        assert answered.status == 422
+        assert await service.listed() == ()
+
+    async def test_a_session_page_says_what_it_is_answered_on(self, app: ASGIApp) -> None:
+        session = await a_session(app)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session}")
+        assert f"{DEFAULT_CHOICE.profile}" in answered.text
+        assert f"{DEFAULT_CHOICE.model}" in answered.text
+        assert 'name="profile"' not in answered.text, "a session's choice is fixed, so offering one would lie"
+
+    async def test_a_session_whose_profile_is_gone_says_so_and_stops_asking(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The one state a person cannot otherwise diagnose: a spinner that will never resolve.
+
+        The worker cannot answer the session, so a page that kept polling would show a pending
+        bubble forever with nothing saying why. Naming the profile is the whole of the fix, because
+        putting it back is what makes the conversation continue where it stopped.
+        """
+        session = await a_session(app)
+        narrowed = replace(service, config=parse_config(OTHER_CONFIG))
+        async with calling(build_app(already(narrowed))) as caller:
+            answered = await caller.get(f"/sessions/{session}")
+        assert DEFAULT_CHOICE.profile in answered.text
+        assert "no longer offers" in answered.text
+        assert "hx-get" not in answered.text, "a session nothing will answer must stop asking"
 
     async def test_what_the_model_says_is_escaped_rather_than_rendered(self, app: ASGIApp, service: Service) -> None:
         """A prompt is somebody else's text on this page, so markup in it must not become markup."""

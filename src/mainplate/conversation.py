@@ -1,4 +1,4 @@
-# A chat session as one durable workflow, and the two pure readings of its checkpoint.
+# A chat session as one durable workflow, and the pure readings of its checkpoint.
 #
 # The workflow id *is* the session id, and the body below is the whole of what a session is: wait
 # to be told what the person said, answer it, wait again. Nothing ends it, so a session's every
@@ -10,12 +10,19 @@
 # been said is what has been recorded, so the page renders the checkpoint, a crash resumes from
 # it, and a second process reading the same file sees exactly what the first one did.
 #
-# Three keys per turn, and the whole scheme is here so that the code that writes them and the two
-# functions that read them cannot drift apart:
+# One key for the session, and three per turn. The whole scheme is here so that the code that
+# writes them and the functions that read them cannot drift apart:
 #
+#     choice               which profile and model this session is on, written once at creation
 #     turn:{n}:prompt      what the person said, written from outside the pass by `arrive`
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
+#
+# `choice` is in the checkpoint rather than beside the session's row for the reason everything else
+# is: it has to be the same on every pass and after every restart, and the checkpoint is the thing
+# that already promises that. It is also why it is written before the first prompt and never
+# again, since a session that changed endpoint halfway would replay recorded answers from one and
+# continue on another.
 #
 # `messages` is what makes resuming cheap. The stepwise mechanism re-runs the code *between*
 # steps, so a body that looped over every past turn would re-drive the agent graph for all of
@@ -33,7 +40,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Never
 
-from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelResponse
@@ -42,7 +48,11 @@ from pydantic_ai.run import AgentRunResult
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
+from mainplate.agent import Agents
+from mainplate.agent import Choice
 from mainplate.durability import stepping
+
+CHOICE_KEY: StepKey = "choice"
 
 
 def turn_prefix(turn: int) -> str:
@@ -72,6 +82,49 @@ def parse_prompt(recorded: object) -> str:
 
 def parse_messages(recorded: object) -> tuple[ModelMessage, ...]:
     return tuple(ModelMessagesTypeAdapter.validate_python(recorded))
+
+
+def parse_choice(recorded: object) -> Choice:
+    """
+    The profile and model a session was started on, or a loud failure if the record is not one.
+
+    Strict about shape and silent about whether the pair is still *configured*, which is a
+    different question with a different answer: this says what the session chose, and `Agents`
+    says whether that is still something to answer with.
+    """
+    if not isinstance(recorded, dict):
+        raise TypeError(f"a choice must be a mapping, not {recorded!r}")
+    profile, model = recorded.get("profile"), recorded.get("model")
+    if not isinstance(profile, str) or not isinstance(model, str):
+        raise TypeError(f"a choice must name a profile and a model, not {recorded!r}")
+    return Choice(profile=profile, model=model)
+
+
+def recorded_choice(chosen: Choice) -> dict[str, str]:
+    """A choice as the JSON-native value the store's codec will take."""
+    return {"profile": chosen.profile, "model": chosen.model}
+
+
+def choice_of(recorded: Mapping[str, object]) -> Choice | None:
+    """
+    What a session is on, or nothing at all for one that has not been started yet.
+
+    Absent is an ordinary state rather than a fault: a workflow id nobody enrolled has an empty
+    checkpoint, and so does a session in the instant between its row and its first message.
+    """
+    written = recorded.get(CHOICE_KEY)
+    return None if written is None else parse_choice(written)
+
+
+class NeverStarted(LookupError):
+    """
+    A workflow was queued that no session creation ever wrote a choice into.
+
+    `Service.start` writes the choice before the prompt precisely so this cannot happen, so
+    reaching it means a workflow id was queued by something other than this console. Loud rather
+    than defaulted to some profile, because guessing which endpoint an unknown conversation
+    belongs on is exactly the decision nothing here should make on somebody's behalf.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,16 +234,26 @@ def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
     return record
 
 
-def conversing(agent: Agent[None, str]) -> Callable[[Run], Awaitable[Never]]:
+def conversing(agents: Agents) -> Callable[[Run], Awaitable[Never]]:
     """
-    The workflow body every session runs, closed over the agent that answers them.
+    The workflow body every session runs, closed over every agent this process can answer with.
 
-    A closure rather than an argument because `work` takes one body for every workflow, which is
-    the right shape here: a session differs from another only in its id, and `Run.workflow` is
-    already that. What an agent *is* stays the composition root's decision.
+    A closure rather than an argument because `work` takes one body for every workflow. What
+    differs between sessions is not the body but which agent it reaches for, and that is read from
+    the session's own checkpoint rather than passed in: `run.workflow` names the session, and the
+    session names its profile.
+
+    The agent is resolved once per pass rather than once per turn, because a session's choice
+    cannot change: reading it again on the second turn would be asking a question whose answer is
+    already recorded. Resolving it before the first `awaiting` is what makes a removed profile a
+    failure the console can explain rather than one discovered mid-turn.
     """
 
     async def converse(run: Run) -> Never:
+        chosen = choice_of(run.recorded)
+        if chosen is None:
+            raise NeverStarted(f"{run.workflow} records no profile, so it was never started by this console")
+        agent = agents.for_choice(chosen)
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)

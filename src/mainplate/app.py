@@ -23,7 +23,6 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Final
 
-from pydantic_ai import Agent
 from without_asgi import ASGIApp
 from without_asgi import HttpScope
 from without_asgi import Lifespan
@@ -47,7 +46,8 @@ from without_web import handle
 from without_web import http_scope
 from without_web import static_files
 
-from mainplate.agent import build_agent
+from mainplate.agent import Agents
+from mainplate.agent import build_agents
 from mainplate.console import ASSETS
 from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
@@ -55,6 +55,9 @@ from mainplate.console import page_response
 from mainplate.console import recover
 from mainplate.conversation import conversing
 from mainplate.pages import refusal_page
+from mainplate.profiles import Config
+from mainplate.profiles import config_path
+from mainplate.profiles import read_config
 from mainplate.service import Service
 from mainplate.sessions import prepare
 from mainplate.settings import Settings
@@ -95,7 +98,7 @@ def build_router() -> Router[Service]:
 
 
 @asynccontextmanager
-async def open_store(database: Path, lease: timedelta) -> AsyncIterator[Service]:
+async def open_store(database: Path, lease: timedelta, config: Config) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
 
@@ -111,6 +114,7 @@ async def open_store(database: Path, lease: timedelta) -> AsyncIterator[Service]
             database=opened,
             durable=SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease)),
             checkpointer=checkpointer,
+            config=config,
         )
     finally:
         # Never `connection.close()`: the store's own `aclose` waits out any statement still
@@ -120,7 +124,7 @@ async def open_store(database: Path, lease: timedelta) -> AsyncIterator[Service]
 
 
 @asynccontextmanager
-async def open_console(settings: Settings, agent: Agent[None, str]) -> AsyncIterator[Service]:
+async def open_console(settings: Settings, config: Config, agents: Agents) -> AsyncIterator[Service]:
     """
     The store, with a worker answering its sessions for as long as the block lasts.
 
@@ -129,8 +133,8 @@ async def open_console(settings: Settings, agent: Agent[None, str]) -> AsyncIter
     leaves its session in the queue for the next process rather than losing it, which is the whole
     of the recovery story here.
     """
-    async with open_store(settings.database, settings.lease) as service:
-        answering = work(service.durable, conversing(agent), limit=settings.passes)
+    async with open_store(settings.database, settings.lease, config) as service:
+        answering = work(service.durable, conversing(agents), limit=settings.passes)
         async with background_task(answering):
             yield service
 
@@ -148,10 +152,11 @@ def build_app(opening: Lifespan[Service]) -> ASGIApp:
 
 async def serve(settings: Settings) -> None:
     """Run the console and the worker until cancelled, which for the CLI means until a signal."""
-    agent = build_agent(settings.model, settings.instructions)
+    config = read_config(config_path(settings.config_home))
+    agents = build_agents(config, settings.instructions)
 
     def opening() -> AbstractAsyncContextManager[Service]:
-        return open_console(settings, agent)
+        return open_console(settings, config, agents)
 
     try:
         async with serving(build_app(opening), host=settings.host, port=settings.port):

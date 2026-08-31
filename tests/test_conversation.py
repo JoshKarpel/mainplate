@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Never
 
 import pytest
+from conftest import DEFAULT_CHOICE
 from conftest import Provider
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
@@ -18,7 +19,9 @@ from without_durability.stepwise import Sleeping
 from without_durability.stepwise import Waiting
 from without_durability.stepwise import resume
 
+from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Exchange
+from mainplate.conversation import NeverStarted
 from mainplate.conversation import Reached
 from mainplate.conversation import Transcript
 from mainplate.conversation import conversing
@@ -26,6 +29,7 @@ from mainplate.conversation import messages_key
 from mainplate.conversation import parse_prompt
 from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
+from mainplate.conversation import recorded_choice
 from mainplate.conversation import replied
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
@@ -33,6 +37,18 @@ from mainplate.durability import stepping
 from mainplate.service import Service
 
 SESSION = "a-session"
+
+
+async def started(service: Service, said: str, session: str = SESSION) -> None:
+    """
+    A session recorded on the default choice, with its first message waiting.
+
+    The choice before the prompt, in the order `Service.start` writes them: the prompt is what
+    queues a session, so a worker taking it before the choice landed would find nothing to answer
+    on.
+    """
+    await service.checkpointer.supply(session, CHOICE_KEY, recorded_choice(DEFAULT_CHOICE))
+    await service.say(session, turn=0, said=said)
 
 
 async def pass_at(
@@ -100,15 +116,23 @@ class TestReadingACheckpoint:
 
 
 class TestAnsweringASession:
-    async def test_a_new_session_waits_to_be_told_something(self, service: Service, provider: Provider) -> None:
-        assert await pass_at(service, conversing(provider.agent())) == Waiting(key=prompt_key(0))
+    async def test_a_started_session_waits_to_be_told_something(self, service: Service, provider: Provider) -> None:
+        await service.checkpointer.supply(SESSION, CHOICE_KEY, recorded_choice(DEFAULT_CHOICE))
+        assert await pass_at(service, conversing(provider.agents())) == Waiting(key=prompt_key(0))
         assert provider.asked == 0
+
+    async def test_a_workflow_with_no_recorded_choice_is_refused_rather_than_guessed_at(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """`Service.start` writes the choice first, so reaching this means something else queued it."""
+        with pytest.raises(NeverStarted):
+            await pass_at(service, conversing(provider.agents()))
 
     async def test_a_message_is_answered_and_the_session_waits_again(
         self, service: Service, provider: Provider
     ) -> None:
-        await service.say(SESSION, turn=0, said="hello")
-        assert await pass_at(service, conversing(provider.agent())) == Waiting(key=prompt_key(1))
+        await started(service, said="hello")
+        assert await pass_at(service, conversing(provider.agents())) == Waiting(key=prompt_key(1))
         assert transcript(await service.checkpointer.load(SESSION)) == Transcript(
             exchanges=(Exchange(prompt="hello", reply="answer 1"),), pending=()
         )
@@ -116,8 +140,8 @@ class TestAnsweringASession:
     async def test_a_later_pass_replays_the_recorded_answer_rather_than_asking_again(
         self, service: Service, provider: Provider
     ) -> None:
-        body = conversing(provider.agent())
-        await service.say(SESSION, turn=0, said="hello")
+        body = conversing(provider.agents())
+        await started(service, said="hello")
         await pass_at(service, body)
         await pass_at(service, body)
         await pass_at(service, body)
@@ -126,8 +150,8 @@ class TestAnsweringASession:
     async def test_a_second_message_is_answered_without_re_asking_the_first(
         self, service: Service, provider: Provider
     ) -> None:
-        body = conversing(provider.agent())
-        await service.say(SESSION, turn=0, said="hello")
+        body = conversing(provider.agents())
+        await started(service, said="hello")
         await pass_at(service, body)
         await service.say(SESSION, turn=1, said="again")
         await pass_at(service, body)
@@ -148,7 +172,7 @@ class TestAnsweringASession:
         the capability that second run is a second call to the provider, and a paid one.
         """
         agent = provider.agent()
-        await service.say(SESSION, turn=0, said="hello")
+        await started(service, said="hello")
         holder = await claimed(service.checkpointer, SESSION)
         run = Run(holder=holder, checkpointer=service.checkpointer, recorded=await service.checkpointer.load(SESSION))
         with stepping(run, turn_prefix(0)):
@@ -157,24 +181,24 @@ class TestAnsweringASession:
         recorded = await service.checkpointer.load(SESSION)
         assert messages_key(0) not in recorded
 
-        assert await pass_at(service, conversing(agent)) == Waiting(key=prompt_key(1))
+        assert await pass_at(service, conversing(provider.agents())) == Waiting(key=prompt_key(1))
         assert provider.asked == 1
 
     async def test_a_turn_carries_the_conversation_so_far_to_the_model(
         self, service: Service, provider: Provider
     ) -> None:
         """A second turn must reach the model with the first exchange behind it, or it is a fresh chat."""
-        body = conversing(provider.agent())
-        await service.say(SESSION, turn=0, said="hello")
+        body = conversing(provider.agents())
+        await started(service, said="hello")
         await pass_at(service, body)
         await service.say(SESSION, turn=1, said="again")
         await pass_at(service, body)
         assert provider.carried == [1, 3]
 
     async def test_two_sessions_do_not_see_each_other(self, service: Service, provider: Provider) -> None:
-        body = conversing(provider.agent())
-        await service.say("one", turn=0, said="first session")
-        await service.say("two", turn=0, said="second session")
+        body = conversing(provider.agents())
+        await started(service, said="first session", session="one")
+        await started(service, said="second session", session="two")
         await pass_at(service, body, session="one")
         await pass_at(service, body, session="two")
         assert transcript(await service.checkpointer.load("one")).exchanges == (
