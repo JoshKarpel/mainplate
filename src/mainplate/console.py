@@ -1,0 +1,188 @@
+# The console's routes: five paths, and what each of them reads or writes.
+#
+# Nothing here runs an agent. A write puts a message into a session's checkpoint and asks for the
+# session to be looked at; the worker is what turns that into a model call, in its own time and
+# possibly in another process. That is the whole reason a reply can outlive the request that
+# asked for it, and it is why every one of these handlers is short.
+
+from __future__ import annotations
+
+from urllib.parse import parse_qs
+
+from without_asgi import Response
+from without_asgi import html_content
+from without_web import STR
+from without_web import ExtractionError
+from without_web import Route
+from without_web import body
+from without_web import get
+from without_web import path_param
+from without_web import post
+
+from mainplate.conversation import Transcript
+from mainplate.pages import Links
+from mainplate.pages import fragment
+from mainplate.pages import refusal_page
+from mainplate.pages import session_page
+from mainplate.pages import start_page
+from mainplate.pages import transcript_region
+from mainplate.service import Service
+
+ASSETS = "/assets"
+
+LOCATION = b"location"
+
+# A bound on what one message may be, so a request that is not a message cannot be buffered into
+# this process's memory as if it were. Generous by the standards of a chat box and small by the
+# standards of anything else.
+LONGEST_PROMPT = 100_000
+
+session_id = path_param("session", STR)
+
+
+class NotAMessage(ValueError):
+    """A form post that did not carry a message this console could send."""
+
+
+def parse_form_prompt(raw: bytes) -> str:
+    """
+    The message a form carried, parsed at the boundary and refused if it is not one.
+
+    `parse_qs` drops empty values, so a form submitted with an empty box arrives as no field at
+    all rather than as an empty string, and both are the same refusal here. Refusing is what lets
+    everything downstream treat a prompt as text somebody meant to send.
+    """
+    if len(raw) > LONGEST_PROMPT:
+        raise NotAMessage(f"a message may be at most {LONGEST_PROMPT} bytes")
+    fields = parse_qs(raw.decode("utf-8", errors="replace"))
+    said = fields.get("prompt", [""])[0].strip()
+    if not said:
+        raise NotAMessage("a message cannot be empty")
+    return said
+
+
+prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
+
+
+def page_response(status: int, markup: str) -> Response:
+    return Response.from_content(status, html_content(markup))
+
+
+async def recover(raised: Exception) -> Response | None:
+    """
+    What a request nothing could read is answered with, which is a page and a client status.
+
+    The whole of the policy, because the whole of what this console parses is one form field.
+    Left unhandled these reach the ASGI plumbing as a `500` and a line of plain text, which says
+    the server broke over a request that was simply not a message.
+
+    Anything else propagates. A `ValueError` raised deeper in a handler is a fault here, and
+    answering it as a client error would hide it; `ExtractionError` is the boundary type that
+    keeps those two apart.
+    """
+    match raised:
+        case ExtractionError(cause=NotAMessage() as why):
+            return page_response(422, refusal_page(LINKS, 422, str(why)))
+        case ExtractionError():
+            return page_response(400, refusal_page(LINKS, 400, "this request could not be read"))
+        case _:
+            return None
+
+
+def seeing(where: str) -> Response:
+    """
+    Where to look now that a session exists, as a `303`.
+
+    `303` rather than `302`, because the browser must follow it with a `GET`: the action was a
+    POST, and a refresh repeating it would start a second session saying the same thing. It is
+    also why this action has no rendering of its own to keep in step with the session page.
+    """
+    return Response(status=303, headers=((LOCATION, where.encode()),))
+
+
+def next_turn(said: Transcript) -> int:
+    """
+    The turn a new message goes into, which is the first one nothing has been said in.
+
+    Counted from what is recorded rather than from a number the server keeps, so two messages
+    posted at once land in different slots and neither overwrites the other: a slot with a prompt
+    in it is spoken for whether or not it has been answered yet.
+    """
+    return len(said.exchanges) + len(said.pending)
+
+
+@get("/", summary="Start a session")
+async def start_here(service: Service) -> Response:
+    return page_response(200, start_page(LINKS, await service.listed()))
+
+
+@post("/sessions", prompt, summary="Say the first thing, which is what creates a session")
+async def start(service: Service, said: str) -> Response:
+    """
+    Mint a session and hand it its first message.
+
+    An ordinary form post rather than an htmx one, because this is the request that changes which
+    session the browser is looking at, and htmx never sees a redirect: the browser follows it
+    internally and htmx is handed the final response, so a swap-driven version would render the
+    new session into the old page's URL.
+    """
+    started = await service.start(said)
+    return seeing(LINKS.to_session(started.id))
+
+
+@get(t"/sessions/{session_id}", session_id, summary="One session, whole")
+async def show_session(service: Service, session: str) -> Response:
+    found = await service.read(session)
+    if found is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return page_response(200, session_page(LINKS, await service.listed(), found))
+
+
+@get(t"/fragments/sessions/{session_id}", session_id, summary="One session's transcript alone, for a live region")
+async def session_fragment(service: Service, session: str) -> Response:
+    """
+    The same transcript the page holds, built by the same function, with no document around it.
+
+    Under `fragments/` rather than at `/sessions/{id}/transcript`, so the segment after a session
+    id keeps meaning something about that session rather than sometimes naming part of a page.
+    Fetching one gives an unstyled element with no document around it, which is not a promise a
+    path shaped like a detail page should make; and it is the disposable half of the URL space,
+    so keeping it out of the durable half leaves something saying which is which. It is also
+    where nearly all the traffic goes while a reply is in flight, which makes it one filter in a
+    log rather than a growing list of paths scattered through the resource tree.
+    """
+    found = await service.read(session)
+    if found is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return page_response(200, fragment(transcript_region(LINKS, session, found.said)))
+
+
+@post(t"/sessions/{session_id}/messages", session_id, prompt, summary="Say something to a session")
+async def say(service: Service, session: str, said: str) -> Response:
+    """
+    Put a message into a session's checkpoint and answer with the transcript that now holds it.
+
+    A `200` carrying the transcript rather than a redirect, because htmx is driving this one and
+    the address bar does not change: the swap replaces the conversation with one showing the
+    message as pending, carrying the poll that will replace it again once it is answered.
+    """
+    found = await service.read(session)
+    if found is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    await service.say(session, turn=next_turn(found.said), said=said)
+    asked = await service.read(session)
+    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return page_response(200, fragment(transcript_region(LINKS, session, asked.said)))
+
+
+CONSOLE_ROUTES: tuple[Route[Service], ...] = (start_here, start, show_session, session_fragment, say)
+
+LINKS = Links(
+    home=start_here,
+    start=start,
+    session=show_session,
+    say=say,
+    session_fragment=session_fragment,
+    assets=ASSETS,
+)

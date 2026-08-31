@@ -1,0 +1,267 @@
+/* Deliberately plain. Every colour is a token so a change is one line, and both schemes are
+   defined so the console matches whatever the machine is set to rather than picking for it. */
+
+:root {
+    color-scheme: light dark;
+
+    --ground: #fbfaf8;
+    --raised: #ffffff;
+    --edge: #e4e0d8;
+    --ink: #1d1b17;
+    --faint: #6d6759;
+    --accent: #4a5f8a;
+    --person: #eceef5;
+    --assistant: #ffffff;
+
+    --gap: 0.75rem;
+    --radius: 0.6rem;
+    --sidebar: 17rem;
+    --reading: 46rem;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ground: #16151a;
+        --raised: #1e1d24;
+        --edge: #302e39;
+        --ink: #e8e6e3;
+        --faint: #9a958f;
+        --accent: #9db4e8;
+        --person: #262a38;
+        --assistant: #1e1d24;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.shell {
+    display: grid;
+    grid-template-columns: var(--sidebar) 1fr;
+    height: 100dvh;
+}
+
+/* The session list */
+
+.sessions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    padding: var(--gap);
+    border-right: 1px solid var(--edge);
+    overflow-y: auto;
+}
+
+.sessions ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.sessions .start {
+    display: block;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--ink);
+    font-weight: 600;
+    text-align: center;
+    text-decoration: none;
+}
+
+.sessions .start:hover,
+.session:hover {
+    border-color: var(--accent);
+}
+
+.session {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.session.current {
+    background: var(--raised);
+    border-color: var(--edge);
+}
+
+.session .name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.session .when {
+    color: var(--faint);
+    font-size: 0.75rem;
+}
+
+/* The conversation */
+
+main {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 0;
+    padding: 0 var(--gap);
+}
+
+main > header {
+    padding: var(--gap) 0;
+}
+
+main > header h1 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--faint);
+}
+
+.transcript {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    width: 100%;
+    max-width: var(--reading);
+    margin: 0 auto;
+    padding-bottom: var(--gap);
+    overflow-y: auto;
+}
+
+/* A conversation grows downwards from the box you type in, so a short one sits at the bottom
+   rather than floating at the top of an empty column. `margin-top: auto` on the first bubble
+   rather than `justify-content: flex-end` on the column, which overflows past the top edge of a
+   scrolling flex container in a way that cannot be scrolled back to. */
+.transcript > :first-child {
+    margin-top: auto;
+}
+
+.transcript .empty {
+    align-self: center;
+    color: var(--faint);
+}
+
+.said {
+    max-width: 85%;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+}
+
+.said .text {
+    margin: 0;
+    /* The model writes newlines and means them; nothing here renders Markdown yet. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.said.person {
+    align-self: flex-end;
+    background: var(--person);
+}
+
+.said.assistant {
+    align-self: flex-start;
+    background: var(--assistant);
+}
+
+.said.waiting {
+    color: var(--faint);
+}
+
+.said.waiting .text {
+    animation: breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .said.waiting .text {
+        animation: none;
+    }
+}
+
+/* The box you type in */
+
+.composer {
+    display: flex;
+    gap: var(--gap);
+    align-items: flex-end;
+    width: 100%;
+    max-width: var(--reading);
+    margin: 0 auto;
+    padding: var(--gap) 0;
+}
+
+.composer textarea {
+    flex: 1;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: inherit;
+    font: inherit;
+    resize: vertical;
+}
+
+.composer textarea:focus-visible,
+.composer button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.composer button {
+    padding: 0.55rem 1.1rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: var(--ground);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.composer button:disabled,
+.composer textarea:disabled {
+    opacity: 0.5;
+    cursor: progress;
+}
+
+/* A page nothing could answer */
+
+.refusal {
+    max-width: var(--reading);
+    margin: 4rem auto;
+    padding: 0 var(--gap);
+}
+
+.refusal h1 {
+    margin: 0;
+    font-size: 3rem;
+    color: var(--faint);
+}
+
+.refusal a {
+    color: var(--accent);
+}
