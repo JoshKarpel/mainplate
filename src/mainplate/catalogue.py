@@ -74,11 +74,13 @@ class Catalogue:
 
     def offers(self, profile: str, model: str) -> bool:
         """
-        Whether this pair is something a session can be answered on right now.
+        Whether this pair is one the picker put in front of somebody.
 
-        The one definition of that question, read by the console to decide whether a session is
-        stuck and by the worker to decide whether to attempt a pass. One function rather than two,
-        so the page a person is looking at and the pass that would answer it cannot disagree.
+        Asked when a *new* session is started, to check that a posted form names a pair the page
+        actually offered. It is deliberately not what decides whether an existing session can be
+        answered: this says what an endpoint advertises, which is narrower than what it will route,
+        so a session already recorded on an unadvertised id is answerable and this would call it
+        stuck. `models_of(...) is not None` is that other question, and it asks about the profile.
         """
         found = self.offered.get(profile)
         return found is not None and any(model == offered.id for offered in found)

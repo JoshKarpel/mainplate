@@ -47,10 +47,14 @@ class Conversation:
     A session, everything said in it, and what it is being said to.
 
     `chosen` is absent only for a session enrolled but never spoken to, which is the window between
-    its row and its first message. `answerable` is the separate question of whether that choice is
-    *still* on offer: a profile edited out from under a session, or a model an endpoint stopped
-    listing, leaves it readable and stuck, and the page says so rather than showing a spinner that
-    will never resolve.
+    its row and its first message.
+
+    `answerable` is the separate question of whether the profile it was started on still exists: a
+    profile edited out from under a session leaves it readable and stuck, and the page says so
+    rather than showing a spinner that will never resolve. It asks about the profile and not the
+    model, matching exactly what the worker checks, because a model missing from the catalogue is
+    not a reason a pass cannot run - an endpoint routes more ids than it advertises, and its own
+    refusal is the authoritative answer about any one of them.
     """
 
     session: Session
@@ -97,7 +101,7 @@ class Service:
             session=found,
             said=transcript(recorded),
             chosen=chosen,
-            answerable=chosen is not None and self.catalogues.current.offers(chosen.profile, chosen.model),
+            answerable=chosen is not None and self.catalogues.current.models_of(chosen.profile) is not None,
         )
 
     async def start(self, said: str, chosen: Choice) -> Session:

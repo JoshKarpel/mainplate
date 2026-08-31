@@ -59,9 +59,7 @@ from without_durability.stepwise import StepKey
 
 from mainplate.agent import Choice
 from mainplate.agent import Endpoints
-from mainplate.agent import UnknownChoice
 from mainplate.agent import agent_for
-from mainplate.catalogue import Catalogues
 from mainplate.durability import stepping
 
 CHOICE_KEY: StepKey = "choice"
@@ -387,7 +385,7 @@ def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
     return record
 
 
-def conversing(endpoints: Endpoints, catalogues: Catalogues, instructions: str) -> Callable[[Run], Awaitable[Never]]:
+def conversing(endpoints: Endpoints, instructions: str) -> Callable[[Run], Awaitable[Never]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
 
@@ -396,14 +394,17 @@ def conversing(endpoints: Endpoints, catalogues: Catalogues, instructions: str) 
     the session's own checkpoint rather than passed in: `run.workflow` names the session, and the
     session names its profile and its model.
 
-    The catalogue is asked before the endpoint is, so that a model the endpoint has stopped
-    offering fails the same way a deleted profile does. `Catalogue.offers` is the one definition of
-    that question and the console reads the same one, which is what stops a page saying a session
-    is stuck while a worker keeps trying to answer it.
+    The profile is what is checked, and the model deliberately is not. A discovered catalogue says
+    what an endpoint *advertises*, which is narrower than what it will *route*: exe.dev's gateway
+    answers `claude-sonnet-4-6` perfectly well while listing it as `anthropic/claude-sonnet-4-6`,
+    so refusing a pass on a model the catalogue lacks would strand a session the provider would
+    have answered. The provider's own refusal is the authoritative answer about a model, and it
+    arrives on the turn where it can be read. The profile is different: without one there is no
+    endpoint to ask at all, so that is a question this can answer and `agent_for` raises on.
 
     The agent is built once per pass rather than once per turn, because a session's choice cannot
     change: reading it again on the second turn would be asking a question whose answer is already
-    recorded. Doing it before the first `awaiting` is what makes an unavailable pair a failure the
+    recorded. Doing it before the first `awaiting` is what makes a missing profile a failure the
     console can explain rather than one discovered mid-turn.
     """
 
@@ -411,8 +412,6 @@ def conversing(endpoints: Endpoints, catalogues: Catalogues, instructions: str) 
         chosen = choice_of(run.recorded)
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no profile, so it was never started by this console")
-        if not catalogues.current.offers(chosen.profile, chosen.model):
-            raise UnknownChoice(f"no profile {chosen.profile!r} offering {chosen.model!r} is available")
         agent = agent_for(endpoints, chosen, instructions)
         at = reached(run.recorded)
         while True:

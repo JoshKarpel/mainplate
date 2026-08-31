@@ -162,8 +162,8 @@ class Provider:
         return agent_for(self.endpoints(), DEFAULT_CHOICE, INSTRUCTIONS)
 
     def body(self) -> Callable[[Run], Awaitable[Never]]:
-        """The workflow body, over a catalogue that offers exactly what the stand-ins serve."""
-        return conversing(self.endpoints(), Catalogues(current=CATALOGUE), INSTRUCTIONS)
+        """The workflow body, over the stand-in endpoints."""
+        return conversing(self.endpoints(), INSTRUCTIONS)
 
 
 @pytest.fixture

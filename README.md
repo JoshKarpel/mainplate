@@ -216,9 +216,10 @@ Named plainly, because they are the next things rather than omissions nobody not
 - **Two wires, not every wire.** A profile's `provider` takes `anthropic` or `openai`, which
   between them cover most gateways. A third is one `Endpoint` class saying how to name a model over
   that wire and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.
-- **A session cannot be moved to another profile.** A profile removed from the file, or a model an
-  endpoint stops listing, leaves the sessions on it readable and stuck; the page names the pair so
-  putting it back is obvious.
+- **A session cannot be moved to another profile.** Removing a profile that sessions use leaves
+  them readable and stuck; the page names the profile so putting it back is obvious. A model
+  dropping out of the picker is *not* that case and does not stop a session, since an endpoint
+  routes more ids than it advertises.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.

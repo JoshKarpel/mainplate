@@ -37,7 +37,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whatever comes back, grouped by the vendor each model comes from. A refresh that fails keeps the
   models discovered earlier; a first read that fails is a startup failure naming the profile.
   `default_model` names which one a new session starts on, defaulting to whatever the endpoint
-  listed first.
+  listed first. What the picker shows is what an endpoint *advertises*, which is narrower than what
+  it will route, so an existing session on a model that never appears in the list is still
+  answered: only a missing profile stops one.
 - exe.dev support: on a VM with the built-in LLM integration, `mainplate install` discovers it
   through the reflection integration and writes keyless profiles, so the box holds no credential
   at all. One gateway gets one profile per wire, which between them reach Anthropic, OpenAI,

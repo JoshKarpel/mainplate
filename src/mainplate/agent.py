@@ -64,12 +64,15 @@ class Choice:
 
 class UnknownChoice(LookupError):
     """
-    A session names a profile or a model that is no longer offered.
+    A session names a profile the configuration no longer declares.
 
-    Its own type because the answer is a person's rather than a retry's: the pair was available
-    when the session started, so either the file was edited or the endpoint stopped listing the
-    model, and the fix is to put it back or to start a new session. The console says so on the
-    session's own page rather than leaving it to a worker log.
+    Its own type because the answer is a person's rather than a retry's: the profile was there when
+    the session started, so the file was edited, and the fix is to put it back or to start a new
+    session. The console says so on the session's own page rather than leaving it to a worker log.
+
+    Only ever about the profile. A *model* an endpoint has stopped listing is not this, because an
+    endpoint routes more ids than it advertises: its own refusal is the authoritative answer about
+    one, and it arrives on the turn rather than here.
     """
 
 

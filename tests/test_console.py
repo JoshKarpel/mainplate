@@ -284,8 +284,31 @@ class TestTheConsole:
         async with calling(build_app(already(narrowed))) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert DEFAULT_CHOICE.profile in answered.text
-        assert "no longer offered" in answered.text
+        assert "no longer declares" in answered.text
         assert "hx-get" not in answered.text, "a session nothing will answer must stop asking"
+
+    async def test_a_session_on_a_model_the_picker_stopped_listing_is_not_stuck(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        An endpoint routes more ids than it advertises, so a missing model is not a stuck session.
+
+        The case is real rather than hypothetical: exe.dev's gateway answers `claude-sonnet-4-6`
+        while listing it as `anthropic/claude-sonnet-4-6`, so every session recorded before that
+        prefix appeared names a model discovery will never return. Calling those stuck would tell
+        somebody to restore a model nobody removed, and would stop the poll on a conversation the
+        worker can still answer.
+        """
+        session = await a_session(app)
+        thinned = Catalogue(
+            offered={DEFAULT_CHOICE.profile: (Listed(id="ripe/other", label="Other", family="ripe"),)},
+            default=Choice(profile=DEFAULT_CHOICE.profile, model="ripe/other"),
+        )
+        narrowed = replace(service, catalogues=Catalogues(current=thinned))
+        async with calling(build_app(already(narrowed))) as caller:
+            answered = await caller.get(f"/sessions/{session}")
+        assert "no longer" not in answered.text
+        assert "hx-get" in answered.text, "the worker can still answer it, so the page must keep asking"
 
     async def test_a_message_is_rendered_as_the_markdown_it_was_written_as(self, app: ASGIApp) -> None:
         session = await a_session(app, "a **strong** point")

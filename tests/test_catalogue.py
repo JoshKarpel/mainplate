@@ -172,10 +172,6 @@ class Rounds:
 # rather than on the clock.
 BRIEF = timedelta(seconds=0.001)
 
-# Long enough that a round firing inside one is the refresher not sleeping first, rather than a
-# loaded machine.
-PATIENT = timedelta(minutes=30)
-
 
 async def until_round(endpoint: Rounds, number: int) -> None:
     """Wait for a given round to begin, which is the signal that the one before it was applied."""
@@ -235,6 +231,12 @@ class TestTheDefaultChoice:
 
 
 class TestWhatACatalogueOffers:
+    """
+    `offers` answers "did the picker put this in front of somebody", which is what a posted form
+    is checked against. Whether an *existing* session can be answered is the other question, asked
+    of the profile alone; `test_console.py` is where that one is pinned.
+    """
+
     def test_a_pair_that_was_discovered_is_offered(self) -> None:
         assert CATALOGUE.offers("here", OFFERED["here"][1].id) is True
 
@@ -242,11 +244,15 @@ class TestWhatACatalogueOffers:
         ("profile", "model"),
         [("gateway", "ripe/careful"), ("here", "vendor/quick"), ("gone", "ripe/fast")],
     )
-    def test_a_pair_from_another_profile_or_no_profile_is_not(self, profile: str, model: str) -> None:
-        """A session records a pair, so what is checked later is the pair and never the halves."""
+    def test_a_pair_the_picker_never_showed_together_is_not(self, profile: str, model: str) -> None:
+        """
+        The picker offers models *per profile*, so a form naming one profile's model under
+        another names a pair no page ever rendered.
+        """
         assert CATALOGUE.offers(profile, model) is False
 
-    def test_a_profile_nothing_offers_has_no_models_rather_than_none(self) -> None:
+    def test_a_profile_nothing_declared_has_no_models_rather_than_none(self) -> None:
+        """The question the worker and the page both ask, since a profile is what an agent needs."""
         assert CATALOGUE.models_of("gone") is None
 
 

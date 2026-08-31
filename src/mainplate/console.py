@@ -152,8 +152,13 @@ async def start(service: Service, started: Started) -> Response:
     new session into the old page's URL.
 
     The pair is checked here rather than trusted, because it arrived in a form: a select is a
-    suggestion a browser was given, not a constraint on what somebody can post, and a session
-    recorded on a pair nothing offers would be unanswerable from the moment it existed.
+    suggestion a browser was given, not a constraint on what somebody can post, so this is where a
+    new session is held to a pair the picker actually rendered.
+
+    It is the one place the *pair* is checked, and deliberately stricter than what stops an
+    existing session, which is a missing profile alone. The asymmetry is the point: a conversation
+    already under way should not be broken by a model quietly leaving a list, while a new one has
+    no reason to start on something nobody was shown.
     """
     if not service.catalogues.current.offers(started.chosen.profile, started.chosen.model):
         return page_response(422, refusal_page(LINKS, 422, f"no profile on offer serves {started.chosen.model}"))

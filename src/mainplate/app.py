@@ -148,9 +148,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Endpoints)
     catalogues = Catalogues(current=await discover(endpoints, config))
     logger.info(f"models discovered: {summarise(catalogues.current)}")
     async with open_store(settings.database, settings.lease, catalogues) as service:
-        answering = work(
-            service.durable, conversing(endpoints, catalogues, settings.instructions), limit=settings.passes
-        )
+        answering = work(service.durable, conversing(endpoints, settings.instructions), limit=settings.passes)
         keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
         async with background_task(answering), background_task(keeping_current):
             yield service

@@ -113,12 +113,24 @@ now discovered and changes while the process runs. That costs tens of microsecon
 that costs seconds, and the connection pool - the expensive part - belongs to the endpoint and is
 shared by every model over it.
 
-A pair nothing offers is not a retry: the worker and the console both ask `Catalogue.offers`, which
-is deliberately one function rather than two so a page saying a session is stuck and a worker still
-trying to answer it cannot disagree. The console renders such a session with a sentence naming the
-pair and no poll, because a spinner that will never resolve is the one state a person cannot
-diagnose. The sentence says "no longer offered" without guessing which half moved, since a profile
-edited out of the file and a model an endpoint stopped listing are indistinguishable from here.
+**A discovered catalogue says what an endpoint advertises, which is narrower than what it will
+route**, and conflating the two is the mistake to avoid. exe.dev's gateway answers
+`claude-sonnet-4-6` while listing it as `anthropic/claude-sonnet-4-6`, so every session recorded
+before that prefix appeared names a model discovery will never return. So the two questions are
+kept apart:
+
+- **Starting** a session asks `Catalogue.offers(profile, model)`. That is form validation: a select
+  is a suggestion the page made, not a constraint on what can be posted, so a new session may only
+  be created on a pair the picker actually offered.
+- **Answering** one asks only whether the *profile* exists, in the worker (`agent_for` raising
+  `UnknownChoice`) and in `Conversation.answerable` (`models_of(...) is not None`), which are
+  deliberately the same question so the page and the worker cannot disagree. The model is not
+  checked: the provider's own refusal is the authoritative answer about a model and it arrives on
+  the turn, where gating here would strand a conversation nobody broke.
+
+A session whose profile is gone renders with a sentence naming it and no poll, because a spinner
+that will never resolve is the one state a person cannot diagnose. `test_console.py` pins both
+halves, including that a session on an unlisted-but-routable model keeps its poll.
 
 `exe.py` is the exe.dev half. A VM with the built-in LLM integration reaches the provider with no
 credential at all, so `mainplate install` asks the reflection integration what is attached and

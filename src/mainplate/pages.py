@@ -825,17 +825,19 @@ def stalled_by(showing: Conversation) -> str | None:
     """
     Why this session cannot be answered, or nothing at all when it can.
 
-    One sentence naming the pair, because that is the only thing a person can act on. It says
-    "no longer offers" without guessing which half moved, since a pair that was available when the
-    session started can stop being so in two ways this cannot tell apart: the profile edited out of
-    the configuration file, or the endpoint dropping a model it used to list. Naming one would be a
-    guess, and the pair is what somebody has to restore either way.
+    One sentence naming the profile, because that is the only thing a person can act on: the
+    profile was configured when the session started, so putting it back in the configuration file
+    is what makes the conversation continue exactly where it stopped.
+
+    It names the profile and not the model on purpose. A model missing from the picker does not
+    stop a session, since an endpoint routes more ids than it advertises, so saying so here would
+    tell somebody to fix something that is not broken.
     """
     if showing.answerable or showing.chosen is None:
         return None
     return (
-        f"This session was started on profile {showing.chosen.profile!r} with {showing.chosen.model!r}, "
-        f"which is no longer offered. Put it back to carry on, or start a new session."
+        f"This session was started on profile {showing.chosen.profile!r}, which the configuration "
+        f"no longer declares. Put it back to carry on, or start a new session."
     )
 
 
