@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from contextlib import asynccontextmanager
@@ -46,8 +47,12 @@ from without_web import handle
 from without_web import http_scope
 from without_web import static_files
 
-from mainplate.agent import Agents
-from mainplate.agent import build_agents
+from mainplate.agent import Endpoints
+from mainplate.agent import build_endpoints
+from mainplate.catalogue import Catalogues
+from mainplate.catalogue import discover
+from mainplate.catalogue import refreshing
+from mainplate.catalogue import summarise
 from mainplate.console import ASSETS
 from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
@@ -63,6 +68,8 @@ from mainplate.sessions import prepare
 from mainplate.settings import Settings
 
 ASSET_ROOT: Final = Path(__file__).parent / "assets"
+
+logger = logging.getLogger(__name__)
 
 
 class DidNotStart(RuntimeError):
@@ -98,7 +105,7 @@ def build_router() -> Router[Service]:
 
 
 @asynccontextmanager
-async def open_store(database: Path, lease: timedelta, config: Config) -> AsyncIterator[Service]:
+async def open_store(database: Path, lease: timedelta, catalogues: Catalogues) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
 
@@ -114,7 +121,7 @@ async def open_store(database: Path, lease: timedelta, config: Config) -> AsyncI
             database=opened,
             durable=SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease)),
             checkpointer=checkpointer,
-            config=config,
+            catalogues=catalogues,
         )
     finally:
         # Never `connection.close()`: the store's own `aclose` waits out any statement still
@@ -124,18 +131,28 @@ async def open_store(database: Path, lease: timedelta, config: Config) -> AsyncI
 
 
 @asynccontextmanager
-async def open_console(settings: Settings, config: Config, agents: Agents) -> AsyncIterator[Service]:
+async def open_console(settings: Settings, config: Config, endpoints: Endpoints) -> AsyncIterator[Service]:
     """
-    The store, with a worker answering its sessions for as long as the block lasts.
+    The store, with a worker answering its sessions and a refresher keeping the models current.
 
-    `background_task` starts the worker before the first request and cancels it on shutdown, so
+    Discovery happens here rather than in `serve`, and before the store is opened, because it is
+    the last thing that can refuse: a lifespan that raises never lets the server take traffic, so
+    an endpoint that cannot say what it serves is a start that fails naming the profile rather than
+    a console whose picker is empty.
+
+    `background_task` starts each task before the first request and cancels it on shutdown, so
     there is no task to outlive the server and no lifetime to manage by hand. A cancelled pass
     leaves its session in the queue for the next process rather than losing it, which is the whole
     of the recovery story here.
     """
-    async with open_store(settings.database, settings.lease, config) as service:
-        answering = work(service.durable, conversing(agents), limit=settings.passes)
-        async with background_task(answering):
+    catalogues = Catalogues(current=await discover(endpoints, config))
+    logger.info(f"models discovered: {summarise(catalogues.current)}")
+    async with open_store(settings.database, settings.lease, catalogues) as service:
+        answering = work(
+            service.durable, conversing(endpoints, catalogues, settings.instructions), limit=settings.passes
+        )
+        keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
+        async with background_task(answering), background_task(keeping_current):
             yield service
 
 
@@ -153,10 +170,10 @@ def build_app(opening: Lifespan[Service]) -> ASGIApp:
 async def serve(settings: Settings) -> None:
     """Run the console and the worker until cancelled, which for the CLI means until a signal."""
     config = read_config(config_path(settings.config_home))
-    agents = build_agents(config, settings.instructions)
+    endpoints = build_endpoints(config)
 
     def opening() -> AbstractAsyncContextManager[Service]:
-        return open_console(settings, config, agents)
+        return open_console(settings, config, endpoints)
 
     try:
         async with serving(build_app(opening), host=settings.host, port=settings.port):

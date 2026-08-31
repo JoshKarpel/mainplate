@@ -7,18 +7,18 @@ import pytest
 from calling import calling
 from conftest import CONFIG
 from conftest import DEFAULT_CHOICE
+from conftest import OFFERED
+from conftest import Stand
 from conftest import already
-from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
-from mainplate.agent import Agents
+from mainplate.agent import Endpoints
 from mainplate.app import build_app
 from mainplate.app import open_console
-from mainplate.durability import StepwiseDurability
 from mainplate.settings import Settings
 
 # A bound on each half of the exchange rather than a wait for it. Every assertion below is an
@@ -44,6 +44,10 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
 
     It waits on a semaphore rather than sleeping, so the test runs as fast as the scheduler's poll
     allows and does not depend on how quick the machine is.
+
+    The endpoints are stand-ins, so `open_console`'s own discovery runs for real over them: what
+    this asserts includes that a console whose models are asked for rather than configured still
+    reaches the point of taking traffic.
     """
     answered = asyncio.Semaphore(0)
 
@@ -51,10 +55,10 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
         answered.release()
         return ModelResponse(parts=[TextPart("an answer")])
 
-    agent: Agent[None, str] = Agent(FunctionModel(respond), name="test", capabilities=[StepwiseDurability()])
-    agents = Agents(by_choice={DEFAULT_CHOICE: agent})
+    shared = FunctionModel(respond)
+    endpoints = Endpoints(by_profile={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.profiles})
 
-    async with open_console(Settings(database=database), CONFIG, agents) as service:
+    async with open_console(Settings(database=database), CONFIG, endpoints) as service:
         async with calling(build_app(already(service))) as caller:
             started = await caller.post(
                 "/sessions",

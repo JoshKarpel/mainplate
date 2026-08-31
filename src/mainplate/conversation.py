@@ -57,8 +57,11 @@ from pydantic_ai.run import AgentRunResult
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
-from mainplate.agent import Agents
 from mainplate.agent import Choice
+from mainplate.agent import Endpoints
+from mainplate.agent import UnknownChoice
+from mainplate.agent import agent_for
+from mainplate.catalogue import Catalogues
 from mainplate.durability import stepping
 
 CHOICE_KEY: StepKey = "choice"
@@ -97,8 +100,8 @@ def parse_choice(recorded: object) -> Choice:
     """
     The profile and model a session was started on, or a loud failure if the record is not one.
 
-    Strict about shape and silent about whether the pair is still *configured*, which is a
-    different question with a different answer: this says what the session chose, and `Agents`
+    Strict about shape and silent about whether the pair is still *available*, which is a
+    different question with a different answer: this says what the session chose, and `Catalogue`
     says whether that is still something to answer with.
     """
     if not isinstance(recorded, dict):
@@ -384,26 +387,33 @@ def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
     return record
 
 
-def conversing(agents: Agents) -> Callable[[Run], Awaitable[Never]]:
+def conversing(endpoints: Endpoints, catalogues: Catalogues, instructions: str) -> Callable[[Run], Awaitable[Never]]:
     """
-    The workflow body every session runs, closed over every agent this process can answer with.
+    The workflow body every session runs, closed over everything it takes to build an agent.
 
     A closure rather than an argument because `work` takes one body for every workflow. What
     differs between sessions is not the body but which agent it reaches for, and that is read from
     the session's own checkpoint rather than passed in: `run.workflow` names the session, and the
-    session names its profile.
+    session names its profile and its model.
 
-    The agent is resolved once per pass rather than once per turn, because a session's choice
-    cannot change: reading it again on the second turn would be asking a question whose answer is
-    already recorded. Resolving it before the first `awaiting` is what makes a removed profile a
-    failure the console can explain rather than one discovered mid-turn.
+    The catalogue is asked before the endpoint is, so that a model the endpoint has stopped
+    offering fails the same way a deleted profile does. `Catalogue.offers` is the one definition of
+    that question and the console reads the same one, which is what stops a page saying a session
+    is stuck while a worker keeps trying to answer it.
+
+    The agent is built once per pass rather than once per turn, because a session's choice cannot
+    change: reading it again on the second turn would be asking a question whose answer is already
+    recorded. Doing it before the first `awaiting` is what makes an unavailable pair a failure the
+    console can explain rather than one discovered mid-turn.
     """
 
     async def converse(run: Run) -> Never:
         chosen = choice_of(run.recorded)
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no profile, so it was never started by this console")
-        agent = agents.for_choice(chosen)
+        if not catalogues.current.offers(chosen.profile, chosen.model):
+            raise UnknownChoice(f"no profile {chosen.profile!r} offering {chosen.model!r} is available")
+        agent = agent_for(endpoints, chosen, instructions)
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)

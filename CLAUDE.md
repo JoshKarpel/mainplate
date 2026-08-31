@@ -41,7 +41,14 @@ session index (`sessions.py`) is the one row per session that exists, because
 *not* a copy of changing state, because a session is named after its first message and nothing
 ever renames it.
 
-The console's `localStorage` is the other thing that looks like an exception and is not. It holds
+The model catalogue (`catalogue.py`) is the one piece of process state that genuinely changes under
+a reader, and it is not an exception either: nothing in it is anything anybody said. It is
+configuration that happens to live at the far end of a request rather than on disk, so it is
+handled the way reloadable configuration is, and a page render reads it out of memory rather than
+asking a gateway. The test for a change here is the same one: does it keep a second copy of what
+was *said*?
+
+The console's `localStorage` is the last thing that looks like an exception and is not. It holds
 only what a *reader* decided (the theme, which kinds are set aside, which calls are unfolded,
 whether they are following the end), never a word of the conversation, so a browser with it wiped
 renders exactly what one without it does. It is keyed by session id, and that scoping is
@@ -69,32 +76,72 @@ them (`choice_of` and `reached` for the body, `transcript` for the page) cannot 
 tests in `test_conversation.py` assert the shape against literal recorded values rather than
 round-tripping through the writer, so a change to the scheme has to be made in both places.
 
-## Profiles and per-session auth
+## Profiles, discovery, and per-session auth
 
-A **profile** is an endpoint and a credential; the model is separate, because a gateway serves many
-models behind one hostname. A session records both and is bound to them for life.
+A **profile** is an endpoint, a wire format, and a credential. The models are separate and are not
+in the file at all: `catalogue.py` asks each endpoint's own model-list API what it serves. A session
+records a profile and a model and is bound to both for life.
+
+`provider` names the wire rather than the vendor, because one hostname often answers both and each
+reaches models the other does not. It also decides what `base_url` means: the Anthropic SDK appends
+`/v1/messages`, so it wants the host; the OpenAI SDK appends `/chat/completions`, so it wants the
+host and `/v1`. On exe.dev that is why `install` writes two profiles for one gateway.
+
+`agent.py` holds one class per wire, and it holds *both* wire-specific things: how to name a model
+over it and how to ask it what it serves. A third wire is one class, not an edit in three files.
+`chat_models` is the pure half of the OpenAI side and is where its two exclusions live: exe.dev
+publishes every OpenAI model twice (bare and prefixed) and mixes embedding models in with chat
+ones. The embedding rule is a rule over names because that list carries no capability to ask;
+`test_catalogue.py` pins both against the shapes a live gateway actually returns.
 
 `profiles.py` parses `config.toml` into `Config`, once, at startup. Two things there are easy to
 undo by accident:
 
 - **Credentials are `SecretStr` and come from the file, not the environment.** A key handed to
-  `AnthropicProvider(api_key=...)` never becomes an environment variable. `Profile.key_for` is the
+  `AnthropicProvider(api_key=...)` never becomes an environment variable. `Profile.key` is the
   one place that decides between a configured key, the `KEYLESS` placeholder for a gateway that
-  authenticates at its edge, and `None`, which is what leaves the SDK reading `ANTHROPIC_API_KEY`
-  for itself. Do not "simplify" that `None` away.
-- **`build_agents` is eager**, so a profile that cannot be built fails at startup naming itself
-  rather than on whichever session first chose it. That is also why the service refuses to start on
-  an unusable `config.toml` instead of running and failing on the first message.
+  authenticates at its edge, and `None`, which is what leaves the SDK reading its own environment
+  variable for itself. Do not "simplify" that `None` away.
+- **`build_endpoints` is eager**, so a profile that cannot be built fails at startup naming itself
+  rather than on whichever session first chose it. It builds the *provider* and not a model per
+  name, which loses nothing: an SDK validates neither, so the eager build was only ever buying
+  endpoint validation. That is also why the service refuses to start on an unusable `config.toml`,
+  and why `discover` refuses an endpoint that lists nothing.
 
-A pair the configuration no longer offers is not a retry: `Agents.for_choice` raises
-`UnknownChoice`, and the console renders the session with a sentence naming the profile and no
-poll, because a spinner that will never resolve is the one state a person cannot diagnose.
+The agent itself is built per pass rather than held in a startup mapping, because the model set is
+now discovered and changes while the process runs. That costs tens of microseconds against a turn
+that costs seconds, and the connection pool - the expensive part - belongs to the endpoint and is
+shared by every model over it.
+
+A pair nothing offers is not a retry: the worker and the console both ask `Catalogue.offers`, which
+is deliberately one function rather than two so a page saying a session is stuck and a worker still
+trying to answer it cannot disagree. The console renders such a session with a sentence naming the
+pair and no poll, because a spinner that will never resolve is the one state a person cannot
+diagnose. The sentence says "no longer offered" without guessing which half moved, since a profile
+edited out of the file and a model an endpoint stopped listing are indistinguishable from here.
 
 `exe.py` is the exe.dev half. A VM with the built-in LLM integration reaches the provider with no
 credential at all, so `mainplate install` asks the reflection integration what is attached and
-writes a keyless profile. Every failure there returns `()` rather than raising: "you are not on
+writes keyless profiles. Every failure there returns `()` rather than raising: "you are not on
 exe.dev" must not be a failed install. Discovery is passed *into* `converge` rather than done
 inside it, so the suite does not behave differently depending on which machine it runs on.
+
+## Keeping the catalogue current
+
+`catalogue.py` is the one piece of process state that changes under a reader, and it does not
+contradict the checkpoint being the conversation: nothing in it is anything anybody said. It is
+configuration that lives at the far end of a request rather than on disk, handled the way any
+reloadable configuration is.
+
+- **Read before ready, refreshed off the request path.** `open_console` calls `discover` before the
+  store is opened, so an endpoint that cannot say what it serves is a lifespan that raises and a
+  service that never takes traffic. After that a background task re-asks on `Settings.refresh`. A
+  page render reads `catalogues.current` out of memory and never causes a request to a gateway.
+- **Swapped whole, never edited.** `Catalogues.current` is rebound to a new `Catalogue`, so a
+  reader that grabbed one holds a consistent answer even if a newer one lands mid-render.
+- **A failed refresh keeps the last good value and there is no staleness bound.** That is
+  deliberate rather than an omission: the bound would have to be invented, and emptying the picker
+  because a gateway was unreachable for an hour is worse than the staleness it would prevent.
 
 ## Durability
 
@@ -151,8 +198,11 @@ rather than guessing at an API from memory; the same goes for `pydantic_ai`, whi
 list too, or the whole graph gets held back to a release predating it. The cooldown is also why
 `pydantic-ai-slim` is floored a release or two behind its latest.
 
-`pydantic-ai-slim[anthropic]` rather than `pydantic-ai`, which pulls every provider SDK, a CLI, an
-MCP server, and an evals framework. Another provider is an extra in that list, not a code change.
+`pydantic-ai-slim[anthropic,openai]` rather than `pydantic-ai`, which pulls every provider SDK, a
+CLI, an MCP server, and an evals framework. Two extras and not more: between them the Anthropic and
+OpenAI wires reach almost every gateway, and each further extra is a whole SDK. The `openai` one is
+not free - it brings `openai`, `tiktoken`, `requests`, `urllib3`, `regex`, and `certifi` - which is
+the price of the OpenAI-compatible half of a gateway being reachable at all.
 
 ## The console
 

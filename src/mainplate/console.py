@@ -138,7 +138,7 @@ def seeing(where: str) -> Response:
 
 @get("/", summary="Start a session")
 async def start_here(service: Service) -> Response:
-    return page_response(200, start_page(LINKS, await service.listed(), service.config))
+    return page_response(200, start_page(LINKS, await service.listed(), service.catalogues.current))
 
 
 @post("/sessions", starting, summary="Say the first thing, which is what creates a session")
@@ -153,10 +153,10 @@ async def start(service: Service, started: Started) -> Response:
 
     The pair is checked here rather than trusted, because it arrived in a form: a select is a
     suggestion a browser was given, not a constraint on what somebody can post, and a session
-    recorded on a profile nothing offers would be unanswerable from the moment it existed.
+    recorded on a pair nothing offers would be unanswerable from the moment it existed.
     """
-    if not service.config.offers(started.chosen.profile, started.chosen.model):
-        return page_response(422, refusal_page(LINKS, 422, f"no configured profile offers {started.chosen.model}"))
+    if not service.catalogues.current.offers(started.chosen.profile, started.chosen.model):
+        return page_response(422, refusal_page(LINKS, 422, f"no profile on offer serves {started.chosen.model}"))
     session = await service.start(started.said, started.chosen)
     return seeing(LINKS.to_session(session.id))
 
@@ -166,11 +166,12 @@ async def profile_models(service: Service, profile: str) -> Response:
     """
     The model select for a profile, which is what changing the profile swaps in.
 
-    A fragment rather than a script over a table of models embedded in the page: the profiles are
-    the server's to know, and a select rebuilt from the server cannot drift from what the form
-    will actually be checked against.
+    A fragment rather than a script over a table of models embedded in the page: what an endpoint
+    offers is discovered and is refreshed while the page is open, so a list serialized into the
+    document at render time is the one thing guaranteed to go stale, and a select rebuilt from the
+    server cannot drift from what the form will actually be checked against.
     """
-    found = service.config.profiles.get(profile)
+    found = service.catalogues.current.models_of(profile)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no profile {profile}"))
     return page_response(200, fragment(model_select(found)))

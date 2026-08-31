@@ -92,7 +92,9 @@ class TestRenderingTheUnit:
         """
         assert f"EnvironmentFile={unit.environment}" in unit.text
         directives = [line for line in unit.text.splitlines() if line and not line.startswith("#")]
-        assert not [line for line in directives if "ANTHROPIC_API_KEY" in line or "api_key" in line]
+        # `API_KEY` rather than either SDK's variable by name, so a wire added later is covered by
+        # a check written before it existed.
+        assert not [line for line in directives if "API_KEY" in line or "api_key" in line]
 
     def test_a_missing_environment_file_is_a_loud_start_failure(self, unit: Unit) -> None:
         """`EnvironmentFile=-` would start the service anyway and refuse every message instead."""
@@ -166,14 +168,21 @@ class TestWritingTheFiles:
         write_config(path, ())
         assert usable_config(path) is False
 
-    def test_a_discovered_gateway_is_written_as_a_keyless_profile_that_starts(self, tmp_path: Path) -> None:
+    def test_a_discovered_gateway_is_written_as_keyless_profiles_that_start(self, tmp_path: Path) -> None:
+        """
+        One hostname, one profile per wire, because each reaches models the other does not.
+
+        The Anthropic wire is the default of the two, since its list is the one written to be read:
+        every entry carries a display name and none of them is an embedding model.
+        """
         path = tmp_path / "config.toml"
         write_config(path, (Gateway(name="llm", base_url="https://llm.int.exe.xyz"),))
         assert usable_config(path) is True
         config = read_config(path)
-        assert config.default == "llm"
-        assert config.profiles["llm"].base_url == "https://llm.int.exe.xyz"
-        assert config.profiles["llm"].api_key is None
+        assert config.default == "llm-anthropic"
+        assert config.profiles["llm-anthropic"].base_url == "https://llm.int.exe.xyz"
+        assert config.profiles["llm-openai"].base_url == "https://llm.int.exe.xyz/v1", "only the OpenAI SDK wants /v1"
+        assert all(profile.api_key is None for profile in config.profiles.values())
 
 
 class TestConverging:

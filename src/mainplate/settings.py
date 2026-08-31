@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     conversations in flight, and every pass in flight holds the one SQLite connection in turn.
     """
 
+    refresh: timedelta = Field(default=timedelta(minutes=15), gt=timedelta())
+    """
+    How often to ask every endpoint what models it serves.
+
+    The list is read once before the server is ready and then kept current by a background task, so
+    this decides only how long a model added at the gateway stays invisible here. Fifteen minutes
+    is short against how often a provider ships one and long enough that a console left open for a
+    week makes a few hundred requests rather than a few hundred thousand.
+    """
+
     lease: timedelta = Field(default=timedelta(minutes=10), gt=timedelta())
     """
     How long a pass may take before another worker may take the session over.

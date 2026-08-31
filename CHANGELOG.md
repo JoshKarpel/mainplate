@@ -28,10 +28,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `mainplate install` and `mainplate uninstall`, which converge and remove a user systemd unit
   pointing at the interpreter that ran them. Any `MAINPLATE_*` setting lives in an
   `EnvironmentFile` created `0600` on the first install and never overwritten.
-- Profiles in `config.toml`: an endpoint and a credential, with the model chosen separately. Each
-  session records the pair it was created on and is answered on it for life, so changing what is
-  configured leaves existing conversations readable. Credentials are read from the `0600` file and
-  handed to the SDK, so they never enter the process environment.
+- Profiles in `config.toml`: an endpoint, the wire spoken to it (`anthropic` or `openai`), and a
+  credential. Each session records the profile and model it was created on and is answered on them
+  for life, so changing what is configured leaves existing conversations readable. Credentials are
+  read from the `0600` file and handed to the SDK, so they never enter the process environment.
+- Model discovery: no models are configured anywhere. Each endpoint's own model-list API is asked
+  what it serves, once before the console takes traffic and then on a timer, and the picker offers
+  whatever comes back, grouped by the vendor each model comes from. A refresh that fails keeps the
+  models discovered earlier; a first read that fails is a startup failure naming the profile.
+  `default_model` names which one a new session starts on, defaulting to whatever the endpoint
+  listed first.
 - exe.dev support: on a VM with the built-in LLM integration, `mainplate install` discovers it
-  through the reflection integration and writes a keyless profile, so the box holds no credential
-  at all.
+  through the reflection integration and writes keyless profiles, so the box holds no credential
+  at all. One gateway gets one profile per wire, which between them reach Anthropic, OpenAI,
+  Fireworks, and xAI: around seventy models with nothing configured.

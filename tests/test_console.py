@@ -11,13 +11,15 @@ from conftest import already
 from without_asgi import ASGIApp
 
 from mainplate.agent import Choice
+from mainplate.agent import Listed
 from mainplate.app import build_app
+from mainplate.catalogue import Catalogue
+from mainplate.catalogue import Catalogues
 from mainplate.console import LONGEST_PROMPT
 from mainplate.console import NotAMessage
 from mainplate.console import parse_form_prompt
 from mainplate.conversation import messages_key
 from mainplate.conversation import prompt_key
-from mainplate.profiles import parse_config
 from mainplate.service import Service
 
 
@@ -29,15 +31,13 @@ async def a_session(app: ASGIApp, said: str = "what is a mainplate") -> str:
         return answered.location.rsplit("/", 1)[-1]
 
 
-# A configuration offering something else entirely, for the session whose profile went away.
-OTHER_CONFIG = """
-default = "elsewhere"
-
-[profiles.elsewhere]
-provider = "anthropic"
-api_key = "sk-other"
-models = ["different"]
-"""
+# A catalogue offering something else entirely, for the session whose pair went away. It stands in
+# for both ways that happens - a profile edited out of the file, and an endpoint that stopped
+# listing a model - because the console cannot tell them apart and does not try to.
+OTHER_CATALOGUE = Catalogue(
+    offered={"elsewhere": (Listed(id="plain/different", label="Different", family="plain"),)},
+    default=Choice(profile="elsewhere", model="plain/different"),
+)
 
 
 def starting_form(said: str, chosen: Choice = DEFAULT_CHOICE) -> dict[str, str]:
@@ -205,8 +205,26 @@ class TestTheConsole:
             answered = await caller.get("/")
         for name in CONFIG.profiles:
             assert f'value="{name}"' in answered.text
-        assert 'value="careful"' in answered.text, "the default profile's second model"
-        assert 'value="fast" selected' in answered.text, "its first, preselected"
+        assert 'value="ripe/careful"' in answered.text, "the default profile's second model"
+        assert 'value="ripe/fast" selected' in answered.text, "the first it listed, preselected"
+
+    async def test_a_models_own_name_is_what_the_picker_shows(self, app: ASGIApp) -> None:
+        """An endpoint that writes a name for a person is why the id is a value and not the text."""
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert ">Careful<" in answered.text
+
+    async def test_models_are_grouped_by_the_family_they_come_from(self, app: ASGIApp) -> None:
+        """
+        What makes a gateway's seventy models a list somebody can read.
+
+        Both families are asserted, because a rendering that emitted one group holding everything
+        would satisfy a check for either alone while grouping nothing.
+        """
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert '<optgroup label="ripe">' in answered.text
+        assert '<optgroup label="wide">' in answered.text
 
     async def test_changing_the_profile_asks_for_that_profiles_models(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
@@ -219,7 +237,7 @@ class TestTheConsole:
             answered = await caller.get("/fragments/models?profile=gateway")
         assert answered.status == 200
         assert "<html" not in answered.text
-        assert 'value="fast"' in answered.text
+        assert 'value="wide/steady"' in answered.text
         assert "careful" not in answered.text, "'careful' belongs to the other profile"
 
     async def test_the_models_fragment_for_a_profile_nothing_offers_is_refused(self, app: ASGIApp) -> None:
@@ -228,7 +246,7 @@ class TestTheConsole:
         assert answered.status == 404
 
     async def test_a_session_records_the_pair_it_was_started_on(self, app: ASGIApp, service: Service) -> None:
-        chosen = Choice(profile="gateway", model="fast")
+        chosen = Choice(profile="gateway", model="wide/steady")
         async with calling(app) as caller:
             answered = await caller.post("/sessions", starting_form("hello", chosen))
         session = answered.location.rsplit("/", 1)[-1]
@@ -262,11 +280,11 @@ class TestTheConsole:
         putting it back is what makes the conversation continue where it stopped.
         """
         session = await a_session(app)
-        narrowed = replace(service, config=parse_config(OTHER_CONFIG))
+        narrowed = replace(service, catalogues=Catalogues(current=OTHER_CATALOGUE))
         async with calling(build_app(already(narrowed))) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert DEFAULT_CHOICE.profile in answered.text
-        assert "no longer offers" in answered.text
+        assert "no longer offered" in answered.text
         assert "hx-get" not in answered.text, "a session nothing will answer must stop asking"
 
     async def test_a_message_is_rendered_as_the_markdown_it_was_written_as(self, app: ASGIApp) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from collections.abc import Awaitable
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from typing import Never
 
 import pytest
 from pydantic import SecretStr
@@ -20,12 +22,17 @@ from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from without_asgi import ASGIApp
+from without_durability.stepwise import Run
 
-from mainplate.agent import Agents
 from mainplate.agent import Choice
+from mainplate.agent import Endpoints
+from mainplate.agent import Listed
+from mainplate.agent import agent_for
 from mainplate.app import build_app
 from mainplate.app import open_store
-from mainplate.durability import StepwiseDurability
+from mainplate.catalogue import Catalogue
+from mainplate.catalogue import Catalogues
+from mainplate.conversation import conversing
 from mainplate.profiles import Config
 from mainplate.profiles import Profile
 from mainplate.service import Service
@@ -57,21 +64,58 @@ class Ticking:
 # slow machine into a failing one.
 LEASE = timedelta(seconds=30)
 
-# Two profiles and three pairs, so a test can tell "the default" from "a choice somebody made" and
-# so the model picker has something to cascade between.
+# Two profiles, so a test can tell "the default" from "a choice somebody made" and so the model
+# picker has something to cascade between. No models here, because a profile no longer names any:
+# what is on offer comes from `OFFERED` below, which is what a stand-in endpoint says when asked.
 CONFIG = Config(
     default="here",
     profiles={
-        "here": Profile(provider="anthropic", api_key=SecretStr("sk-test"), models=("fast", "careful")),
-        "gateway": Profile(provider="anthropic", base_url="https://llm.example.invalid", models=("fast",)),
+        "here": Profile(provider="anthropic", api_key=SecretStr("sk-test")),
+        "gateway": Profile(provider="openai", base_url="https://llm.example.invalid/v1"),
     },
 )
 
-CHOICES = tuple(
-    Choice(profile=name, model=model) for name, profile in CONFIG.profiles.items() for model in profile.models
-)
+# What the stand-in endpoints say they serve. Two families under one profile, because grouping the
+# picker by family is a rendering with a branch in it, and a single-family fixture would exercise
+# the branch without ever showing it doing anything. The same model under both profiles is the
+# real case a gateway produces, where one wire and the other reach the same upstream.
+OFFERED: dict[str, tuple[Listed, ...]] = {
+    "here": (
+        Listed(id="ripe/fast", label="Fast", family="ripe"),
+        Listed(id="ripe/careful", label="Careful", family="ripe"),
+        Listed(id="wide/steady", label="Steady", family="wide"),
+    ),
+    "gateway": (Listed(id="wide/steady", label="Steady", family="wide"),),
+}
 
-DEFAULT_CHOICE = Choice(profile=CONFIG.default, model=CONFIG.default_model)
+CHOICES = tuple(Choice(profile=name, model=model.id) for name, models in OFFERED.items() for model in models)
+
+# The default is the first thing the default profile listed, since `CONFIG` names no `default_model`.
+DEFAULT_CHOICE = Choice(profile=CONFIG.default, model=OFFERED[CONFIG.default][0].id)
+
+CATALOGUE = Catalogue(offered=OFFERED, default=DEFAULT_CHOICE)
+
+INSTRUCTIONS = "Answer as a fixture would."
+
+
+@dataclass(slots=True)
+class Stand:
+    """
+    One stand-in endpoint: what it says it serves, and the one model everything over it resolves to.
+
+    It satisfies `Endpoint` structurally rather than by inheritance, which is the whole point of
+    that being a protocol: a test needs no provider, no client, and no network to be something
+    `agent_for` and `discover` can both use.
+    """
+
+    offers: tuple[Listed, ...]
+    responding: FunctionModel
+
+    def model(self, name: str) -> FunctionModel:
+        return self.responding
+
+    async def listed(self) -> tuple[Listed, ...]:
+        return self.offers
 
 
 @dataclass(slots=True)
@@ -97,19 +141,29 @@ class Provider:
 
         return FunctionModel(respond)
 
+    def endpoints(self) -> Endpoints:
+        """
+        Every profile `CONFIG` declares, all answered by one stand-in model.
+
+        One model behind every profile rather than one each, so `asked` counts calls across the
+        whole configuration: what a test wants to know is how often the provider was reached, not
+        which of two identical fakes reached it.
+        """
+        shared = self.model()
+        return Endpoints(by_profile={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.profiles})
+
     def agent(self) -> Agent[None, str]:
-        return Agent(self.model(), name="test", capabilities=[StepwiseDurability()])
-
-    def agents(self) -> Agents:
         """
-        Every choice `CONFIG` offers, answered by one stand-in model.
+        The agent a pass would build for the default choice, for a test driving one directly.
 
-        One model behind every pair rather than one each, so `asked` counts calls across the whole
-        configuration: what a test wants to know is how often the provider was reached, not which
-        of two identical fakes reached it.
+        Built through `agent_for` rather than assembled here, so a test standing in for half a pass
+        is running the capability stack a real pass runs and not a second one that resembles it.
         """
-        shared = self.agent()
-        return Agents(by_choice=dict.fromkeys(CHOICES, shared))
+        return agent_for(self.endpoints(), DEFAULT_CHOICE, INSTRUCTIONS)
+
+    def body(self) -> Callable[[Run], Awaitable[Never]]:
+        """The workflow body, over a catalogue that offers exactly what the stand-ins serve."""
+        return conversing(self.endpoints(), Catalogues(current=CATALOGUE), INSTRUCTIONS)
 
 
 @pytest.fixture
@@ -118,19 +172,25 @@ def provider() -> Provider:
 
 
 @pytest.fixture
+def catalogues() -> Catalogues:
+    """A holder of its own per test, so one test replacing what it holds cannot reach another."""
+    return Catalogues(current=CATALOGUE)
+
+
+@pytest.fixture
 def database(tmp_path: Path) -> Path:
     return tmp_path / "mainplate.db"
 
 
 @pytest.fixture
-async def service(database: Path) -> AsyncIterator[Service]:
+async def service(database: Path, catalogues: Catalogues) -> AsyncIterator[Service]:
     """A store on its own file, with no worker: nothing answers a session unless a test does."""
-    async with open_store(database, LEASE, CONFIG) as opened:
+    async with open_store(database, LEASE, catalogues) as opened:
         yield Service(
             database=opened.database,
             durable=opened.durable,
             checkpointer=opened.checkpointer,
-            config=CONFIG,
+            catalogues=catalogues,
             now=Ticking(),
         )
 

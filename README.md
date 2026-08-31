@@ -22,8 +22,10 @@ default = "anthropic"
 [profiles.anthropic]
 provider = "anthropic"
 api_key  = "sk-ant-..."
-models   = ["claude-sonnet-5", "claude-opus-5"]
 ```
+
+No models are listed, because none are configured: mainplate asks each endpoint what it serves and
+offers whatever comes back.
 
 ```console
 $ uvx mainplate serve          # once there is a release; from a checkout, `just serve`
@@ -38,34 +40,55 @@ them from `MAINPLATE_`-prefixed environment variables.
 
 ### Profiles
 
-A **profile** is where requests go and how they authenticate. The model is deliberately not part
-of one, because the thing a profile names is often a gateway serving many models behind a single
-hostname: folding the model in would mean a profile per model over identical settings.
+A **profile** is where requests go, which wire is spoken there, and how to authenticate. The models
+are deliberately not part of one, and are not written down anywhere: mainplate asks the endpoint's
+own model-list API what it serves. That is the same call whether the endpoint is `api.anthropic.com`
+or a gateway fronting five vendors, and it means the picker is never a list somebody has to
+remember to update.
 
-So a session records *both*, at the moment it is created, and both are fixed for its life. You
-pick them under the composer on the new-chat page; after that the session says what it is on
-rather than offering a control that could not change it. A conversation that switched model
-halfway would replay its recorded answers from one and continue on another, so what the transcript
-shows and what the next turn reasons from would have different authors. Starting a second session
-is how you change your mind, and it keeps the first one readable.
+`provider` names the wire rather than the vendor, because one hostname often answers both and each
+reaches models the other does not. It also decides what `base_url` has to be: the Anthropic SDK
+appends `/v1/messages` to what it is given, so it wants the host, and the OpenAI SDK appends
+`/chat/completions`, so it wants the host and `/v1`.
+
+A session records the profile *and* the model, at the moment it is created, and both are fixed for
+its life. The profile is what carries the wire, which is why it is recorded rather than looked up
+later: the same model id can sit behind two wires, and the two serialize a conversation
+differently. You pick both under the composer on the new-chat page, where the models are grouped by
+the vendor each comes from; after that the session says what it is on rather than offering a control
+that could not change it. A conversation that switched model halfway would replay its recorded
+answers from one and continue on another, so what the transcript shows and what the next turn
+reasons from would have different authors. Starting a second session is how you change your mind,
+and it keeps the first one readable.
+
+A new session starts on whichever model the default profile listed first, which for most gateways is
+their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
+since dropped falls back to the first rather than stopping the console.
+
+The list is read once before the console takes traffic and refreshed on a timer after that
+(`MAINPLATE_REFRESH`, fifteen minutes by default), by a task that answers no requests. So rendering
+a page never causes a request to a gateway, and a model that appears at the provider reaches the
+picker without anybody restarting anything. A refresh that fails keeps the models discovered
+earlier and logs why; a *first* read that fails is a startup failure naming the profile, because a
+console with an empty picker can answer nothing.
 
 Credentials live in that file rather than in the environment. A key read from a `0600` file and
 handed to the SDK never becomes an environment variable, so it is not inherited by child
 processes, not in `/proc/<pid>/environ`, and not in a crash dump of anything but this process. A
-profile that names neither `api_key` nor `base_url` falls back to `ANTHROPIC_API_KEY`, which is
-what the Anthropic SDK does for itself.
+profile that names neither `api_key` nor `base_url` falls back to the SDK's own environment
+variable, which is what the SDK does for itself.
 
 ### On exe.dev, no key at all
 
 An [exe.dev](https://exe.dev) VM with the built-in
-[LLM integration](https://exe.dev/docs/integrations-llm.md) reaches Anthropic through
-`https://llm.int.exe.xyz` with **no credential on the box**: exe.dev injects one at its own edge.
-That is the best version of the secrets story available here, because there is nothing to store,
-rotate, or leak.
+[LLM integration](https://exe.dev/docs/integrations-llm.md) reaches Anthropic, OpenAI, Fireworks,
+and xAI through `https://llm.int.exe.xyz` with **no credential on the box**: exe.dev injects one at
+its own edge. That is the best version of the secrets story available here, because there is
+nothing to store, rotate, or leak.
 
 `mainplate install` finds it for you. It asks the
 [reflection integration](https://exe.dev/docs/integrations-reflection.md) which integrations are
-attached, writes a keyless profile per LLM integration it finds, and says so:
+attached, writes keyless profiles per LLM integration it finds, and says so:
 
 ```console
 $ just install
@@ -75,13 +98,16 @@ mainplate is installed and restarted
   profiles /home/you/.config/mainplate/config.toml
 ```
 
-Off exe.dev the lookup finds nothing and the install writes a template to edit. Either way an
-existing `config.toml` is never overwritten. The seeded model list is short because it cannot be
-discovered: the gateway's `/v1/models` lists its OpenAI-compatible models and not its Anthropic
-ones, so add the rest by hand.
+One hostname gets two profiles, one per wire, because each reaches models the other does not.
+`llm-anthropic` offers every Claude and every Fireworks model, all answered over `/v1/messages`;
+`llm-openai` offers GPT, Grok, and Fireworks again over `/v1/chat/completions`. Between them a
+default VM offers around seventy models with nothing configured.
 
-To see the console without a provider or any spend, `just demo` runs it against Pydantic AI's own
-canned model.
+Off exe.dev the lookup finds nothing and the install writes a template to edit. Either way an
+existing `config.toml` is never overwritten.
+
+`just demo` runs the same console on a throwaway database, for poking at a page without touching
+real sessions.
 
 ### Leaving it running
 
@@ -100,9 +126,10 @@ The install prints where its files are. `config.toml` is the one to edit, and
 `environment` beside it carries any `MAINPLATE_*` process setting. Both are created `0600` on the
 first install and neither is ever overwritten.
 
-With no usable profile the service fails at startup and restarts every five seconds, because the
-agents are built before anything binds. That is deliberate: a console that could answer nothing
-has nothing honest to serve, and failing at boot is louder than failing on the first message.
+With no usable profile, or with one no endpoint will answer a model list for, the service fails at
+startup and restarts every five seconds: the endpoints are built and asked what they serve before
+anything binds. That is deliberate: a console that could answer nothing has nothing honest to
+serve, and failing at boot is louder than failing on the first message.
 
 Sessions live at `$XDG_DATA_HOME/mainplate/mainplate.db` rather than in whatever directory you
 installed from, since a service has no meaningful working directory.
@@ -121,7 +148,7 @@ whole of what a session is:
 
 ```python
 async def converse(run: Run) -> Never:
-    agent = agents.for_choice(chosen)  # the profile and model this session recorded at creation
+    agent = agent_for(endpoints, chosen, instructions)  # the pair this session recorded at creation
     at = reached(run.recorded)
     while True:
         prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
@@ -186,11 +213,12 @@ Named plainly, because they are the next things rather than omissions nobody not
 - **No tools.** The agent is a model and some instructions. Tool calls become another kind of
   recorded step, which is the shape `Stepping.key` already numbers. The console reads and draws
   them already, so a toolset is the change; the panel it appears in is not.
-- **Anthropic only.** A profile's `provider` is a field because the answer varies, and today it
-  takes one value. Another provider is an extra on `pydantic-ai-slim` and a branch in
-  `build_model`.
-- **A session cannot be moved to another profile.** Removing a profile that sessions use leaves
-  them readable and stuck; the page names the profile so putting it back is obvious.
+- **Two wires, not every wire.** A profile's `provider` takes `anthropic` or `openai`, which
+  between them cover most gateways. A third is one `Endpoint` class saying how to name a model over
+  that wire and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.
+- **A session cannot be moved to another profile.** A profile removed from the file, or a model an
+  endpoint stops listing, leaves the sessions on it readable and stuck; the page names the pair so
+  putting it back is obvious.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.

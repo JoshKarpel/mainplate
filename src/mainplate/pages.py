@@ -47,6 +47,7 @@ from without_html import li
 from without_html import link
 from without_html import main
 from without_html import meta
+from without_html import optgroup
 from without_html import option
 from without_html import p
 from without_html import pre
@@ -64,6 +65,9 @@ from without_web import Reversible
 from without_web import url_for
 
 from mainplate.agent import Choice
+from mainplate.agent import Listed
+from mainplate.catalogue import Catalogue
+from mainplate.catalogue import grouped
 from mainplate.conversation import Block
 from mainplate.conversation import Kind
 from mainplate.conversation import Panel
@@ -72,8 +76,6 @@ from mainplate.conversation import Reasoning
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.markup import as_markup
-from mainplate.profiles import Config
-from mainplate.profiles import Profile
 from mainplate.service import Conversation
 from mainplate.sessions import Session
 
@@ -264,31 +266,43 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> E
     )
 
 
-def model_select(profile: Profile, chosen: str | None = None) -> Element:
+def model_select(models: Sequence[Listed], chosen: str | None = None) -> Element:
     """
     The models one profile offers, as the select the form submits.
 
     Its own element with a stable id, because changing the profile replaces exactly this and
-    nothing else on the page. A profile always offers at least one model (the parser refuses an
-    empty list), so this is never an empty select nobody can submit.
+    nothing else on the page. A profile always offers at least one model (discovery refuses a
+    profile that lists none), so this is never an empty select nobody can submit.
+
+    Grouped by family, because a gateway fronting several vendors answers with seventy entries and
+    an ungrouped list of seventy is a list nobody reads. The value is the id the request will name;
+    the text is whatever the endpoint calls it, which on the Anthropic wire is written for a person
+    and on the OpenAI wire is the id again.
     """
-    picked = chosen if chosen in profile.models else profile.models[0]
+    picked = chosen if any(chosen == model.id for model in models) else models[0].id
     return select(
         attrs={"id": MODEL_ID, "name": "model", "aria-label": "Model"},
         children=[
-            option(attrs={"value": model, "selected": model == picked}, children=model) for model in profile.models
+            optgroup(
+                attrs={"label": family},
+                children=[
+                    option(attrs={"value": model.id, "selected": model.id == picked}, children=model.label)
+                    for model in found
+                ],
+            )
+            for family, found in grouped(models)
         ],
     )
 
 
-def profile_select(links: Links, config: Config) -> Element:
+def profile_select(links: Links, catalogue: Catalogue) -> Element:
     """
     Which endpoint to answer on, and the control that swaps the model list beside it.
 
     htmx sends a triggering input's own value, so the `hx-get` needs no interpolation: choosing a
     profile asks for that profile's models and replaces the select next to this one. Without a
     browser the form still posts, carrying whatever models the page was rendered with, and the
-    handler refuses a pair no profile offers.
+    handler refuses a pair nothing offers.
 
     `outerHTML` and deliberately not the `outerMorph` the transcript uses. Morphing preserves what
     a control already holds, which is exactly right for a conversation being reread and exactly
@@ -306,20 +320,20 @@ def profile_select(links: Links, config: Config) -> Element:
             "hx-status:5xx": "swap:none",
         },
         children=[
-            option(attrs={"value": name, "selected": name == config.default}, children=name)
-            for name in sorted(config.profiles)
+            option(attrs={"value": name, "selected": name == catalogue.default.profile}, children=name)
+            for name in catalogue.profiles
         ],
     )
 
 
-def picker(links: Links, config: Config) -> Element:
+def picker(links: Links, catalogue: Catalogue) -> Element:
     """The two selects, which appear only where a session is being created."""
     return div(
         cls="picker",
         children=[
             span(cls="label", children="Answer with"),
-            profile_select(links, config),
-            model_select(config.profiles[config.default]),
+            profile_select(links, catalogue),
+            model_select(catalogue.offered[catalogue.default.profile], catalogue.default.model),
         ],
     )
 
@@ -784,7 +798,7 @@ def shell(
     )
 
 
-def start_page(links: Links, listed: tuple[Session, ...], config: Config) -> str:
+def start_page(links: Links, listed: tuple[Session, ...], catalogue: Catalogue) -> str:
     """
     Where a session begins: an empty transcript, a box, and what to answer it with.
 
@@ -801,7 +815,7 @@ def start_page(links: Links, listed: tuple[Session, ...], config: Config) -> str
             showing=None,
             pane=[
                 transcript_region(links, session="", said=Transcript(panels=(), awaiting=False, turns=0)),
-                composer(links.to_start(), picker(links, config), live=False),
+                composer(links.to_start(), picker(links, catalogue), live=False),
             ],
         ),
     )
@@ -811,15 +825,17 @@ def stalled_by(showing: Conversation) -> str | None:
     """
     Why this session cannot be answered, or nothing at all when it can.
 
-    One sentence naming the profile, because that is the only thing a person can act on: the pair
-    was configured when the session started, so putting it back in the configuration file is what
-    makes the conversation continue exactly where it stopped.
+    One sentence naming the pair, because that is the only thing a person can act on. It says
+    "no longer offers" without guessing which half moved, since a pair that was available when the
+    session started can stop being so in two ways this cannot tell apart: the profile edited out of
+    the configuration file, or the endpoint dropping a model it used to list. Naming one would be a
+    guess, and the pair is what somebody has to restore either way.
     """
     if showing.answerable or showing.chosen is None:
         return None
     return (
         f"This session was started on profile {showing.chosen.profile!r} with {showing.chosen.model!r}, "
-        f"which the configuration no longer offers. Put it back to carry on, or start a new session."
+        f"which is no longer offered. Put it back to carry on, or start a new session."
     )
 
 

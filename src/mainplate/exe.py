@@ -32,14 +32,6 @@ PATIENCE: Final = timedelta(seconds=5)
 # What exe.dev calls an integration that fronts model providers.
 LLM: Final = "llm"
 
-# The model list is the OpenAI-compatible one, and it does not include the Anthropic models even
-# where the Anthropic provider is enabled: measured against a live gateway, `/v1/models` returned
-# eighty-one entries and not one of them was a Claude. So the models a discovered profile offers
-# cannot be read from the gateway, and this is what a fresh profile is seeded with instead. Edit
-# `config.toml` to add others; the gateway routes by model id and this list is only what the
-# picker shows.
-SEEDED_MODELS: Final = ("claude-sonnet-4-6",)
-
 
 @dataclass(frozen=True, slots=True)
 class Gateway:

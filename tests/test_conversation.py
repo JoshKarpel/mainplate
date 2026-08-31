@@ -34,7 +34,6 @@ from mainplate.conversation import Returned
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.conversation import blocks_of
-from mainplate.conversation import conversing
 from mainplate.conversation import messages_key
 from mainplate.conversation import panelled
 from mainplate.conversation import parse_prompt
@@ -221,7 +220,7 @@ class TestChoosingATurn:
 class TestAnsweringASession:
     async def test_a_started_session_waits_to_be_told_something(self, service: Service, provider: Provider) -> None:
         await service.checkpointer.supply(SESSION, CHOICE_KEY, recorded_choice(DEFAULT_CHOICE))
-        assert await pass_at(service, conversing(provider.agents())) == Waiting(key=prompt_key(0))
+        assert await pass_at(service, provider.body()) == Waiting(key=prompt_key(0))
         assert provider.asked == 0
 
     async def test_a_workflow_with_no_recorded_choice_is_refused_rather_than_guessed_at(
@@ -229,13 +228,13 @@ class TestAnsweringASession:
     ) -> None:
         """`Service.start` writes the choice first, so reaching this means something else queued it."""
         with pytest.raises(NeverStarted):
-            await pass_at(service, conversing(provider.agents()))
+            await pass_at(service, provider.body())
 
     async def test_a_message_is_answered_and_the_session_waits_again(
         self, service: Service, provider: Provider
     ) -> None:
         await started(service, said="hello")
-        assert await pass_at(service, conversing(provider.agents())) == Waiting(key=prompt_key(1))
+        assert await pass_at(service, provider.body()) == Waiting(key=prompt_key(1))
         said = transcript(await service.checkpointer.load(SESSION))
         assert spoken(said) == [("person", "hello"), ("assistant", "answer 1")]
         assert not said.awaiting
@@ -243,7 +242,7 @@ class TestAnsweringASession:
     async def test_a_later_pass_replays_the_recorded_answer_rather_than_asking_again(
         self, service: Service, provider: Provider
     ) -> None:
-        body = conversing(provider.agents())
+        body = provider.body()
         await started(service, said="hello")
         await pass_at(service, body)
         await pass_at(service, body)
@@ -253,7 +252,7 @@ class TestAnsweringASession:
     async def test_a_second_message_is_answered_without_re_asking_the_first(
         self, service: Service, provider: Provider
     ) -> None:
-        body = conversing(provider.agents())
+        body = provider.body()
         await started(service, said="hello")
         await pass_at(service, body)
         await service.say(SESSION, turn=1, said="again")
@@ -286,14 +285,14 @@ class TestAnsweringASession:
         recorded = await service.checkpointer.load(SESSION)
         assert messages_key(0) not in recorded
 
-        assert await pass_at(service, conversing(provider.agents())) == Waiting(key=prompt_key(1))
+        assert await pass_at(service, provider.body()) == Waiting(key=prompt_key(1))
         assert provider.asked == 1
 
     async def test_a_turn_carries_the_conversation_so_far_to_the_model(
         self, service: Service, provider: Provider
     ) -> None:
         """A second turn must reach the model with the first exchange behind it, or it is a fresh chat."""
-        body = conversing(provider.agents())
+        body = provider.body()
         await started(service, said="hello")
         await pass_at(service, body)
         await service.say(SESSION, turn=1, said="again")
@@ -301,7 +300,7 @@ class TestAnsweringASession:
         assert provider.carried == [1, 3]
 
     async def test_two_sessions_do_not_see_each_other(self, service: Service, provider: Provider) -> None:
-        body = conversing(provider.agents())
+        body = provider.body()
         await started(service, said="first session", session="one")
         await started(service, said="second session", session="two")
         await pass_at(service, body, session="one")

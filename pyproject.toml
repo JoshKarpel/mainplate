@@ -28,7 +28,7 @@ dependencies = [
     # `-slim` plus the one provider, rather than `pydantic-ai`, which pulls every provider
     # SDK, a CLI, an MCP server, and an evals framework into an environment that uses one
     # of them. Adding a provider is an extra in this list rather than a change to any code.
-    "pydantic-ai-slim[anthropic]>=2.33",
+    "pydantic-ai-slim[anthropic,openai]>=2.33",
     "without-async>=0.0.6",
     "without-asgi>=0.0.6",
     "without-web>=0.0.6",

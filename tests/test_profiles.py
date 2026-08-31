@@ -16,16 +16,19 @@ from mainplate.profiles import read_config
 
 WHOLE = """
 default = "gateway"
+default_model = "anthropic/claude-opus-5"
 
 [profiles.gateway]
 provider = "anthropic"
 base_url = "https://llm.int.exe.xyz"
-models = ["claude-sonnet-4-6", "claude-opus-4-1"]
+
+[profiles.wired]
+provider = "openai"
+base_url = "https://llm.int.exe.xyz/v1"
 
 [profiles.direct]
 provider = "anthropic"
 api_key = "sk-ant-secret"
-models = ["claude-sonnet-5"]
 """
 
 
@@ -33,11 +36,21 @@ class TestParsingAConfig:
     def test_a_whole_file_becomes_the_profiles_it_declares(self) -> None:
         config = parse_config(WHOLE)
         assert config.default == "gateway"
-        assert sorted(config.profiles) == ["direct", "gateway"]
-        assert config.profiles["gateway"].models == ("claude-sonnet-4-6", "claude-opus-4-1")
+        assert sorted(config.profiles) == ["direct", "gateway", "wired"]
+        assert config.profiles["gateway"].base_url == "https://llm.int.exe.xyz"
 
-    def test_the_default_model_is_the_default_profiles_first(self) -> None:
-        assert parse_config(WHOLE).default_model == "claude-sonnet-4-6"
+    def test_a_profile_names_the_wire_spoken_to_it(self) -> None:
+        """One hostname answers both, so which is spoken is the profile's to say and not the host's."""
+        config = parse_config(WHOLE)
+        assert config.profiles["gateway"].provider == "anthropic"
+        assert config.profiles["wired"].provider == "openai"
+
+    def test_a_named_default_model_is_carried_through(self) -> None:
+        assert parse_config(WHOLE).default_model == "anthropic/claude-opus-5"
+
+    def test_a_file_that_names_no_default_model_leaves_it_to_the_endpoint(self) -> None:
+        """Absent means "whatever it lists first", which is a question only discovery can answer."""
+        assert parse_config('default = "here"\n[profiles.here]\nprovider="anthropic"').default_model is None
 
     def test_a_credential_is_held_redacted_rather_than_as_text(self) -> None:
         """A key that renders in a traceback or a log line is the whole failure this prevents."""
@@ -50,13 +63,12 @@ class TestParsingAConfig:
         ("raw", "why"),
         [
             ("default = [", "not TOML at all"),
-            ('default = "nope"\n[profiles.here]\nprovider="anthropic"\nmodels=["m"]', "a default naming nothing"),
+            ('default = "nope"\n[profiles.here]\nprovider="anthropic"', "a default naming nothing"),
             ('default = "here"', "a default with no profiles at all"),
-            ('default = "here"\n[profiles.here]\nprovider="anthropic"\nmodels=[]', "a profile offering no model"),
-            ('default = "here"\n[profiles.here]\nprovider="openai"\nmodels=["m"]', "a provider nothing can build"),
-            ('default = "here"\n[profiles.here]\nprovider="anthropic"', "a profile with no models key"),
+            ('default = "here"\n[profiles.here]\nprovider="fireworks"', "a wire nothing can speak"),
+            ('default = "here"\n[profiles.here]\napi_key="k"', "a profile naming no wire at all"),
             (
-                'default = "here"\n[profiles.here]\nprovider="anthropic"\nmodels=["m"]\nnonsense=1',
+                'default = "here"\n[profiles.here]\nprovider="anthropic"\nnonsense=1',
                 "a key nothing reads, which is usually a typo for one that is",
             ),
         ],
@@ -65,33 +77,31 @@ class TestParsingAConfig:
         with pytest.raises(BadConfig):
             parse_config(raw)
 
+    def test_a_file_still_listing_models_is_told_what_replaced_it(self) -> None:
+        """
+        A file written correctly against an older version, which `extra="forbid"` alone calls a typo.
+
+        The message has to name the key and say what happens instead, because the reader's own
+        conclusion from "extra inputs are not permitted" is that they misspelled something.
+        """
+        raw = 'default = "here"\n[profiles.here]\nprovider="anthropic"\nmodels=["m"]'
+        with pytest.raises(BadConfig, match="no longer read"):
+            parse_config(raw)
+
 
 class TestChoosingACredential:
     def test_a_configured_key_is_what_the_sdk_gets(self) -> None:
-        profile = Profile(provider="anthropic", api_key=SecretStr("sk-mine"), models=("m",))
+        profile = Profile(provider="anthropic", api_key=SecretStr("sk-mine"))
         assert profile.key == "sk-mine"
 
     def test_an_endpoint_with_no_key_gets_a_placeholder(self) -> None:
         """exe.dev injects the credential at its edge, and the SDK still refuses to construct bare."""
-        profile = Profile(provider="anthropic", base_url="https://llm.int.exe.xyz", models=("m",))
+        profile = Profile(provider="anthropic", base_url="https://llm.int.exe.xyz")
         assert profile.key == KEYLESS
 
     def test_neither_leaves_the_sdk_reading_the_environment_for_itself(self) -> None:
         """`None` is the value that keeps a plain `Agent('anthropic:...')` behaving as it always did."""
-        assert Profile(provider="anthropic", models=("m",)).key is None
-
-
-class TestOfferings:
-    def test_a_configured_pair_is_offered(self) -> None:
-        assert parse_config(WHOLE).offers("gateway", "claude-opus-4-1") is True
-
-    @pytest.mark.parametrize(
-        ("profile", "model"),
-        [("gateway", "claude-sonnet-5"), ("direct", "claude-opus-4-1"), ("gone", "claude-sonnet-5")],
-    )
-    def test_a_pair_from_another_profile_or_no_profile_is_not(self, profile: str, model: str) -> None:
-        """A session records a pair, so what is checked later is the pair and never the halves."""
-        assert parse_config(WHOLE).offers(profile, model) is False
+        assert Profile(provider="anthropic").key is None
 
 
 class TestDiscoveringAnExeGateway:

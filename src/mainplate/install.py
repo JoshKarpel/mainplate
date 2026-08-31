@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 from collections.abc import Awaitable
@@ -30,7 +29,6 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Final
 
-from mainplate.exe import SEEDED_MODELS
 from mainplate.exe import Gateway
 from mainplate.profiles import BadConfig
 from mainplate.profiles import config_path
@@ -53,9 +51,9 @@ Type=exec
 # A user unit inherits none of a login shell's PATH, so this is the standard system set and
 # nothing more.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# Any MAINPLATE_* process setting, and the SDK's own ANTHROPIC_API_KEY fallback. Provider
-# credentials live in config.toml instead, where they are read from the file rather than put in
-# the environment. Not optional (`-`), so a deleted file is a start that fails loudly.
+# Any MAINPLATE_* process setting, and whichever key an SDK falls back to reading for itself.
+# Provider credentials live in config.toml instead, where they are read from the file rather than
+# put in the environment. Not optional (`-`), so a deleted file is a start that fails loudly.
 EnvironmentFile={environment}
 ExecStart={executable} -m mainplate serve --host {host} --port {port} --database {database}
 Restart=always
@@ -70,8 +68,8 @@ WantedBy=default.target
 #
 # It is no longer where the credential goes: `config.toml` is, per profile, and a key read from a
 # file and handed to the SDK never enters this process's environment at all. What is left here is
-# the fallback the Anthropic SDK does for itself, for a profile naming neither a key nor an
-# endpoint, and any `MAINPLATE_*` process setting.
+# the fallback each SDK does for itself, for a profile naming neither a key nor an endpoint, and
+# any `MAINPLATE_*` process setting.
 ENVIRONMENT: Final = """\
 # Read by the mainplate user service, and by nothing else on this machine.
 #
@@ -79,10 +77,11 @@ ENVIRONMENT: Final = """\
 # Keep it 0600.
 #
 # Provider credentials belong in config.toml, per profile, where they are read from the file and
-# never enter the environment. This is only the fallback for a profile that names no key and no
-# endpoint of its own, which is what the Anthropic SDK reads for itself.
+# never enter the environment. These are only the fallback for a profile that names no key and no
+# endpoint of its own, which is what each SDK reads for itself: one per wire.
 
 # ANTHROPIC_API_KEY=
+# OPENAI_API_KEY=
 
 # Any setting `mainplate serve --help` lists can go here as MAINPLATE_<NAME>. The host, port, and
 # database are on the unit's own ExecStart instead, because the install chose those.
@@ -96,18 +95,21 @@ ENVIRONMENT: Final = """\
 TEMPLATE: Final = """\
 # Which endpoints mainplate can answer on, and which one a new session starts on.
 #
-# A profile is where requests go and how they authenticate. The model is not part of one: a
-# gateway serves many models behind one hostname, so a session records a profile *and* a model,
-# and both are fixed for that session's life.
+# A profile is where requests go, which wire is spoken, and how to authenticate. The models are
+# not part of one and are not listed here: mainplate asks each endpoint what it serves and offers
+# whatever comes back. A session records a profile *and* a model, and both are fixed for its life.
 #
 # Uncomment one and set `default` to its name. This file holds credentials, so keep it 0600.
 
 # default = "anthropic"
 #
+# # Optional: which of the default profile's models a new session starts on. Left out, it is
+# # whichever the endpoint lists first, which for most gateways is their newest.
+# default_model = "claude-opus-5"
+#
 # [profiles.anthropic]
 # provider = "anthropic"
 # api_key  = "sk-ant-..."          # omit to fall back to ANTHROPIC_API_KEY in the environment
-# models   = ["claude-sonnet-5", "claude-opus-5"]
 """
 
 # What a discovered exe.dev gateway is written as. No key, because there is nothing to write: the
@@ -116,19 +118,28 @@ GATEWAY: Final = """\
 # Written by `mainplate install`, which found this VM's exe.dev LLM integration.
 #
 # No credential: exe.dev injects one at its own edge, so this VM holds no key to store or rotate.
-# A profile is an endpoint, so add models to the list below to offer them in the picker; the
-# gateway routes by model id and this list is only what the picker shows. A team integration
-# answers at `https://<name>.team.exe.xyz` rather than `.int.`.
+# Nothing lists models either: mainplate asks each endpoint what it serves, at startup and on a
+# timer after that, and offers whatever comes back.
+#
+# One hostname, two profiles, because exe.dev answers both wires there and each reaches models the
+# other does not. The Anthropic wire serves every Claude and the Fireworks models; the OpenAI wire
+# serves GPT, Grok, and the Fireworks models again. Note the `/v1`, which only the OpenAI SDK wants:
+# it appends `/chat/completions` where the Anthropic SDK appends `/v1/messages`.
+#
+# A team integration answers at `https://<name>.team.exe.xyz` rather than `.int.`.
 
 default = "{default}"
 
 {profiles}"""
 
 GATEWAY_PROFILE: Final = """\
-[profiles.{name}]
+[profiles.{name}-anthropic]
 provider = "anthropic"
 base_url = "{base_url}"
-models   = {models}
+
+[profiles.{name}-openai]
+provider = "openai"
+base_url = "{base_url}/v1"
 """
 
 # What systemctl is asked, as the only shape of call this makes: arguments after `--user`, and the
@@ -238,12 +249,12 @@ class Unit:
         Where the credential lives, which is beside the configuration and not inside the unit.
 
         The unit is world-readable by design (systemd reads it, and so does anyone listing your
-        units); this is 0600. What it does not buy is the thing the secrets guidance actually
-        wants, since the value still becomes a process environment variable, inherited by every
-        child and readable at `/proc/<pid>/environ`. That is forced from above: Pydantic AI reads
-        `ANTHROPIC_API_KEY` from the environment itself, so the alternative is this process holding
-        the secret in a second place in order to hand it back. Naming the trade is what is
-        available here; removing it means passing a key to `AnthropicProvider` directly.
+        units); this is 0600. What a key put here does not buy is the thing the secrets guidance
+        actually wants, since the value becomes a process environment variable, inherited by every
+        child and readable at `/proc/<pid>/environ`. That is why a profile's `api_key` is the way
+        to hand one over: it is read from `config.toml` at the point of use and never enters this
+        environment at all. What is left here is each SDK's own fallback, for a profile naming
+        neither a key nor an endpoint, and any `MAINPLATE_*` process setting.
         """
         return self.config_home / SERVICE / "environment"
 
@@ -410,15 +421,11 @@ def render_config(gateways: Sequence[Gateway]) -> str:
     """
     if not gateways:
         return TEMPLATE
-    profiles = "\n".join(
-        GATEWAY_PROFILE.format(
-            name=gateway.name,
-            base_url=gateway.base_url,
-            models=json.dumps(list(SEEDED_MODELS)),
-        )
-        for gateway in gateways
-    )
-    return GATEWAY.format(default=gateways[0].name, profiles=profiles)
+    profiles = "\n".join(GATEWAY_PROFILE.format(name=gateway.name, base_url=gateway.base_url) for gateway in gateways)
+    # The Anthropic wire is the default of the two, because its list is the one written for a
+    # person to read: every entry carries a display name, and none of them is an embedding model
+    # or the same model under a second id.
+    return GATEWAY.format(default=f"{gateways[0].name}-anthropic", profiles=profiles)
 
 
 def write_config(path: Path, gateways: Sequence[Gateway]) -> bool:

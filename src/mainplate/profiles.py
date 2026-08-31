@@ -1,9 +1,16 @@
 # Where requests go and how they authenticate, as a file you edit rather than an environment.
 #
-# A **profile** is an endpoint and a credential. The model is not part of one, because the thing a
-# profile names is often a gateway serving dozens of models: exe.dev's serves eighty-one behind one
-# hostname, so folding the model in would mean a profile per model over identical settings. A
-# session records both, separately, and both are fixed for its life.
+# A **profile** is an endpoint, a wire format, and a credential. The models are not part of one and
+# are not written down at all: a profile usually names a gateway serving dozens of models, so the
+# list belongs to the endpoint rather than to the file, and `catalogue.py` asks the endpoint for it.
+# What this file decides is where to ask. A session records a profile *and* a model, separately,
+# and both are fixed for its life.
+#
+# `provider` is the wire format rather than the company: one hostname often answers both, and which
+# one is spoken decides which models are reachable and what `base_url` has to say. exe.dev's gateway
+# is the worked example - its Anthropic wire offers every Claude and every Fireworks model, its
+# OpenAI wire offers GPT, Grok, and Fireworks again - so a VM that wants all of them declares the
+# same host twice, once per wire.
 #
 # This is also where the credential stops being an environment variable. A key in a file this
 # process reads and hands to `AnthropicProvider(api_key=...)` never enters the environment, so it
@@ -17,13 +24,11 @@ from __future__ import annotations
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated
 from typing import Final
 from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
-from pydantic import Field
 from pydantic import SecretStr
 from pydantic import ValidationError
 from pydantic import model_validator
@@ -46,21 +51,31 @@ class BadConfig(ValueError):
     """
 
 
+type Wire = Literal["anthropic", "openai"]
+
+
 class Profile(BaseModel):
     """
-    One endpoint and how to authenticate to it.
+    One endpoint, the wire format spoken to it, and how to authenticate.
 
-    Inbound, so nothing here is defaulted into existence: `provider` and `models` must be written
-    down. `base_url` and `api_key` default to `None` because their *absence is the meaning* rather
-    than an omission - no `base_url` is the provider's own endpoint, and no `api_key` is either a
+    Inbound, so nothing here is defaulted into existence: `provider` must be written down.
+    `base_url` and `api_key` default to `None` because their *absence is the meaning* rather than
+    an omission - no `base_url` is the provider's own endpoint, and no `api_key` is either a
     gateway that needs none or a fallback to the environment - and a parser cannot tell a
     forgotten optional field from an omitted one either way.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    provider: Literal["anthropic"]
-    """Which SDK talks to this endpoint. One today; the field exists because the answer varies."""
+    provider: Wire
+    """
+    Which SDK talks to this endpoint, which is a statement about the wire and not about the vendor.
+
+    It decides three things at once, and they travel together: which models the endpoint will list,
+    which of them it will actually answer for, and what `base_url` has to be. The Anthropic SDK
+    appends `/v1/messages` to what it is given, so it wants the host; the OpenAI SDK appends
+    `/chat/completions`, so it wants the host *and* `/v1`.
+    """
 
     base_url: str | None = None
     """Where to send requests, or the provider's own endpoint when absent."""
@@ -73,23 +88,16 @@ class Profile(BaseModel):
     authenticate its own callers, and the provider's own endpoint falls back to the environment.
     """
 
-    models: Annotated[tuple[str, ...], Field(min_length=1)]
-    """
-    Which models this profile offers, in the order a picker should list them.
-
-    At least one, because a profile nothing can be run on is a profile that cannot be chosen, and
-    an empty list is how a half-finished edit renders rather than something anybody means.
-    """
-
     @property
     def key(self) -> str | None:
         """
         What to hand the SDK: the configured key, a placeholder, or nothing at all.
 
         `None` is the case that keeps a Pydantic AI default intact, so a profile with neither a
-        key nor an endpoint behaves exactly as `Agent('anthropic:...')` does and reads
-        `ANTHROPIC_API_KEY` itself. The placeholder is for the opposite case, a gateway that
-        authenticates at its edge and whose SDK still refuses to construct without something.
+        key nor an endpoint behaves exactly as `Agent('anthropic:...')` does and reads whichever
+        variable its own SDK reads: `ANTHROPIC_API_KEY` on one wire, `OPENAI_API_KEY` on the other.
+        The placeholder is for the opposite case, a gateway that authenticates at its edge and
+        whose SDK still refuses to construct without something.
 
         It takes no environment, and that is the point rather than an omission: the environment
         fallback is the *SDK's*, reached by handing it nothing, so a copy of the environment read
@@ -115,6 +123,21 @@ class Config(BaseModel):
     default: str
     profiles: Mapping[str, Profile]
 
+    default_model: str | None = None
+    """
+    Which of the default profile's models a new session starts on, or its first when absent.
+
+    A knob rather than a rule, because the answer moved when the models stopped being written
+    down: "first" used to mean first in the file, which somebody chose, and now means first in
+    whatever order an endpoint listed, which nobody did. Naming one here settles it; leaving it
+    out accepts the endpoint's order, which is the sensible default for a gateway that puts its
+    newest model first.
+
+    Not checked against the endpoint here, because this is parsed before anything has been asked
+    what it offers. `catalogue.py` is where a name that no longer resolves falls back to the first
+    discovered, since a model retired overnight must not stop the console from starting.
+    """
+
     @model_validator(mode="after")
     def default_names_a_profile(self) -> Config:
         """
@@ -130,15 +153,11 @@ class Config(BaseModel):
             raise ValueError(f"default profile {self.default!r} is not one of: {offered}")
         return self
 
-    @property
-    def default_model(self) -> str:
-        """The model a new session starts on, which is the default profile's first."""
-        return self.profiles[self.default].models[0]
 
-    def offers(self, profile: str, model: str) -> bool:
-        """Whether this pair is still something a session can be answered on."""
-        found = self.profiles.get(profile)
-        return found is not None and model in found.models
+# A key that used to mean something and now means the opposite of what it says. `extra="forbid"`
+# already refuses it, but "Extra inputs are not permitted" is the one message that reads as a typo
+# when it is in fact a file written correctly against an older version of this program.
+RETIRED: Final = "models"
 
 
 def parse_config(raw: str) -> Config:
@@ -152,10 +171,23 @@ def parse_config(raw: str) -> Config:
         document = tomllib.loads(raw)
     except tomllib.TOMLDecodeError as broken:
         raise BadConfig(f"this is not valid TOML: {broken}") from broken
+    named = declared_profiles(document)
+    if any(RETIRED in profile for profile in named.values() if isinstance(profile, dict)):
+        raise BadConfig(
+            f"a profile still lists {RETIRED!r}, which is no longer read: the picker offers whatever "
+            f"the endpoint says it serves. Delete the line, and name `default_model` at the top "
+            f"level if you want a particular one to start selected."
+        )
     try:
         return Config.model_validate(document)
     except ValidationError as refused:
         raise BadConfig(str(refused)) from refused
+
+
+def declared_profiles(document: Mapping[str, object]) -> Mapping[str, object]:
+    """The `[profiles.*]` tables as TOML produced them, before anything has decided they are valid."""
+    named = document.get("profiles")
+    return named if isinstance(named, dict) else {}
 
 
 def read_config(path: Path) -> Config:

@@ -1,14 +1,18 @@
 # What a request handler is allowed to see, and every question it may ask.
 #
-# One object, constructed once at startup and handed to every route. It holds the store and
-# nothing else: no agent, no worker, no in-flight state. That is what makes the console
-# restartable and, in principle, separable, since answering a session is the worker's job and
-# nothing here waits on one.
+# One object, constructed once at startup and handed to every route. It holds the store and the
+# models on offer, and nothing else: no agent, no worker, no in-flight state. That is what makes
+# the console restartable and, in principle, separable, since answering a session is the worker's
+# job and nothing here waits on one.
 #
-# Every read goes to the checkpoint, which is the only record of what was said. So there is no
-# cache to invalidate and nothing to keep in step: two tabs open on one session render the same
+# Every read of what was *said* goes to the checkpoint, which is the only record of it. So there is
+# no cache to invalidate and nothing to keep in step: two tabs open on one session render the same
 # thing because they are reading the same rows, and a page rendered after a crash is right for
 # the same reason.
+#
+# The models are the one thing here that is not read from the checkpoint, and they are not a cache
+# of anything anybody said: they are configuration discovered from the endpoints and refreshed off
+# the request path, so a handler reads a value out of memory rather than reaching a gateway.
 
 from __future__ import annotations
 
@@ -21,13 +25,13 @@ from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
 
 from mainplate.agent import Choice
+from mainplate.catalogue import Catalogues
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import choice_of
 from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import transcript
-from mainplate.profiles import Config
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
 from mainplate.sessions import mint_session_id
@@ -44,8 +48,9 @@ class Conversation:
 
     `chosen` is absent only for a session enrolled but never spoken to, which is the window between
     its row and its first message. `answerable` is the separate question of whether that choice is
-    *still* configured: a profile edited out from under a session leaves it readable and stuck, and
-    the page says so rather than showing a spinner that will never resolve.
+    *still* on offer: a profile edited out from under a session, or a model an endpoint stopped
+    listing, leaves it readable and stuck, and the page says so rather than showing a spinner that
+    will never resolve.
     """
 
     session: Session
@@ -59,7 +64,17 @@ class Service:
     database: Database
     durable: SqliteDurable
     checkpointer: SqliteCheckpointer
-    config: Config
+    catalogues: Catalogues
+    """
+    The one thing here that changes while the process runs, and deliberately so.
+
+    What a profile offers is discovered from the endpoint rather than written down, so it is
+    configuration that arrives over the network and is refreshed by a task that answers no
+    requests. A handler reads `catalogues.current` and gets a whole value; nothing it does causes a
+    request to a gateway, so this is still a service that holds no in-flight state and no cache of
+    anything anybody said.
+    """
+
     now: Callable[[], datetime] = now_utc
 
     async def listed(self) -> tuple[Session, ...]:
@@ -82,7 +97,7 @@ class Service:
             session=found,
             said=transcript(recorded),
             chosen=chosen,
-            answerable=chosen is not None and self.config.offers(chosen.profile, chosen.model),
+            answerable=chosen is not None and self.catalogues.current.offers(chosen.profile, chosen.model),
         )
 
     async def start(self, said: str, chosen: Choice) -> Session:

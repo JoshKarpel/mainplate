@@ -34,9 +34,9 @@ check:
 serve *args:
     uv run mainplate serve --port {{ DEV_PORT }} {{ args }}
 
-[doc("Run it against Pydantic AI's canned model, so a page renders with no provider and no spend")]
+[doc('Run it on a throwaway database, for poking at a page without touching real sessions')]
 demo *args:
-    MAINPLATE_MODEL=test uv run mainplate serve --port {{ DEV_PORT }} --database mainplate-demo.db {{ args }}
+    uv run mainplate serve --port {{ DEV_PORT }} --database mainplate-demo.db {{ args }}
 
 # `uv sync` first, and it is not a convenience: the unit names this checkout's interpreter, so an
 # install from a stale environment points systemd at a venv missing whatever was just added. Run
