@@ -19,6 +19,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
+from contextlib import AsyncExitStack
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -47,12 +48,15 @@ from without_web import handle
 from without_web import http_scope
 from without_web import static_files
 
-from mainplate.agent import Endpoints
-from mainplate.agent import build_endpoints
+from mainplate.agent import Wires
+from mainplate.agent import build_wires
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import discover
 from mainplate.catalogue import refreshing
 from mainplate.catalogue import summarise
+from mainplate.config import Config
+from mainplate.config import config_path
+from mainplate.config import read_config
 from mainplate.console import ASSETS
 from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
@@ -66,9 +70,9 @@ from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
 from mainplate.pages import refusal_page
-from mainplate.profiles import Config
-from mainplate.profiles import config_path
-from mainplate.profiles import read_config
+from mainplate.reference import References
+from mainplate.reference import refreshed
+from mainplate.reference import refreshing as refreshing_reference
 from mainplate.service import Service
 from mainplate.sessions import prepare
 from mainplate.settings import Settings
@@ -119,7 +123,11 @@ def build_router() -> Router[Service]:
 
 @asynccontextmanager
 async def open_store(
-    database: Path, lease: timedelta, catalogues: Catalogues, workspaces: Workspaces | None = None
+    database: Path,
+    lease: timedelta,
+    catalogues: Catalogues,
+    workspaces: Workspaces | None = None,
+    references: References | None = None,
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -138,6 +146,10 @@ async def open_store(
             checkpointer=checkpointer,
             catalogues=catalogues,
             workspaces=workspaces,
+            # A holder either way, so nothing downstream has to ask whether there is one. An empty
+            # holder is a console that was never told to look anything up, which is a different
+            # state from one whose database would not load and the state a card must not report.
+            references=references if references is not None else References(),
         )
     finally:
         # Never `connection.close()`: the store's own `aclose` waits out any statement still
@@ -147,13 +159,13 @@ async def open_store(
 
 
 @asynccontextmanager
-async def open_console(settings: Settings, config: Config, endpoints: Endpoints) -> AsyncIterator[Service]:
+async def open_console(settings: Settings, config: Config, endpoints: Wires) -> AsyncIterator[Service]:
     """
     The store, with a worker answering its sessions and a refresher keeping the models current.
 
     Discovery happens here rather than in `serve`, and before the store is opened, because it is
     the last thing that can refuse: a lifespan that raises never lets the server take traffic, so
-    an endpoint that cannot say what it serves is a start that fails naming the profile rather than
+    an endpoint that cannot say what it serves is a start that fails naming the endpoint rather than
     a console whose picker is empty.
 
     `background_task` starts each task before the first request and cancels it on shutdown, so
@@ -174,12 +186,28 @@ async def open_console(settings: Settings, config: Config, endpoints: Endpoints)
         root=settings.workspace_root / "worktrees",
         reaching=reaching,
     )
-    async with open_store(settings.database, settings.lease, catalogues, workspaces) as service:
+    # Read before ready like the other two, and unlike either of them it cannot refuse to start.
+    # `refreshed` never raises: an unreachable database leaves the holder empty and every card
+    # simply says less, where an endpoint that cannot list its models is an endpoint somebody can
+    # select and then not use. Skipped entirely when nothing is configured, which is the default,
+    # so a console nobody asked to look anything up calls nobody but its own gateways.
+    references = References()
+    if config.model_reference is not None:
+        await refreshed(references, config.model_reference)
+    async with open_store(settings.database, settings.lease, catalogues, workspaces, references) as service:
         answering = work(
             service.durable, conversing(endpoints, settings.instructions, workspaces), limit=settings.passes
         )
         keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
-        async with background_task(answering), background_task(keeping_current):
+        # A stack rather than nested `async with`, because one of these tasks is conditional and
+        # the alternative is the same body written twice or a branch around a `yield`.
+        async with AsyncExitStack() as running:
+            await running.enter_async_context(background_task(answering))
+            await running.enter_async_context(background_task(keeping_current))
+            if config.model_reference is not None:
+                await running.enter_async_context(
+                    background_task(refreshing_reference(references, config.model_reference, settings.reference_every))
+                )
             yield service
 
 
@@ -197,7 +225,7 @@ def build_app(opening: Lifespan[Service]) -> ASGIApp:
 async def serve(settings: Settings) -> None:
     """Run the console and the worker until cancelled, which for the CLI means until a signal."""
     config = read_config(config_path(settings.config_home))
-    endpoints = build_endpoints(config)
+    endpoints = build_wires(config)
 
     def opening() -> AbstractAsyncContextManager[Service]:
         return open_console(settings, config, endpoints)

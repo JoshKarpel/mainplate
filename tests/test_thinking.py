@@ -15,7 +15,7 @@ from pydantic_ai.settings import ThinkingEffort
 from pydantic_ai.settings import ThinkingLevel
 
 from mainplate.agent import Choice
-from mainplate.agent import Endpoints
+from mainplate.agent import Wires
 from mainplate.agent import agent_for
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import THINKING_NAMES
@@ -78,16 +78,16 @@ class TestTheVocabulary:
 
 class TestWhatAChoiceAsksOfAModel:
     def test_a_choice_that_says_nothing_about_thinking_asks_for_nothing(self) -> None:
-        assert Choice(profile="here", model="ripe/careful").settings is None
+        assert Choice(endpoint="here", model="ripe/careful").settings is None
 
     @pytest.mark.parametrize("level", [False, True, "minimal", "xhigh"])
     def test_a_chosen_level_becomes_the_one_setting(self, level: ThinkingLevel) -> None:
-        assert Choice(profile="here", model="ripe/careful", thinking=level).settings == {"thinking": level}
+        assert Choice(endpoint="here", model="ripe/careful", thinking=level).settings == {"thinking": level}
 
     async def test_the_level_reaches_the_request_the_agent_makes(self) -> None:
         watcher = Watching()
-        endpoints = Endpoints(by_profile={"here": Stand(offers=OFFERED["here"], responding=watcher)})
-        chosen = Choice(profile="here", model="ripe/careful", thinking="xhigh")
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+        chosen = Choice(endpoint="here", model="ripe/careful", thinking="xhigh")
 
         await agent_for(endpoints, chosen, INSTRUCTIONS).run("hello")
 
@@ -100,8 +100,8 @@ class TestWhatAChoiceAsksOfAModel:
         chosen on its behalf.
         """
         watcher = Watching()
-        endpoints = Endpoints(by_profile={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
 
-        await agent_for(endpoints, Choice(profile="here", model="ripe/careful"), INSTRUCTIONS).run("hello")
+        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), INSTRUCTIONS).run("hello")
 
         assert watcher.seen == [None]

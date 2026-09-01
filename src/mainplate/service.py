@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import field
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
+from mainplate.reference import References
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
@@ -56,9 +58,9 @@ class Conversation:
     `chosen` is absent only for a session enrolled but never spoken to, which is the window between
     its row and its first message.
 
-    `answerable` is the separate question of whether the profile it was started on still exists: a
-    profile edited out from under a session leaves it readable and stuck, and the page says so
-    rather than showing a spinner that will never resolve. It asks about the profile and not the
+    `answerable` is the separate question of whether the endpoint it was started on still exists: a
+    endpoint edited out from under a session leaves it readable and stuck, and the page says so
+    rather than showing a spinner that will never resolve. It asks about the endpoint and not the
     model, matching exactly what the worker checks, because a model missing from the catalogue is
     not a reason a pass cannot run - an endpoint routes more ids than it advertises, and its own
     refusal is the authoritative answer about any one of them.
@@ -97,7 +99,7 @@ class Service:
     """
     The one thing here that changes while the process runs, and deliberately so.
 
-    What a profile offers is discovered from the endpoint rather than written down, so it is
+    What an endpoint offers is discovered from the endpoint rather than written down, so it is
     configuration that arrives over the network and is refreshed by a task that answers no
     requests. A handler reads `catalogues.current` and gets a whole value; nothing it does causes a
     request to a gateway, so this is still a service that holds no in-flight state and no cache of
@@ -111,6 +113,16 @@ class Service:
     Held here so a page can say which repository a session works in and where its worktree is, both
     of which are questions with no I/O in them. Making the worktree *exist* is the worker's, and it
     is handed the same value separately: this object answers questions and never runs an agent.
+    """
+
+    references: References = field(default_factory=References)
+    """
+    What is known about the models on offer beyond their names, refreshed off the request path.
+
+    The same shape as `catalogues` and for the same reasons, with one difference that matters: what
+    it holds may be `None`, meaning no reference was configured. That is not an empty answer but the
+    absence of a question, and it is what stops a card reporting a missing record on a console
+    nobody asked to look one up.
     """
 
     now: Callable[[], datetime] = now_utc
@@ -161,22 +173,34 @@ class Service:
             session=found,
             said=transcript(recorded),
             chosen=chosen,
-            answerable=chosen is not None and self.catalogues.current.models_of(chosen.profile) is not None,
+            answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             repository=self.repository_of(chosen),
             workspace=self.workspaces.at(session) if self.workspaces is not None and working else None,
         )
 
-    async def start(self, said: str, chosen: Choice) -> Session:
+    async def start(self, said: str, chosen: Choice, title: str | None = None) -> Session:
         """
-        A new session on `chosen`, named after the first thing said in it, with that message sent.
+        A new session on `chosen`, named `title` or after the first thing said in it, with that
+        message sent.
 
         Three writes, and the order is the whole of the choice. The choice is recorded before the
         message because the message is what *queues* the session: written the other way round, a
-        worker could take the session between the two and find no profile to answer on. Enrolment
+        worker could take the session between the two and find no endpoint to answer on. Enrolment
         comes first for the reason it always did, that a session in the list with nothing in it is
         visible where work nobody can find is not.
+
+        A given name goes through `name_from` exactly as the message would, so there is one rule
+        about what a session name is - whitespace collapsed, cut to a length a sidebar can hold -
+        rather than one for a name somebody typed and another for one taken from a message. A name
+        that is only whitespace collapses to nothing and is the same as not having named it, which
+        is what an empty box posts.
+
+        Nothing renames a session afterwards, and that is why the index may hold the title at all:
+        it is a copy of something settled rather than of something that changes. Naming it here does
+        not alter that, because this is still the one moment it is decided.
         """
-        session = Session(id=mint_session_id(), created_at=self.now(), title=name_from(said))
+        named = name_from(title) if title else ""
+        session = Session(id=mint_session_id(), created_at=self.now(), title=named or name_from(said))
         await enrol(self.database, session)
         # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
@@ -210,7 +234,7 @@ class Service:
         no message to re-ask - forking from the end of a conversation to carry on somewhere else.
 
         The message goes last, after the choice, for the reason it does in `start`: a prompt is
-        what *queues* a session, so a worker taking this one between the two would find no profile
+        what *queues* a session, so a worker taking this one between the two would find no endpoint
         to answer on.
         """
         parent = await read_session(self.database, session)
@@ -218,12 +242,19 @@ class Service:
             return None
         recorded = await self.checkpointer.load(session)
         carried = before(recorded, at)
-        # The repository is inherited here rather than taken from the caller, so that no form can
-        # change it by omission or otherwise. The fork page offers no control for it because
-        # re-asking a turn against different files is a different question; making that true by
-        # *construction* is what stops a posted form quietly dropping it.
+        # A fork may *attach* a repository to a session that had none, and may not *swap* one for
+        # another. The two are not the same act. Swapping asks the new model to redo a turn against
+        # different files, which is a different question wearing the same words; attaching asks it
+        # to carry on with files where there were none, and the turns being inherited were not
+        # asked against other files, they were asked against no files at all. That is the ordinary
+        # shape of thinking something through and then going to work on it.
+        #
+        # Decided here rather than trusted from the caller, so that a form which names nothing
+        # cannot quietly move a session out of its repository - which is exactly what the fork
+        # form, having no control for it, would otherwise do.
         was = choice_of(recorded)
-        chosen = replace(chosen, repository=was.repository if was is not None else None)
+        held = was.repository if was is not None else None
+        chosen = replace(chosen, repository=chosen.repository if held is None else held)
         forked = Session(
             id=mint_session_id(),
             created_at=self.now(),

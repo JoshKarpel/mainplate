@@ -402,37 +402,43 @@ class TestForkingTheWorktreeToo:
 
         assert (workspaces.at(forked.id) / "src" / "kept.txt").read_text() == "original\n"
 
+    async def forked_into(self, planting: Service, started: Choice, asked: str | None) -> str | None:
+        """The repository a fork ends up in, having started from `started` and asked for `asked`."""
+        session = await planting.start("first", started)
+        forked = await planting.fork(session.id, at=0, chosen=replace(started, repository=asked), said="again")
+        assert forked is not None
+        recorded = choice_of(await planting.checkpointer.load(forked.id))
+        assert recorded is not None
+        return recorded.repository
+
     async def test_a_fork_inherits_the_repository_even_when_the_caller_names_none(
         self, planting: Service, on_fixture: Choice
     ) -> None:
         """
-        The fork page offers no repository control, so the form it posts names none. Inheriting it
-        in the service rather than trusting the caller is what stops that omission silently moving
-        a branch into no repository at all: re-asking a turn against different files is a different
-        question, and against *no* files it is not a question.
+        The fork page offers no repository control to a session that has one, so the form it posts
+        names none. Deciding this in the service rather than trusting the caller is what stops that
+        omission silently moving a branch out of its repository.
         """
-        session = await planting.start("first", on_fixture)
+        assert await self.forked_into(planting, on_fixture, None) == FIXTURE
 
-        forked = await planting.fork(session.id, at=0, chosen=replace(on_fixture, repository=None), said="again")
+    async def test_a_fork_cannot_be_swapped_to_another_repository(self, planting: Service, on_fixture: Choice) -> None:
+        """
+        Re-asking a turn against *different* files is a different question wearing the same words,
+        and nothing in the transcript would say so.
+        """
+        assert await self.forked_into(planting, on_fixture, "test:somewhere-else") == FIXTURE
 
-        assert forked is not None
-        recorded = choice_of(await planting.checkpointer.load(forked.id))
-        assert recorded is not None
-        assert recorded.repository == FIXTURE
+    async def test_a_fork_may_attach_a_repository_to_a_session_that_had_none(self, planting: Service) -> None:
+        """
+        Not the same act as swapping, and the difference is why both rules exist. The turns being
+        inherited were not asked against *other* files, they were asked against none, so picking a
+        repository up here breaks nothing: it is the ordinary shape of thinking something through
+        and then going to work on it.
+        """
+        assert await self.forked_into(planting, DEFAULT_CHOICE, FIXTURE) == FIXTURE
 
-    async def test_a_fork_cannot_be_moved_to_another_repository_by_a_posted_form(
-        self, planting: Service, on_fixture: Choice
-    ) -> None:
-        session = await planting.start("first", on_fixture)
-
-        forked = await planting.fork(
-            session.id, at=0, chosen=replace(on_fixture, repository="test:somewhere-else"), said="again"
-        )
-
-        assert forked is not None
-        recorded = choice_of(await planting.checkpointer.load(forked.id))
-        assert recorded is not None
-        assert recorded.repository == FIXTURE
+    async def test_a_fork_of_a_session_with_none_may_still_choose_none(self, planting: Service) -> None:
+        assert await self.forked_into(planting, DEFAULT_CHOICE, None) is None
 
 
 class TestPickingOneThroughTheConsole:
@@ -457,7 +463,7 @@ class TestPickingOneThroughTheConsole:
         async with calling(app) as caller:
             answered = await caller.post(
                 "/sessions",
-                {"prompt": "hello", "profile": "here", "model": "ripe/fast", "repository": FIXTURE},
+                {"prompt": "hello", "endpoint": "here", "model": "ripe/fast", "repository": FIXTURE},
             )
 
         assert answered.status == 303
@@ -470,7 +476,7 @@ class TestPickingOneThroughTheConsole:
         """The empty option, which is what this console was before there were repositories."""
         async with calling(app) as caller:
             answered = await caller.post(
-                "/sessions", {"prompt": "hello", "profile": "here", "model": "ripe/fast", "repository": ""}
+                "/sessions", {"prompt": "hello", "endpoint": "here", "model": "ripe/fast", "repository": ""}
             )
 
         assert answered.status == 303
@@ -483,13 +489,15 @@ class TestPickingOneThroughTheConsole:
         async with calling(app) as caller:
             answered = await caller.post(
                 "/sessions",
-                {"prompt": "hello", "profile": "here", "model": "ripe/fast", "repository": "test:invented"},
+                {"prompt": "hello", "endpoint": "here", "model": "ripe/fast", "repository": "test:invented"},
             )
 
         assert answered.status == 422
 
-    async def test_the_fork_page_offers_no_repository_control(self, app: ASGIApp, planting: Service) -> None:
-        """Because a fork inherits one; offering a choice that cannot be honoured would be a lie."""
+    async def test_the_fork_page_offers_no_repository_to_a_session_that_has_one(
+        self, app: ASGIApp, planting: Service
+    ) -> None:
+        """Because it inherits that one; offering a choice that cannot be honoured would be a lie."""
         session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
 
         async with calling(app) as caller:
@@ -498,6 +506,37 @@ class TestPickingOneThroughTheConsole:
         assert answered.status == 200
         assert 'id="repository"' not in answered.text
 
+    async def test_the_fork_page_offers_one_to_a_session_that_has_none(self, app: ASGIApp, planting: Service) -> None:
+        """The other half of the rule: a fork may attach a repository where there was none."""
+        session = await planting.start("first", DEFAULT_CHOICE)
+
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
+
+        assert answered.status == 200
+        assert 'id="repository"' in answered.text
+        assert f'value="{FIXTURE}"' in answered.text
+
+    async def test_attaching_a_repository_through_the_fork_form_works(self, app: ASGIApp, planting: Service) -> None:
+        session = await planting.start("first", DEFAULT_CHOICE)
+
+        async with calling(app) as caller:
+            answered = await caller.post(
+                f"/sessions/{session.id}/forks",
+                {
+                    "at": "0",
+                    "endpoint": "here",
+                    "model": "ripe/fast",
+                    "prompt": "now let us work",
+                    "repository": FIXTURE,
+                },
+            )
+
+        assert answered.status == 303
+        chosen = choice_of(await planting.checkpointer.load(answered.location.rsplit("/", 1)[-1]))
+        assert chosen is not None
+        assert chosen.repository == FIXTURE
+
     async def test_forking_through_the_console_keeps_the_repository(self, app: ASGIApp, planting: Service) -> None:
         """The bug this class exists for: the form carries no repository, so the service supplies it."""
         session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
@@ -505,7 +544,7 @@ class TestPickingOneThroughTheConsole:
         async with calling(app) as caller:
             answered = await caller.post(
                 f"/sessions/{session.id}/forks",
-                {"at": "0", "profile": "here", "model": "ripe/fast", "prompt": "again"},
+                {"at": "0", "endpoint": "here", "model": "ripe/fast", "prompt": "again"},
             )
 
         assert answered.status == 303

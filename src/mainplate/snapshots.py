@@ -51,7 +51,7 @@ class NotAWorkspace(ValueError):
     """
     A workspace was configured that is not a git repository.
 
-    Loud, and at startup, for the reason an unusable `config.toml` is: a console that accepted the
+    Loud, and at startup, for the reason an unusable `config.yaml` is: a console that accepted the
     path and silently recorded no snapshots would look like it was keeping a history it was not,
     and the first time anybody wanted to go back would be the first time they found out.
     """

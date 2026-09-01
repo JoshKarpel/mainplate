@@ -133,7 +133,7 @@ async def discover(forges: Sequence[Forge]) -> Reachable:
 
     Concurrent because forges are independent and each is a round trip. A forge that answers with
     nothing contributes nothing, which is *not* the failure `catalogue.discover` refuses: an
-    endpoint that lists no models is a profile you can select and then cannot use, where a forge
+    endpoint that lists no models is an endpoint you can select and then cannot use, where a forge
     reaching no repositories is an ordinary state of a machine that has none attached.
     """
     found = await asyncio.gather(*(forge.offers() for forge in forges), return_exceptions=True)

@@ -31,7 +31,7 @@ REFLECTION_URL: Final = "https://reflection.int.exe.xyz/integrations"
 
 # Short, because this runs inside `mainplate install` while somebody waits, and its answer is an
 # optimisation rather than a requirement: a slow or absent reflection means the install writes a
-# template to edit instead of a profile that was ready to use.
+# template to edit instead of an endpoint that was ready to use.
 PATIENCE: Final = timedelta(seconds=5)
 
 # What exe.dev calls an integration that fronts model providers.
@@ -67,8 +67,8 @@ def integration_url(name: str) -> str:
 
     Personal integrations are `<name>.int.exe.xyz` and a team's are `<name>.team.exe.xyz`. Only the
     personal form is built here, because that is the one a default account gets and because
-    guessing wrong writes a profile that never answers; a team gateway is two edits to
-    `config.toml` and is named in the file's own comments.
+    guessing wrong writes an endpoint that never answers; a team gateway is two edits to
+    `config.yaml` and is named in the file's own comments.
 
     Used for repositories as well as gateways, and deliberately in preference to the aggregate
     `github.int.exe.xyz` that an integration's help text prints: an integration's own hostname
@@ -100,7 +100,7 @@ def integrations_in(document: bytes) -> tuple[Mapping[str, object], ...]:
 
 
 def parse_gateways(document: bytes) -> tuple[Gateway, ...]:
-    """Every LLM integration in a reflection document, as somewhere a profile can be written for."""
+    """Every LLM integration in a reflection document, as somewhere an endpoint can be written for."""
     return tuple(
         Gateway(name=name, base_url=integration_url(name))
         for entry in integrations_in(document)

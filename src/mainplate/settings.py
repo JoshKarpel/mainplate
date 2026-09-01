@@ -1,7 +1,7 @@
 # Everything the process is told about *itself*, read once, here.
 #
 # What it does not hold is anything about which model to talk to or how to authenticate to one.
-# That is per-profile and lives in `config.toml`, because a session chooses among profiles and a
+# That is per-endpoint and lives in `config.yaml`, because a session chooses among endpoints and a
 # process-wide answer would be a second answer to a question each session already answers.
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
-from mainplate.profiles import config_home
+from mainplate.config import config_home
 
 # What a fresh checkout gets with nothing set. A file under the working directory rather than
 # under the user's data directory, because this is a tool you point at a project.
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     The process's configuration, parsed from the environment at startup.
 
     Every field is settable and every field has a default that runs, so the shortest way to a
-    working console is `mainplate serve` with nothing set but a `config.toml` naming one profile.
+    working console is `mainplate serve` with nothing set but a `config.yaml` naming one endpoint.
     """
 
     model_config = SettingsConfigDict(env_prefix="MAINPLATE_", frozen=True)
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     config_home: Path = Field(default_factory=lambda: config_home(os.environ))
     """
-    Where to look for `mainplate/config.toml`, which is where the profiles are.
+    Where to look for `mainplate/config.yaml`, which is where the endpoints are.
 
     A directory rather than the file, so it moves with `XDG_CONFIG_HOME` the way everything else
     under it does, and so the one place that knows the file's name is the module that parses it.
@@ -83,6 +83,17 @@ class Settings(BaseSettings):
     this decides only how long a model added at the gateway stays invisible here. Fifteen minutes
     is short against how often a provider ships one and long enough that a console left open for a
     week makes a few hundred requests rather than a few hundred thousand.
+    """
+
+    reference_every: timedelta = Field(default=timedelta(hours=12), gt=timedelta())
+    """
+    How often to re-read the model reference database, where one is configured.
+
+    Hours where `refresh` is minutes, because the two are watching different things change. A model
+    appears at a gateway when somebody attaches an integration, which is a thing that happens while
+    you are looking at the console; a price moves or a record is filled in when somebody upstream
+    ships a release, which is not. Re-reading a four-megabyte document every fifteen minutes would
+    spend real bandwidth re-learning a value that changes a few times a month.
     """
 
     @property

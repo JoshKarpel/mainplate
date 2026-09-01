@@ -20,6 +20,11 @@ $ just logs             # journalctl --user -u mainplate -f
 $ just uninstall        # removes the unit, keeps the environment file and the database
 ```
 
+`just serve` and `just demo` run under `watchfiles` and restart on any change under `src/mainplate`,
+which is what makes a styling change watchable: the assets are inventoried once at startup, so an
+edited stylesheet only reaches a *new* process. They restart the server and do not reload the
+browser, which is one keystroke against needing a dev-only script injected into a page that ships.
+
 `just serve` and `just install` are on different ports on purpose, so a foreground run for a quick
 look never takes down the service. `just install` runs `uv sync` first, and that is not a
 convenience: the unit names this checkout's interpreter, so an install from a stale environment
@@ -28,7 +33,7 @@ points systemd at a venv missing whatever was just added.
 **The stylesheet is a deliverable, and no string assertion checks one.** `just shots` renders every
 page from fixture checkpoints and drives a real Chromium over them, so a styling change can be
 looked at rather than argued about. It needs no server, no database, no provider and no
-`config.toml`, because a page is a pure function of already-answered questions: `scripts/gallery.py`
+`config.yaml`, because a page is a pure function of already-answered questions: `scripts/gallery.py`
 answers them with fixtures and the assets are copied beside the output, so a static server renders
 what the console renders. Every shot asserts the document never scrolls sideways, which is how the
 `:target` rule that widened a panel past its container was found.
@@ -83,7 +88,7 @@ with nothing to dereference.
 One key for the session and four per turn, written by five different places and read by four:
 
 ```text
-choice               the profile, model, repository and thinking level; written by `Service.start`
+choice               the endpoint, model, repository and thinking level; written by `Service.start`
                      and by `Service.fork`, before the prompt
 turn:{n}:prompt      the person's message; written from outside a pass, by `Service.say`
 turn:{n}:tree        the worktree that turn started on; written by the conversation body
@@ -93,7 +98,7 @@ turn:{n}:messages    what the agent run produced; written by the conversation bo
 
 `choice` goes in before the first prompt and never again *within a session*. The order is
 load-bearing: the prompt is what *queues* a session, so writing it first would let a worker take the
-session and find no profile to answer on. Never again, because a session that changed endpoint
+session and find no endpoint to answer on. Never again, because a session that changed endpoint
 halfway would replay recorded answers from one and continue on another. Forking is how the choice
 changes, and it changes it by making a different session rather than by rewriting this one.
 
@@ -108,14 +113,20 @@ drift apart. The tests in `test_conversation.py` assert the shape against litera
 rather than round-tripping through the writer, so a change to the scheme has to be made in both
 places.
 
-## Profiles, discovery, and per-session auth
+## Endpoints, discovery, and per-session auth
 
-A **profile** is an endpoint, a wire format, and a credential. The models are separate and are not
-in the file at all: `catalogue.py` asks each endpoint's own model-list API what it serves. A session
-records a profile, a model and a thinking level, and is bound to all three for life.
+An **endpoint** is a URL, an API format, and a credential. The models are separate and are not in
+the file at all: `catalogue.py` asks each endpoint's own model-list API what it serves. A session
+records an endpoint, a model and a thinking level, and is bound to all three for life.
+
+**Three words, kept apart deliberately.** An *endpoint* is what `config.yaml` declares. A *wire*
+(`agent.py`) is the built thing that speaks one API format. A *provider* is whoever made a model,
+which is discovered and is a facet rather than a level: the same provider appears under more than
+one endpoint, because every Fireworks model on exe.dev's gateway is listed by both formats under one
+id. `grouped` therefore groups *within* an endpoint's list and never across.
 
 The thinking level lives in `thinking.py` rather than beside `Choice`, and the reason is a cycle:
-`profiles.py` has to validate a configured name and `agent.py` already imports `profiles.py`. What
+`config.py` has to validate a configured name and `agent.py` already imports `config.py`. What
 is left is a small shared vocabulary three layers read. Its effort names are recovered from Pydantic
 AI's `ThinkingEffort` rather than restated, so a level that library adds reaches the picker without
 an edit. The three that are not efforts are spelled out because they are not gradations of one
@@ -123,30 +134,31 @@ thing: `None` leaves the setting off the request, `False` asks for thinking off,
 it at the provider's own budget, which on the Anthropic wire is no parameter, an omitted block, and
 ten thousand tokens.
 
-`provider` names the wire rather than the vendor, because one hostname often answers both and each
-reaches models the other does not. It also decides what `base_url` means: the Anthropic SDK appends
+`format` names the API shape rather than the vendor, because one hostname often answers both and
+each reaches models the other does not. It also decides what `url` means: the Anthropic SDK appends
 `/v1/messages`, so it wants the host; the OpenAI SDK appends `/chat/completions`, so it wants the
-host and `/v1`. On exe.dev that is why `install` writes two profiles for one gateway.
+host and `/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
 
-`agent.py` holds one class per wire, and it holds *both* wire-specific things: how to name a model
-over it and how to ask it what it serves. A third wire is one class, not an edit in three files.
+`agent.py` holds one `Wire` class per format, and it holds *both* format-specific things: how to
+name a model over it and how to ask it what it serves. A third format is one class, not an edit in
+three files.
 `chat_models` is the pure half of the OpenAI side and is where its two exclusions live: exe.dev
 publishes every OpenAI model twice (bare and prefixed) and mixes embedding models in with chat
 ones. The embedding rule is a rule over names because that list carries no capability to ask;
 `test_catalogue.py` pins both against the shapes a live gateway actually returns.
 
-`profiles.py` parses `config.toml` into `Config`, once, at startup. Two things there are easy to
+`config.py` parses `config.yaml` into `Config`, once, at startup. Two things there are easy to
 undo by accident:
 
 - **Credentials are `SecretStr` and come from the file, not the environment.** A key handed to
-  `AnthropicProvider(api_key=...)` never becomes an environment variable. `Profile.key` is the
+  `AnthropicProvider(api_key=...)` never becomes an environment variable. `Endpoint.key` is the
   one place that decides between a configured key, the `KEYLESS` placeholder for a gateway that
   authenticates at its edge, and `None`, which is what leaves the SDK reading its own environment
   variable for itself. Do not "simplify" that `None` away.
-- **`build_endpoints` is eager**, so a profile that cannot be built fails at startup naming itself
+- **`build_wires` is eager**, so an endpoint that cannot be built fails at startup naming itself
   rather than on whichever session first chose it. It builds the *provider* and not a model per
   name, which loses nothing: an SDK validates neither, so the eager build was only ever buying
-  endpoint validation. That is also why the service refuses to start on an unusable `config.toml`,
+  endpoint validation. That is also why the service refuses to start on an unusable `config.yaml`,
   and why `discover` refuses an endpoint that lists nothing.
 
 The agent itself is built per pass rather than held in a startup mapping, because the model set is
@@ -160,21 +172,21 @@ route**, and conflating the two is the mistake to avoid. exe.dev's gateway answe
 before that prefix appeared names a model discovery will never return. So the two questions are
 kept apart:
 
-- **Starting** a session asks `Catalogue.offers(profile, model)`. That is form validation: a select
+- **Starting** a session asks `Catalogue.offers(endpoint, model)`. That is form validation: a select
   is a suggestion the page made, not a constraint on what can be posted, so a new session may only
   be created on a pair the picker actually offered.
-- **Answering** one asks only whether the *profile* exists, in the worker (`agent_for` raising
+- **Answering** one asks only whether the *endpoint* exists, in the worker (`agent_for` raising
   `UnknownChoice`) and in `Conversation.answerable` (`models_of(...) is not None`), which are
   deliberately the same question so the page and the worker cannot disagree. The model is not
   checked: the provider's own refusal is the authoritative answer about a model and it arrives on
   the turn, where gating here would strand a conversation nobody broke.
 
-A session whose profile is gone renders with a sentence naming it and no poll, because a spinner
+A session whose endpoint is gone renders with a sentence naming it and no poll, because a spinner
 that will never resolve is the one state a person cannot diagnose. `test_console.py` pins both
 halves, including that a session on an unlisted-but-routable model keeps its poll.
 
 `exe.py` is the exe.dev half, and it answers reflection twice over: which LLM gateways are attached
-(so `mainplate install` writes keyless profiles) and which GitHub repositories are (so a session
+(so `mainplate install` writes keyless endpoints) and which GitHub repositories are (so a session
 has somewhere to work). A VM reaches both with no credential at all. Every failure there returns
 `()` rather than raising: "you are not on exe.dev" must not be a failed install or a console that
 will not start. Gateway discovery is passed *into* `converge` rather than done inside it, so the
@@ -194,7 +206,7 @@ Three things there are decided rather than incidental:
   happens to be in, so "not on exe.dev" and "nothing attached" are ordinary answers. `discover`
   logs a forge that breaks that promise and carries on with the others, because one forge's mistake
   is not a reason the console cannot start. This is deliberately *unlike* `catalogue.discover`,
-  which refuses a profile listing no models: that is a profile you can select and then cannot use,
+  which refuses an endpoint listing no models: that is an endpoint you can select and then cannot use,
   where a machine with no repositories attached simply has none.
 - **A repository is one *way of reaching* a repository, not one repository.** `key` is the forge's
   identifier for the attachment and `name` is what a person recognises, because the same repository
@@ -240,6 +252,47 @@ reloadable configuration is.
 - **A failed refresh keeps the last good value and there is no staleness bound.** That is
   deliberate rather than an omission: the bound would have to be invented, and emptying the picker
   because a gateway was unreachable for an hour is worse than the staleness it would prevent.
+
+## What a model card says, and where it comes from
+
+`reference.py` is a second piece of reloadable configuration beside the catalogue, and the split
+between them is the thing to keep straight. The **catalogue** says which models exist and is asked
+of the endpoints. The **reference** says what they cost and what they do, and is asked of one
+database, because no endpoint reached so far answers that question at all.
+
+**`Listed` is identity and nothing else** - id, label, family, and `upstream`. That is a refusal
+rather than an omission. A gateway's list holds three shapes at once: a Claude arrives fully typed
+with a capability block and token limits, a resold model arrives with all of that empty and the
+upstream service's record forwarded in the extras, and GPT and Grok arrive as four fields saying
+nothing. Reading each of those and filling the gaps from a database would put three kinds of card
+on one page, where the facts shown depended on which wire answered. One source is worth more than
+the coverage a merge would buy, so `Described` reads facts only from the reference.
+
+`upstream` is the exception and is identity too: it is what the service actually serving a model
+calls it (`accounts/fireworks/models/kimi-k3`), and it is the second of the two keys a record is
+found under. It is not optional in practice - most of what a gateway serves is resold, and the
+provider-and-model split alone finds none of it.
+
+Three rules there are load-bearing:
+
+- **The routed id wins over the upstream name.** A gateway that has taken a model over under its
+  own key sets the terms the session is actually billed and limited by, so its record is the truer
+  of the two.
+- **A name two providers claim resolves to neither.** An aggregator republishes other people's
+  models under its own key at its own markup, so a flat index over every id collides in the
+  hundreds. Demanding uniqueness turns a wrong price into no price, which is the only safe way to
+  be wrong here. `test_reference.py` pins this against a fixture where the collision costs 15x.
+- **It can never stop the console starting.** This is `forge.offers`'s promise, not
+  `catalogue.discover`'s refusal, and the difference is that nothing here can leave somebody
+  holding a choice they cannot use. A reference that will not load costs a card its numbers.
+
+`Described.consulted` is what decides whether a card with no record says so. With
+`[model_reference]` absent nothing was looked up, so nothing is missing, and a marker there would
+report the absence of a feature nobody turned on.
+
+`format` in the config table exists so a second database is one more `ReferenceFormat` member and
+one more arm in `parse_reference`, which `assert_never` makes the type checker demand. It stays a
+value rather than becoming a plugin point.
 
 ## Forking, and where a session may change its mind
 
@@ -310,8 +363,16 @@ different question wearing the same words and invisible in the transcript.
 The mechanism is one extra key rather than a checkout in a request handler: `Service.fork` copies
 `turn:{at}:tree` across on its own, even though that turn's prompt and messages are *not* inherited,
 and the fork's first pass plants at whatever tree is already recorded for the turn it is about to
-run. So the fork also inherits the repository, and is not offered another - re-asking a turn
-against different files is a different question.
+run.
+
+**A fork may attach a repository and may not swap one.** The two look alike and are not. Swapping
+re-asks a turn against different files, which is a different question wearing the same words and
+invisible in the transcript; attaching carries on with files where there were none, and the turns
+being inherited were not asked against *other* files, they were asked against none. So a session in
+a repository inherits it and its fork page renders no control, and a session in none is offered the
+picker. `Service.fork` decides that rather than trusting what the form posted, which is what stops
+a form with no repository field quietly moving a branch out of its repository - the bug that shape
+of trust actually produced.
 
 `Workspace.restore` is written and tested but nothing calls it yet: today a snapshot is a record of
 what disk looked like, not something to go back to.

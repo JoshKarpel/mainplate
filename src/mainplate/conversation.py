@@ -13,7 +13,7 @@
 # One key for the session, and four per turn. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
-#     choice               the profile, model, repository and thinking level this session is on,
+#     choice               the endpoint, model, repository and thinking level this session is on,
 #                          written once at creation
 #     turn:{n}:prompt      what the person said, written from outside the pass by `arrive`
 #     turn:{n}:tree        the worktree that turn started on, written by the body before the agent
@@ -64,7 +64,7 @@ from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
 from mainplate.agent import Choice
-from mainplate.agent import Endpoints
+from mainplate.agent import Wires
 from mainplate.agent import agent_for
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
@@ -78,6 +78,11 @@ CHOICE_KEY: StepKey = "choice"
 THINKING_FIELD: Final = "thinking"
 
 REPOSITORY_FIELD: Final = "repository"
+
+# Which endpoint the session is answered on, inside the recorded choice and on the form that starts
+# one. Named once here for the reason the turn keys are: the code that writes it and the code that
+# reads it are both in this file and must not drift.
+ENDPOINT_FIELD: Final = "endpoint"
 
 
 def turn_prefix(turn: int) -> str:
@@ -183,14 +188,14 @@ def parse_choice(recorded: object) -> Choice:
     """
     if not isinstance(recorded, dict):
         raise TypeError(f"a choice must be a mapping, not {recorded!r}")
-    profile, model = recorded.get("profile"), recorded.get("model")
-    if not isinstance(profile, str) or not isinstance(model, str):
-        raise TypeError(f"a choice must name a profile and a model, not {recorded!r}")
+    endpoint, model = recorded.get(ENDPOINT_FIELD), recorded.get("model")
+    if not isinstance(endpoint, str) or not isinstance(model, str):
+        raise TypeError(f"a choice must name an endpoint and a model, not {recorded!r}")
     repository = recorded.get(REPOSITORY_FIELD)
     if repository is not None and not isinstance(repository, str):
         raise TypeError(f"a repository must be an id or nothing, not {repository!r}")
     return Choice(
-        profile=profile,
+        endpoint=endpoint,
         model=model,
         repository=repository,
         thinking=parse_thinking(recorded.get(THINKING_FIELD)),
@@ -207,7 +212,7 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
     were.
     """
     return {
-        "profile": chosen.profile,
+        ENDPOINT_FIELD: chosen.endpoint,
         "model": chosen.model,
         REPOSITORY_FIELD: chosen.repository,
         THINKING_FIELD: chosen.thinking,
@@ -231,7 +236,7 @@ class NeverStarted(LookupError):
 
     `Service.start` writes the choice before the prompt precisely so this cannot happen, so
     reaching it means a workflow id was queued by something other than this console. Loud rather
-    than defaulted to some profile, because guessing which endpoint an unknown conversation
+    than defaulted to some endpoint, because guessing which endpoint an unknown conversation
     belongs on is exactly the decision nothing here should make on somebody's behalf.
     """
 
@@ -572,7 +577,7 @@ async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn
 
 
 def conversing(
-    endpoints: Endpoints, instructions: str, workspaces: Workspaces | None = None
+    endpoints: Wires, instructions: str, workspaces: Workspaces | None = None
 ) -> Callable[[Run], Awaitable[Never]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -580,26 +585,26 @@ def conversing(
     A closure rather than an argument because `work` takes one body for every workflow. What
     differs between sessions is not the body but which agent it reaches for, and that is read from
     the session's own checkpoint rather than passed in: `run.workflow` names the session, and the
-    session names its profile and its model.
+    session names its endpoint and its model.
 
-    The profile is what is checked, and the model deliberately is not. A discovered catalogue says
+    The endpoint is what is checked, and the model deliberately is not. A discovered catalogue says
     what an endpoint *advertises*, which is narrower than what it will *route*: exe.dev's gateway
     answers `claude-sonnet-4-6` perfectly well while listing it as `anthropic/claude-sonnet-4-6`,
     so refusing a pass on a model the catalogue lacks would strand a session the provider would
     have answered. The provider's own refusal is the authoritative answer about a model, and it
-    arrives on the turn where it can be read. The profile is different: without one there is no
+    arrives on the turn where it can be read. The endpoint is different: without one there is no
     endpoint to ask at all, so that is a question this can answer and `agent_for` raises on.
 
     The agent is built once per pass rather than once per turn, because a session's choice cannot
     change: reading it again on the second turn would be asking a question whose answer is already
-    recorded. Doing it before the first `awaiting` is what makes a missing profile a failure the
+    recorded. Doing it before the first `awaiting` is what makes a missing endpoint a failure the
     console can explain rather than one discovered mid-turn.
     """
 
     async def converse(run: Run) -> Never:
         chosen = choice_of(run.recorded)
         if chosen is None:
-            raise NeverStarted(f"{run.workflow} records no profile, so it was never started by this console")
+            raise NeverStarted(f"{run.workflow} records no endpoint, so it was never started by this console")
         agent = agent_for(endpoints, chosen, instructions)
         at = reached(run.recorded)
         while True:

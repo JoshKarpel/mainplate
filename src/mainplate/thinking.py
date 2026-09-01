@@ -2,8 +2,8 @@
 #
 # Its own module because three layers need the same vocabulary and none of them should own it: the
 # configuration file names a default, a form posts a name, and a page renders the list. `agent.py`
-# would be the natural home, except that `profiles.py` has to validate a configured name and
-# `agent.py` already imports `profiles.py`, so putting it there is a cycle. What is left is a small
+# would be the natural home, except that `config.py` has to validate a configured name and
+# `agent.py` already imports `config.py`, so putting it there is a cycle. What is left is a small
 # shared vocabulary, which is what this is.
 #
 # The effort names are recovered from Pydantic AI's own type rather than restated, so a level it

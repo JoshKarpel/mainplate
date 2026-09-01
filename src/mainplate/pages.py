@@ -29,6 +29,7 @@ from pydantic_ai.settings import ThinkingLevel
 from without_html import DOCTYPE
 from without_html import Element
 from without_html import Node
+from without_html import VoidElement
 from without_html import a
 from without_html import article
 from without_html import aside
@@ -41,15 +42,16 @@ from without_html import dl
 from without_html import dt
 from without_html import form
 from without_html import h1
+from without_html import h2
 from without_html import head
 from without_html import header
 from without_html import html
 from without_html import input_
+from without_html import label
 from without_html import li
 from without_html import link
 from without_html import main
 from without_html import meta
-from without_html import optgroup
 from without_html import option
 from without_html import p
 from without_html import pre
@@ -69,6 +71,7 @@ from without_web import url_for
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
+from mainplate.catalogue import Offering
 from mainplate.catalogue import grouped
 from mainplate.conversation import REPOSITORY_FIELD
 from mainplate.conversation import THINKING_FIELD
@@ -81,7 +84,13 @@ from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
 from mainplate.markup import as_markup
+from mainplate.reference import Cost
+from mainplate.reference import Described
+from mainplate.reference import Reference
+from mainplate.reference import describe
 from mainplate.service import Conversation
+from mainplate.sessions import TITLE_FIELD
+from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import Session
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
@@ -145,9 +154,17 @@ SIDES: Final[dict[Kind, str]] = {
     "tool": "model",
 }
 
-# What a session is called before anyone has said anything in it, and what the tab says on the
-# page where a session does not exist yet.
-UNTITLED: Final = "New chat"
+# What the link that starts one is called, and what the tab says on the page where a session does
+# not exist yet. "Session" rather than "workspace", which is the other word for this and is already
+# taken: a session's *workspace* is the git worktree it works in, so calling the session one too
+# would make "a workspace's workspace" a sentence somebody has to parse.
+NEW_SESSION: Final = "New session"
+
+# What a session with no name of its own is called. Unreachable today, because every session is
+# named when it is created - after the box, or after its first message - and nothing renames one.
+# Kept as the answer to a row that has somehow lost its title, which is a database somebody edited
+# rather than a state this console produces.
+UNTITLED: Final = "Untitled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +182,7 @@ class Links:
     session: Reversible
     say: Reversible
     session_fragment: Reversible
-    profile_models: Reversible
+    endpoint_models: Reversible
     fork_form: Reversible
     fork: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
@@ -188,15 +205,15 @@ class Links:
     def to_session_fragment(self, session: str) -> str:
         return url_for(self.session_fragment, {"session": session})
 
-    def to_profile_models(self) -> str:
+    def to_endpoint_models(self) -> str:
         """
-        The model select, asked for with a profile in the query string.
+        The model select, asked for with an endpoint in the query string.
 
-        A query parameter rather than a path segment, because the profile is *the value of the
+        A query parameter rather than a path segment, because the endpoint is *the value of the
         select that asks*: htmx sends a triggering input's own value, so this URL needs no
         interpolation and the select needs no script to build one.
         """
-        return url_for(self.profile_models)
+        return url_for(self.endpoint_models)
 
     def to_fork_form(self, session: str, at: int) -> str:
         """Where to ask what a branch from this turn should be answered with."""
@@ -305,7 +322,7 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> E
     return aside(
         cls="sessions",
         children=[
-            a(cls="start", attrs={"href": links.to_home()}, children=UNTITLED),
+            a(cls="start", attrs={"href": links.to_home()}, children=NEW_SESSION),
             ul(
                 children=[
                     li(
@@ -340,63 +357,207 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> E
     )
 
 
-def model_select(models: Sequence[Listed], chosen: str | None = None) -> Element:
+def tokens(count: int) -> str:
     """
-    The models one profile offers, as the select the form submits.
+    A token count as a person compares them, which is to two or three figures and no more.
 
-    Its own element with a stable id, because changing the profile replaces exactly this and
-    nothing else on the page. A profile always offers at least one model (discovery refuses a
-    profile that lists none), so this is never an empty select nobody can submit.
-
-    Grouped by family, because a gateway fronting several vendors answers with seventy entries and
-    an ungrouped list of seventy is a list nobody reads. The value is the id the request will name;
-    the text is whatever the endpoint calls it, which on the Anthropic wire is written for a person
-    and on the OpenAI wire is the id again.
+    Decimal throughout, because the two wires disagree about the base and a card mixing them would
+    be the one place on the page where 256K and 262K meant the same thing. A model's context is a
+    number to weigh against another model's, not a size to allocate against.
     """
-    picked = chosen if any(chosen == model.id for model in models) else models[0].id
-    return select(
-        attrs={"id": MODEL_ID, "name": "model", "aria-label": "Model"},
+    if count >= 1_000_000:
+        # One decimal, and not even that when it would be a zero. A context window is a number to
+        # weigh against another model's, so the digits past the first are noise: a 2^20 window is
+        # `1.04858M` at full precision, which reads as precision nobody asked for about a figure
+        # that is round in the other base.
+        return f"{f'{count / 1_000_000:.1f}'.removesuffix('.0')}M"
+    if count >= 1_000:
+        return f"{count / 1_000:.0f}K"
+    return str(count)
+
+
+def dollars(rate: float) -> str:
+    """
+    A price per million tokens, carrying the digits that vary and no others.
+
+    Significant figures rather than a fixed two decimals, because these rates span four orders of
+    magnitude: a fixed width writes the cheap end as `$0.08` where the difference between models is
+    in the next digit, and pads the expensive end to `$75.00` where the cents are noise. It also
+    keeps a pair consistent with itself - `$5.00/$25` reads as two differently-measured numbers,
+    where `$5/$25` reads as the ratio it is.
+    """
+    return "free" if rate == 0 else f"${rate:g}"
+
+
+def model_card(described: Described, chosen: bool) -> Element:
+    """
+    One model as something you pick rather than something you scroll past.
+
+    A `<label>` around a radio, so it works with no script at all: the whole card is the hit target,
+    the browser does the selecting, and the form posts the same field a select posted. That is the
+    same bargain the rest of this console makes - the page works without JavaScript and is nicer
+    with it - and it is why this is not a grid of buttons driven by a handler.
+
+    Every fact on it comes from the reference database, so a card says the same kinds of things
+    whichever endpoint serves the model. What it says nothing about it simply omits: an absent price
+    is a blank rather than a zero, because a model shown as costing nothing is worse than a model
+    shown as costing something nobody wrote down.
+    """
+    facts = described.listed
+    return label(
+        cls="model",
+        attrs={"data-provider": facts.provider},
         children=[
-            optgroup(
-                attrs={"label": family},
+            input_(
+                cls="model__pick",
+                attrs={"type": "radio", "name": "model", "value": facts.id, "checked": chosen},
+            ),
+            span(cls="model__name", children=facts.label),
+            span(cls="model__id", children=facts.id),
+            *(
+                (span(cls="model__about", attrs={"title": about}, children=about),)
+                if (about := described.about)
+                else ()
+            ),
+            div(
+                cls="model__facts",
                 children=[
-                    option(attrs={"value": model.id, "selected": model.id == picked}, children=model.label)
-                    for model in found
+                    *measured("context", described.context, "of context"),
+                    *measured("output", described.output, "of output"),
+                    *priced(described.cost),
                 ],
-            )
-            for family, found in grouped(models)
+            ),
+            div(
+                cls="model__traits",
+                children=[span(cls="model__trait", children=trait) for trait in described.traits],
+            ),
+            # Only where a reference was configured and had nothing to say. With the setting absent
+            # nothing is missing, because nothing was ever looked up, and a marker there would be
+            # reporting the absence of a feature nobody turned on.
+            *((span(cls="model__unknown", children="no reference record"),) if described.unreferenced else ()),
         ],
     )
 
 
-def profile_select(links: Links, catalogue: Catalogue, chosen: str | None = None) -> Element:
+def measured(what: str, count: int | None, saying: str) -> tuple[Element, ...]:
+    """One token figure, or nothing at all where the database does not carry it."""
+    if count is None:
+        return ()
+    return (
+        span(
+            cls=("model__fact", f"model__fact--{what}"),
+            attrs={"title": f"{count:,} tokens {saying}"},
+            children=[span(cls="model__figure", children=tokens(count)), span(cls="model__unit", children=what)],
+        ),
+    )
+
+
+def priced(cost: Cost | None) -> tuple[Element, ...]:
     """
-    Which endpoint to answer on, and the control that swaps the model list beside it.
+    What a million tokens in and a million out cost, as one figure pair.
+
+    Both together because neither is a price on its own: a model that reads cheaply and writes
+    expensively is the common shape, and showing one number would rank the list wrongly.
+    """
+    if cost is None:
+        return ()
+    return (
+        span(
+            cls=("model__fact", "model__fact--cost"),
+            attrs={"title": f"{dollars(cost.input)} in and {dollars(cost.output)} out, per million tokens"},
+            children=[
+                span(cls="model__figure", children=f"{dollars(cost.input)}/{dollars(cost.output)}"),
+                span(cls="model__unit", children="per Mtok"),
+            ],
+        ),
+    )
+
+
+def model_cards(models: Sequence[Listed], reference: Reference | None, chosen: str | None = None) -> Element:
+    """
+    The models one endpoint offers, as the cards the form submits one of.
+
+    Its own element with a stable id, because changing the endpoint replaces exactly this and
+    nothing else on the page. An endpoint always offers at least one model (discovery refuses a
+    endpoint that lists none), so this is never an empty group nobody can submit.
+
+    Grouped by provider, because a gateway fronting several vendors answers with seventy entries and
+    an ungrouped wall of seventy cards is worse than the ungrouped list of seventy it replaced. The
+    value is the id the request will name; the name is whatever the endpoint calls it.
+    """
+    picked = chosen if any(chosen == model.id for model in models) else models[0].id
+    return div(
+        cls="models",
+        attrs={"id": MODEL_ID, "role": "radiogroup", "aria-label": "Model"},
+        children=[
+            section(
+                cls="models__provider",
+                children=[
+                    h2(cls="models__heading", children=provider),
+                    div(
+                        cls="models__grid",
+                        children=[model_card(describe(model, reference), chosen=model.id == picked) for model in found],
+                    ),
+                ],
+            )
+            for provider, found in grouped(models)
+        ],
+    )
+
+
+def endpoint_card(links: Links, offering: Offering, chosen: bool) -> Element:
+    """
+    One endpoint as where it actually points, rather than as a name somebody chose for it.
+
+    The endpoint and the wire are on it because they are what distinguishes two endpoints that
+    otherwise read alike, and on this machine that is the ordinary case rather than the exotic one:
+    one gateway answers both wires, so a VM declares the same host twice and the *only* thing
+    telling those two rows apart is the word `anthropic` or `openai` and the `/v1` on the end.
 
     htmx sends a triggering input's own value, so the `hx-get` needs no interpolation: choosing a
-    profile asks for that profile's models and replaces the select next to this one. Without a
-    browser the form still posts, carrying whatever models the page was rendered with, and the
-    handler refuses a pair nothing offers.
+    endpoint asks for that endpoint's models and replaces the cards beside it. Without a browser the
+    form still posts, carrying whatever models the page was rendered with, and the handler refuses a
+    pair nothing offers.
 
-    `outerHTML` and deliberately not the `outerMorph` the transcript uses. Morphing preserves what
-    a control already holds, which is exactly right for a conversation being reread and exactly
-    wrong here: the whole point of this swap is that the model list is now a *different* list, and
-    a merge would keep a selection the new profile may not even offer.
+    `outerHTML` and deliberately not the `outerMorph` the transcript uses. Morphing preserves what a
+    control already holds, which is exactly right for a conversation being reread and exactly wrong
+    here: the whole point of this swap is that the model list is now a *different* list, and a merge
+    would keep a card the new endpoint may not even offer.
     """
-    return select(
-        attrs={
-            "name": "profile",
-            "aria-label": "Profile",
-            "hx-get": links.to_profile_models(),
-            "hx-target": f"#{MODEL_ID}",
-            "hx-swap": "outerHTML",
-            "hx-status:4xx": "swap:none",
-            "hx-status:5xx": "swap:none",
-        },
+    return label(
+        cls="endpoint",
         children=[
-            option(attrs={"value": name, "selected": name == (chosen or catalogue.default.profile)}, children=name)
-            for name in catalogue.profiles
+            input_(
+                cls="endpoint__pick",
+                attrs={
+                    "type": "radio",
+                    "name": "endpoint",
+                    "value": offering.endpoint,
+                    "checked": chosen,
+                    "hx-get": links.to_endpoint_models(),
+                    "hx-target": f"#{MODEL_ID}",
+                    "hx-swap": "outerHTML",
+                    "hx-status:4xx": "swap:none",
+                    "hx-status:5xx": "swap:none",
+                },
+            ),
+            span(cls="endpoint__name", children=offering.endpoint),
+            span(cls="endpoint__format", children=f"{offering.format} format"),
+            span(cls="endpoint__url", children=offering.where),
+            span(
+                cls="endpoint__count",
+                children=f"{len(offering.models)} model{'' if len(offering.models) == 1 else 's'}",
+            ),
         ],
+    )
+
+
+def endpoint_cards(links: Links, catalogue: Catalogue, chosen: str | None = None) -> Element:
+    picked = chosen if chosen in catalogue.offered else catalogue.default.endpoint
+    return div(
+        cls="endpoints",
+        attrs={"role": "radiogroup", "aria-label": "Endpoint"},
+        children=[endpoint_card(links, catalogue.offered[name], chosen=name == picked) for name in catalogue.endpoints],
     )
 
 
@@ -405,7 +566,7 @@ def thinking_select(chosen: ThinkingLevel | None) -> Element:
     How hard to think, as a plain select with no cascade behind it.
 
     Unlike the model list this is the same everywhere, because it is a property of the request
-    rather than of the endpoint: every level is offered against every profile, and a model that
+    rather than of the endpoint: every level is offered against every endpoint, and a model that
     cannot reason refuses or ignores it on the turn. That is the same stance the model id gets, and
     for the same reason - the provider's own answer about what it supports is the authoritative
     one, and gating here would hide a level that in fact works.
@@ -451,33 +612,65 @@ def repository_select(reachable: Reachable, chosen: str | None) -> Element:
     )
 
 
-def picker(links: Links, catalogue: Catalogue, reachable: Reachable, chosen: Choice | None = None) -> Element:
+def picker(
+    links: Links,
+    catalogue: Catalogue,
+    reachable: Reachable,
+    reference: Reference | None,
+    chosen: Choice | None = None,
+) -> Element:
     """
-    The three selects, which appear where a session is created and where one is branched.
+    Everything a session is decided by, laid out as the question it actually is.
+
+    One block rather than a row of selects, because choosing a model is the one real decision on
+    this page and a row of selects made it look like a footnote to the message box. The endpoints
+    come first because the model list depends on which one is picked; the models are the body of it;
+    the two settings that apply whatever you picked sit under them.
 
     `chosen` is what the controls start on, defaulting to the configured default for a new session.
-    A branch passes the parent's own choice instead, so continuing on the same model is the path
-    that needs nothing touched: the fork exists to let the choice change, not to require it.
+    A fork passes the parent's own choice instead, so continuing on the same model is the path that
+    needs nothing touched: the fork exists to let the choice change, not to require it.
 
-    A choice naming a profile the catalogue no longer has falls back to the default rather than
-    rendering a select with nothing selected. That is the same case `stalled_by` explains on the
+    Whether a repository *can* be chosen here is the caller's answer, given as what it says is
+    reachable: a fork of a session already in a repository is handed nothing, because it inherits
+    that one and a control that could not be honoured would be a lie about what the page does.
+
+    A choice naming an endpoint the catalogue no longer has falls back to the default rather than
+    rendering a picker with nothing selected. That is the same case `stalled_by` explains on the
     session page, and here there is a sensible thing to show.
     """
-    starting = chosen if chosen is not None and chosen.profile in catalogue.offered else catalogue.default
+    starting = chosen if chosen is not None and chosen.endpoint in catalogue.offered else catalogue.default
     return div(
         cls="picker",
         children=[
-            span(cls="label", children="Answer with"),
-            profile_select(links, catalogue, starting.profile),
-            model_select(catalogue.offered[starting.profile], starting.model),
-            thinking_select(starting.thinking),
-            # Only where a session is being *created*. A fork inherits its parent's repository and
-            # is not offered another, because re-asking a turn against different files is a
-            # different question wearing the same words.
-            *(
-                (span(cls="label", children="in"), repository_select(reachable, starting.repository))
-                if reachable.repositories and chosen is None
-                else ()
+            section(
+                cls="picker__part",
+                children=[
+                    h2(cls="picker__legend", children="Endpoint"),
+                    endpoint_cards(links, catalogue, starting.endpoint),
+                ],
+            ),
+            section(
+                cls=("picker__part", "picker__part--models"),
+                children=[
+                    h2(cls="picker__legend", children="Model"),
+                    model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
+                ],
+            ),
+            div(
+                cls="picker__settings",
+                children=[
+                    span(cls="picker__label", children="Thinking"),
+                    thinking_select(starting.thinking),
+                    *(
+                        (
+                            span(cls="picker__label", children="Working in"),
+                            repository_select(reachable, starting.repository),
+                        )
+                        if reachable.repositories
+                        else ()
+                    ),
+                ],
             ),
         ],
     )
@@ -487,6 +680,11 @@ def chosen_note(chosen: Choice | None, repository: str | None = None, workspace:
     """
     What an existing session is on, as a fact rather than a control: it cannot be changed.
 
+    Its own class rather than the picker's, and that is not tidying. The two used to look alike
+    enough to share one, and once the picker became a page-filling block of cards they stopped
+    being the same kind of thing at all: this is one line of faint text under a message box, and
+    sharing a rule with a grid gave every session page a layout meant for the start page.
+
     The thinking level is named only when there is one to name. A session that said nothing about
     thinking is not a session set to some level called "default"; it is one that never raised the
     question, and printing a word for that would invent a setting nobody chose. The workspace is
@@ -494,12 +692,12 @@ def chosen_note(chosen: Choice | None, repository: str | None = None, workspace:
     there is nothing a later fork could put back on disk.
     """
     if chosen is None:
-        return span(cls="picker")
-    said = f"{chosen.profile} \N{MIDDLE DOT} {chosen.model}"
+        return span(cls="chosen")
+    said = f"{chosen.endpoint} \N{MIDDLE DOT} {chosen.model}"
     if chosen.thinking is not None:
         said = f"{said} \N{MIDDLE DOT} thinking {name_of_thinking(chosen.thinking)}"
     return span(
-        cls=("picker", "settled"),
+        cls="chosen",
         children=[
             span(children=said),
             *(
@@ -913,7 +1111,42 @@ def rail() -> Element:
     )
 
 
-def composer(action: str, beneath: Element, *, live: bool, refusing: bool = False) -> Element:
+def naming() -> VoidElement:
+    """
+    What to call this session, offered above the box and safe to ignore.
+
+    Optional, and the placeholder says what happens if you leave it: a session with no name given is
+    named after its first message, exactly as every session was before this existed. So the field
+    adds a choice without adding a step, which is the only way it earns a place above the thing
+    somebody actually came here to type.
+
+    A plain input with no `hx-` attribute on it, because it is submitted with the message rather
+    than being a question of its own: nothing exists to name until the form posts.
+    """
+    return input_(
+        cls="composer__name",
+        attrs={
+            "type": "text",
+            "name": TITLE_FIELD,
+            "maxlength": str(TITLE_LENGTH),
+            "placeholder": "Name this session (or leave it to the first message)",
+            "aria-label": "Session name",
+        },
+    )
+
+
+type Placed = Element | VoidElement | None
+"""One thing a caller hands the composer to put above or below the box, or nothing at all."""
+
+
+def composer(
+    action: str,
+    beneath: Placed,
+    *,
+    live: bool,
+    refusing: bool = False,
+    above: Placed = None,
+) -> Element:
     """
     The box you type in, which posts to `action`, with `beneath` under it.
 
@@ -929,7 +1162,7 @@ def composer(action: str, beneath: Element, *, live: bool, refusing: bool = Fals
 
     `refusing` disables the whole thing, for a session nothing can answer. The disabling is real
     rather than styling: a box that still submitted would record a message into a session whose
-    profile is gone, which is one more thing to explain and nothing gained.
+    endpoint is gone, which is one more thing to explain and nothing gained.
 
     The reset is on `after:swap` rather than on `after:request`, so the box empties when the
     conversation on screen has actually taken the message rather than when the request left.
@@ -960,6 +1193,7 @@ def composer(action: str, beneath: Element, *, live: bool, refusing: bool = Fals
         cls="composer",
         attrs={"method": "post", "action": action, **driving},
         children=[
+            above,
             div(
                 cls="row",
                 children=[
@@ -1009,24 +1243,40 @@ def shell(
     )
 
 
-def start_page(links: Links, listed: tuple[Session, ...], catalogue: Catalogue, reachable: Reachable) -> str:
+def start_page(
+    links: Links,
+    listed: tuple[Session, ...],
+    catalogue: Catalogue,
+    reachable: Reachable,
+    reference: Reference | None = None,
+) -> str:
     """
-    Where a session begins: an empty transcript, a box, and what to answer it with.
+    Where a session begins: what to answer it with, and the box that starts it.
+
+    The choosing fills the page and the box sits under it, which is the opposite of what a session
+    page does and is right for the same reason. On a session page the conversation is the content
+    and the box is how you add to it. Here there is no conversation, and what somebody is actually
+    doing is deciding what they are about to talk to; a page that gave that a row of selects under
+    the message box was answering the wrong question first.
+
+    There is no transcript element on this page at all. An empty one was a region with nothing in it
+    saying "ask it something", which is the message box's job to say and the message box says it
+    better by being the thing you type into.
 
     Nothing is created until something is said, which is why this page has no id in its URL. A
     session that existed with nothing in it would be a row in the list nobody can name and nobody
-    asked for, and it would have to be recorded on a profile chosen for it rather than by anybody.
+    asked for, and it would have to be recorded on an endpoint chosen for it rather than by anybody.
     """
     return document(
         links,
-        UNTITLED,
+        NEW_SESSION,
         shell(
             links,
             listed,
             showing=None,
             pane=[
-                transcript_region(links, session="", said=Transcript(panels=(), awaiting=False, turns=0)),
-                composer(links.to_start(), picker(links, catalogue, reachable), live=False),
+                div(cls="setup", children=picker(links, catalogue, reachable, reference)),
+                composer(links.to_start(), None, live=False, above=naming()),
             ],
         ),
     )
@@ -1036,18 +1286,18 @@ def stalled_by(showing: Conversation) -> str | None:
     """
     Why this session cannot be answered, or nothing at all when it can.
 
-    One sentence naming the profile, because that is the only thing a person can act on: the
-    profile was configured when the session started, so putting it back in the configuration file
+    One sentence naming the endpoint, because that is the only thing a person can act on: the
+    endpoint was configured when the session started, so putting it back in the configuration file
     is what makes the conversation continue exactly where it stopped.
 
-    It names the profile and not the model on purpose. A model missing from the picker does not
+    It names the endpoint and not the model on purpose. A model missing from the picker does not
     stop a session, since an endpoint routes more ids than it advertises, so saying so here would
     tell somebody to fix something that is not broken.
     """
     if showing.answerable or showing.chosen is None:
         return None
     return (
-        f"This session was started on profile {showing.chosen.profile!r}, which the configuration "
+        f"This session was started on endpoint {showing.chosen.endpoint!r}, which the configuration "
         f"no longer declares. Put it back to carry on, or start a new session."
     )
 
@@ -1079,6 +1329,17 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
     )
 
 
+def attachable(showing: Conversation, reachable: Reachable) -> Reachable:
+    """
+    What a fork of this session may choose to work in, which is nothing once it works somewhere.
+
+    A fork attaches a repository or inherits one; it never swaps. Answering that here, as an empty
+    set of choices, is what keeps `picker` a rendering rather than a place that knows the rule.
+    """
+    settled = showing.chosen is not None and showing.chosen.repository is not None
+    return Reachable(repositories=()) if settled else reachable
+
+
 def inheriting(at: int, asking: bool) -> str:
     """
     What a fork from `at` would carry, said in turns.
@@ -1096,7 +1357,15 @@ def inheriting(at: int, asking: bool) -> str:
     return f"{carried}, then asks turn {at} again." if asking else f"{carried}, then waits for turn {at}."
 
 
-def fork_page(links: Links, listed: tuple[Session, ...], showing: Conversation, at: int, catalogue: Catalogue) -> str:
+def fork_page(
+    links: Links,
+    listed: tuple[Session, ...],
+    showing: Conversation,
+    at: int,
+    catalogue: Catalogue,
+    reachable: Reachable,
+    reference: Reference | None = None,
+) -> str:
     """
     What a branch from one turn would be, and the one control that may answer differently.
 
@@ -1140,7 +1409,11 @@ def fork_page(links: Links, listed: tuple[Session, ...], showing: Conversation, 
                             },
                             children=asked or "",
                         ),
-                        picker(links, catalogue, Reachable(repositories=()), showing.chosen),
+                        # A repository is offered only to a fork of a session that has none.
+                        # One already in a repository inherits it, so there is nothing to choose;
+                        # one in none may pick a repository up here, which is the ordinary shape
+                        # of having thought something through and then going to work on it.
+                        picker(links, catalogue, attachable(showing, reachable), reference, showing.chosen),
                         div(
                             cls="forking__act",
                             children=[

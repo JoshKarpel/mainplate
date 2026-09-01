@@ -70,6 +70,10 @@
     --sidebar: 17rem;
     --rail: 11rem;
     --measure: 46rem;
+    /* What a grid of cards is laid out in, as against `--measure`, which is what prose is read at.
+       A transcript wants a column narrow enough to read a line of; a picker wants room for three
+       cards across, and held to the reading measure it never reaches a third column. */
+    --wide: 68rem;
 
     --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
 }
@@ -109,6 +113,29 @@ body {
    start page, which has no rail, simply has no third column. */
 .shell:has(> .rail) {
     grid-template-columns: var(--sidebar) 1fr var(--rail);
+}
+
+/* Below the width at which a fixed session list and a readable page both fit, the list stops being
+   a column and becomes a band across the top. The sidebar is 17rem whatever the window is, so on a
+   phone it was taking two thirds of the screen and leaving the conversation about a hundred pixels
+   to render in - which is what actually scrolled the document sideways, however much the things
+   inside it were taught to shrink.
+
+   Stacked rather than hidden behind a toggle, because every session stays reachable with no new
+   control to learn and nothing for the script to drive: the band scrolls itself, and the page
+   below it gets the whole width. */
+@media (max-width: 48rem) {
+    .shell,
+    .shell:has(> .rail) {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    .sessions {
+        max-height: 30vh;
+        border-right: none;
+        border-bottom: 1px solid var(--edge);
+    }
 }
 
 /* --- The session list ------------------------------------------------- */
@@ -181,7 +208,21 @@ main {
     display: grid;
     grid-template-rows: auto 1fr auto;
     min-height: 0;
+    /* A grid item's minimum is its min-content unless this says otherwise, so without it the `1fr`
+       column cannot go narrower than the widest unbreakable thing in here - which is the composer's
+       row, a textarea at its intrinsic twenty columns beside a Send button. On a phone that floors
+       `main` at about 317px next to a 272px sidebar and scrolls the *document* sideways, which is
+       the one thing every page here must never do. */
+    min-width: 0;
     padding: 0 var(--gap);
+}
+
+/* And again for the rows inside it, because `min-width: auto` applies to every grid item and not
+   just the outermost: `main` shrinking without this leaves the transcript, the setup block and the
+   composer at their own min-content, overflowing the parent that just learned to shrink. The
+   column they sit in is auto-sized, so it is their minimum that decides its width. */
+main > * {
+    min-width: 0;
 }
 
 main > header {
@@ -570,12 +611,22 @@ main > header h1 {
 
 .tool > summary {
     display: flex;
+    /* A tool name and an outcome are two unbreakable words, and on a narrow window they do not fit
+       one line: unwrapped they push the panel, and the transcript is the one thing on this page
+       with nowhere to overflow to but the document. */
+    flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-4);
     padding: 0.35rem 0.6rem;
     color: var(--ink-soft);
     cursor: pointer;
     list-style: none;
+}
+
+/* The name is the part that can be long, so it is the part that gives way. */
+.tool__name {
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .tool > summary::-webkit-details-marker {
@@ -698,7 +749,7 @@ main > header h1 {
     }
 }
 
-/* A session whose profile is no longer configured: readable, and honest about being stuck. */
+/* A session whose endpoint is no longer configured: readable, and honest about being stuck. */
 .stalled {
     max-width: 40rem;
     margin: var(--gap) auto 0;
@@ -730,6 +781,9 @@ main > header h1 {
 
 .composer textarea {
     flex: 1;
+    /* `flex: 1` sets the basis to zero but not the minimum, which stays at the textarea's intrinsic
+       `cols` width. This is what lets the box actually shrink with the window. */
+    min-width: 0;
     padding: 0.55rem 0.7rem;
     border: 1px solid var(--edge);
     border-radius: var(--radius);
@@ -756,36 +810,364 @@ main > header h1 {
     cursor: progress;
 }
 
-/* What a session will be answered on: a control before it exists, a fact after. */
+/* What a session already under way is answered on, stated as a fact under the box because it
+   cannot be changed. One line of faint text, deliberately not sharing a rule with the picker: the
+   two say related things and are no longer the same kind of object. */
+.chosen {
+    display: flex;
+    /* Wrapping, because an endpoint, a model, a thinking level and a repository do not fit a narrow
+       window on one line, and a row that overflows scrolls the whole page sideways rather than the
+       row. Nothing here has to stay beside anything else. */
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+    align-items: baseline;
+    min-height: var(--space-7);
+    min-width: 0;
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+/* On the page where the picker is, the box takes the picker's measure rather than the reading one.
+   Both are centred in the column, so at different widths their left edges do not line up and the
+   box reads as belonging to something other than the cards above it. A session page keeps the
+   reading measure, because there the box sits under a transcript and should line up with that. */
+.setup + .composer {
+    max-width: var(--wide);
+}
+
+/* The name a session is given before it has one, above the box that would otherwise name it. */
+.composer__name {
+    width: 100%;
+    /* An `<input>` carries an intrinsic width from its `size` attribute, and `width: 100%` does not
+       override it: the element still reports that width as its minimum, so a flex or grid parent
+       sizes itself to fit and the page grows to hold it. `min-width: 0` is what actually lets it
+       shrink, and without it this one field widens `main` on a narrow window. */
+    min-width: 0;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--ink);
+    font: inherit;
+}
+
+/* Quieter than the message box, because it is the optional half of this form: something you may
+   fill in, not something you came here to do. */
+.composer__name::placeholder {
+    color: var(--ink-faint);
+}
+
+/* --- Choosing what a session runs on ----------------------------------- */
+
+/* The middle of the start page, and the body of the fork page. `main` is a grid whose middle row
+   grows, so putting this there is what gives the choosing the room and leaves the box at the
+   bottom - which is the opposite arrangement to a session page and right for the same reason:
+   there is no conversation yet, and what somebody is doing is deciding what to talk to. */
+.setup {
+    display: flex;
+    flex-direction: column;
+    /* Centred in the room it has, because this is the middle of the page rather than the top of a
+       document: pinned to the top it left a screen of nothing between the last card and the box,
+       which read as a page that had failed to load the rest of itself.
+
+       `safe` is what makes centring compatible with the scrolling: a centred flex child taller
+       than its container overflows equally in both directions and the top becomes unreachable,
+       and `safe` falls back to start-alignment exactly in that case. */
+    justify-content: safe center;
+    min-height: 0;
+    overflow-y: auto;
+    padding-block: var(--gap);
+}
+
 .picker {
     display: flex;
-    /* Four controls and two words do not fit a narrow window on one line, and a row that overflows
-       scrolls the whole page sideways rather than the row. Wrapping is what a picker can do that a
-       transcript cannot: nothing here has to stay beside anything else. */
+    flex-direction: column;
+    gap: var(--space-6);
+    /* Wider than the reading measure, because these are cards in a grid rather than prose: at
+       `--measure` the grid never reaches a third column and the facts on a card wrap. */
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+}
+
+.picker__part {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-width: 0;
+}
+
+/* The word above each group, drawn as the same faint chrome the panel roles are: it labels the
+   choice without competing with the things being chosen between. */
+.picker__legend {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+}
+
+/* The two settings that apply whatever was picked above, on one wrapping row. Wrapping is what a
+   row of controls can do that a transcript cannot: nothing here has to stay beside anything else,
+   and a row that overflowed would scroll the whole page sideways rather than itself. */
+.picker__settings {
+    display: flex;
     flex-wrap: wrap;
-    gap: var(--space-3);
+    gap: var(--space-3) var(--space-4);
     align-items: center;
-    min-height: var(--space-7);
     color: var(--ink-faint);
     font-size: 0.8rem;
 }
 
-/* The words between the controls read as one thing each, so they break beside a control rather
-   than through themselves: "Answer / with" is two lines saying nothing. */
-.picker .label {
+/* Each label reads as one thing, so it breaks beside its control rather than through itself:
+   "Working / in" is two lines saying nothing. */
+.picker__label {
     white-space: nowrap;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
 .picker select {
     /* Long enough to hold `owner/repository (attachment)` without the row pushing the page wider,
        and free to shrink under it: a select that cannot shrink is a select that overflows. */
     max-width: 100%;
-    padding: var(--space-1) var(--space-2);
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--edge);
     border-radius: 0.35rem;
     background: var(--raised);
     color: var(--ink);
     font: inherit;
+}
+
+/* --- Which endpoint answers -------------------------------------------- */
+
+/* `min(15rem, 100%)` and not a bare `15rem`, which is the whole of why this grid does not push a
+   phone sideways: a bare minimum is a floor the track keeps even when the container is narrower
+   than it, so the grid stays 15rem wide inside a 390px viewport and takes the document with it.
+   Bounding the minimum by the container's own width lets the last column collapse instead. */
+.endpoints {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
+    gap: var(--space-4);
+}
+
+/* A whole card is the hit target, because the thing being chosen is the card and a radio beside it
+   would be a five-pixel target next to a five-centimetre one. The input is still really there and
+   still does the choosing; see `.endpoint__pick`. */
+.endpoint,
+.model {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    cursor: pointer;
+}
+
+.endpoint:hover,
+.model:hover {
+    border-color: color-mix(in srgb, var(--person-edge) 45%, var(--edge));
+}
+
+/* Off the page but not out of the accessibility tree, and deliberately not `display: none`: a
+   hidden radio is one a screen reader cannot announce and a keyboard cannot reach, which would
+   make this grid unusable by anyone not pointing at it. `:focus-visible` below is what draws the
+   focus ring back onto the card, since the ring would otherwise land on something invisible. */
+.endpoint__pick,
+.model__pick {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* The chosen one, marked with the person's own hue, because picking a model is the reader saying
+   what they want rather than the console reporting something. */
+.endpoint:has(.endpoint__pick:checked),
+.model:has(.model__pick:checked) {
+    border-color: var(--person-edge);
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--raised));
+}
+
+.endpoint:has(.endpoint__pick:focus-visible),
+.model:has(.model__pick:focus-visible) {
+    outline: 2px solid var(--mark);
+    outline-offset: 2px;
+}
+
+.endpoint__name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* Which API format is spoken to it, which is the fact that tells two endpoints on one hostname
+   apart: the same gateway answers both, and each reaches models the other does not. */
+.endpoint__format {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tool-edge);
+}
+
+/* Where it actually points. A URL is long and is not read left to right, so it breaks anywhere
+   rather than pushing the card - and therefore the grid, and therefore the page - wider. */
+.endpoint__url {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+    overflow-wrap: anywhere;
+}
+
+.endpoint__count {
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+}
+
+/* --- Which model answers ------------------------------------------------ */
+
+.models {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    /* Its own scroller, bounded, because one endpoint can offer seventy models and a page that grew
+       to hold all of them would put the message box below the fold on the one page whose whole
+       purpose is to reach that box. The endpoints and the settings stay put around it. */
+    max-height: 32rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.models__provider {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+/* The vendor a run of models comes from. Sticky, so the heading of the group being scrolled
+   through stays legible: with seventy models the group you are in is the thing most easily lost. */
+.models__heading {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0;
+    padding: var(--space-2) 0;
+    background: var(--ground);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+
+/* Bounded by the container for the reason `.endpoints` is, and it matters more here: this grid is
+   the widest thing on the start page, so a floor it cannot go under is a floor the document takes. */
+.models__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
+    gap: var(--space-4);
+}
+
+.model__name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* What the request will actually name, which is not always what the name above suggests: a gateway
+   routes `anthropic/claude-opus-5` and calls it "Claude Opus 5". Worth showing because it is the
+   string that ends up recorded on the session for life. */
+.model__id {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--ink-faint);
+    overflow-wrap: anywhere;
+}
+
+/* Clamped rather than truncated with an ellipsis, so a card stays a card: descriptions run to
+   several sentences and one long one would set the row height for every model beside it. The whole
+   text is on the `title`, which is where somebody who wants it will look. */
+.model__about {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    color: var(--ink-soft);
+}
+
+/* The numbers, pushed to the bottom of the card so they line up across a row whatever length the
+   name and the description above them ran to. */
+.model__facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+    margin-top: auto;
+    padding-top: var(--space-3);
+}
+
+.model__fact {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+}
+
+.model__figure {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    color: var(--ink);
+}
+
+/* What the figure above it means, in the same faint ink every other label on this console uses. */
+.model__unit {
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+}
+
+/* The price reads in the tool's ochre rather than the ink, because it is the one number on the
+   card somebody is weighing rather than reading. Never green: nothing anybody said is green here,
+   and money is not a speaker. */
+.model__fact--cost .model__figure {
+    color: var(--sienna);
+}
+
+.model__traits {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+/* Positive badges only, so a card claims what a model does and stays silent about the rest. */
+.model__trait {
+    padding: 0 var(--space-2);
+    border: 1px solid var(--edge);
+    border-radius: 0.75rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+
+/* Shown only where a reference was configured and had no record, which is why it reads as a fact
+   about the lookup rather than as a warning about the model: the model is fine, and picking it
+   works exactly as picking any other does. */
+.model__unknown {
+    font-size: 0.66rem;
+    font-style: italic;
+    color: var(--ink-faint);
 }
 
 /* --- The rail: search, key, and dock ---------------------------------- */
@@ -856,7 +1238,14 @@ main > header h1 {
         z-index: 10;
         width: var(--rail);
         padding: 0;
-        overflow: visible;
+        /* `clip` on the inline axis, and `visible` still on the block axis, because the cards are
+           parked off the right-hand edge by a transform when the rail is shut. Off-screen by
+           design, but a transform still contributes scrollable overflow, so those parked cards
+           were scrolling the document sideways on every session page - the one thing every page
+           here must never do. Clipping says what was already meant: past this box, nothing.
+           `clip` rather than `hidden` because `hidden` would make this a scroll container. */
+        overflow-x: clip;
+        overflow-y: visible;
         /* The cards are what a reader presses; the column between and around them is nothing, and
            a fixed box with no background still swallows every click over it. */
         pointer-events: none;
@@ -1156,11 +1545,35 @@ main:has(> .forking) {
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
-    max-width: var(--measure);
+    /* The card measure rather than the reading one, because this holds the same picker the start
+       page does and a grid of model cards needs the room to reach a third column. */
+    max-width: var(--wide);
     padding: var(--space-6);
     border: 1px solid var(--edge);
     border-radius: var(--radius);
     background: var(--raised);
+}
+
+/* The picker sits inside a raised card here and directly on the page on the start page, so its own
+   cards need a ground to stand out from rather than the one they are already on. */
+.forking .endpoint,
+.forking .model {
+    background: var(--ground);
+}
+
+.forking .endpoint:has(.endpoint__pick:checked),
+.forking .model:has(.model__pick:checked) {
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--ground));
+}
+
+.forking .models__heading {
+    background: var(--raised);
+}
+
+/* Shorter here than on the start page: this page has a transcript under it that a reader has to be
+   able to see, so the models take a bounded slice rather than the middle of the page. */
+.forking .models {
+    max-height: 22rem;
 }
 
 .forking h1 {
@@ -1181,7 +1594,7 @@ main:has(> .forking) {
 
 /* Which worktree this console snapshots against. On the settled note rather than in the rail,
    because it belongs with the other things a session cannot change about itself. */
-.picker .workspace {
+.chosen .workspace {
     color: var(--ink-faint);
     font-family: var(--mono);
 }

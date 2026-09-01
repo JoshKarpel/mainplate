@@ -18,6 +18,8 @@ import typer
 
 from mainplate.app import DidNotStart
 from mainplate.app import serve_until_stopped
+from mainplate.config import BadConfig
+from mainplate.config import config_home
 from mainplate.exe import discover_gateways
 from mainplate.install import SERVICE
 from mainplate.install import Converged
@@ -33,8 +35,6 @@ from mainplate.install import is_lingering
 from mainplate.install import remove
 from mainplate.install import running_executable
 from mainplate.install import systemctl_for
-from mainplate.profiles import BadConfig
-from mainplate.profiles import config_home
 from mainplate.settings import Settings
 
 Database = Annotated[
@@ -70,7 +70,7 @@ def serve(database: Database = None, host: Host = None, port: Port = None) -> No
     Run the console and the worker that answers its sessions, until a signal stops the process.
 
     Every option is optional because every setting has a default that runs. What is required is a
-    configuration file with at least one profile in it, because a profile is what a session is
+    configuration file with at least one endpoint in it, because an endpoint is what a session is
     answered on; there is no `--model`, since a session records its own and a process-wide one
     would be a second answer to a question each session already answers.
     """
@@ -184,16 +184,16 @@ def report_install(done: Converged) -> None:
         typer.echo(f"  found    exe.dev llm integration {gateway.name!r} at {gateway.base_url}")
     typer.echo(f"  console  http://{done.unit.host}:{done.unit.port}")
     typer.echo(f"  unit     {done.unit.path}")
-    typer.echo(f"  profiles {done.unit.config}")
+    typer.echo(f"  endpoints {done.unit.config}")
     typer.echo(f"  settings {done.unit.environment}")
     typer.echo(f"  sessions {done.unit.database}")
     typer.echo(f"  logs     journalctl --user -u {SERVICE} -f")
 
     if not done.startable:
         typer.echo(
-            f"\nnote: {done.unit.config} declares no usable profile, so the service will fail at\n"
+            f"\nnote: {done.unit.config} declares no usable endpoint, so the service will fail at\n"
             f"startup and restart every five seconds until it does. That is the loud version of a\n"
-            f"console that could answer nothing. Uncomment a profile there, then\n"
+            f"console that could answer nothing. Uncomment an endpoint there, then\n"
             f"`systemctl --user restart {SERVICE}`.",
             err=True,
         )

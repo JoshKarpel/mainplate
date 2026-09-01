@@ -45,7 +45,7 @@ class TestReadingAKeyBack:
 
     def test_a_prefix_carries_every_kind_of_key_for_the_turns_it_covers(self) -> None:
         recorded = {
-            CHOICE_KEY: {"profile": "here", "model": "ripe/fast"},
+            CHOICE_KEY: {"endpoint": "here", "model": "ripe/fast"},
             prompt_key(0): "first",
             messages_key(0): [],
             "turn:0:model:0": {"kind": "response"},
@@ -90,7 +90,7 @@ class TestWhatABranchInherits:
 
     async def test_a_branch_may_answer_on_a_different_model(self, service: Service, provider: Provider) -> None:
         """The one moment a choice may differ, which is the whole reason forking exists here."""
-        elsewhere = Choice(profile="gateway", model="wide/steady", thinking="xhigh")
+        elsewhere = Choice(endpoint="gateway", model="wide/steady", thinking="xhigh")
         session = await service.start("first", DEFAULT_CHOICE)
 
         forked = await service.fork(session.id, at=0, chosen=elsewhere)
@@ -234,14 +234,14 @@ class TestBranchingThroughTheConsole:
         self, app: ASGIApp, service: Service
     ) -> None:
         """Continuing on the same model is the common branch, so it is the one needing no change."""
-        elsewhere = Choice(profile="gateway", model="wide/steady")
+        elsewhere = Choice(endpoint="gateway", model="wide/steady")
         session = await service.start("first", elsewhere)
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
 
         assert answered.status == 200
-        assert '<option value="gateway" selected' in answered.text
+        assert 'value="gateway" checked' in answered.text
 
     async def test_branching_creates_a_session_and_sends_the_browser_to_it(
         self, app: ASGIApp, service: Service
@@ -251,14 +251,14 @@ class TestBranchingThroughTheConsole:
         async with calling(app) as caller:
             answered = await caller.post(
                 f"/sessions/{session.id}/forks",
-                {"at": "0", "profile": "gateway", "model": "wide/steady", "thinking": "low"},
+                {"at": "0", "endpoint": "gateway", "model": "wide/steady", "thinking": "low"},
             )
 
         assert answered.status == 303
         branched = answered.location.rsplit("/", 1)[-1]
         assert branched != session.id
         assert choice_of(await service.checkpointer.load(branched)) == Choice(
-            profile="gateway", model="wide/steady", thinking="low"
+            endpoint="gateway", model="wide/steady", thinking="low"
         )
 
     async def test_a_pair_nothing_offers_is_refused_exactly_as_starting_one_is(
@@ -269,7 +269,7 @@ class TestBranchingThroughTheConsole:
         async with calling(app) as caller:
             answered = await caller.post(
                 f"/sessions/{session.id}/forks",
-                {"at": "0", "profile": "here", "model": "nope", "thinking": "default"},
+                {"at": "0", "endpoint": "here", "model": "nope", "thinking": "default"},
             )
 
         assert answered.status == 422

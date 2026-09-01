@@ -13,15 +13,16 @@ was doing when its process dies is the failure worth designing out first.
 
 ## Running it
 
-Write `$XDG_CONFIG_HOME/mainplate/config.toml` (usually `~/.config/mainplate/config.toml`), then
+Write `$XDG_CONFIG_HOME/mainplate/config.yaml` (usually `~/.config/mainplate/config.yaml`), then
 start it:
 
-```toml
-default = "anthropic"
+```yaml
+default: anthropic
 
-[profiles.anthropic]
-provider = "anthropic"
-api_key  = "sk-ant-..."
+endpoints:
+  anthropic:
+    format: anthropic
+    api_key: sk-ant-...
 ```
 
 No models are listed, because none are configured: mainplate asks each endpoint what it serves and
@@ -40,50 +41,91 @@ other setting is a field of `Settings` read from a `MAINPLATE_`-prefixed environ
 `MAINPLATE_REFRESH` sets how often the models are re-read and `MAINPLATE_PASSES` how many sessions
 are answered at once. Read `settings.py` for the whole set, each with what it is for.
 
-### Profiles
+### Endpoints
 
-A **profile** is where requests go, which wire is spoken there, and how to authenticate. The models
-are deliberately not part of one, and are not written down anywhere: mainplate asks the endpoint's
-own model-list API what it serves. That is the same call whether the endpoint is `api.anthropic.com`
-or a gateway fronting five vendors, and it means the picker is never a list somebody has to
-remember to update.
+An **endpoint** is where requests go, which API format is spoken there, and how to authenticate. The
+models are deliberately not part of one, and are not written down anywhere: mainplate asks the
+endpoint's own model-list API what it serves. That is the same call whether the endpoint is
+`api.anthropic.com` or a gateway fronting five vendors, and it means the picker is never a list
+somebody has to remember to update.
 
-`provider` names the wire rather than the vendor, because one hostname often answers both and each
-reaches models the other does not. It also decides what `base_url` has to be: the Anthropic SDK
+`format` names the API shape rather than the vendor, because one hostname often answers both and
+each reaches models the other does not. It also decides what `url` has to be: the Anthropic SDK
 appends `/v1/messages` to what it is given, so it wants the host, and the OpenAI SDK appends
 `/chat/completions`, so it wants the host and `/v1`.
 
-A session records the profile, the model, a thinking level *and* a repository, at the moment it is
-created, and all four are fixed for its life. The profile is what carries the wire, which is why it is recorded
-rather than looked up later: the same model id can sit behind two wires, and the two serialize a
-conversation differently. You pick all three under the composer on the new-chat page, where the
-models are grouped by the vendor each comes from; after that the session says what it is on rather
-than offering a control that could not change it. A conversation that switched model halfway would
-replay its recorded answers from one and continue on another, so what the transcript shows and what
-the next turn reasons from would have different authors.
+The **provider** of a model (`anthropic`, `fireworks`, `xai`) is a third word and a different thing
+again. It is discovered rather than configured, and it is not a level of the hierarchy: the same
+provider turns up under more than one endpoint, since every Fireworks model on exe.dev's gateway is
+listed by both of its formats under one id. So the shape is `endpoint -> model`, and the provider is
+the heading the model cards are grouped under.
+
+A session records the endpoint, the model, a thinking level *and* a repository, at the moment it is
+created, and all four are fixed for its life. The endpoint is what carries the API format, which is
+why it is recorded rather than looked up later: the same model id genuinely does sit behind two
+formats, and the two serialize a conversation differently. You pick all four on the new-session page, where the endpoints are cards
+naming the API format each speaks and the URL each points at, and the models are cards carrying what they
+cost, how much they read, and what they can do, grouped by the vendor each comes from. After that
+the session says what it is on rather than offering a control that could not change it. A
+conversation that switched model halfway would replay its recorded answers from one and continue on
+another, so what the transcript shows and what the next turn reasons from would have different
+authors.
+
+You can name a session there too, in the field above the box. Left empty it is named after its first
+message, which is what every session was named after before the field existed.
 
 **Forking is how you change your mind**, and it keeps the original readable. Every message carries a
 `fork` link: following it makes a new session that inherits the turns before that one, on whatever
-profile, model and thinking level you pick, and asks that turn's own question again. The message
+endpoint, model and thinking level you pick, and asks that turn's own question again. The message
 comes across editable, so a fork is equally a way to rephrase. The sidebar draws the result as a
 tree, each fork nested under what it came from and labelled with the turn it left at.
 
-A new session starts on whichever model the default profile listed first, which for most gateways is
+The repository is the one part a fork will not change. It inherits its parent's, because re-asking
+a turn against different files is a different question wearing the same words. A session working in
+*no* repository is the exception, and forking one is how you pick a repository up: think something
+through first, then fork it into the code.
+
+A new session starts on whichever model the default endpoint listed first, which for most gateways is
 their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
 since dropped falls back to the first rather than stopping the console. `default_thinking` names the
 level, and defaults to saying nothing about thinking at all.
+
+## What a model costs
+
+No gateway reached so far publishes a price anywhere in its model list, and what it does publish is
+uneven: an endpoint describes its own vendor's models in detail, forwards somebody else's record for the
+ones it resells, and says nothing at all about the rest. So the facts on a model card come from a
+reference database rather than from the listing, which is what lets two models on one page be
+compared.
+
+It is off unless you ask for it. Name one at the bottom of `config.yaml`:
+
+```yaml
+model_reference:
+  source: https://models.dev/api.json
+  format: models.dev
+```
+
+`source` is fetched when it is a URL and read when it is a path, so a machine with no outbound
+access can point at a file it already has. Delete it and mainplate calls nobody but the gateways
+your own endpoints name.
+
+It is read before the console takes traffic and re-read on a timer, and unlike model discovery it
+can never stop the console starting: a database that will not load costs a card its numbers and
+nothing else. A model the database has no record of says so on its card. A console with no reference
+configured says nothing, because nothing was looked up.
 
 The list is read once before the console takes traffic and refreshed on a timer after that
 (`MAINPLATE_REFRESH`, fifteen minutes by default), by a task that answers no requests. So rendering
 a page never causes a request to a gateway, and a model that appears at the provider reaches the
 picker without anybody restarting anything. A refresh that fails keeps the models discovered
-earlier and logs why; a *first* read that fails is a startup failure naming the profile, because a
+earlier and logs why; a *first* read that fails is a startup failure naming the endpoint, because a
 console with an empty picker can answer nothing.
 
 Credentials live in that file rather than in the environment. A key read from a `0600` file and
 handed to the SDK never becomes an environment variable, so it is not inherited by child
-processes, not in `/proc/<pid>/environ`, and not in a crash dump of anything but this process. A
-profile that names neither `api_key` nor `base_url` falls back to the SDK's own environment
+processes, not in `/proc/<pid>/environ`, and not in a crash dump of anything but this process. An
+endpoint that names neither `api_key` nor `url` falls back to the SDK's own environment
 variable, which is what the SDK does for itself.
 
 ### On exe.dev, no key at all
@@ -96,23 +138,23 @@ nothing to store, rotate, or leak.
 
 `mainplate install` finds it for you. It asks the
 [reflection integration](https://exe.dev/docs/integrations-reflection.md) which integrations are
-attached, writes keyless profiles per LLM integration it finds, and says so:
+attached, writes keyless endpoints per LLM integration it finds, and says so:
 
 ```console
 $ just install
 mainplate is installed and restarted
   found    exe.dev llm integration 'llm' at https://llm.int.exe.xyz
   console  http://127.0.0.1:8100
-  profiles /home/you/.config/mainplate/config.toml
+  endpoints /home/you/.config/mainplate/config.yaml
 ```
 
-One hostname gets two profiles, one per wire, because each reaches models the other does not.
+One hostname gets two endpoints, one per API format, because each reaches models the other does not.
 `llm-anthropic` offers every Claude and every Fireworks model, all answered over `/v1/messages`;
 `llm-openai` offers GPT, Grok, and Fireworks again over `/v1/chat/completions`. Between them a
 default VM offers around seventy models with nothing configured.
 
 Off exe.dev the lookup finds nothing and the install writes a template to edit. Either way an
-existing `config.toml` is never overwritten.
+existing `config.yaml` is never overwritten.
 
 `just demo` runs the same console on a throwaway database, for poking at a page without touching
 real sessions.
@@ -130,11 +172,11 @@ $ just logs            # journalctl --user -u mainplate -f
 $ just uninstall       # keeps the settings and the sessions
 ```
 
-The install prints where its files are. `config.toml` is the one to edit, and
+The install prints where its files are. `config.yaml` is the one to edit, and
 `environment` beside it carries any `MAINPLATE_*` process setting. Both are created `0600` on the
 first install and neither is ever overwritten.
 
-With no usable profile, or with one no endpoint will answer a model list for, the service fails at
+With no usable endpoint, or with one no endpoint will answer a model list for, the service fails at
 startup and restarts every five seconds: the endpoints are built and asked what they serve before
 anything binds. That is deliberate: a console that could answer nothing has nothing honest to
 serve, and failing at boot is louder than failing on the first message.
@@ -221,12 +263,12 @@ Named plainly, because they are the next things rather than omissions nobody not
 - **No tools.** The agent is a model and some instructions. Tool calls become another kind of
   recorded step, which is the shape `Stepping.key` already numbers. The console reads and draws
   them already, so a toolset is the change; the panel it appears in is not.
-- **Two wires, not every wire.** A profile's `provider` takes `anthropic` or `openai`, which
+- **Two API formats, not every format.** An endpoint's `format` takes `anthropic` or `openai`, which
   between them cover most gateways. A third is one `Endpoint` class saying how to name a model over
-  that wire and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.
-- **A session cannot be moved to another profile.** Removing a profile that sessions use leaves
-  them readable and stuck; the page names the profile so putting it back is obvious. Forking one
-  onto a profile that still exists is the way out. A model dropping out of the picker is *not* that
+  that format and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.
+- **A session cannot be moved to another endpoint.** Removing an endpoint that sessions use leaves
+  them readable and stuck; the page names the endpoint so putting it back is obvious. Forking one
+  onto an endpoint that still exists is the way out. A model dropping out of the picker is *not* that
   case and does not stop a session, since an endpoint routes more ids than it advertises.
 - **Snapshots are kept but not yet restored.** A session that picked a repository works in a
   worktree of its own, every turn records the tree it started on, and a fork is checked out at the

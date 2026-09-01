@@ -172,7 +172,7 @@ class TestAskingEveryForge:
 
     async def test_a_forge_reaching_nothing_is_an_ordinary_answer(self) -> None:
         """
-        Unlike an endpoint listing no models, which is a profile you can select and cannot use. A
+        Unlike an endpoint listing no models, which is an endpoint you can select and cannot use. A
         machine with no repositories attached is simply a machine with none.
         """
         reachable = await discover([Stand(name="here"), Stand(name="there", reaches=(TWO,))])

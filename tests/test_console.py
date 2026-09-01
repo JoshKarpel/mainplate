@@ -15,34 +15,50 @@ from mainplate.agent import Listed
 from mainplate.app import build_app
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Catalogues
+from mainplate.catalogue import Offering
 from mainplate.console import LONGEST_PROMPT
 from mainplate.console import NotAMessage
 from mainplate.console import parse_form_prompt
 from mainplate.conversation import messages_key
 from mainplate.conversation import prompt_key
 from mainplate.service import Service
+from mainplate.sessions import TITLE_FIELD
+from mainplate.sessions import TITLE_LENGTH
 
 
-async def a_session(app: ASGIApp, said: str = "what is a mainplate") -> str:
+async def a_session(app: ASGIApp, said: str = "what is a mainplate", title: str | None = None) -> str:
     """A session started the way a browser starts one, named by the path it was redirected to."""
     async with calling(app) as caller:
-        answered = await caller.post("/sessions", starting_form(said))
+        answered = await caller.post("/sessions", starting_form(said, title=title))
         assert answered.status == 303
         return answered.location.rsplit("/", 1)[-1]
 
 
 # A catalogue offering something else entirely, for the session whose pair went away. It stands in
-# for both ways that happens - a profile edited out of the file, and an endpoint that stopped
+# for both ways that happens - an endpoint edited out of the file, and an endpoint that stopped
 # listing a model - because the console cannot tell them apart and does not try to.
 OTHER_CATALOGUE = Catalogue(
-    offered={"elsewhere": (Listed(id="plain/different", label="Different", family="plain"),)},
-    default=Choice(profile="elsewhere", model="plain/different"),
+    offered={
+        "elsewhere": Offering(
+            endpoint="elsewhere",
+            format="anthropic",
+            url=None,
+            models=(Listed(id="plain/different", label="Different", provider="plain"),),
+        )
+    },
+    default=Choice(endpoint="elsewhere", model="plain/different"),
 )
 
 
-def starting_form(said: str, chosen: Choice = DEFAULT_CHOICE) -> dict[str, str]:
-    """What the new-chat form posts: a message and the pair chosen to answer it."""
-    return {"prompt": said, "profile": chosen.profile, "model": chosen.model}
+def starting_form(said: str, chosen: Choice = DEFAULT_CHOICE, title: str | None = None) -> dict[str, str]:
+    """
+    What the new-session form posts: a message, the pair chosen to answer it, and maybe a name.
+
+    The name is omitted when it is `None`, which is what a browser sends for a field left empty:
+    `parse_qs` drops empty values, so an untouched box never reaches the handler as a field at all.
+    """
+    posted = {"prompt": said, "endpoint": chosen.endpoint, "model": chosen.model}
+    return posted if title is None else {**posted, TITLE_FIELD: title}
 
 
 class TestReadingAForm:
@@ -203,10 +219,55 @@ class TestTheConsole:
     async def test_the_start_page_offers_every_profile_and_the_defaults_models(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
             answered = await caller.get("/")
-        for name in CONFIG.profiles:
+        for name in CONFIG.endpoints:
             assert f'value="{name}"' in answered.text
-        assert 'value="ripe/careful"' in answered.text, "the default profile's second model"
-        assert 'value="ripe/fast" selected' in answered.text, "the first it listed, preselected"
+        assert 'value="ripe/careful"' in answered.text, "the default endpoint's second model"
+        assert 'value="ripe/fast" checked' in answered.text, "the first it listed, preselected"
+
+    async def test_a_session_is_named_by_the_box_when_one_is_given(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, "the first thing said", title="Reading the checkpointer")
+        found = await service.read(session)
+        assert found is not None
+        assert found.session.title == "Reading the checkpointer"
+
+    async def test_a_session_with_no_name_given_is_named_after_its_first_message(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The behaviour every session had before the field existed, and still the default."""
+        session = await a_session(app, "the first thing said")
+        found = await service.read(session)
+        assert found is not None
+        assert found.session.title == "the first thing said"
+
+    @pytest.mark.parametrize("given", ["", "   "], ids=["empty", "whitespace"])
+    async def test_an_empty_name_is_the_same_as_not_naming_it(self, app: ASGIApp, service: Service, given: str) -> None:
+        """
+        A box somebody tabbed through must not name a session after nothing.
+
+        `parse_qs` drops empty values, so an untouched field and an absent one already arrive
+        alike; whitespace is the case that would otherwise get through and title a session `"   "`.
+        """
+        session = await a_session(app, "the first thing said", title=given)
+        found = await service.read(session)
+        assert found is not None
+        assert found.session.title == "the first thing said"
+
+    async def test_a_given_name_is_cut_by_the_same_rule_a_message_is(self, app: ASGIApp, service: Service) -> None:
+        """
+        One rule about what a session name is, rather than one per way of arriving at one.
+
+        A sidebar seventeen rems wide can hold only so much, and a name typed into a box can be
+        arbitrarily long where one taken from a message was already cut.
+        """
+        session = await a_session(app, "hello", title="w " * 200)
+        found = await service.read(session)
+        assert found is not None
+        assert len(found.session.title) <= TITLE_LENGTH
+
+    async def test_the_start_page_offers_a_box_to_name_a_session(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert f'name="{TITLE_FIELD}"' in answered.text
 
     async def test_a_models_own_name_is_what_the_picker_shows(self, app: ASGIApp) -> None:
         """An endpoint that writes a name for a person is why the id is a value and not the text."""
@@ -223,8 +284,8 @@ class TestTheConsole:
         """
         async with calling(app) as caller:
             answered = await caller.get("/")
-        assert '<optgroup label="ripe">' in answered.text
-        assert '<optgroup label="wide">' in answered.text
+        assert '<h2 class="models__heading">ripe</h2>' in answered.text
+        assert '<h2 class="models__heading">wide</h2>' in answered.text
 
     async def test_changing_the_profile_asks_for_that_profiles_models(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
@@ -234,19 +295,19 @@ class TestTheConsole:
 
     async def test_the_models_fragment_answers_with_one_profiles_models(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            answered = await caller.get("/fragments/models?profile=gateway")
+            answered = await caller.get("/fragments/models?endpoint=gateway")
         assert answered.status == 200
         assert "<html" not in answered.text
         assert 'value="wide/steady"' in answered.text
-        assert "careful" not in answered.text, "'careful' belongs to the other profile"
+        assert "careful" not in answered.text, "'careful' belongs to the other endpoint"
 
     async def test_the_models_fragment_for_a_profile_nothing_offers_is_refused(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            answered = await caller.get("/fragments/models?profile=gone")
+            answered = await caller.get("/fragments/models?endpoint=gone")
         assert answered.status == 404
 
     async def test_a_session_records_the_pair_it_was_started_on(self, app: ASGIApp, service: Service) -> None:
-        chosen = Choice(profile="gateway", model="wide/steady")
+        chosen = Choice(endpoint="gateway", model="wide/steady")
         async with calling(app) as caller:
             answered = await caller.post("/sessions", starting_form("hello", chosen))
         session = answered.location.rsplit("/", 1)[-1]
@@ -257,7 +318,7 @@ class TestTheConsole:
     ) -> None:
         """A select is a suggestion the page made, not a constraint on what somebody can post."""
         async with calling(app) as caller:
-            answered = await caller.post("/sessions", starting_form("hello", Choice(profile="here", model="nope")))
+            answered = await caller.post("/sessions", starting_form("hello", Choice(endpoint="here", model="nope")))
         assert answered.status == 422
         assert await service.listed() == ()
 
@@ -265,9 +326,9 @@ class TestTheConsole:
         session = await a_session(app)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
-        assert f"{DEFAULT_CHOICE.profile}" in answered.text
+        assert f"{DEFAULT_CHOICE.endpoint}" in answered.text
         assert f"{DEFAULT_CHOICE.model}" in answered.text
-        assert 'name="profile"' not in answered.text, "a session's choice is fixed, so offering one would lie"
+        assert 'name="endpoint"' not in answered.text, "a session's choice is fixed, so offering one would lie"
 
     async def test_a_session_whose_profile_is_gone_says_so_and_stops_asking(
         self, app: ASGIApp, service: Service
@@ -276,14 +337,14 @@ class TestTheConsole:
         The one state a person cannot otherwise diagnose: a spinner that will never resolve.
 
         The worker cannot answer the session, so a page that kept polling would show a pending
-        panel forever with nothing saying why. Naming the profile is the whole of the fix, because
+        panel forever with nothing saying why. Naming the endpoint is the whole of the fix, because
         putting it back is what makes the conversation continue where it stopped.
         """
         session = await a_session(app)
         narrowed = replace(service, catalogues=Catalogues(current=OTHER_CATALOGUE))
         async with calling(build_app(already(narrowed))) as caller:
             answered = await caller.get(f"/sessions/{session}")
-        assert DEFAULT_CHOICE.profile in answered.text
+        assert DEFAULT_CHOICE.endpoint in answered.text
         assert "no longer declares" in answered.text
         assert "hx-get" not in answered.text, "a session nothing will answer must stop asking"
 
@@ -301,8 +362,15 @@ class TestTheConsole:
         """
         session = await a_session(app)
         thinned = Catalogue(
-            offered={DEFAULT_CHOICE.profile: (Listed(id="ripe/other", label="Other", family="ripe"),)},
-            default=Choice(profile=DEFAULT_CHOICE.profile, model="ripe/other"),
+            offered={
+                DEFAULT_CHOICE.endpoint: Offering(
+                    endpoint=DEFAULT_CHOICE.endpoint,
+                    format="anthropic",
+                    url=None,
+                    models=(Listed(id="ripe/other", label="Other", provider="ripe"),),
+                )
+            },
+            default=Choice(endpoint=DEFAULT_CHOICE.endpoint, model="ripe/other"),
         )
         narrowed = replace(service, catalogues=Catalogues(current=thinned))
         async with calling(build_app(already(narrowed))) as caller:

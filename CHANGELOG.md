@@ -28,40 +28,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `mainplate install` and `mainplate uninstall`, which converge and remove a user systemd unit
   pointing at the interpreter that ran them. Any `MAINPLATE_*` setting lives in an
   `EnvironmentFile` created `0600` on the first install and never overwritten.
-- Profiles in `config.toml`: an endpoint, the wire spoken to it (`anthropic` or `openai`), and a
-  credential. Each session records the profile and model it was created on and is answered on them
+- Endpoints in `config.yaml`: a URL, the API format spoken to it (`anthropic` or `openai`), and a
+  credential. Each session records the endpoint and model it was created on and is answered on them
   for life, so changing what is configured leaves existing conversations readable. Credentials are
   read from the `0600` file and handed to the SDK, so they never enter the process environment.
 - Model discovery: no models are configured anywhere. Each endpoint's own model-list API is asked
   what it serves, once before the console takes traffic and then on a timer, and the picker offers
   whatever comes back, grouped by the vendor each model comes from. A refresh that fails keeps the
-  models discovered earlier; a first read that fails is a startup failure naming the profile.
+  models discovered earlier; a first read that fails is a startup failure naming the endpoint.
   `default_model` names which one a new session starts on, defaulting to whatever the endpoint
   listed first. What the picker shows is what an endpoint *advertises*, which is narrower than what
   it will route, so an existing session on a model that never appears in the list is still
-  answered: only a missing profile stops one.
+  answered: only a missing endpoint stops one.
 - exe.dev support: on a VM with the built-in LLM integration, `mainplate install` discovers it
-  through the reflection integration and writes keyless profiles, so the box holds no credential
-  at all. One gateway gets one profile per wire, which between them reach Anthropic, OpenAI,
+  through the reflection integration and writes keyless endpoints, so the box holds no credential
+  at all. One gateway gets one endpoint per API format, which between them reach Anthropic, OpenAI,
   Fireworks, and xAI: around seventy models with nothing configured.
-- A thinking level on every session, chosen beside the profile and the model and fixed with them
+- A thinking level on every session, chosen beside the endpoint and the model and fixed with them
   for its life. Eight values, because saying nothing about thinking, asking for it to be off, and
   asking for it at the provider's own budget are three different requests rather than gradations of
   one. The effort names come from Pydantic AI's own type, so a level it adds reaches the picker
   without a change here. `default_thinking` names the one a new session starts on.
 - Forking: any turn can be branched into a new session that carries the turns before it, on a
-  different model, a different profile, or a different thinking level. A fork is a *copy* of an
+  different model, a different endpoint, or a different thinking level. A fork is a *copy* of an
   immutable prefix rather than a pointer into its parent, so each session's checkpoint stays the
   whole of its own conversation and neither can change what the other reads. The branch point is
   before the forked turn's message, which comes across editable and is asked again on the new
   model, so seeing a turn answered differently never means retyping the question. The sidebar draws
   the resulting tree, each fork under what it came from and labelled with the turn it left at.
-- A repository picker on the new-chat page, alongside the profile, model and thinking level. Where
+- A repository picker on the new-session page, alongside the endpoint, model and thinking level. Where
   the repositories come from is an interface (`forge.py`) with one implementation: on an exe.dev VM,
   `ExeDevGitHub` offers whatever GitHub integrations are attached, which needs no credential at all
   because exe.dev injects one at its own edge. Anywhere else no forge reaches anything, the picker
   does not appear, and the console is what it was before: a place to talk. A session may also choose
-  no repository, and a fork inherits its parent's rather than being offered another.
+  no repository. A fork may *attach* a repository to a session that had none, and may not *swap*
+  one for another: re-asking a turn against different files is a different question, where carrying
+  on with files where there were none is the ordinary shape of thinking something through and then
+  going to work on it.
 - Git snapshots: a session that picked a repository gets a worktree of its own and each
   turn records the tree it started on. Snapshots go through a shadow index, so nothing a reader can
   see moves - not their staged changes, not `HEAD`, not a branch, not `git log` - and are chained
@@ -73,3 +76,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Syntax highlighting on fenced code blocks, in the console's own palette rather than an imported
   theme. Only Pygments' own token classes survive sanitising, so a reply cannot paint itself as any
   part of the console's chrome.
+- A new-session page built around the choosing rather than around the box. The endpoints are cards
+  naming the API format each speaks and the URL each points at, which is what tells two endpoints
+  apart when one gateway answers both formats on one hostname; the models are cards carrying cost, context
+  window, output cap, capabilities and release date. Both are radio inputs inside labels, so the
+  whole card is the target and the page works with JavaScript off. The picker fills the middle of
+  the page and the message box sits under it, which is the arrangement a page with no conversation
+  on it wants.
+- An optional name for a session, in a field above the message box. Left empty, a session is named
+  after its first message exactly as before. A given name goes through the same rule, so there is
+  one answer to what a session name is rather than one per way of arriving at one.
+- A model reference database, off unless `config.yaml` names one under `model_reference`. No
+  gateway reached so far publishes a price anywhere in its model list, and coverage of everything
+  else is uneven: an endpoint describes its own vendor's models richly, forwards somebody else's record
+  verbatim for the ones it resells, and says nothing at all about the rest. So every fact on a card
+  comes from the one database instead, which is what lets two models on a page be compared. Records
+  are found by the routed `provider/model` id first and then by the model's canonical name upstream,
+  and a name two providers claim resolves to neither, so an ambiguous price is shown as no price
+  rather than as somebody's markup. `source` is fetched when it is a URL and read when it is a path,
+  so a machine with no outbound access can point at a file. It is read before the console is ready
+  and re-read on a timer, and unlike model discovery it can never stop the console starting: a
+  database that will not load costs a card its numbers and nothing else. Where one is configured and
+  has no record for a model, the card says so; where none is configured, nothing is reported as
+  missing, because nothing was asked.
+- Configuration is YAML (`config.yaml`) rather than TOML, and the vocabulary it uses is settled.
+  What the file declares is an **endpoint**: a `url`, the `format` spoken to it, and a credential.
+  The **provider** of a model (`anthropic`, `fireworks`, `xai`) is discovered rather than
+  configured and is deliberately not a level of that hierarchy, because the same provider appears
+  under more than one endpoint: every Fireworks model on exe.dev's gateway is listed by both of its
+  formats under one id. So the shape is `endpoint -> model`, with the provider the heading the
+  model cards are grouped under, and `format` means the same thing here as it does under
+  `model_reference`.

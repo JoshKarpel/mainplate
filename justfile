@@ -76,13 +76,27 @@ check:
     uv run pre-commit run --all-files
     uv run mypy
 
-[doc('Run the console in the foreground, on a database of its own')]
+# Both of these restart the console whenever anything under `src/mainplate` changes, which covers
+# the stylesheet and the script as well as the Python. The assets are inventoried once at startup,
+# deliberately, so a CSS edit is only visible to a *new* process: without a watcher, looking at a
+# styling change means stopping and starting the server by hand every time.
+#
+# It restarts the server, and does not reload the browser. A page has to be refreshed to be seen
+# again, which is one keystroke and is the whole of what this trades for needing no dev-only
+# script injected into a page that ships.
+#
+# `exec` so Ctrl-C reaches the watcher rather than the shell just spawned to run it, and the
+# default filter rather than `--filter python`, which would watch the code and ignore the
+# stylesheet that is the more common thing to be iterating on.
+WATCH := "uv run watchfiles --filter default"
+
+[doc('Run the console in the foreground, on a database of its own, restarting on any change')]
 serve *args:
-    uv run mainplate serve --port {{ DEV_PORT }} {{ args }}
+    exec {{ WATCH }} 'mainplate serve --port {{ DEV_PORT }} {{ args }}' src/mainplate
 
 [doc('Run it on a throwaway database, for poking at a page without touching real sessions')]
 demo *args:
-    uv run mainplate serve --port {{ DEV_PORT }} --database {{ DEMO_DATABASE }} {{ args }}
+    exec {{ WATCH }} 'mainplate serve --port {{ DEV_PORT }} --database {{ DEMO_DATABASE }} {{ args }}' src/mainplate
 
 # The same conversations the gallery renders, written into a real store so the console can be
 # driven rather than looked at: the sidebar reordering between branches, a fork actually being

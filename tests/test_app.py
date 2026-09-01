@@ -16,7 +16,7 @@ from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
-from mainplate.agent import Endpoints
+from mainplate.agent import Wires
 from mainplate.app import build_app
 from mainplate.app import open_console
 from mainplate.settings import Settings
@@ -56,13 +56,13 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
         return ModelResponse(parts=[TextPart("an answer")])
 
     shared = FunctionModel(respond)
-    endpoints = Endpoints(by_profile={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.profiles})
+    endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
 
     async with open_console(Settings(database=database), CONFIG, endpoints) as service:
         async with calling(build_app(already(service))) as caller:
             started = await caller.post(
                 "/sessions",
-                {"prompt": "hello", "profile": DEFAULT_CHOICE.profile, "model": DEFAULT_CHOICE.model},
+                {"prompt": "hello", "endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model},
             )
             assert started.status == 303
             session = started.location.rsplit("/", 1)[-1]

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from mainplate.config import read_config
 from mainplate.exe import Gateway
 from mainplate.install import SERVICE
 from mainplate.install import ProgramFailed
@@ -15,13 +16,14 @@ from mainplate.install import converge
 from mainplate.install import data_home
 from mainplate.install import default_database
 from mainplate.install import remove
+from mainplate.install import render_config
 from mainplate.install import run
 from mainplate.install import running_executable
 from mainplate.install import usable_config
 from mainplate.install import write_config
 from mainplate.install import write_environment
 from mainplate.install import write_unit
-from mainplate.profiles import read_config
+from mainplate.reference import MODELS_DEV
 
 
 @pytest.fixture
@@ -103,7 +105,7 @@ class TestRenderingTheUnit:
     def test_the_unit_and_its_two_files_sit_where_xdg_says(self, unit: Unit) -> None:
         assert unit.path == unit.config_home / "systemd" / "user" / f"{SERVICE}.service"
         assert unit.environment == unit.config_home / SERVICE / "environment"
-        assert unit.config == unit.config_home / SERVICE / "config.toml"
+        assert unit.config == unit.config_home / SERVICE / "config.yaml"
 
 
 class TestXdgPaths:
@@ -147,12 +149,12 @@ class TestWritingTheFiles:
 
     def test_a_fresh_config_is_created_private_to_its_owner(self, tmp_path: Path) -> None:
         """It holds credentials, so it is 0600 like the environment file and unlike the unit."""
-        path = tmp_path / "config" / "mainplate" / "config.toml"
+        path = tmp_path / "config" / "mainplate" / "config.yaml"
         assert write_config(path, ()) is True
         assert path.stat().st_mode & 0o777 == 0o600
 
     def test_a_config_that_exists_is_never_overwritten(self, tmp_path: Path) -> None:
-        path = tmp_path / "config.toml"
+        path = tmp_path / "config.yaml"
         path.write_text("mine")
         assert write_config(path, ()) is False
         assert path.read_text() == "mine"
@@ -161,28 +163,51 @@ class TestWritingTheFiles:
         """
         A template that parsed would be worse than one that does not.
 
-        A placeholder profile would start a console that fails on the first message; refusing at
+        A placeholder endpoint would start a console that fails on the first message; refusing at
         boot is the loud version, and it is what `startable` reports so the install can say so.
         """
-        path = tmp_path / "config.toml"
+        path = tmp_path / "config.yaml"
         write_config(path, ())
         assert usable_config(path) is False
 
     def test_a_discovered_gateway_is_written_as_keyless_profiles_that_start(self, tmp_path: Path) -> None:
         """
-        One hostname, one profile per wire, because each reaches models the other does not.
+        One hostname, one endpoint per wire, because each reaches models the other does not.
 
         The Anthropic wire is the default of the two, since its list is the one written to be read:
         every entry carries a display name and none of them is an embedding model.
         """
-        path = tmp_path / "config.toml"
+        path = tmp_path / "config.yaml"
         write_config(path, (Gateway(name="llm", base_url="https://llm.int.exe.xyz"),))
         assert usable_config(path) is True
         config = read_config(path)
         assert config.default == "llm-anthropic"
-        assert config.profiles["llm-anthropic"].base_url == "https://llm.int.exe.xyz"
-        assert config.profiles["llm-openai"].base_url == "https://llm.int.exe.xyz/v1", "only the OpenAI SDK wants /v1"
-        assert all(profile.api_key is None for profile in config.profiles.values())
+        assert config.endpoints["llm-anthropic"].url == "https://llm.int.exe.xyz"
+        assert config.endpoints["llm-openai"].url == "https://llm.int.exe.xyz/v1", "only the OpenAI SDK wants /v1"
+        assert all(endpoint.api_key is None for endpoint in config.endpoints.values())
+
+    def test_a_written_config_points_at_a_model_reference(self, tmp_path: Path) -> None:
+        """
+        Written active rather than commented out, because it is most of what a model card shows.
+
+        No gateway reached so far publishes a price, so a console installed without this offers
+        models by name and id alone - and a setting nobody knows exists is a setting nobody enables.
+        """
+        path = tmp_path / "config.yaml"
+        write_config(path, (Gateway(name="llm", base_url="https://llm.int.exe.xyz"),))
+        reference = read_config(path).model_reference
+        assert reference is not None
+        assert reference.source == MODELS_DEV
+        assert reference.format == "models.dev"
+
+    def test_the_reference_can_be_deleted_without_taking_anything_else_with_it(self, tmp_path: Path) -> None:
+        """The comment above it promises this, so a console with no outbound access can honour it."""
+        rendered = render_config((Gateway(name="llm", base_url="https://llm.int.exe.xyz"),))
+        without = rendered[: rendered.index("model_reference:")]
+        path = tmp_path / "config.yaml"
+        path.write_text(without)
+        assert usable_config(path) is True
+        assert read_config(path).model_reference is None
 
 
 class TestConverging:

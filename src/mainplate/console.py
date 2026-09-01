@@ -30,13 +30,14 @@ from mainplate.conversation import THINKING_FIELD
 from mainplate.pages import Links
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
-from mainplate.pages import model_select
+from mainplate.pages import model_cards
 from mainplate.pages import refusal_page
 from mainplate.pages import session_page
 from mainplate.pages import stalled_by
 from mainplate.pages import start_page
 from mainplate.pages import transcript_region
 from mainplate.service import Service
+from mainplate.sessions import TITLE_FIELD
 from mainplate.thinking import DEFAULT_THINKING
 from mainplate.thinking import UnknownThinking
 from mainplate.thinking import thinking_named
@@ -51,8 +52,8 @@ LOCATION = b"location"
 LONGEST_PROMPT = 100_000
 
 session_id = path_param("session", STR)
-# The profile whose models to render, which is the value of the select that asks for them.
-of_profile = query_param("profile", once(str), schema={"type": "string"})
+# The endpoint whose models to render, which is the value of the select that asks for them.
+of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # Which turn a fork would start at, which is the first turn the branch does not inherit.
 at_turn = query_param("at", once(int), schema={"type": "integer"})
 
@@ -83,28 +84,33 @@ prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="applicat
 
 def parse_form_start(raw: bytes) -> Started:
     """
-    The whole of what the new-chat form carries: a message, and what to answer it with.
+    The whole of what the new-session form carries: a message, what to answer it with, and a name.
 
     Parsed together rather than in two extractors because they arrive in one body and are refused
-    on one condition: a form that names a profile without a message is not half a request, it is
+    on one condition: a form that names an endpoint without a message is not half a request, it is
     not a request. Whether the pair is *configured* is not asked here, because this layer has no
     configuration; the handler asks that of the `Service` and refuses with a status of its own.
 
-    The thinking level is the one field this layer can settle by itself, because unlike a profile
+    The thinking level is the one field this layer can settle by itself, because unlike an endpoint
     and a model it is a closed set rather than something discovered. An absent field is the
     configured default rather than a refusal, so a form posted by something that predates the
     control still names a session's whole choice.
     """
     said = parse_form_prompt(raw)
     fields = parse_qs(raw.decode("utf-8", errors="replace"))
-    profile = fields.get("profile", [""])[0].strip()
+    endpoint = fields.get("endpoint", [""])[0].strip()
     model = fields.get("model", [""])[0].strip()
-    if not profile or not model:
-        raise NotAMessage("a message needs a profile and a model to be answered on")
+    if not endpoint or not model:
+        raise NotAMessage("a message needs an endpoint and a model to be answered on")
     return Started(
         said=said,
+        # Optional, and an empty box is the same as no field at all: `parse_qs` drops empty values,
+        # so both arrive here as nothing and both mean "name it after what I said". The length is
+        # bounded by the message bound above, and cut to a name by `Service.start`, which is where
+        # the one rule about what a session name is already lives.
+        title=fields.get(TITLE_FIELD, [""])[0].strip() or None,
         chosen=Choice(
-            profile=profile,
+            endpoint=endpoint,
             model=model,
             repository=fields.get(REPOSITORY_FIELD, [""])[0].strip() or None,
             thinking=posted_thinking(fields),
@@ -134,6 +140,9 @@ class Started:
     said: str
     chosen: Choice
 
+    title: str | None = None
+    """What to call it, or nothing at all to name it after its first message as every session was."""
+
 
 starting = body(parse_form_start, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
 
@@ -162,16 +171,23 @@ def parse_form_fork(raw: bytes) -> Forking:
     if len(raw) > LONGEST_PROMPT:
         raise NotAMessage(f"a message may be at most {LONGEST_PROMPT} bytes")
     fields = parse_qs(raw.decode("utf-8", errors="replace"))
-    profile = fields.get("profile", [""])[0].strip()
+    endpoint = fields.get("endpoint", [""])[0].strip()
     model = fields.get("model", [""])[0].strip()
     at = fields.get("at", [""])[0].strip()
-    if not profile or not model:
-        raise NotAMessage("a fork needs a profile and a model to be answered on")
+    if not endpoint or not model:
+        raise NotAMessage("a fork needs an endpoint and a model to be answered on")
     if not at.isdigit():
         raise NotAMessage("a fork needs the turn it forks at")
     return Forking(
         at=int(at),
-        chosen=Choice(profile=profile, model=model, thinking=posted_thinking(fields)),
+        chosen=Choice(
+            endpoint=endpoint,
+            model=model,
+            # Only meaningful for a fork of a session that has no repository, and the service is
+            # what decides that: one already in a repository keeps it whatever arrives here.
+            repository=fields.get(REPOSITORY_FIELD, [""])[0].strip() or None,
+            thinking=posted_thinking(fields),
+        ),
         said=fields.get("prompt", [""])[0].strip() or None,
     )
 
@@ -217,13 +233,22 @@ def seeing(where: str) -> Response:
 
 @get("/", summary="Start a session")
 async def start_here(service: Service) -> Response:
-    return page_response(200, start_page(LINKS, await service.listed(), service.catalogues.current, service.reachable))
+    return page_response(
+        200,
+        start_page(
+            LINKS,
+            await service.listed(),
+            service.catalogues.current,
+            service.reachable,
+            service.references.current,
+        ),
+    )
 
 
 @post("/sessions", starting, summary="Say the first thing, which is what creates a session")
 async def start(service: Service, started: Started) -> Response:
     """
-    Mint a session on the chosen profile and hand it its first message.
+    Mint a session on the chosen endpoint and hand it its first message.
 
     An ordinary form post rather than an htmx one, because this is the request that changes which
     session the browser is looking at, and htmx never sees a redirect: the browser follows it
@@ -235,18 +260,18 @@ async def start(service: Service, started: Started) -> Response:
     new session is held to a pair the picker actually rendered.
 
     It is the one place the *pair* is checked, and deliberately stricter than what stops an
-    existing session, which is a missing profile alone. The asymmetry is the point: a conversation
+    existing session, which is a missing endpoint alone. The asymmetry is the point: a conversation
     already under way should not be broken by a model quietly leaving a list, while a new one has
     no reason to start on something nobody was shown.
     """
-    if not service.catalogues.current.offers(started.chosen.profile, started.chosen.model):
-        return page_response(422, refusal_page(LINKS, 422, f"no profile on offer serves {started.chosen.model}"))
+    if not service.catalogues.current.offers(started.chosen.endpoint, started.chosen.model):
+        return page_response(422, refusal_page(LINKS, 422, f"no endpoint on offer serves {started.chosen.model}"))
     # The repository is held to what the picker offered for the same reason the pair is, and the
     # check is only made where one was asked for: a session with no repository is an ordinary
     # session, and this console answered nothing else until repositories existed.
     if started.chosen.repository is not None and not service.reaches(started.chosen.repository):
         return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {started.chosen.repository}"))
-    session = await service.start(started.said, started.chosen)
+    session = await service.start(started.said, started.chosen, started.title)
     return seeing(LINKS.to_session(session.id))
 
 
@@ -266,7 +291,18 @@ async def fork_form(service: Service, session: str, at: int) -> Response:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     if not 0 <= at <= found.said.turns:
         return page_response(404, refusal_page(LINKS, 404, f"session {session} has no turn {at}"))
-    return page_response(200, fork_page(LINKS, await service.listed(), found, at, service.catalogues.current))
+    return page_response(
+        200,
+        fork_page(
+            LINKS,
+            await service.listed(),
+            found,
+            at,
+            service.catalogues.current,
+            service.reachable,
+            service.references.current,
+        ),
+    )
 
 
 @post(t"/sessions/{session_id}/forks", session_id, forking, summary="Fork a session at one of its turns")
@@ -281,28 +317,35 @@ async def fork(service: Service, session: str, branch: Forking) -> Response:
     A `303` for the reason `start` returns one: this created something, and the browser must arrive
     at it with a `GET` so a refresh does not branch again.
     """
-    if not service.catalogues.current.offers(branch.chosen.profile, branch.chosen.model):
-        return page_response(422, refusal_page(LINKS, 422, f"no profile on offer serves {branch.chosen.model}"))
+    if not service.catalogues.current.offers(branch.chosen.endpoint, branch.chosen.model):
+        return page_response(422, refusal_page(LINKS, 422, f"no endpoint on offer serves {branch.chosen.model}"))
+    # A repository is only ever *attached* here, so it is checked on the same terms a new session's
+    # is. Whether it may be attached at all is the service's, since only it knows what the parent
+    # is already in; a posted repository for a session that has one is ignored rather than refused.
+    if branch.chosen.repository is not None and not service.reaches(branch.chosen.repository):
+        return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {branch.chosen.repository}"))
     forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said)
     if forked is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return seeing(LINKS.to_session(forked.id))
 
 
-@get("/fragments/models", of_profile, summary="One profile's model select")
-async def profile_models(service: Service, profile: str) -> Response:
+@get("/fragments/models", of_endpoint, summary="One endpoint's model cards")
+async def endpoint_models(service: Service, endpoint: str) -> Response:
     """
-    The model select for a profile, which is what changing the profile swaps in.
+    The model cards for an endpoint, which is what changing the endpoint swaps in.
 
     A fragment rather than a script over a table of models embedded in the page: what an endpoint
     offers is discovered and is refreshed while the page is open, so a list serialized into the
-    document at render time is the one thing guaranteed to go stale, and a select rebuilt from the
-    server cannot drift from what the form will actually be checked against.
+    document at render time is the one thing guaranteed to go stale, and cards rebuilt from the
+    server cannot drift from what the form will actually be checked against. The reference is read
+    here for the same reason, out of the holder the refresher writes, so a swap that lands after one
+    has been read carries the same facts the first render would have.
     """
-    found = service.catalogues.current.models_of(profile)
+    found = service.catalogues.current.models_of(endpoint)
     if found is None:
-        return page_response(404, refusal_page(LINKS, 404, f"no profile {profile}"))
-    return page_response(200, fragment(model_select(found)))
+        return page_response(404, refusal_page(LINKS, 404, f"no endpoint {endpoint}"))
+    return page_response(200, fragment(model_cards(found, service.references.current)))
 
 
 @get(t"/sessions/{session_id}", session_id, summary="One session, whole")
@@ -356,7 +399,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start,
     show_session,
     session_fragment,
-    profile_models,
+    endpoint_models,
     fork_form,
     fork,
     say,
@@ -368,7 +411,7 @@ LINKS = Links(
     session=show_session,
     say=say,
     session_fragment=session_fragment,
-    profile_models=profile_models,
+    endpoint_models=endpoint_models,
     fork_form=fork_form,
     fork=fork,
     assets=ASSETS,

@@ -25,16 +25,17 @@ from without_asgi import ASGIApp
 from without_durability.stepwise import Run
 
 from mainplate.agent import Choice
-from mainplate.agent import Endpoints
 from mainplate.agent import Listed
+from mainplate.agent import Wires
 from mainplate.agent import agent_for
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Catalogues
+from mainplate.catalogue import Offering
+from mainplate.config import Config
+from mainplate.config import Endpoint
 from mainplate.conversation import conversing
-from mainplate.profiles import Config
-from mainplate.profiles import Profile
 from mainplate.service import Service
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
@@ -64,36 +65,43 @@ class Ticking:
 # slow machine into a failing one.
 LEASE = timedelta(seconds=30)
 
-# Two profiles, so a test can tell "the default" from "a choice somebody made" and so the model
-# picker has something to cascade between. No models here, because a profile no longer names any:
+# Two endpoints, so a test can tell "the default" from "a choice somebody made" and so the model
+# picker has something to cascade between. No models here, because an endpoint no longer names any:
 # what is on offer comes from `OFFERED` below, which is what a stand-in endpoint says when asked.
 CONFIG = Config(
     default="here",
-    profiles={
-        "here": Profile(provider="anthropic", api_key=SecretStr("sk-test")),
-        "gateway": Profile(provider="openai", base_url="https://llm.example.invalid/v1"),
+    endpoints={
+        "here": Endpoint(format="anthropic", api_key=SecretStr("sk-test")),
+        "gateway": Endpoint(format="openai", url="https://llm.example.invalid/v1"),
     },
 )
 
-# What the stand-in endpoints say they serve. Two families under one profile, because grouping the
+# What the stand-in endpoints say they serve. Two families under one endpoint, because grouping the
 # picker by family is a rendering with a branch in it, and a single-family fixture would exercise
-# the branch without ever showing it doing anything. The same model under both profiles is the
+# the branch without ever showing it doing anything. The same model under both endpoints is the
 # real case a gateway produces, where one wire and the other reach the same upstream.
 OFFERED: dict[str, tuple[Listed, ...]] = {
     "here": (
-        Listed(id="ripe/fast", label="Fast", family="ripe"),
-        Listed(id="ripe/careful", label="Careful", family="ripe"),
-        Listed(id="wide/steady", label="Steady", family="wide"),
+        Listed(id="ripe/fast", label="Fast", provider="ripe"),
+        Listed(id="ripe/careful", label="Careful", provider="ripe"),
+        Listed(id="wide/steady", label="Steady", provider="wide"),
     ),
-    "gateway": (Listed(id="wide/steady", label="Steady", family="wide"),),
+    "gateway": (Listed(id="wide/steady", label="Steady", provider="wide"),),
 }
 
-CHOICES = tuple(Choice(profile=name, model=model.id) for name, models in OFFERED.items() for model in models)
+CHOICES = tuple(Choice(endpoint=name, model=model.id) for name, models in OFFERED.items() for model in models)
 
-# The default is the first thing the default profile listed, since `CONFIG` names no `default_model`.
-DEFAULT_CHOICE = Choice(profile=CONFIG.default, model=OFFERED[CONFIG.default][0].id)
+# The default is the first thing the default endpoint listed, since `CONFIG` names no `default_model`.
+DEFAULT_CHOICE = Choice(endpoint=CONFIG.default, model=OFFERED[CONFIG.default][0].id)
 
-CATALOGUE = Catalogue(offered=OFFERED, default=DEFAULT_CHOICE)
+
+def offering(name: str) -> Offering:
+    """One endpoint as the catalogue holds it, taking its endpoint's facts from `CONFIG` itself."""
+    declared = CONFIG.endpoints[name]
+    return Offering(endpoint=name, format=declared.format, url=declared.url, models=OFFERED[name])
+
+
+CATALOGUE = Catalogue(offered={name: offering(name) for name in OFFERED}, default=DEFAULT_CHOICE)
 
 INSTRUCTIONS = "Answer as a fixture would."
 
@@ -141,16 +149,16 @@ class Provider:
 
         return FunctionModel(respond)
 
-    def endpoints(self) -> Endpoints:
+    def endpoints(self) -> Wires:
         """
-        Every profile `CONFIG` declares, all answered by one stand-in model.
+        Every endpoint `CONFIG` declares, all answered by one stand-in model.
 
-        One model behind every profile rather than one each, so `asked` counts calls across the
+        One model behind every endpoint rather than one each, so `asked` counts calls across the
         whole configuration: what a test wants to know is how often the provider was reached, not
         which of two identical fakes reached it.
         """
         shared = self.model()
-        return Endpoints(by_profile={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.profiles})
+        return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
 
     def agent(self) -> Agent[None, str]:
         """

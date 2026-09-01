@@ -29,10 +29,11 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Final
 
+from mainplate.config import BadConfig
+from mainplate.config import config_path
+from mainplate.config import read_config
 from mainplate.exe import Gateway
-from mainplate.profiles import BadConfig
-from mainplate.profiles import config_path
-from mainplate.profiles import read_config
+from mainplate.reference import MODELS_DEV
 
 SERVICE: Final = "mainplate"
 
@@ -52,7 +53,7 @@ Type=exec
 # nothing more.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Any MAINPLATE_* process setting, and whichever key an SDK falls back to reading for itself.
-# Provider credentials live in config.toml instead, where they are read from the file rather than
+# Provider credentials live in config.yaml instead, where they are read from the file rather than
 # put in the environment. Not optional (`-`), so a deleted file is a start that fails loudly.
 EnvironmentFile={environment}
 ExecStart={executable} -m mainplate serve --host {host} --port {port} --database {database}
@@ -66,9 +67,9 @@ WantedBy=default.target
 # What a fresh environment file says, which is what it is for and nothing that is a value. It is
 # written once and never overwritten, so this is the only chance to say what belongs in it.
 #
-# It is no longer where the credential goes: `config.toml` is, per profile, and a key read from a
+# It is no longer where the credential goes: `config.yaml` is, per endpoint, and a key read from a
 # file and handed to the SDK never enters this process's environment at all. What is left here is
-# the fallback each SDK does for itself, for a profile naming neither a key nor an endpoint, and
+# the fallback each SDK does for itself, for an endpoint naming neither a key nor an endpoint, and
 # any `MAINPLATE_*` process setting.
 ENVIRONMENT: Final = """\
 # Read by the mainplate user service, and by nothing else on this machine.
@@ -76,8 +77,8 @@ ENVIRONMENT: Final = """\
 # systemd parses this itself: NAME=value per line, no `export`, no shell quoting or expansion.
 # Keep it 0600.
 #
-# Provider credentials belong in config.toml, per profile, where they are read from the file and
-# never enter the environment. These are only the fallback for a profile that names no key and no
+# Provider credentials belong in config.yaml, per endpoint, where they are read from the file and
+# never enter the environment. These are only the fallback for an endpoint that names no key and no
 # endpoint of its own, which is what each SDK reads for itself: one per wire.
 
 # ANTHROPIC_API_KEY=
@@ -88,29 +89,32 @@ ENVIRONMENT: Final = """\
 # MAINPLATE_INSTRUCTIONS=You are a helpful assistant.
 """
 
-# The configuration a machine gets when it has no gateway to point at: one profile, commented out,
-# so the file says what a profile is and refuses to start until somebody means it. Refusing is the
-# point, since a default profile with a placeholder key would start a console that fails on the
+# The configuration a machine gets when it has no gateway to point at: one endpoint, commented out,
+# so the file says what an endpoint is and refuses to start until somebody means it. Refusing is the
+# point, since a default endpoint with a placeholder key would start a console that fails on the
 # first message instead of at boot.
 TEMPLATE: Final = """\
 # Which endpoints mainplate can answer on, and which one a new session starts on.
 #
-# A profile is where requests go, which wire is spoken, and how to authenticate. The models are
-# not part of one and are not listed here: mainplate asks each endpoint what it serves and offers
-# whatever comes back. A session records a profile *and* a model, and both are fixed for its life.
+# An endpoint is where requests go, which API format is spoken to it, and how to authenticate. The
+# models are not part of one and are not listed here: mainplate asks each endpoint what it serves
+# and offers whatever comes back. A session records an endpoint *and* a model, and both are fixed
+# for its life.
 #
 # Uncomment one and set `default` to its name. This file holds credentials, so keep it 0600.
 
-# default = "anthropic"
+# default: anthropic
 #
-# # Optional: which of the default profile's models a new session starts on. Left out, it is
+# # Optional: which of the default endpoint's models a new session starts on. Left out, it is
 # # whichever the endpoint lists first, which for most gateways is their newest.
-# default_model = "claude-opus-5"
+# default_model: claude-opus-5
 #
-# [profiles.anthropic]
-# provider = "anthropic"
-# api_key  = "sk-ant-..."          # omit to fall back to ANTHROPIC_API_KEY in the environment
-"""
+# endpoints:
+#   anthropic:
+#     format: anthropic
+#     # omit api_key to fall back to ANTHROPIC_API_KEY in the environment
+#     api_key: sk-ant-...
+{reference}"""
 
 # What a discovered exe.dev gateway is written as. No key, because there is nothing to write: the
 # credential is injected at exe.dev's edge and the VM never holds one.
@@ -121,26 +125,50 @@ GATEWAY: Final = """\
 # Nothing lists models either: mainplate asks each endpoint what it serves, at startup and on a
 # timer after that, and offers whatever comes back.
 #
-# One hostname, two profiles, because exe.dev answers both wires there and each reaches models the
-# other does not. The Anthropic wire serves every Claude and the Fireworks models; the OpenAI wire
-# serves GPT, Grok, and the Fireworks models again. Note the `/v1`, which only the OpenAI SDK wants:
-# it appends `/chat/completions` where the Anthropic SDK appends `/v1/messages`.
+# One hostname, two endpoints, because exe.dev answers both API formats there and each reaches
+# models the other does not. The Anthropic format serves every Claude and the Fireworks models; the
+# OpenAI format serves GPT, Grok, and the Fireworks models again. Note the `/v1`, which only the
+# OpenAI SDK wants: it appends `/chat/completions` where the Anthropic SDK appends `/v1/messages`.
+#
+# The *provider* of a model (anthropic, fireworks, xai) is not configured here and is not a level of
+# this file: it is discovered, and the same provider shows up under both endpoints.
 #
 # A team integration answers at `https://<name>.team.exe.xyz` rather than `.int.`.
 
-default = "{default}"
+default: {default}
 
-{profiles}"""
+endpoints:
+{endpoints}{reference}"""
 
-GATEWAY_PROFILE: Final = """\
-[profiles.{name}-anthropic]
-provider = "anthropic"
-base_url = "{base_url}"
-
-[profiles.{name}-openai]
-provider = "openai"
-base_url = "{base_url}/v1"
+# The one thing in a written configuration file that reaches a third party, so it is written with
+# the sentence that turns it off directly above it. Active rather than commented out, because the
+# facts it fetches are most of what the model picker shows and a setting nobody knows about is a
+# setting nobody turns on; deletable in four lines, because a console pointed at a private
+# repository on a machine with no outbound access is a case this project means to support.
+REFERENCE: Final = """
+# Where to look up what the endpoints do not publish: what a model costs, how much it reads, and
+# what it can do. No gateway reached so far publishes a price at all, so without this the model
+# cards show a name and an id and nothing else.
+#
+# `source` is fetched when it is a URL and read when it is a path, so a machine with no outbound
+# access can point at a file it already has. Delete these four lines and mainplate calls nobody but
+# the endpoints above.
+model_reference:
+  source: {source}
+  format: models.dev
 """
+
+# Two entries per gateway, indented to sit under `endpoints:`.
+GATEWAY_ENDPOINTS: Final = """\
+  {name}-anthropic:
+    format: anthropic
+    url: {base_url}
+
+  {name}-openai:
+    format: openai
+    url: {base_url}/v1
+"""
+
 
 # What systemctl is asked, as the only shape of call this makes: arguments after `--user`, and the
 # whole result back. Injected rather than reached for, so a test drives convergence without a
@@ -240,7 +268,7 @@ class Unit:
 
     @property
     def config(self) -> Path:
-        """Where the profiles live, which is the file a person edits to add an endpoint or a key."""
+        """Where the endpoints live, which is the file a person edits to add an endpoint or a key."""
         return config_path(self.config_home)
 
     @property
@@ -251,9 +279,9 @@ class Unit:
         The unit is world-readable by design (systemd reads it, and so does anyone listing your
         units); this is 0600. What a key put here does not buy is the thing the secrets guidance
         actually wants, since the value becomes a process environment variable, inherited by every
-        child and readable at `/proc/<pid>/environ`. That is why a profile's `api_key` is the way
-        to hand one over: it is read from `config.toml` at the point of use and never enters this
-        environment at all. What is left here is each SDK's own fallback, for a profile naming
+        child and readable at `/proc/<pid>/environ`. That is why an endpoint's `api_key` is the way
+        to hand one over: it is read from `config.yaml` at the point of use and never enters this
+        environment at all. What is left here is each SDK's own fallback, for an endpoint naming
         neither a key nor an endpoint, and any `MAINPLATE_*` process setting.
         """
         return self.config_home / SERVICE / "environment"
@@ -416,16 +444,19 @@ def render_config(gateways: Sequence[Gateway]) -> str:
     The configuration file for a machine with these gateways, or the template when it has none.
 
     Rendered rather than serialized, because what a first configuration file is *for* is being
-    read and edited: a `tomllib` round trip would produce a valid file with none of the comments
-    explaining what a profile is, which is most of what a person opening it needs.
+    read and edited: a `yaml.safe_dump` round trip would produce a valid file with none of the comments
+    explaining what an endpoint is, which is most of what a person opening it needs.
     """
+    reference = REFERENCE.format(source=MODELS_DEV)
     if not gateways:
-        return TEMPLATE
-    profiles = "\n".join(GATEWAY_PROFILE.format(name=gateway.name, base_url=gateway.base_url) for gateway in gateways)
+        return TEMPLATE.format(reference=reference)
+    endpoints = "\n".join(
+        GATEWAY_ENDPOINTS.format(name=gateway.name, base_url=gateway.base_url) for gateway in gateways
+    )
     # The Anthropic wire is the default of the two, because its list is the one written for a
     # person to read: every entry carries a display name, and none of them is an embedding model
     # or the same model under a second id.
-    return GATEWAY.format(default=f"{gateways[0].name}-anthropic", profiles=profiles)
+    return GATEWAY.format(default=f"{gateways[0].name}-anthropic", endpoints=endpoints, reference=reference)
 
 
 def write_config(path: Path, gateways: Sequence[Gateway]) -> bool:
@@ -451,7 +482,7 @@ def usable_config(path: Path) -> bool:
 
     Asked by parsing it rather than by looking for a line, because a configuration file is
     structured and the failure worth catching is "this will not boot": the template parses as
-    valid TOML and declares no profiles, which is exactly the state a fresh install leaves and
+    valid TOML and declares no endpoints, which is exactly the state a fresh install leaves and
     exactly the state worth mentioning.
     """
     try:

@@ -12,7 +12,7 @@
 # conversations in it adds to them without touching what is there.
 #
 # It seeds only *settled* sessions. A turn left unanswered would be picked up by the worker the
-# moment the console started, which on a real profile means a real request and real money for a
+# moment the console started, which on a real endpoint means a real request and real money for a
 # fixture nobody asked to have answered. Send a message yourself to see that path.
 
 from __future__ import annotations
@@ -45,9 +45,9 @@ LEASE = timedelta(minutes=10)
 
 # What each seeded session is on. Different models across the branches, because that is the whole
 # point of a branch: the sidebar shows one conversation answered three ways.
-ON_SONNET = Choice(profile="llm-anthropic", model="anthropic/claude-sonnet-4-6", thinking="high")
-ON_OPUS = Choice(profile="llm-anthropic", model="anthropic/claude-opus-4-8", thinking="xhigh")
-ON_GPT = Choice(profile="llm-openai", model="openai/gpt-5.5", thinking=None)
+ON_SONNET = Choice(endpoint="llm-anthropic", model="anthropic/claude-sonnet-4-6", thinking="high")
+ON_OPUS = Choice(endpoint="llm-anthropic", model="anthropic/claude-opus-4-8", thinking="xhigh")
+ON_GPT = Choice(endpoint="llm-openai", model="openai/gpt-5.5", thinking=None)
 
 
 def planted() -> tuple[tuple[Session, Choice, dict[str, object]], ...]:
@@ -87,7 +87,7 @@ async def seed(database: Path) -> None:
             wrote = await plant(service, session, chosen, checkpoint)
             origin = f" (forked from turn {session.forked.turn})" if session.forked else ""
             print(f"  {'wrote  ' if wrote else 'skipped'} {session.id[:12]}… {session.title}{origin}")
-    print(f"\n{database} is ready. `just demo` serves it; the fixtures are on {ON_SONNET.profile}.")
+    print(f"\n{database} is ready. `just demo` serves it; the fixtures are on {ON_SONNET.endpoint}.")
 
 
 if __name__ == "__main__":

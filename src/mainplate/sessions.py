@@ -24,6 +24,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
+from typing import Final
 
 from without_durability_sqlite import Database
 
@@ -61,6 +62,12 @@ ID_BYTES = 16
 # How much of the opening line a session is named after. Cut here rather than at render time so
 # the row holds the name and the page holds no rule about how to make one.
 TITLE_LENGTH = 80
+
+# What the field naming a session is called on the form that creates one. Here rather than beside
+# the other posted field names in `conversation.py`, because those are *checkpoint* keys that a form
+# happens to share and this one is not: a title goes to the session index and never into what was
+# said. Named once so the page that renders the input and the handler that reads it cannot drift.
+TITLE_FIELD: Final = "title"
 
 
 @dataclass(frozen=True, slots=True)

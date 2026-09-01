@@ -22,11 +22,12 @@ const [baseUrl, outDir, ...requested] = process.argv.slice(2);
 
 const targets = (requested.length ? requested : [
   "start.html",
+  "start-unreferenced.html",
   "session.html",
   "waiting.html",
   "stalled.html",
   "forking.html",
-  "forking-start.html",
+  "forking-attach.html",
 ]).map((each) => {
   const [file, fragment] = each.split("#");
   return { file, fragment, name: fragment ? `${file.replace(/\.html$/, "")}-${fragment}` : file.replace(/\.html$/, "") };

@@ -1,4 +1,4 @@
-# What every profile currently offers, asked of the endpoints rather than read out of a file.
+# What every endpoint currently offers, asked of the endpoints rather than read out of a file.
 #
 # This is the one piece of process state that changes under a reader, and it is worth being exact
 # about why that does not contradict the checkpoint being the conversation. Nothing here is
@@ -28,9 +28,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from mainplate.agent import Choice
-from mainplate.agent import Endpoints
 from mainplate.agent import Listed
-from mainplate.profiles import Config
+from mainplate.agent import Wires
+from mainplate.config import Config
+from mainplate.config import Format
 from mainplate.thinking import thinking_named
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,40 @@ class NothingOffered(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class Offering:
+    """
+    One endpoint as the picker shows it: where it points, what it speaks, and what it serves.
+
+    The endpoint's own facts travel with its models because the question a person is answering is
+    one question. Two gateways can serve the same model id and reach different things behind it, so
+    a picker showing only names is asking somebody to choose between two rows that read identically.
+
+    It carries **no credential**, and that is the reason this exists rather than the page being
+    handed the parsed `Config`. An `Endpoint` holds a `SecretStr`, and the one reliable way to keep
+    a key out of a rendered page is for the value the renderer is given not to have one in it.
+    """
+
+    endpoint: str
+    format: Format
+    url: str | None
+    models: tuple[Listed, ...]
+
+    @property
+    def where(self) -> str:
+        """
+        Where this endpoint sends requests, as a person reads it.
+
+        An endpoint naming no URL is the SDK's own, and saying so in words beats printing a hostname
+        this process never actually decided: which host that is belongs to the SDK, and writing it
+        here would be a second copy of somebody else's default going quietly out of date.
+        """
+        return self.url if self.url is not None else f"the {self.format} SDK's own endpoint"
+
+
+@dataclass(frozen=True, slots=True)
 class Catalogue:
     """
-    Every profile and what it offers, as one value replaced whole rather than edited in place.
+    Every endpoint and what it offers, as one value replaced whole rather than edited in place.
 
     A value and not a place, which is what lets the console read it without coordinating with the
     task that refreshes it: whoever holds one holds a consistent answer for as long as they need
@@ -61,19 +93,24 @@ class Catalogue:
     "the model a new session starts on" from the same two inputs in two slightly different ways.
     """
 
-    offered: Mapping[str, tuple[Listed, ...]]
+    offered: Mapping[str, Offering]
     default: Choice
 
     @property
-    def profiles(self) -> tuple[str, ...]:
-        """Every profile, in the order the picker lists them, which is the order somebody reads."""
+    def endpoints(self) -> tuple[str, ...]:
+        """Every endpoint, in the order the picker lists them, which is the order somebody reads."""
         return tuple(sorted(self.offered))
 
-    def models_of(self, profile: str) -> tuple[Listed, ...] | None:
-        """What one profile offers, or nothing at all where there is no such profile."""
-        return self.offered.get(profile)
+    def offering_of(self, endpoint: str) -> Offering | None:
+        """One endpoint whole, or nothing at all where there is no such endpoint."""
+        return self.offered.get(endpoint)
 
-    def offers(self, profile: str, model: str) -> bool:
+    def models_of(self, endpoint: str) -> tuple[Listed, ...] | None:
+        """What one endpoint offers, or nothing at all where there is no such endpoint."""
+        found = self.offered.get(endpoint)
+        return found.models if found is not None else None
+
+    def offers(self, endpoint: str, model: str) -> bool:
         """
         Whether this pair is one the picker put in front of somebody.
 
@@ -81,39 +118,42 @@ class Catalogue:
         actually offered. It is deliberately not what decides whether an existing session can be
         answered: this says what an endpoint advertises, which is narrower than what it will route,
         so a session already recorded on an unadvertised id is answerable and this would call it
-        stuck. `models_of(...) is not None` is that other question, and it asks about the profile.
+        stuck. `models_of(...) is not None` is that other question, and it asks about the endpoint.
         """
-        found = self.offered.get(profile)
+        found = self.models_of(endpoint)
         return found is not None and any(model == offered.id for offered in found)
 
 
-async def discover(endpoints: Endpoints, config: Config) -> Catalogue:
+async def discover(wires: Wires, config: Config) -> Catalogue:
     """
     Ask every endpoint what it serves, all at once, and refuse to return a catalogue with a hole.
 
-    Concurrent because the profiles are independent and each is a round trip: a VM declaring the
-    same gateway twice, once per wire, should wait for one list and not two.
+    Concurrent because the endpoints are independent and each is a round trip: a VM declaring the
+    same gateway twice, once per format, should wait for one list and not two.
 
-    A profile that lists nothing is a failure rather than an empty entry. An empty entry renders as
-    a profile you can select and then cannot use, which is the state hardest to diagnose from the
+    An endpoint that lists nothing is a failure rather than an empty entry. An empty entry renders as
+    an endpoint you can select and then cannot use, which is the state hardest to diagnose from the
     page; and at startup it is the difference between a service that refuses to come up naming the
     endpoint and one that comes up unable to answer anything.
     """
-    named = tuple(endpoints.by_profile)
-    listings = await asyncio.gather(*(endpoints.by_profile[name].listed() for name in named), return_exceptions=True)
-    offered: dict[str, tuple[Listed, ...]] = {}
+    named = tuple(wires.by_endpoint)
+    listings = await asyncio.gather(*(wires.by_endpoint[name].listed() for name in named), return_exceptions=True)
+    offered: dict[str, Offering] = {}
     for name, listing in zip(named, listings, strict=True):
         if isinstance(listing, BaseException):
-            raise NothingOffered(f"profile {name!r} could not be asked what it serves: {listing!r}") from listing
+            raise NothingOffered(f"endpoint {name!r} could not be asked what it serves: {listing!r}") from listing
         if not listing:
-            raise NothingOffered(f"profile {name!r} says it serves no models")
-        offered[name] = listing
+            raise NothingOffered(f"endpoint {name!r} says it serves no models")
+        # The endpoint's own facts are copied across field by field rather than the `Endpoint` being
+        # carried, so what reaches a page is a value with no credential in it at all.
+        declared = config.endpoints[name]
+        offered[name] = Offering(endpoint=name, format=declared.format, url=declared.url, models=listing)
     return Catalogue(offered=offered, default=default_choice(offered, config))
 
 
-def default_choice(offered: Mapping[str, tuple[Listed, ...]], config: Config) -> Choice:
+def default_choice(offered: Mapping[str, Offering], config: Config) -> Choice:
     """
-    What a new session starts on: the configured profile, and the model the file named or the first.
+    What a new session starts on: the configured endpoint, and the model the file named or the first.
 
     The name from the file is checked against what was actually discovered rather than trusted,
     because it is the one setting here that can be made wrong by somebody else: a model retired
@@ -125,13 +165,13 @@ def default_choice(offered: Mapping[str, tuple[Listed, ...]], config: Config) ->
     file was parsed, so by here it is already a level rather than a name to be doubted.
     """
     thinking = thinking_named(config.default_thinking)
-    models = offered[config.default]
+    models = offered[config.default].models
     named = config.default_model
     if named is not None and any(named == model.id for model in models):
-        return Choice(profile=config.default, model=named, thinking=thinking)
+        return Choice(endpoint=config.default, model=named, thinking=thinking)
     if named is not None:
-        logger.warning(f"default_model {named!r} is not offered by profile {config.default!r}, using {models[0].id!r}")
-    return Choice(profile=config.default, model=models[0].id, thinking=thinking)
+        logger.warning(f"default_model {named!r} is not offered by endpoint {config.default!r}, using {models[0].id!r}")
+    return Choice(endpoint=config.default, model=models[0].id, thinking=thinking)
 
 
 @dataclass(slots=True)
@@ -148,7 +188,7 @@ class Catalogues:
     current: Catalogue
 
 
-async def refreshing(holder: Catalogues, endpoints: Endpoints, config: Config, every: timedelta) -> None:
+async def refreshing(holder: Catalogues, endpoints: Wires, config: Config, every: timedelta) -> None:
     """
     Re-ask every endpoint on a timer, for as long as this is running.
 
@@ -173,19 +213,22 @@ async def refreshing(holder: Catalogues, endpoints: Endpoints, config: Config, e
 
 def summarise(catalogue: Catalogue) -> str:
     """One line naming what was found, which is what a log is read for after a model appears."""
-    return ", ".join(f"{name} offers {len(models)}" for name, models in sorted(catalogue.offered.items()))
+    return ", ".join(f"{name} offers {len(offering.models)}" for name, offering in sorted(catalogue.offered.items()))
 
 
 def grouped(models: Sequence[Listed]) -> tuple[tuple[str, tuple[Listed, ...]], ...]:
     """
-    One profile's models as the families it fronts, each keeping the order the endpoint gave.
+    One endpoint's models as the providers behind it, each keeping the order the endpoint gave.
 
     Grouping is what makes a list of seventy readable, and the endpoint's own order is what makes
     each group useful: a gateway lists its newest model first, and no ordering this could impose
-    would know that. So the families are ordered by where each first appeared rather than
+    would know that. So the providers are ordered by where each first appeared rather than
     alphabetically, which puts the vendor the endpoint leads with at the top.
+
+    A heading rather than a level of a tree, and the difference is real: the same provider appears
+    under more than one endpoint, so this groups *within* an endpoint's list and never across.
     """
-    families: dict[str, list[Listed]] = {}
+    providers: dict[str, list[Listed]] = {}
     for model in models:
-        families.setdefault(model.family, []).append(model)
-    return tuple((family, tuple(found)) for family, found in families.items())
+        providers.setdefault(model.provider, []).append(model)
+    return tuple((provider, tuple(found)) for provider, found in providers.items())
