@@ -36,6 +36,7 @@ from without_html import aside
 from without_html import body
 from without_html import button
 from without_html import code
+from without_html import datalist
 from without_html import dd
 from without_html import details
 from without_html import div
@@ -59,7 +60,6 @@ from without_html import pre
 from without_html import render
 from without_html import script
 from without_html import section
-from without_html import select
 from without_html import span
 from without_html import summary
 from without_html import textarea
@@ -84,6 +84,7 @@ from mainplate.conversation import Reasoning
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
+from mainplate.forge import Repository
 from mainplate.markup import as_markup
 from mainplate.reference import Cost
 from mainplate.reference import Described
@@ -123,6 +124,16 @@ SEND_SWAP: Final = "outerMorph scroll:bottom"
 TRANSCRIPT_ID: Final = "transcript"
 
 MODEL_ID: Final = "model"
+
+# The two folds on the picker. A `<label>` reaches its control by id, so these have to be different
+# strings on a page that draws both, and stable across the swap that replaces the model group.
+ENDPOINT_TOGGLE_ID: Final = "open-endpoint"
+
+MODEL_TOGGLE_ID: Final = "open-model"
+
+REPOSITORY_TOGGLE_ID: Final = "open-repository"
+
+THINKING_TOGGLE_ID: Final = "open-thinking"
 
 THINKING_ID: Final = "thinking"
 
@@ -499,7 +510,9 @@ def model_card(described: Described, chosen: bool) -> Element:
     facts = described.listed
     return label(
         cls="model",
-        attrs={"data-provider": facts.provider},
+        # The name this card answers to, which is the same string the group's completion list is
+        # built from: naming one exactly is how the reader picks it without reaching for the card.
+        attrs={"data-provider": facts.provider, "data-name": facts.label},
         children=[
             input_(
                 cls="model__pick",
@@ -572,35 +585,158 @@ def priced(cost: Cost | None) -> tuple[Element, ...]:
     )
 
 
+def counted(many: int, thing: str) -> str:
+    """`3 models`, `1 option`: a count with the word it counts, pluralised."""
+    return f"{many} {thing}{'' if many == 1 else 's'}"
+
+
+def choosing(
+    legend: str,
+    toggle: str,
+    names: Sequence[str],
+    body: Element,
+    *,
+    identified: str | None = None,
+    extra: str | None = None,
+) -> Element:
+    """
+    One group of cards, folded down to the one that is picked.
+
+    A wall of cards is what the start page used to be: seventy of them on a real gateway, so the
+    choice already made was somewhere in a list you had to scroll, and everything after that list
+    was past the end of it. Shut, a group is the card you picked and nothing else; open, it is
+    everything on offer, in place.
+
+    **The fold is a checkbox and the folding is `:has()`, so no script decides any of this.** That
+    is what keeps a shut group honest: what it draws is the card whose radio is actually checked,
+    read off the radio itself, so there is no second copy of the choice to go stale and nothing to
+    keep in step. A summary line naming the model would have been that second copy, and with
+    scripting off it would have named the wrong one the moment somebody picked.
+
+    The count on the control is there rather than left to be inferred, because a shut group is a
+    single card with nothing about it saying others exist. It is what makes the group read as a
+    picker, and it has to be rendered *inside* whatever the endpoint swap replaces or it keeps
+    saying 27 after the list under it became 46.
+
+    `names` is what an open group can be narrowed by, and it is the same list the cards are drawn
+    from rather than a second one: one argument gives the count, the datalist and the filter, so
+    none of the three can disagree about what is on offer.
+    """
+    listed = f"{toggle}-names"
+    return section(
+        cls=("picker__part", extra),
+        attrs={"id": identified},
+        children=[
+            # A real checkbox, so opening a group is the browser's own behaviour. No `name`, so it
+            # is never submitted, and deliberately no `form`, so it is not associated with one
+            # either: this is a fold, not part of what a session is decided by.
+            input_(cls="picker__toggle", attrs={"type": "checkbox", "id": toggle}),
+            div(
+                cls="picker__head",
+                children=[
+                    h2(cls="picker__legend", children=legend),
+                    label(
+                        cls="picker__more",
+                        attrs={"for": toggle},
+                        children=[
+                            span(cls="picker__more--shut", children=counted(len(names), "option")),
+                            span(cls="picker__more--open", children="done"),
+                        ],
+                    ),
+                ],
+            ),
+            narrowing(listed, names),
+            body,
+        ],
+    )
+
+
+def narrowing(listed: str, names: Sequence[str]) -> Element:
+    """
+    A box that narrows an open group to the cards matching what is typed.
+
+    The `<datalist>` is what makes typing worth anything with no script: the browser completes a
+    name from the same list the cards are drawn from, so a long model id is a few keystrokes either
+    way and the completion menu is itself a way of reading what is on offer. The *narrowing* is the
+    script's, which is why the cards remain the thing that actually answers the question - with the
+    file absent this is a box that suggests and does not filter, and every card is still there to
+    be picked.
+
+    Taking an entry from that menu names one exactly, and the script reads that as the choice: the
+    card is checked and the group shuts. So the box is two things at once - a filter while a name is
+    partial, and a way of picking once it is whole - which is what the completion menu already
+    implies it should be. Matching a whole name and never a prefix is what keeps the two apart, and
+    what stops the keystrokes spelling one name choosing a shorter one on the way past.
+
+    Drawn on every group rather than only the long one. Searching by name is the same question
+    whether a list holds four endpoints or seventy models, and a control that appeared once a list
+    passed some length would be one nobody learns to expect.
+    """
+    return div(
+        cls="picker__filter",
+        children=[
+            input_(
+                cls="picker__filter-field",
+                attrs={
+                    "type": "search",
+                    "list": listed,
+                    "placeholder": "find",
+                    "aria-label": f"Find in {listed}",
+                    "autocomplete": "off",
+                },
+            ),
+            datalist(attrs={"id": listed}, children=[option(attrs={"value": name}) for name in names]),
+        ],
+    )
+
+
 def model_cards(models: Sequence[Listed], reference: Reference | None, chosen: str | None = None) -> Element:
     """
     The models one endpoint offers, as the cards the form submits one of.
 
-    Its own element with a stable id, because changing the endpoint replaces exactly this and
-    nothing else on the page. An endpoint always offers at least one model (discovery refuses a
-    endpoint that lists none), so this is never an empty group nobody can submit.
+    The whole group carries the stable id, head and fold included, because changing the endpoint
+    replaces exactly this: the count beside the legend is a fact about the list below it, so it has
+    to travel with it. Replacing the group also resets the fold, which is the right state to arrive
+    in - a new endpoint means a new default model, already picked and worth seeing shut.
+
+    An endpoint always offers at least one model (discovery refuses one that lists none), so this is
+    never an empty group nobody can submit.
 
     Grouped by provider, because a gateway fronting several vendors answers with seventy entries and
     an ungrouped wall of seventy cards is worse than the ungrouped list of seventy it replaced. The
     value is the id the request will name; the name is whatever the endpoint calls it.
     """
     picked = chosen if any(chosen == model.id for model in models) else models[0].id
-    return div(
-        cls="models",
-        attrs={"id": MODEL_ID, "role": "radiogroup", "aria-label": "Model"},
-        children=[
-            section(
-                cls="models__provider",
-                children=[
-                    h2(cls="models__heading", children=provider),
-                    div(
-                        cls="models__grid",
-                        children=[model_card(describe(model, reference), chosen=model.id == picked) for model in found],
-                    ),
-                ],
-            )
-            for provider, found in grouped(models)
-        ],
+    return choosing(
+        "Model",
+        MODEL_TOGGLE_ID,
+        # One name per card, which is what keeps the count honest: the datalist offering the label
+        # *and* the routed id would be two entries per model and a group announcing 54 options over
+        # 27 cards. Searching by id still works, because the filter matches a card's whole text and
+        # the id is printed on it; the completion list is the readable half, and a list of names
+        # interleaved with `anthropic/claude-sonnet-4-6` is not the readable half.
+        [model.label for model in models],
+        div(
+            cls="models",
+            attrs={"role": "radiogroup", "aria-label": "Model"},
+            children=[
+                section(
+                    cls="models__provider",
+                    children=[
+                        h2(cls="models__heading", children=provider),
+                        div(
+                            cls="models__grid",
+                            children=[
+                                model_card(describe(model, reference), chosen=model.id == picked) for model in found
+                            ],
+                        ),
+                    ],
+                )
+                for provider, found in grouped(models)
+            ],
+        ),
+        identified=MODEL_ID,
+        extra="picker__part--models",
     )
 
 
@@ -613,10 +749,11 @@ def endpoint_card(links: Links, offering: Offering, chosen: bool) -> Element:
     one gateway answers both wires, so a VM declares the same host twice and the *only* thing
     telling those two rows apart is the word `anthropic` or `openai` and the `/v1` on the end.
 
-    htmx sends a triggering input's own value, so the `hx-get` needs no interpolation: choosing a
-    endpoint asks for that endpoint's models and replaces the cards beside it. Without a browser the
-    form still posts, carrying whatever models the page was rendered with, and the handler refuses a
-    pair nothing offers.
+    htmx sends a triggering input's own value, so the `hx-get` needs no interpolation: choosing an
+    endpoint asks for that endpoint's models and replaces the whole model group with them, head and
+    fold included, so the count beside the legend is the new list's rather than the old one's.
+    Without a browser the form still posts, carrying whatever models the page was rendered with, and
+    the handler refuses a pair nothing offers.
 
     `outerHTML` and deliberately not the `outerMorph` the transcript uses. Morphing preserves what a
     control already holds, which is exactly right for a conversation being reread and exactly wrong
@@ -625,6 +762,7 @@ def endpoint_card(links: Links, offering: Offering, chosen: bool) -> Element:
     """
     return label(
         cls="endpoint",
+        attrs={"data-name": offering.endpoint},
         children=[
             input_(
                 cls="endpoint__pick",
@@ -661,54 +799,131 @@ def endpoint_cards(links: Links, catalogue: Catalogue, chosen: str | None = None
     )
 
 
-def thinking_select(chosen: ThinkingLevel | None) -> Element:
+def thinking_card(naming: str, chosen: bool) -> Element:
+    return label(
+        cls="think",
+        attrs={"data-name": naming},
+        children=[
+            input_(
+                cls="think__pick",
+                attrs={
+                    "type": "radio",
+                    "name": THINKING_FIELD,
+                    "value": naming,
+                    "checked": chosen,
+                    "form": CHOOSING_ID,
+                },
+            ),
+            span(cls="think__name", children=naming),
+        ],
+    )
+
+
+def thinking_cards(chosen: ThinkingLevel | None) -> Element:
     """
-    How hard to think, as a plain select with no cascade behind it.
+    How hard to think, with no cascade behind it.
 
     Unlike the model list this is the same everywhere, because it is a property of the request
     rather than of the endpoint: every level is offered against every endpoint, and a model that
     cannot reason refuses or ignores it on the turn. That is the same stance the model id gets, and
     for the same reason - the provider's own answer about what it supports is the authoritative
     one, and gating here would hide a level that in fact works.
+
+    Cards like the other three, which is worth more here than the control it replaced: eight levels
+    is enough that a shut group saying `high` is a better answer than a select showing it, and
+    naming them in one vocabulary means the same fold, the same count and the same narrowing serve
+    every question this page asks.
     """
-    return select(
-        attrs={"id": THINKING_ID, "name": THINKING_FIELD, "form": CHOOSING_ID, "aria-label": "Thinking"},
-        children=[
-            option(attrs={"value": name, "selected": level == chosen}, children=name)
-            for name, level in THINKING_CHOICES
-        ],
+    picked = next((name for name, level in THINKING_CHOICES if level == chosen), None)
+    return choosing(
+        "Thinking",
+        THINKING_TOGGLE_ID,
+        [name for name, _ in THINKING_CHOICES],
+        div(
+            cls="thinks",
+            attrs={"id": THINKING_ID, "role": "radiogroup", "aria-label": "Thinking"},
+            children=[
+                div(
+                    cls="thinks__grid",
+                    children=[thinking_card(name, chosen=name == picked) for name, _ in THINKING_CHOICES],
+                )
+            ],
+        ),
     )
 
 
 NO_REPOSITORY: Final = ""
 
+# What the card for "no repository" is called. Named, because it is both the card's own text and one
+# of the names the group can be narrowed by, and those two must be the same string.
+NO_REPOSITORY_NAME: Final = "no repository"
 
-def repository_select(reachable: Reachable, chosen: str | None) -> Element:
+
+def repository_card(reached: Repository | None, naming: str, chosen: bool) -> Element:
+    """
+    One repository as something to pick, or the choice to work in none.
+
+    A card rather than an `<option>`, and that is what the forge is drawn on: an `<option>` renders
+    as text in every browser, so anything said about *where* a repository comes from has nowhere to
+    go inside a select. A row here can carry it, which matters the moment a second forge exists and
+    two rows read `owner/repo` from different places.
+    """
+    return label(
+        cls="repo",
+        attrs={"data-name": naming},
+        children=[
+            input_(
+                cls="repo__pick",
+                attrs={
+                    "type": "radio",
+                    "name": REPOSITORY_FIELD,
+                    "value": reached.id if reached is not None else NO_REPOSITORY,
+                    "checked": chosen,
+                    "form": CHOOSING_ID,
+                },
+            ),
+            span(cls="repo__name", children=naming),
+            span(cls="repo__forge", children=reached.forge if reached is not None else "no files"),
+        ],
+    )
+
+
+def repository_cards(reachable: Reachable, chosen: str | None) -> Element:
     """
     Which repository a session works in, offered only where there is one to offer.
 
-    Nothing at all when no forge reaches anything, rather than an empty or disabled select: off
+    Nothing at all when no forge reaches anything, rather than an empty or disabled control: off
     exe.dev, or on a machine with no integrations attached, this console is what it was before
     repositories existed and a control for a choice with no options is a question nobody can
-    answer.
+    answer. That answer is the caller's; this is only reached when there is something to show.
 
     "No repository" is always offered even when there are some, because a conversation that is not
     about code is an ordinary thing to want and picking a repository for it would give the agent
-    files nobody meant it to have.
+    files nobody meant it to have. It is a card like the rest, so the fold has something to collapse
+    to when it is what was chosen.
 
     Labels come from `Reachable`, which qualifies a row only where two would otherwise read the
     same: the same repository can be attached twice with different rights, and choosing between two
     identical rows is guessing.
     """
-    return select(
-        attrs={"id": REPOSITORY_ID, "name": REPOSITORY_FIELD, "form": CHOOSING_ID, "aria-label": "Repository"},
-        children=[
-            option(attrs={"value": NO_REPOSITORY, "selected": chosen is None}, children="no repository"),
-            *(
-                option(attrs={"value": repository.id, "selected": repository.id == chosen}, children=label)
-                for repository, label in reachable.labelled()
-            ),
-        ],
+    rows = reachable.labelled()
+    return choosing(
+        "Working in",
+        REPOSITORY_TOGGLE_ID,
+        [NO_REPOSITORY_NAME, *(naming for _, naming in rows)],
+        div(
+            cls="repos",
+            attrs={"id": REPOSITORY_ID, "role": "radiogroup", "aria-label": "Repository"},
+            children=[
+                div(
+                    cls="repos__grid",
+                    children=[
+                        repository_card(None, NO_REPOSITORY_NAME, chosen is None),
+                        *(repository_card(reached, naming, reached.id == chosen) for reached, naming in rows),
+                    ],
+                )
+            ],
+        ),
     )
 
 
@@ -723,13 +938,21 @@ def picker(
     Everything a session is decided by, laid out as the question it actually is.
 
     One block rather than a row of selects, because choosing a model is the one real decision on
-    this page and a row of selects made it look like a footnote to the message box. The endpoints
-    come first because the model list depends on which one is picked; the models are the body of it;
-    the settings that apply whatever you picked sit under them, a line each.
+    this page and a row of selects made it look like a footnote to the message box.
 
-    The models are also the only part that scrolls, and that is what keeps the settings reachable:
-    the list is as long as whatever gateway you are pointed at makes it, where everything else here
-    is a fixed handful of rows, so it is the part that gives up height when there is not enough.
+    **The order is what a session is decided by, widest first: where it works, what answers it,
+    which model, and how hard that model thinks.** The repository comes first because it is the
+    broadest of the four and the only one that decides what the agent can touch at all; the endpoint
+    and the model are next and are adjacent because they are a pair, the list being whatever the
+    endpoint above it offers; the thinking level is last because it is a setting on the model rather
+    than a choice beside it.
+
+    Both card groups are folded down to what is picked (see `choosing`), so the order above is what
+    a reader sees rather than what they would reach after scrolling: four labelled lines and the two
+    cards that are the current choice. Opened, the models are the one part with no bound on their
+    length, and on a wide window they are the only part that scrolls - the list is as long as
+    whatever gateway you are pointed at makes it, where everything else here is a fixed handful of
+    rows, so it is what gives up height when there is not enough.
 
     `chosen` is what the controls start on, defaulting to the configured default for a new session.
     A fork passes the parent's own choice instead, so continuing on the same model is the path that
@@ -747,35 +970,15 @@ def picker(
     return div(
         cls="picker",
         children=[
-            section(
-                cls="picker__part",
-                children=[
-                    h2(cls="picker__legend", children="Endpoint"),
-                    endpoint_cards(links, catalogue, starting.endpoint),
-                ],
+            *((repository_cards(reachable, starting.repository),) if reachable.repositories else ()),
+            choosing(
+                "Endpoint",
+                ENDPOINT_TOGGLE_ID,
+                list(catalogue.endpoints),
+                endpoint_cards(links, catalogue, starting.endpoint),
             ),
-            section(
-                cls=("picker__part", "picker__part--models"),
-                children=[
-                    h2(cls="picker__legend", children="Model"),
-                    model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
-                ],
-            ),
-            div(
-                cls="picker__settings",
-                children=[
-                    span(cls="picker__label", children="Thinking"),
-                    thinking_select(starting.thinking),
-                    *(
-                        (
-                            span(cls="picker__label", children="Working in"),
-                            repository_select(reachable, starting.repository),
-                        )
-                        if reachable.repositories
-                        else ()
-                    ),
-                ],
-            ),
+            model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
+            thinking_cards(starting.thinking),
         ],
     )
 
@@ -1429,7 +1632,11 @@ def shell(
         cls="shell",
         children=[
             sidebar(links, listed, showing, reachable),
-            main(children=[header(children=h1(children="mainplate")), *pane]),
+            # No banner over the pane, and that is room rather than an omission: the console's own
+            # name was a row on every page saying nothing the tab title does not, and on a phone it
+            # was a twentieth of the screen spent on it. What names the page is `<title>`, and what
+            # gets somebody back to the start is the session list, which is always on screen.
+            main(children=[*pane]),
             *aside_rail,
         ],
     )

@@ -24,10 +24,12 @@ from without_http import serving
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
+from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import tool_key
 from mainplate.service import Service
+from scripts.gallery import pages
 from scripts.gallery import write
 
 # The gallery rather than a running console, which is the bargain `scripts/gallery.py` already
@@ -49,6 +51,17 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # Wide enough that the rail, the sidebar and the transcript are all drawn: the layout collapses on a
 # narrow window and half of what these drive would not be on the page.
 VIEWPORT = ViewportSize(width=1400, height=1000)
+
+# And a phone, which is the collapsed layout the width above exists to avoid. Comfortably under the
+# stylesheet's 48rem, because what these ask is whether the narrow shape is the one it means to draw
+# rather than where exactly it starts drawing it.
+PHONE = ViewportSize(width=390, height=844)
+
+# Every page the gallery renders, named at collection so each is a test of its own rather than a
+# loop that can only fail at the first one to break. Asked of `pages()` rather than listed here,
+# which is what stops a page added later from being one nothing measures; it is pure, so the render
+# nobody looks at costs only itself.
+EVERY_PAGE = tuple(sorted(pages()))
 
 # Every panel drawn as *where the reader is*, however they got there. The stylesheet draws `:target`
 # and `data-landed` alike deliberately - a landing and an arrival by link should read the same - so
@@ -138,6 +151,52 @@ async def page(browser: Browser) -> AsyncIterator[Page]:
         yield await context.new_page()
     finally:
         await context.close()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def phone(browser: Browser) -> AsyncIterator[Page]:
+    """The same thing on a phone, in a context of its own for the reason `page` is."""
+    context = await browser.new_context(viewport=PHONE)
+    try:
+        yield await context.new_page()
+    finally:
+        await context.close()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def unscripted(browser: Browser) -> AsyncIterator[Page]:
+    """
+    A page with scripting off, for the parts that have to work without it.
+
+    Its own context because `javaScriptEnabled` is a context setting rather than a page one, and it
+    is the only fixture here that wants the console's own file *not* to run.
+    """
+    context = await browser.new_context(viewport=VIEWPORT, java_script_enabled=False)
+    try:
+        yield await context.new_page()
+    finally:
+        await context.close()
+
+
+async def showing_model(page: Page) -> str:
+    """The id on the one model card a shut group is drawn as."""
+    return str(
+        await page.evaluate("() => document.querySelector('.model:has(.model__pick:checked) .model__id').textContent")
+    )
+
+
+async def posted(page: Page, field: str) -> str:
+    """What the form would actually submit for one field, which is the browser's answer, not markup's."""
+    return str(await page.evaluate(f"() => new FormData(document.querySelector('form#choosing')).get({field!r})"))
+
+
+async def posted_model(page: Page) -> str:
+    return await posted(page, "model")
+
+
+async def opened(page: Page, toggle: str) -> bool:
+    """Whether one group is folded open, asked of the checkbox that decides it."""
+    return bool(await page.evaluate(f"() => document.getElementById({toggle!r}).checked"))
 
 
 async def lands_on(page: Page, *expected: str) -> None:
@@ -307,6 +366,152 @@ class TestSendingFromTheKeyboard:
         await page.evaluate(WATCH_SUBMITS)
         await page.press("textarea[name=prompt]", "Shift+Enter")
         assert await page.evaluate("() => window.submitted") == []
+
+
+SHOWING = "(selector) => [...document.querySelectorAll(selector)].filter((each) => each.offsetParent !== null).length"
+
+# The narrowing box of the thinking group, which is the one used to drive these: eight short names
+# with one a prefix of another (`high`, `xhigh`), which is exactly the case worth pinning.
+THINKING_FILTER = ".picker__part:has(#open-thinking) .picker__filter-field"
+
+
+class TestFoldingAGroupOfCards:
+    """
+    A shut group is the card that is picked, and it is still the card the form posts.
+
+    Nothing here is visible to a markup assertion, which is the whole reason it drives a browser:
+    every card is in the document either way, and what decides whether one is *drawn* is a CSS
+    `:has()` rule reading the radio beside it. Rendered markup looks identical shut and open.
+
+    The last of these is the one that would hurt. The collapse hides every card but the checked one,
+    so a rule that stopped exempting the checked card would hide the only radio that is on, and the
+    form would post no model at all - a page refusing itself with a 422, from a stylesheet edit.
+    """
+
+    @pytest.mark.parametrize("name", ["start.html", "forking.html"])
+    async def test_a_group_shows_only_what_is_picked_until_it_is_opened(
+        self, page: Page, gallery: str, name: str
+    ) -> None:
+        await page.goto(f"{gallery}/{name}", wait_until="load")
+        # Every kind of card, because all four groups are one component now: a picker that stopped
+        # folding would be a regression in `choosing` rather than in any one of them.
+        for card in (".model", ".endpoint", ".think"):
+            assert await page.evaluate(SHOWING, card) == 1, card
+
+        await page.click('label[for="open-model"]')
+        # More than one, rather than a count: what the fixture catalogue offers is not this test's
+        # business, only that opening the group stops hiding the rest of it.
+        assert await page.evaluate(SHOWING, ".model") > 1
+        # And opening one group leaves the others exactly as they were.
+        assert await page.evaluate(SHOWING, ".endpoint") == 1
+        assert await page.evaluate(SHOWING, ".think") == 1
+
+    async def test_a_group_counts_the_cards_it_actually_holds(self, page: Page, gallery: str) -> None:
+        # `names` feeds the count, the `<datalist>` completions and the filter from one list, so the
+        # three cannot disagree - which is the invariant, and which a group given a model's label
+        # *and* its routed id broke by announcing 54 options over 27 cards.
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        groups = await page.evaluate(
+            "() => [...document.querySelectorAll('.picker__part')].map((part) => ({"
+            " legend: part.querySelector('.picker__legend').textContent,"
+            " said: Number((part.querySelector('.picker__more--shut').textContent.match(/\\d+/) || [0])[0]),"
+            " cards: part.querySelectorAll('label:has(input[type=radio])').length,"
+            " listed: part.querySelector('datalist').options.length }))"
+        )
+        assert groups
+        for group in groups:
+            assert group["said"] == group["cards"] == group["listed"], group
+
+    async def test_picking_folds_the_group_back_to_what_was_just_picked(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+        await page.locator(".model").nth(1).click()
+        # Shut again without anybody pressing the control, which is the script's one contribution
+        # here, and showing the card just chosen rather than the one the server rendered as picked.
+        assert await page.evaluate(SHOWING, ".model") == 1
+        assert await showing_model(page) == await posted_model(page)
+
+    async def test_the_fold_needs_no_script_at_all(self, unscripted: Page, gallery: str) -> None:
+        # The reason the closed state is drawn by `:has()` rather than by a summary the script keeps
+        # in step. With no script the group cannot fold itself on a pick, so it stays open - but the
+        # card it collapses to is read off the radio, so shutting it by hand shows what was picked
+        # rather than what the server rendered. A summary would name the wrong model here.
+        await unscripted.goto(f"{gallery}/start.html", wait_until="load")
+        assert await unscripted.evaluate(SHOWING, ".model") == 1
+
+        await unscripted.click('label[for="open-model"]')
+        assert await unscripted.evaluate(SHOWING, ".model") > 1
+
+        await unscripted.locator(".model").nth(1).click()
+        await unscripted.click('label[for="open-model"]')
+        assert await unscripted.evaluate(SHOWING, ".model") == 1
+        assert await showing_model(unscripted) == await posted_model(unscripted)
+
+    async def test_naming_an_option_exactly_picks_it_and_shuts_the_group(self, page: Page, gallery: str) -> None:
+        # Taking an entry from the browser's completion menu puts the whole name in the box, and
+        # that is the reader having chosen: leaving them to reach for the one card still showing is
+        # a step they already took.
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-thinking"]')
+        await page.locator(THINKING_FILTER).fill("xhigh")
+        assert await posted(page, THINKING_FIELD) == "xhigh"
+        assert await opened(page, "open-thinking") is False
+
+    async def test_typing_toward_a_longer_name_picks_nothing_on_the_way(self, page: Page, gallery: str) -> None:
+        # Only ever an exact match on a whole name, so the keystrokes spelling `xhigh` do not stop
+        # at `high` - and a partial name narrows the group rather than choosing from it. Compared
+        # against what the page loaded with rather than a named level, because what is posted is
+        # the level's *name* and the fixture's default is the level itself.
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        before = await posted(page, THINKING_FIELD)
+        await page.click('label[for="open-thinking"]')
+        for typed in ("h", "hi", "hig"):
+            await page.locator(THINKING_FILTER).fill(typed)
+        assert await posted(page, THINKING_FIELD) == before
+        assert await opened(page, "open-thinking") is True
+
+    @pytest.mark.parametrize("name", ["start.html", "forking.html"])
+    async def test_a_shut_group_still_posts_its_choice(self, page: Page, gallery: str, name: str) -> None:
+        await page.goto(f"{gallery}/{name}", wait_until="load")
+        posted = await page.evaluate("() => [...new FormData(document.querySelector('form#choosing')).keys()]")
+        assert {"endpoint", "model"} <= set(posted)
+
+
+class TestTheShapeOfANarrowWindow:
+    """
+    A phone gets one column, and no page pushes the document sideways to get it.
+
+    Here rather than in `scripts/shoot.mjs`, which prints the same overflow beside the screenshot it
+    is measuring and fails nothing: that is a diagnostic for somebody already looking at a shot, and
+    the layout it is measuring is a deliverable that regresses without anybody looking. It is the
+    reason the rest of this module exists, applied once more.
+
+    Two questions rather than one, because overflow alone can be right for the wrong reason. The
+    stylesheet's two breakpoints overlap and every session page matched both, so the rail's own
+    `max-width: 78rem` block put the 17rem sidebar column back under the narrow one and left the
+    conversation about a hundred pixels to render in. Whether the shell is *one track* is what
+    catches that directly; whether the document scrolls sideways is what catches the ways it shows.
+    """
+
+    @pytest.mark.parametrize("name", EVERY_PAGE)
+    async def test_no_page_pushes_the_document_sideways(self, phone: Page, gallery: str, name: str) -> None:
+        await phone.goto(f"{gallery}/{name}", wait_until="load")
+        # The transcript may scroll its own wide blocks and the session strip scrolls itself; what
+        # must never move is the document, which has nowhere to overflow to.
+        room = await phone.evaluate(
+            "() => ({ document: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth })"
+        )
+        assert room["document"] <= room["viewport"]
+
+    async def test_a_page_with_a_rail_is_still_one_column(self, phone: Page, gallery: str) -> None:
+        # A session page is the one that carries a rail, so it is the one that matched both
+        # breakpoints and the only one where the columns could disagree with the width.
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        columns = await phone.evaluate("() => getComputedStyle(document.querySelector('.shell')).gridTemplateColumns")
+        # The used value of the one track rather than a count of them, so this says the whole width
+        # goes to the conversation. A count alone is satisfied by `none`, which is what a shell that
+        # had stopped being a grid at all would report.
+        assert columns.split() == [f"{PHONE['width']}px"]
 
 
 # One response of a turn, as the capability records it partway through: the model reasoned and asked

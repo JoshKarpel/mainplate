@@ -167,6 +167,19 @@
       });
     };
 
+    // The session being read, brought into the list of them. On a narrow window that list is a
+    // strip scrolling sideways, so the conversation on screen can be off one end of it; on a wide
+    // one it is a column long enough to put the current session below the fold. One call answers
+    // both, and nothing here knows which shape it is looking at: `nearest` scrolls the list on
+    // whichever axis it actually scrolls on, and does nothing when the session is already showing.
+    //
+    // Not through `scrolling`, unlike every other scroll this file performs: the listener that
+    // guard exists for watches the transcript, and this moves a different box entirely.
+    const toCurrentSession = () => {
+      const current = document.querySelector(".sessions .session.current");
+      if (current) current.scrollIntoView({ block: "nearest", inline: "center" });
+    };
+
     // --- Projection ------------------------------------------------------
     //
     // Everything the reader has decided, put back onto the markup currently on screen. Called once
@@ -547,6 +560,80 @@
       });
     };
 
+    // --- The picker ------------------------------------------------------
+    //
+    // Everything this file adds to the picker is an enhancement over markup that already works: the
+    // fold is a checkbox and the folding is a CSS `:has()` rule, so with this absent a group opens,
+    // collapses to what is checked, and posts it. What is added is the two conveniences that need a
+    // script - shutting a group once something in it is picked, and narrowing an open one to what
+    // is typed.
+    //
+    // A card is found structurally, as a label with a radio in it, rather than by a list of the
+    // four classes that happen to be cards today, so a fifth kind of picker needs no edit here.
+
+    const shut = (part) => {
+      const toggle = part.querySelector(":scope > .picker__toggle");
+      if (toggle) toggle.checked = false;
+    };
+
+    // Matching is over a card's whole text, which is why a model answers to its name and to the
+    // routed id under it: both are printed on the card.
+    const narrow = (part, needle) => {
+      part.querySelectorAll("label:has(input[type=radio])").forEach((card) => {
+        card.toggleAttribute("data-away", Boolean(needle) && !card.textContent.toLowerCase().includes(needle));
+      });
+      // A provider heading with nothing left under it is a heading for nothing.
+      part.querySelectorAll(".models__provider").forEach((group) => {
+        group.toggleAttribute("data-away", !group.querySelector("label:has(input[type=radio]):not([data-away])"));
+      });
+    };
+
+    // Delegated, because the model group is replaced wholesale whenever the endpoint changes, so a
+    // listener wired to the radios at load would be pointing at cards that no longer exist.
+    const wireFolding = () => {
+      document.addEventListener("change", (event) => {
+        const pick = event.target;
+        if (!(pick instanceof HTMLInputElement) || pick.type !== "radio") return;
+        const part = pick.closest(".picker__part");
+        if (part) shut(part);
+      });
+    };
+
+    const wireFilter = () => {
+      document.addEventListener("input", (event) => {
+        const field = event.target;
+        if (!(field instanceof HTMLInputElement) || !field.classList.contains("picker__filter-field")) return;
+        const part = field.closest(".picker__part");
+        if (!part) return;
+        const needle = field.value.trim().toLowerCase();
+
+        // Naming one exactly *is* choosing it, which is what taking an entry from the browser's
+        // completion menu produces: leaving the reader to then reach for the single card still
+        // showing is a step they have already taken. Only ever an exact match on the whole name,
+        // so typing toward a longer one cannot pick something on the way past.
+        const named = [...part.querySelectorAll("label[data-name]")].filter(
+          (card) => card.dataset.name.toLowerCase() === needle,
+        );
+        if (named.length !== 1) {
+          narrow(part, needle);
+          return;
+        }
+        field.value = "";
+        narrow(part, "");
+        const pick = named[0].querySelector("input[type=radio]");
+        if (pick && !pick.checked) {
+          pick.checked = true;
+          // A real `change`, so everything already listening hears it: the fold shuts, and an
+          // endpoint's own `hx-get` swaps the model group. Setting `.checked` fires nothing.
+          pick.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          // Already the choice, so nothing changes and no event would fire. Shut it anyway: naming
+          // it is the reader saying they are done here either way.
+          shut(part);
+        }
+      });
+    };
+
     // Shift-Enter sends, and plain Enter still breaks the line. That way round because a message
     // here is prose that often wants a second paragraph and a fenced block, and a box where the
     // obvious key sends is a box you cannot write one in without learning a second key first.
@@ -618,10 +705,14 @@
     wireFolds();
     wireTheme();
     wireClasp();
+    wireFolding();
+    wireFilter();
     wireSend();
     wireFresh();
     wireSwaps();
     wireHash();
+
+    toCurrentSession();
 
     // A panel named in the URL is where the reader asked to be, and outranks following the end.
     const named = decodeURIComponent((location.hash || "").replace(/^#/, ""));

@@ -115,26 +115,20 @@ body {
     grid-template-columns: var(--sidebar) 1fr var(--rail);
 }
 
-/* Below the width at which a fixed session list and a readable page both fit, the list stops being
-   a column and becomes a band across the top. The sidebar is 17rem whatever the window is, so on a
-   phone it was taking two thirds of the screen and leaving the conversation about a hundred pixels
-   to render in - which is what actually scrolled the document sideways, however much the things
-   inside it were taught to shrink.
+/* The console has three shapes, and this is the one place that decides between them:
 
-   Stacked rather than hidden behind a toggle, because every session stays reachable with no new
-   control to learn and nothing for the script to drive: the band scrolls itself, and the page
-   below it gets the whole width. */
-@media (max-width: 48rem) {
-    .shell,
+   - over 78rem, three columns, the rail standing beside the conversation;
+   - 48rem to 78rem, two columns, the rail lying over the page and drawn shut;
+   - under 48rem, one column, with the session list a strip across the top.
+
+   The queries overlap, so the order they are written in is what picks between them: both match on
+   a phone, and whichever comes last wins. Every rule for the narrow shape is therefore in one
+   block at the end of this file, and the one immediately below is the only other width the grid
+   changes at. Split between the components they are about, they read fine one at a time and put
+   the 17rem sidebar column back on every phone. */
+@media (max-width: 78rem) {
     .shell:has(> .rail) {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
-    }
-
-    .sessions {
-        max-height: 30vh;
-        border-right: none;
-        border-bottom: 1px solid var(--edge);
+        grid-template-columns: var(--sidebar) 1fr;
     }
 }
 
@@ -211,7 +205,10 @@ body {
 
 main {
     display: grid;
-    grid-template-rows: auto 1fr auto;
+    /* Two rows, because a page here is the thing being read and the box you add to it: the
+       conversation (or the choosing, on the page with no conversation yet) takes whatever room is
+       left, and the composer is its own height under it. */
+    grid-template-rows: 1fr auto;
     min-height: 0;
     /* A grid item's minimum is its min-content unless this says otherwise, so without it the `1fr`
        column cannot go narrower than the widest unbreakable thing in here - which is the composer's
@@ -228,21 +225,6 @@ main {
    column they sit in is auto-sized, so it is their minimum that decides its width. */
 main > * {
     min-width: 0;
-}
-
-main > header {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-4);
-    padding: var(--gap) 0;
-}
-
-main > header h1 {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--ink-faint);
 }
 
 .transcript {
@@ -991,22 +973,17 @@ main > header h1 {
 .setup {
     display: flex;
     flex-direction: column;
-    /* Centred in the room it has, because this is the middle of the page rather than the top of a
-       document: pinned to the top it left a screen of nothing between the last card and the box,
-       which read as a page that had failed to load the rest of itself.
+    /* Pinned to the top, and that is what folding the groups bought. Centred, the picker's height
+       is a function of which group is open, so opening one moved every other group under the
+       reader's hand - and shut, all four are short enough that centring puts them adrift in the
+       middle of the page anyway. The cost is a gap between the last group and the message box on a
+       tall window, which is a page with room to spare rather than one that failed to load.
 
-       `safe` is what makes centring compatible with the scrolling: a centred flex child taller
-       than its container overflows equally in both directions and the top becomes unreachable,
-       and `safe` falls back to start-alignment exactly in that case.
-
-       It still scrolls, but as a last resort rather than as the normal case: the model list inside
-       gives up its height first, so this only overflows in a window too short to hold a choice and
-       a message box at once. That is the whole of why the settings stay put while the models
-       scroll - both are in here, and only one of them is in the part that gives. */
-    justify-content: safe center;
+       It still scrolls, as a last resort: with a group open the models are longer than any window,
+       and the list inside gives up its height first. */
+    justify-content: flex-start;
     min-height: 0;
     overflow-y: auto;
-    padding-block: var(--gap);
 }
 
 .picker {
@@ -1018,17 +995,217 @@ main > header h1 {
     width: 100%;
     max-width: var(--wide);
     margin: 0 auto;
-    /* So the models below can give up height instead of pushing the settings past the bottom of
-       the page. Without it a flex item is floored at its content height and the whole picker grows
-       until `.setup` has to scroll, taking the settings with it. */
+    /* So the models can give up height instead of the whole picker growing past the bottom of the
+       page. Without it a flex item is floored at its content height and `.setup` has to scroll,
+       which carries the endpoints and the settings off with the list. */
     min-height: 0;
+    /* Inside the scroller rather than on it, and that is what keeps the sticky provider heading
+       flush with the top of the box. A sticky `top: 0` is measured from the scroll container's
+       *content* edge, so padding on `.setup` parks the heading that far down and leaves a strip
+       above it with model cards sliding through - which is what a phone shows, where `.setup` is
+       the box that scrolls. Here the padding scrolls away with the content, as it should. */
+    padding-block: var(--gap);
 }
 
 .picker__part {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
     min-width: 0;
+}
+
+/* --- Folding a group down to what is picked ----------------------------- */
+
+/* The fold is a checkbox and every rule below reads it with `:has()`, so opening a group is the
+   browser's own behaviour and what a shut group draws is decided by the radio that is actually
+   checked. Nothing keeps a copy of the choice, so nothing can go stale: a summary line naming the
+   model would have been that copy, and with scripting off it would have named the wrong one from
+   the first pick onwards. */
+
+/* Off the page rather than `display: none`, for the reason the card radios are: hidden that way it
+   is unreachable by keyboard and unannounced. `.picker__more` below is what draws its focus. */
+.picker__toggle {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.picker__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+}
+
+/* What says a group is a picker rather than a statement. A shut group is one card, and a card with
+   nothing beside it reads as a fact about the session; the count of what else is on offer is what
+   makes it read as a choice. In the person's own hue, because opening it is the reader acting. */
+/* Beside the legend rather than pinned to the far edge. Pushed right it belonged to nothing: on a
+   wide window it sat a whole screen away from the word it qualifies, reading as page furniture
+   rather than as the control that opens the group under it. */
+.picker__more {
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.picker__more::after {
+    content: " \25BE";
+}
+
+.picker__part:has(> .picker__toggle:checked) .picker__more::after {
+    content: " \25B4";
+}
+
+/* One word or the other. `done` while open, because `27 options` beside the twenty-seven of them
+   is saying what the reader is already looking at. */
+.picker__part:has(> .picker__toggle:checked) .picker__more--shut,
+.picker__part:not(:has(> .picker__toggle:checked)) .picker__more--open {
+    display: none;
+}
+
+/* The control is what the reader sees, so it is what the focus ring has to land on: the checkbox
+   carrying the focus is parked off the page. */
+.picker__part:has(> .picker__toggle:focus-visible) .picker__more {
+    outline: 2px solid var(--mark);
+    outline-offset: 2px;
+}
+
+/* Shut: everything not picked is gone, and so is the provider heading over it - a lone card under
+   `ANTHROPIC` is a group of one, which is not what a settled choice looks like - and so is the box
+   for narrowing a list that is not being shown. */
+.picker__part:not(:has(> .picker__toggle:checked)) :is(.endpoint, .model, .repo, .think):not(:has(:checked)),
+.picker__part:not(:has(> .picker__toggle:checked)) .models__provider:not(:has(.model__pick:checked)),
+.picker__part:not(:has(> .picker__toggle:checked)) .models__heading,
+.picker__part:not(:has(> .picker__toggle:checked)) .picker__filter {
+    display: none;
+}
+
+/* --- Narrowing an open group ------------------------------------------- */
+
+/* One box per group, drawn only while the group is open. What it suggests is the browser's own
+   completion from the `<datalist>` beside it, which needs no script; what it hides is the script's,
+   so with the file absent this suggests and does not filter and every card is still there. */
+.picker__filter-field {
+    width: min(22rem, 100%);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--raised);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.8rem;
+}
+
+.picker__filter-field::placeholder {
+    color: var(--ink-faint);
+}
+
+/* Narrowed out. An attribute rather than a class, so it reads as a state the script put there
+   rather than as something the page was rendered with. */
+.picker [data-away] {
+    display: none;
+}
+
+/* --- Where a session works, and how hard it thinks ---------------------- */
+
+/* Both are rows rather than a grid of cards with facts on them: a repository is a name and where it
+   came from, and a thinking level is one word. Cards all the same, so the fold, the count and the
+   narrowing are one mechanism across every question this page asks. */
+.repos__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(20rem, 100%), 1fr));
+    gap: var(--space-3);
+}
+
+.thinks__grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+}
+
+.repo,
+.think {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    cursor: pointer;
+}
+
+.repo:hover,
+.think:hover {
+    border-color: color-mix(in srgb, var(--person-edge) 45%, var(--edge));
+}
+
+.repo__pick,
+.think__pick {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.repo:has(.repo__pick:checked),
+.think:has(.think__pick:checked) {
+    border-color: var(--person-edge);
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--raised));
+}
+
+.repo:has(.repo__pick:focus-visible),
+.think:has(.think__pick:focus-visible) {
+    outline: 2px solid var(--mark);
+    outline-offset: 2px;
+}
+
+.repo__name {
+    min-width: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* Which forge reached it, which is the fact that tells two rows apart once there is more than one
+   place repositories come from. Last in the row and quiet, like the endpoint's format. */
+.repo__forge {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tool-edge);
+}
+
+.think__name {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+}
+
+/* The picker sits on a raised card on the fork page, so its own cards need a ground to stand out
+   from rather than the one they are already on - the same trade the endpoints and models make. */
+.forking .repo,
+.forking .think {
+    background: var(--ground);
+}
+
+.forking .repo:has(.repo__pick:checked),
+.forking .think:has(.think__pick:checked) {
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--ground));
+}
+
+/* And a shut list is one card, so it neither scrolls nor holds the height a list would. */
+.picker__part:not(:has(> .picker__toggle:checked)) .models {
+    min-height: 0;
+    overflow-y: visible;
 }
 
 /* The one part that gives. The endpoints are a handful of cards and the settings are two rows, so
@@ -1038,8 +1215,8 @@ main > header h1 {
     min-height: 0;
 }
 
-/* The word above each group, drawn as the same faint chrome the panel roles are: it labels the
-   choice without competing with the things being chosen between. */
+/* The word naming each group, at the head of its row and drawn as the same faint chrome the panel
+   roles are: it labels the choice without competing with the thing being chosen. */
 .picker__legend {
     margin: 0;
     font-family: var(--mono);
@@ -1048,48 +1225,6 @@ main > header h1 {
     letter-spacing: 0.09em;
     text-transform: uppercase;
     color: var(--ink-faint);
-}
-
-/* The settings that apply whatever was picked above: a line each, label and control, labels
-   aligned down a column. A row each rather than one wrapping row, because they are two unrelated
-   questions and side by side they read as one setting with two halves - and because the answer to
-   the second is `owner/repository (attachment)`, which is long enough that the row wrapped at most
-   widths anyway, putting them on two lines in a way that depended on the window.
-
-   Two columns and `justify-items: start`, so each control is its own natural width: stretched to
-   the column a three-word thinking level would be a select as wide as the page. `minmax(0, ...)`
-   on the second, because a grid column is floored at its content's minimum width otherwise, and a
-   long repository name would push this wider than the picker. */
-.picker__settings {
-    display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
-    gap: var(--space-3) var(--space-4);
-    align-items: center;
-    justify-items: start;
-    color: var(--ink-faint);
-    font-size: 0.8rem;
-}
-
-/* Each label reads as one thing, so it breaks beside its control rather than through itself:
-   "Working / in" is two lines saying nothing. */
-.picker__label {
-    white-space: nowrap;
-    font-family: var(--mono);
-    font-size: 0.68rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-}
-
-.picker select {
-    /* Long enough to hold `owner/repository (attachment)` without the row pushing the page wider,
-       and free to shrink under it: a select that cannot shrink is a select that overflows. */
-    max-width: 100%;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--edge);
-    border-radius: 0.35rem;
-    background: var(--raised);
-    color: var(--ink);
-    font: inherit;
 }
 
 /* --- Which endpoint answers -------------------------------------------- */
@@ -1191,10 +1326,11 @@ main > header h1 {
        all of them would put the message box below the fold on the one page whose whole purpose is
        to reach that box.
 
-       Bounded by the room actually left rather than by a fixed height, which is what keeps the
-       endpoints and the settings put: at a fixed bound a short window still overflowed the picker
-       as a whole, so the outer block scrolled and carried the settings off with the models. Here
-       this is the only thing that scrolls, and the settings below it do not move.
+       Bounded by the room actually left rather than by a fixed height, which is what keeps
+       everything around it put: at a fixed bound a short window still overflowed the picker as a
+       whole, so the outer block scrolled and carried them off with the models. Here this is the
+       only thing that scrolls, so the repository and the endpoints above it and the thinking level
+       below it all stay where they are however long the list runs.
 
        The floor is what stops "shrink to fit" becoming "shrink to nothing": past it the outer block
        scrolls after all, which is the right answer in a window too short to show a choice and a
@@ -1379,14 +1515,10 @@ main > header h1 {
 }
 
 /* Below the width at which the rail can stand beside the conversation, giving it a column of its
-   own would take that width from the reading measure instead. So the column goes, the rail lies
-   over the page, and it is drawn shut: the cards slide off and the clasp is left where their head
-   was. Which width that is stays here, so nothing in the script has to measure the window. */
+   own would take that width from the reading measure instead. So the rail lies over the page and
+   is drawn shut: the cards slide off and the clasp is left where their head was. The column it
+   gives up goes with the shell's other widths, at the top of this file. */
 @media (max-width: 78rem) {
-    .shell:has(> .rail) {
-        grid-template-columns: var(--sidebar) 1fr;
-    }
-
     .rail {
         position: fixed;
         top: var(--space-5);
@@ -1427,11 +1559,6 @@ main > header h1 {
     .rail[data-open] > :not(.rail__clasp) {
         visibility: visible;
         transform: none;
-    }
-
-    /* A field under 16px is what makes a phone zoom the page as the reader focuses it. */
-    .search .search__input {
-        font-size: 16px;
     }
 }
 
@@ -1689,13 +1816,24 @@ mark.hit.current {
     color: var(--mark);
 }
 
-/* `main` is a grid whose middle row grows, because on a session page the middle child is the
-   transcript and the transcript is what should take the room. This page puts the card there
-   instead, so the rows are restated: the card is its own height and the conversation beneath it
-   grows. Stated as a rule on the page rather than a property on the card, because which row grows
-   is a fact about the layout and not about the thing that happens to sit in it. */
+/* On a touch screen there is no hover to come out of, so a link revealed by one is a link that
+   does not exist. Forking is the only way a session changes its mind, and it is offered on a
+   person's panel and nowhere else, so hiding it there hides the feature entirely. Shown always
+   where nothing can hover, which is the pointer's question and not the window's: a touch laptop
+   at full width has the same problem a phone does. */
+@media (hover: none) {
+    .panel__fork {
+        opacity: 1;
+    }
+}
+
+/* `main` is a grid whose first row grows, because on a session page that child is the transcript
+   and the transcript is what should take the room. This page puts the fork card there instead, so
+   the rows are restated: the card is its own height and the conversation beneath it grows. Stated
+   as a rule on the page rather than a property on the card, because which row grows is a fact
+   about the layout and not about the thing that happens to sit in it. */
 main:has(> .forking) {
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto 1fr;
 }
 
 .forking {
@@ -1848,4 +1986,256 @@ main:has(> .forking) {
 
 .refusal a {
     color: var(--person-edge);
+}
+
+/* --- On a phone --------------------------------------------------------- */
+
+/* One block rather than a rule beside each thing it changes, and the reason is the cascade rather
+   than taste: every rule here replaces one written above it, so being last is what makes it win.
+   Split up, the rail's own breakpoint put the sidebar column back under the narrow one and left
+   the conversation about a hundred pixels wide - a bug that is invisible in any one place and
+   obvious in one list. The rail's overlay rules are the exception and stay with the rail, because
+   they apply at two widths rather than this one.
+
+   Three things this is trying to do, in order:
+
+   - Give the conversation the screen. A phone has one column of room and everything that is not
+     what somebody is reading is spending it.
+   - Scroll on one axis at a time, in one box. Nested scrollers on the same axis are what actually
+     feels broken under a thumb, and this console had three of them stacked on the start page.
+   - Be touchable. A 16px field is what stops a phone zooming the page as it is focused, and an
+     arrow under about 44px square is one that gets missed. */
+@media (max-width: 48rem) {
+    :root {
+        /* Wider than the column a wide window gives the rail, because everything in it is sized to
+           be hit rather than pointed at. What sets it is the key and the theme, which are words
+           laid out in columns and cannot give way; the dock's three arrows fit well inside that. */
+        --rail: 12.5rem;
+    }
+
+    /* The sidebar's 17rem is two thirds of a phone, spent on navigation somebody reaches for once
+       a session. So the list stops being a column and becomes a strip across the top: one row of
+       chips that scrolls sideways, which is the switcher a phone already reads without being
+       taught one and costs the conversation about a twentieth of its height.
+
+       A strip rather than a shorter band, and it is the axis that decides it: a band is a second
+       vertical scroller stacked on the transcript's own. Sideways over downwards means a swipe
+       says one thing wherever it lands.
+
+       What a chip gives up is the date, the repository and the tree's indentation - facts for
+       telling sessions apart, where a strip is for getting back to one. The fork marker stays,
+       because "a branch at turn 2" is what distinguishes two chips of the same conversation. */
+    .shell,
+    .shell:has(> .rail) {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    .sessions {
+        flex-direction: row;
+        align-items: center;
+        gap: var(--space-2);
+        /* A grid item's minimum is its content's, and a row of session names is far wider than a
+           phone: without this the strip floors the column and takes the document sideways with
+           it, which is the one thing every page here must never do. */
+        min-width: 0;
+        padding: var(--space-3) var(--space-4);
+        border-right: none;
+        border-bottom: 1px solid var(--edge);
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+    }
+
+    /* Held at the head of the strip while the sessions scroll under it: starting one is what
+       somebody comes to this list to do most often, and swiping back for it is a step. */
+    .sessions .start {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        flex: none;
+        padding: var(--space-3) var(--space-5);
+        /* A sticky box holds still against the *padding* box, so the strip's own inline padding is
+           a gutter the chips keep scrolling through beside a button that cannot reach it: half a
+           centimetre of somebody else's session, permanently, at the left edge. The shadow is the
+           ground painted over that gutter, offset by exactly the padding it has to cover, with
+           enough spread that the button's rounded corners leave nothing showing at the ends. */
+        box-shadow: calc(-1 * var(--space-4)) 0 0 var(--space-2) var(--ground);
+    }
+
+    .sessions ul {
+        flex-direction: row;
+        align-items: center;
+    }
+
+    .sessions li,
+    .sessions li[data-depth] {
+        flex: none;
+        /* The tree is drawn by stepping a branch in under what it came from, and a row of chips
+           has no under. What is on the chip is what survives. */
+        padding-left: 0;
+    }
+
+    .session {
+        flex-direction: row;
+        align-items: baseline;
+        gap: var(--space-3);
+        max-width: 13rem;
+        padding: var(--space-3) var(--space-4);
+        border-color: var(--edge-soft);
+        white-space: nowrap;
+    }
+
+    .session .name {
+        min-width: 0;
+    }
+
+    .session .meta {
+        flex: none;
+    }
+
+    .session .when,
+    .session .where {
+        display: none;
+    }
+
+    /* --- The conversation --- */
+
+    /* A little room at the top, which with no banner over the pane is the only thing between the
+       session strip and the first panel - and the strip needs a line under it that is not somebody's
+       message. It is also what the rail's clasp hangs in, so the first panel's own controls are not
+       under it. */
+    main {
+        padding: var(--space-5) var(--space-4) 0;
+    }
+
+    .panel {
+        margin: var(--space-6) 0;
+        padding: var(--space-1) var(--space-4);
+    }
+
+    /* --- What you type in --- */
+
+    /* Under 16px is what makes a phone zoom the page as the reader focuses a field, and it does
+       not zoom back out: every control that takes text or a choice is held at it, rather than the
+       search alone, because the box you write a message in is the one that matters most. */
+    .composer textarea,
+    .composer__name,
+    .forking textarea,
+    .picker__filter-field,
+    .search__input {
+        font-size: 16px;
+    }
+
+    .composer {
+        padding: var(--space-4) 0;
+    }
+
+    .composer button,
+    .forking__act button,
+    .picker__filter-field,
+    .repo,
+    .think {
+        min-height: 2.75rem;
+    }
+
+    /* A card is a row here, so it wants its text centred in the height a thumb needs rather than
+       sitting at the top of it. */
+    .repo,
+    .think {
+        align-items: center;
+    }
+
+    /* --- Choosing what a session runs on --- */
+
+    /* One scroller for the whole choosing, where a wide window has the models scrolling inside a
+       block that scrolls inside the page. That nesting is what keeps the settings put beside a
+       long model list, and on a phone it bought a list about thirty pixels tall: `.setup` is the
+       row that grows, the picker is taller than it whatever happens, so the part that was meant to
+       give had nothing to give from.
+
+       So the models simply stop scrolling and `.setup` carries the lot. The message box is still
+       pinned under it, which is the property that mattered: however far down the list somebody
+       scrolls, the thing they came to type in has not moved.
+
+       The `flex: none` is the other half and is not optional. Every `min-height: 0` above exists to
+       let a part shrink so the models can be the one that gives; with nothing left to scroll, that
+       permission just squashes the list to a third of its content and draws the rest of it over the
+       settings underneath. Nothing here shrinks, so everything is its own height and one box
+       scrolls. */
+    .picker,
+    .picker__part--models,
+    .models,
+    .forking .models {
+        flex: none;
+        min-height: auto;
+        max-height: none;
+        overflow-y: visible;
+    }
+
+    /* --- Forking --- */
+
+    /* The fork card holds a whole picker, so on a phone it is taller than the screen on its own
+       and the transcript beneath it has nothing left to be. Pinning rows is what a session page
+       wants, where the transcript is the content; here the page is one thing to read down, so it
+       scrolls as one. */
+    main:has(> .forking) {
+        grid-template-rows: auto auto;
+        overflow-y: auto;
+    }
+
+    main:has(> .forking) .transcript {
+        overflow-y: visible;
+    }
+
+    .forking {
+        padding: var(--space-5);
+    }
+
+    /* --- The rail --- */
+
+    /* The rail is fixed to the viewport rather than laid out in the shell, so it knows nothing
+       about the session strip and the clasp lands on top of the last chip in it. Started below the
+       strip instead, which is one row of chips and their padding and comes to a little over three
+       rems. Bottom-anchoring it would put the clasp under a thumb, which is the better place for
+       it on a phone and is taken: that corner is the Send button's. */
+    .rail {
+        top: var(--space-9);
+    }
+
+    /* Everything in here is pressed rather than read, so it is sized for a thumb: the cards keep
+       their proportions and the targets in them grow. */
+    .rail > * {
+        padding: var(--space-3) var(--space-4);
+        font-size: 0.78rem;
+    }
+
+    .rail__clasp {
+        width: 2.8rem;
+        height: 2.8rem;
+        padding: 0;
+        font-size: 1.2rem;
+    }
+
+    .dock__nav {
+        grid-template-columns: repeat(3, 2.6rem);
+    }
+
+    .dock__btn {
+        width: 2.6rem;
+        height: 2.6rem;
+        font-size: 1rem;
+    }
+
+    .key__chip {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .search__nav {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .theme button {
+        padding: var(--space-2) var(--space-4);
+    }
 }

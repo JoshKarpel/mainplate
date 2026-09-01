@@ -51,6 +51,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Shift-Enter sends a message and plain Enter breaks the line, which is that way round because a
   message here is prose that often wants a second paragraph and a fenced block. An empty box refuses
   from the keyboard exactly as it refuses from the button.
+- A console that reads on a phone. Under 48rem the session list stops being a 17rem column and
+  becomes a strip of chips across the top that scrolls sideways, which gives the conversation all
+  but about a twentieth of the height and keeps every session one swipe away with no control to
+  learn; the session being read is brought into view, on a strip and on a full-height list alike.
+  The choosing on the new-session page becomes one scroller rather than three nested ones, with the
+  message box still pinned beneath it, and the fork page scrolls as the single long thing it is.
+  Every field that takes text or a choice is held at 16px, which is what stops a phone zooming the
+  page as it is focused, and every control in the rail is sized to be hit rather than pointed at.
+  A branch link, which a wide window reveals on hover, is drawn always where nothing can hover.
 - `mainplate install` and `mainplate uninstall`, which converge and remove a user systemd unit
   pointing at the interpreter that ran them. Any `MAINPLATE_*` setting lives in an
   `EnvironmentFile` created `0600` on the first install and never overwritten.
@@ -144,13 +153,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   part of the console's chrome.
 - A new-session page built around the choosing rather than around the box. The endpoints are cards
   naming the API format each speaks and the URL each points at, which is what tells two endpoints
-  apart when one gateway answers both formats on one hostname; the models are cards carrying cost, context
-  window, output cap, capabilities and release date. Both are radio inputs inside labels, so the
-  whole card is the target and the page works with JavaScript off. The picker fills the middle of
-  the page and the message box sits under it, which is the arrangement a page with no conversation
-  on it wants. The model list is the only part that scrolls, since its length is a property of
-  whichever gateway you are pointed at, so the thinking level and the repository stay put below it
-  rather than scrolling away with it, a line each.
+  apart when one gateway answers both formats on one hostname; the models are cards carrying cost,
+  context window, output cap, capabilities and release date. Every option is a radio input inside a
+  label, so the whole card is the target and the page works with JavaScript off. The choosing runs
+  down the top of the page with the message box pinned under it, which is the arrangement a page
+  with no conversation on it wants, and it is ordered widest-first - the repository, then the
+  endpoint, then the model, then the thinking level, then the name and the message box - so the
+  choice that decides what the agent can touch at all is the first thing on the page rather than a
+  line under seventy model cards.
+- All four questions the picker asks are one component: a group of cards that folds down to the one
+  picked, says how many options it has (`27 options`), and can be narrowed by typing. A gateway
+  serves seventy models, and a wall of that many cards left everything after it past the end of a
+  scroll; shut, the whole of what a session is decided by is four lines and four cards. The fold is
+  a checkbox and the folding is a CSS `:has()` rule, so it works with JavaScript off and a shut
+  group draws the card whose radio is actually checked rather than a summary that could go stale.
+  With scripting on, picking a card folds its group away.
+- The repository and the thinking level are cards too, rather than `<select>`s. A native `<option>`
+  renders as text in every browser, so a select can carry neither the fold nor the forge a
+  repository was reached through - and that forge is the fact telling two rows apart the moment
+  repositories come from more than one place.
+- Typing narrows a group. Each carries a `<datalist>` of the names in it, so the browser completes
+  one with no script at all, and the script hides the cards that do not match. Matching is over a
+  card's whole text, so a model answers to its name and to the id the request will actually name.
+  Naming one exactly picks it and shuts the group, which is what taking an entry from the
+  completion menu does; the match is never on a prefix, so spelling `xhigh` does not stop at
+  `high`.
 - An optional name for a session, in a field above the message box. Left empty, a session is named
   after its first message exactly as before. A given name goes through the same rule, so there is
   one answer to what a session name is rather than one per way of arriving at one.

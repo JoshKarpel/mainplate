@@ -43,8 +43,8 @@ page from fixture checkpoints and drives a real Chromium over them, so a styling
 looked at rather than argued about. It needs no server, no database, no provider and no
 `config.yaml`, because a page is a pure function of already-answered questions: `scripts/gallery.py`
 answers them with fixtures and the assets are copied beside the output, so a static server renders
-what the console renders. Every shot asserts the document never scrolls sideways, which is how the
-`:target` rule that widened a panel past its container was found.
+what the console renders. Every shot also prints whether the document scrolls sideways, which is how
+the `:target` rule that widened a panel past its container was found.
 
 `tests/test_browser.py` is the other half and asks a different kind of question, mostly over the
 same gallery. What a still cannot show is that *two* panels are drawn as where the reader is, or
@@ -53,6 +53,14 @@ assertions. It is in the suite rather than in a recipe of its own because a chec
 check that catches nothing: both of the bugs it first pinned were live while an equivalent script
 sat beside it unrun. A browser that is not installed fails loudly rather than skipping, for the same
 reason.
+
+**Sideways scroll is asserted there rather than in the shots, and that is the same lesson again.**
+`shoot.mjs` prints it beside the screenshot it is measuring and fails nothing, which is a diagnostic
+for somebody already looking; `TestTheShapeOfANarrowWindow` fails a build. It asks two things,
+because overflow can be right for the wrong reason: whether any page pushes the document sideways on
+a phone, and whether a page carrying a rail is still *one* grid track there. The second is the
+direct guard on the breakpoint ordering below, and it reports the sidebar track coming back rather
+than one of the ways that shows.
 
 Its `console` fixture is the one thing there that leaves the gallery, and it has to. The gallery
 proves how a conversation *renders*; what the live connection has to prove is that the page changes
@@ -248,9 +256,9 @@ route**, and conflating the two is the mistake to avoid. exe.dev's gateway answe
 before that prefix appeared names a model discovery will never return. So the two questions are
 kept apart:
 
-- **Starting** a session asks `Catalogue.offers(endpoint, model)`. That is form validation: a select
-  is a suggestion the page made, not a constraint on what can be posted, so a new session may only
-  be created on a pair the picker actually offered.
+- **Starting** a session asks `Catalogue.offers(endpoint, model)`. That is form validation: what the
+  picker drew is a suggestion the page made, not a constraint on what can be posted, so a new
+  session may only be created on a pair the picker actually offered.
 - **Answering** one asks only whether the *endpoint* exists, in the worker (`agent_for` raising
   `UnknownChoice`) and in `Conversation.answerable` (`models_of(...) is not None`), which are
   deliberately the same question so the page and the worker cannot disagree. The model is not
@@ -733,14 +741,107 @@ projection is one idempotent `repaint()` serving the first render, every swap, a
 Everything it drives is an enhancement: with the file absent the page still renders, posts, and
 folds.
 
+**The console has three shapes and one place that decides between them.** Over 78rem the shell is
+three columns and the rail stands beside the conversation; between 48rem and 78rem it is two, with
+the rail lying over the page and drawn shut behind its clasp; under 48rem it is one, and the session
+list becomes a strip of chips across the top. Every phone rule is in one block at the *end* of
+`mainplate.css`, and that is not tidiness: the queries overlap, so the narrow one wins only by
+coming later. Split up, the rail's own `max-width: 78rem` block sat below the narrow one and put the
+17rem sidebar column back on every phone, leaving the conversation about a hundred pixels to render
+in - a bug invisible in either rule and obvious with both in one list. So a rule that changes shape
+on a phone goes in that block; a rule that applies at two widths (the rail's overlay) stays with the
+thing it is about.
+
+A strip rather than a shorter band, and the axis is what decides it: a band is a second *vertical*
+scroller stacked on the transcript's own, and two of those on one axis is what feels broken under a
+thumb. What a chip gives up is the date, the repository and the tree's indentation, which are for
+telling sessions apart where a strip is for getting back to one; the fork marker stays.
+`toCurrentSession` brings the session being read into that list and is deliberately shape-blind:
+`nearest` scrolls the list on whichever axis it actually scrolls on, so one call serves the strip
+and the full-height column both.
+
+Two more things change on a phone, and both follow from it having one column of room. **Nested
+same-axis scrollers go away**: the wide picker has the models scrolling inside a block that scrolls
+inside the page, which is what keeps the endpoints and the settings put beside a seventy-model list,
+and on a phone it bought a list thirty pixels tall. So the models stop scrolling *and* nothing in
+the picker shrinks - the `flex: none` is the half that is easy to miss, since every `min-height: 0`
+above exists to let a part give way, and with nothing left to scroll that permission just squashes
+the list and draws the rest of it over what follows. **And a control revealed by hover does not
+exist**, which is `@media (hover: none)` rather than a width: the branch link is offered on a
+person's panel and nowhere else, so hiding it there hides forking entirely.
+
+**The picker is ordered widest-first: repository, endpoint, model, thinking**, and then the name and
+the message box, which are the composer's rather than the picker's. Where a session works is the
+broadest thing about it and the only one deciding what the agent can touch at all, so it leads; the
+endpoint and the model are adjacent because they are a pair, the list being whatever the endpoint
+above it offers; the thinking level is a setting *on* the model, so it sits under it.
+
+**Every question the picker asks is one component.** `choosing` in `pages.py` takes a legend, a
+toggle id, the names on offer and a body of cards, and gives back a group that folds to what is
+picked, says how many options it has, and can be narrowed by typing. All four questions - the
+repository, the endpoint, the model, the thinking level - are built from it, which is why the
+repository and the thinking level stopped being `<select>`s: a select renders its options as text in
+every browser, so it could carry neither the forge a repository came from nor the fold, and having
+two kinds of control answering four versions of one question was the thing to remove.
+
+A fifth picker is a `choosing` call and nothing else. The script names none of the four card classes
+- it finds a card structurally, as a `<label>` with a radio in it, or by the `data-name` the card
+declares - so a new kind of card needs no edit there. The one selector it does name is
+`.models__provider`, which is not a card but the heading over a run of them.
+
+Four things there are decided:
+
+- **The fold is a checkbox and the folding is `:has()`, so nothing in the script decides it.** That
+  is what keeps a shut group honest: what it draws is the card whose radio is actually checked, read
+  off the radio, so there is no second copy of the choice to go stale. A summary line naming the
+  model was the obvious alternative and is exactly that copy - with scripting off it names the wrong
+  model from the first pick onwards. Everything the script does to a group - shutting it on a pick,
+  narrowing it, checking a card the reader named - *sets* state and never reads the choice back out
+  to decide anything.
+- **The count of what is on offer is on the control** (`27 options`), because a shut group is one
+  card and a card on its own reads as a fact about the session rather than a choice. It has to be
+  rendered *inside* what the endpoint swap replaces, which is why `model_cards` returns the whole
+  group, head and fold included, rather than just the list: outside it, the count keeps saying 27
+  after the list under it became 46.
+- **A swap resetting the fold is the right state to arrive in.** Picking an endpoint replaces the
+  model group, so it comes back shut on that endpoint's default model, which is a real choice
+  already made and worth seeing rather than a list to close.
+- **One argument is the count, the completions and the filter**, so the three cannot disagree.
+  `names` is one entry per card: passing a model's label *and* its routed id was two entries each
+  and a group announcing 54 options over 27 cards. Searching by id still works, because the filter
+  matches a card's whole text and the id is printed on it - the `<datalist>` is the readable half
+  and a list of names interleaved with `anthropic/claude-sonnet-4-6` is not that.
+
+The narrowing box is the one control on this page that does nothing without the script, and it is
+drawn that way deliberately: the `<datalist>` beside it is the browser's own completion over the
+same names, so with the file absent typing still helps and every card is still there to be picked.
+
+**Naming one exactly is choosing it.** Taking an entry from the completion menu puts the whole name
+in the box, and that is the reader having decided, so the card is checked and the group shuts rather
+than leaving them to reach for the one card still showing. The match is on the whole name and never
+a prefix, which is what stops the keystrokes spelling `xhigh` from stopping at `high`; every card
+carries the name it answers to as `data-name`, the same string that went into the completion list.
+Checking a radio from script fires nothing on its own, so the pick dispatches a real bubbling
+`change` - which is what shuts the fold *and* what lets an endpoint's own `hx-get` swap the models.
+
+**A sticky heading is measured from the scroll container's *content* edge, so that container gets no
+block padding.** `.setup` carried `padding-block` and `.picker` now does, which looks like moving a
+value between two elements that fill each other and is not: on a phone `.setup` is the box that
+scrolls, so padding on it parked the sticky provider heading that far down the box and left a strip
+above it with model cards sliding through. Inside, the padding scrolls away with the content, which
+is what it was always for.
+
 The picker's controls are **associated with their form by name, not by nesting**, and that is
 load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned
-under it, so every endpoint radio, model radio and select is a *sibling* of the form that posts them;
+under it, so every radio in all four groups is a *sibling* of the form that posts them;
 `form="choosing"` (`CHOOSING_ID` in `pages.py`) is the whole of what makes them submit, and without it
 the console refuses its own page with a 422 saying a message needs an endpoint and a model. The fork
 page nests its picker inside a form of the same name, so `model_cards` can carry one attribute and
-serve both the pages and the `/fragments/models` swap. A markup assertion cannot see any of this,
-which is why `TestWhatAFormPosts` asks a browser what `form.elements` holds.
+serve both the pages and the `/fragments/models` swap. The fold's own checkbox is the one control
+that deliberately carries *neither* a `name` nor a `form`: it is how a group is looked at, not part
+of what a session is decided by. A markup assertion cannot see any of this, which is why
+`TestWhatAFormPosts` asks a browser what `form.elements` holds and `TestFoldingAGroupOfCards` asks
+what a shut group still posts.
 
 **Shift-Enter sends and plain Enter breaks the line**, which is that way round because a message here
 is prose that wants paragraphs and fenced blocks: a box where the obvious key sends is a box you

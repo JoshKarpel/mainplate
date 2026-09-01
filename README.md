@@ -64,9 +64,16 @@ the heading the model cards are grouped under.
 A session records the endpoint, the model, a thinking level *and* a repository, at the moment it is
 created, and all four are fixed for its life. The endpoint is what carries the API format, which is
 why it is recorded rather than looked up later: the same model id genuinely does sit behind two
-formats, and the two serialize a conversation differently. You pick all four on the new-session page, where the endpoints are cards
-naming the API format each speaks and the URL each points at, and the models are cards carrying what they
-cost, how much they read, and what they can do, grouped by the vendor each comes from. After that
+formats, and the two serialize a conversation differently. You pick all four on the new-session
+page, where the endpoints are cards naming the API format each speaks and the URL each points at,
+and the models are cards carrying what they cost, how much they read, and what they can do, grouped
+by the vendor each comes from. All four questions are the same component: a group of cards **folded
+down to the one you picked**, with the count of what else is on offer beside it and a box that
+narrows the group as you type. A gateway serves seventy models, and a wall of seventy cards is not a
+page you can see the rest of your choices on; shut, the whole of what a session is decided by is
+four lines. Opening a group is a checkbox and the folding is a CSS `:has()` rule, so it works with
+JavaScript off and a shut group can never name something other than what is actually checked. After
+that
 the session says what it is on rather than offering a control that could not change it. A
 conversation that switched model halfway would replay its recorded answers from one and continue on
 another, so what the transcript shows and what the next turn reasons from would have different
@@ -373,6 +380,13 @@ opens; what goes is the rail and the keyboard send.
 Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
 often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
 you cannot write one in.
+
+**It reads on a phone.** The rail folds away behind a clasp once it cannot stand beside the
+conversation without taking the width from it, and on a narrow screen the session list stops being a
+column and becomes a strip of chips across the top: every session is still one swipe away, and the
+conversation gets all but about a twentieth of the height. What a screen that narrow mostly buys is
+one scroller at a time, so the new-session page's choosing becomes a single scroll with the message
+box pinned under it, and the fork page scrolls as the one long thing it is.
 
 ## What it does not do yet
 
