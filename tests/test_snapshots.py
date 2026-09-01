@@ -26,6 +26,7 @@ from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
 from mainplate.service import Service
+from mainplate.settings import Settings
 from mainplate.snapshots import SNAPSHOT_REF
 from mainplate.snapshots import NotAWorkspace
 from mainplate.snapshots import Workspace
@@ -87,6 +88,55 @@ async def workspaces(workspace: Workspace, tmp_path: Path) -> Workspaces:
         )
     )
     return Workspaces(clones=Clones(root=tmp_path / "clones"), root=tmp_path / "worktrees", reaching=reaching)
+
+
+class TestWorkingFromARelativeDatabase:
+    """
+    A console started from a working directory, which is how every foreground run starts one.
+
+    The fixtures above hand `Clones` and `Worktrees` an absolute root, so nothing else here would
+    notice a root that was relative. These two go the whole way from the setting: `git` is run with
+    a `cwd` of the caller's choosing, so a destination that is not absolute is resolved somewhere
+    nobody asked for, and the idempotence checks that look at the asked-for path then never fire.
+    """
+
+    async def test_a_clone_lands_where_it_was_asked_for_and_is_made_once(
+        self, workspace: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        root = Settings(database=Path("mainplate.db")).workspace_root
+        clones = Clones(root=root / "clones")
+        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(workspace.root))
+
+        assert await clones.ensure(repository) == clones.at(repository.id)
+        assert clones.cloned(repository.id), "the clone is where `at` says it is, not one level deeper"
+        assert list(root.rglob("*.git")) == [clones.at(repository.id)]
+        # The second pass, which is what a session's second turn does. Cloning again would fail on
+        # a destination that already exists, so this is the assertion that `ensure` is idempotent
+        # rather than merely written to look it.
+        assert await clones.ensure(repository) == clones.at(repository.id)
+
+    async def test_a_worktree_is_planted_outside_the_repository_and_only_once(
+        self, workspace: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        root = Settings(database=Path("mainplate.db")).workspace_root
+        clones = Clones(root=root / "clones")
+        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(workspace.root))
+        await clones.ensure(repository)
+        worktrees = clones.worktrees(repository.id, root / "worktrees")
+
+        planted = await worktrees.plant("a" * 32)
+        assert planted.root == worktrees.at("a" * 32)
+        assert planted.root.is_dir()
+        # Outside the clone, which is the property the doubling breaks: a worktree resolved against
+        # the repository's own directory would be captured by the snapshots it exists to take.
+        assert not planted.root.is_relative_to(clones.at(repository.id))
+        # `git worktree list` names the bare repository itself alongside its linked worktrees, so
+        # this asks whether the planted one is in that answer rather than what the whole answer is.
+        # It is the same question `plant` asks to decide whether it has anything to do.
+        assert planted.root in await worktrees.planted()
+        assert (await worktrees.plant("a" * 32)).root == planted.root
 
 
 @pytest.fixture

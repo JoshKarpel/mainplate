@@ -6,7 +6,7 @@ mainplate is a chat console over a Pydantic AI agent whose sessions are durable 
 ## Commands
 
 ```console
-$ just setup            # uv sync + install pre-commit as a git hook
+$ just setup            # uv sync, the browsers, and pre-commit as a git hook
 $ just test             # mypy, then pytest
 $ just test tests/test_console.py::TestTheConsole  # extra args go straight to pytest
 $ just check            # pre-commit over all files, then mypy
@@ -14,7 +14,6 @@ $ just serve            # foreground, on port 8101 so it never fights the instal
 $ just demo             # the same, on a database of its own, for poking without touching real sessions
 $ just seed             # the gallery's fixtures into that database, so there is something to click
 $ just shots            # render every page and screenshot it, wide and phone, into build/shots
-$ just browse           # drive the console in a real Chromium and assert on what it does
 $ just install          # this checkout as a user systemd unit, on the default port 8100
 $ just logs             # journalctl --user -u mainplate -f
 $ just uninstall        # removes the unit, keeps the environment file and the database
@@ -38,17 +37,30 @@ answers them with fixtures and the assets are copied beside the output, so a sta
 what the console renders. Every shot asserts the document never scrolls sideways, which is how the
 `:target` rule that widened a panel past its container was found.
 
-`just browse` is the other half and asks a different kind of question. What a still cannot show is
-that *two* panels are drawn as where the reader is, so behaviour gets its own checks in
-`scripts/check-landing.mjs`. Both are dev tools: the console's own script is served from
-`assets/` and depends on nothing, and `package.json` exists only for Playwright.
+`tests/test_browser.py` is the other half and asks a different kind of question, over the same
+gallery. What a still cannot show is that *two* panels are drawn as where the reader is, or that a
+form posts controls that sit outside it, so behaviour gets a real Chromium and its own assertions.
+It is in the suite rather than in a recipe of its own because a check nobody runs is a check that
+catches nothing: both of the bugs it now pins were live while an equivalent script sat beside it
+unrun. A browser that is not installed fails loudly rather than skipping, for the same reason.
+
+It drives Playwright's **async** binding, which is not a preference: `sync_playwright` runs an event
+loop on the calling thread, and this suite is already running one, so the sync API leaves every
+browser test passing and every *other* async test failing its teardown. One session-scoped loop
+(`pytestmark = pytest.mark.asyncio(loop_scope="session")`) so the browser can be session-scoped too.
+
+The console's own script is served from `assets/` and depends on nothing. `package.json` exists only
+for `scripts/shoot.mjs`, so a checkout currently pins two Chromiums: Playwright's Python and Node
+bindings each fetch their own.
 
 Run `just test` or `just check` before saying anything is done. CI runs the same pre-commit
 configuration, so there is one definition of what the checks are.
 
 `pytest` runs under `xdist` (`-n auto`), `pytest-randomly`, and a 10-second per-test timeout, all
 from `addopts`. A test that needs longer raises it with `@pytest.mark.timeout(...)` rather than
-changing the global.
+changing the global; Playwright's retrying `expect` is capped well under it so a failed assertion
+reports as itself rather than as a hang. `pythonpath = ["."]` is what puts `scripts/` on the path,
+so the browser tests render the gallery with the same code `just gallery` runs.
 
 ## The one idea
 
@@ -326,6 +338,19 @@ A session that picked a repository gets **a git worktree of its own**, under `MA
 files in every other session's snapshots). A worktree apiece rather than one shared tree, because
 two writers in one directory make a snapshot unattributable and the person is always one of the two.
 
+`Settings.workspace_root` **resolves that path**, and it is not tidying. Everything under it runs
+`git` with a `cwd` of its own: a clone is made from the clones root, a worktree is added from the
+repository. Hand either a relative destination and git resolves it against *that* directory, so the
+clone lands at `workspaces/clones/workspaces/clones/…` and the worktree lands inside the repository.
+The idempotence checks then look at the path that was asked for, never find it, and let every pass
+try again, which is a `SnapshotFailed` on a session's second turn. The default database is
+`mainplate.db` in the working directory and `just serve`/`just demo` name one there too, so a
+relative root is the common case rather than the odd one. Resolved at the setting because that is
+where a configured path enters the process, and one absolute value cannot be got wrong by the next
+consumer; `Clones` and `Worktrees` take an absolute root as a precondition. `test_snapshots.py` goes
+the whole way from a `Settings` with a relative database, because the other fixtures there hand both
+an absolute root and so would never notice.
+
 There is deliberately **no setting naming a repository**. What a session works in is picked when it
 is created and recorded on the session, so a process-wide answer would be a second answer to a
 question each session already answers, exactly as a process-wide model would be. A session may
@@ -469,6 +494,24 @@ either, so `assets/mainplate.js` holds it as values and reapplies it after every
 projection is one idempotent `repaint()` serving the first render, every swap, and every press.
 Everything it drives is an enhancement: with the file absent the page still renders, posts, polls,
 and folds.
+
+The picker's controls are **associated with their form by name, not by nesting**, and that is
+load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned
+under it, so every endpoint radio, model radio and select is a *sibling* of the form that posts them;
+`form="choosing"` (`CHOOSING_ID` in `pages.py`) is the whole of what makes them submit, and without it
+the console refuses its own page with a 422 saying a message needs an endpoint and a model. The fork
+page nests its picker inside a form of the same name, so `model_cards` can carry one attribute and
+serve both the pages and the `/fragments/models` swap. A markup assertion cannot see any of this,
+which is why `TestWhatAFormPosts` asks a browser what `form.elements` holds.
+
+**Shift-Enter sends and plain Enter breaks the line**, which is that way round because a message here
+is prose that wants paragraphs and fenced blocks: a box where the obvious key sends is a box you
+cannot write one in. `wireSend` calls **`requestSubmit`** and not `submit`, and that is the whole of
+why one delegated listener serves every page: `submit()` posts *without* dispatching a `submit`
+event, so htmx would never see a send on a session page and the browser would navigate away from the
+conversation instead. It also runs the form's own validation, so an empty box refuses from the
+keyboard exactly as it refuses from the button. The Send button names the key, because a shortcut
+nothing on the page mentions is one nobody uses.
 
 A message is **rendered Markdown, then sanitised**, in `markup.py`. Both halves are required.
 Python-Markdown passes raw HTML through untouched and never looks at URL schemes, so

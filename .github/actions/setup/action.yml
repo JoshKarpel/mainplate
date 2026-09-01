@@ -18,3 +18,10 @@ runs:
     - name: Sync dependencies
       shell: bash
       run: uv sync --locked
+
+    # The suite drives a real browser, so one is part of the toolchain rather than an optional
+    # extra: `tests/test_browser.py` fails loudly without it, which is the point. `--with-deps`
+    # because a runner image carries the shared libraries Chromium needs only by coincidence.
+    - name: Install the browser the suite drives
+      shell: bash
+      run: uv run playwright install --with-deps chromium

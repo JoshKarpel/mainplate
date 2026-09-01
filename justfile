@@ -23,10 +23,13 @@ list:
 
 alias l := list
 
-[doc('Prepare a fresh clone: dependencies, and pre-commit as a git hook')]
+# Two Chromiums, and for now that is what it costs: the suite drives Playwright's Python binding and
+# `shots` still drives its Node one, which pin their own browser builds separately.
+[doc('Prepare a fresh clone: dependencies, browsers, and pre-commit as a git hook')]
 setup:
     uv sync
     uv run pre-commit install
+    uv run playwright install chromium
     npm install
     npx playwright install chromium
 
@@ -40,7 +43,7 @@ setup:
 
 [doc('Render every page to build/gallery, as files a browser can open')]
 gallery:
-    uv run python scripts/gallery.py {{ GALLERY }}
+    uv run python -m scripts.gallery {{ GALLERY }}
 
 # Extra arguments are pages to shoot, each `file.html` or `file.html#anchor`, defaulting to all of
 # them: `just shots 'session.html#panel-0-1'`.
@@ -53,17 +56,11 @@ shots *args: gallery
     sleep 1
     node scripts/shoot.mjs http://127.0.0.1:{{ GALLERY_PORT }} {{ SHOTS }} {{ args }}
 
-# Behaviour rather than appearance, which is a different question and needs a different check: what
-# a still cannot show is that *two* panels are drawn as where the reader is.
-[doc('Drive the console in a real browser and assert on what it does')]
-browse: gallery
-    #!/usr/bin/env bash
-    set -euo pipefail
-    uv run python -m http.server {{ GALLERY_PORT }} --bind 127.0.0.1 --directory {{ GALLERY }} &>/dev/null &
-    trap 'kill %1 2>/dev/null || true' EXIT
-    sleep 1
-    node scripts/check-landing.mjs http://127.0.0.1:{{ GALLERY_PORT }}
-
+# Behaviour rather than appearance is a different question and gets a different check, and those are
+# in the suite rather than here: what a still cannot show is that *two* panels are drawn as where the
+# reader is, or that a form posts the controls sitting outside it, and `tests/test_browser.py` drives
+# a real Chromium over this same gallery to ask. A check nobody runs is a check that catches nothing,
+# so they run wherever `just test` does.
 [doc('Run type checking and tests')]
 test *args:
     uv run mypy
@@ -106,7 +103,7 @@ demo *args:
 # sessions adds to them and rewrites nothing.
 [doc('Put the gallery fixtures into the demo database')]
 seed *args:
-    uv run python scripts/seed.py {{ if args == "" { DEMO_DATABASE } else { args } }}
+    uv run python -m scripts.seed {{ if args == "" { DEMO_DATABASE } else { args } }}
 
 # `uv sync` first, and it is not a convenience: the unit names this checkout's interpreter, so an
 # install from a stale environment points systemd at a venv missing whatever was just added. Run

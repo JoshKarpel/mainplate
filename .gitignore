@@ -226,3 +226,8 @@ __marimo__/
 *.db
 *.db-wal
 *.db-shm
+
+# The other half of those sessions: the bare clones and the worktree each session works in, which
+# land beside the database by default. `just serve` and `just demo` name a database in this
+# directory, so they put this one here too.
+workspaces/

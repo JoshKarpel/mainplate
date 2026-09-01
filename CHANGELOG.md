@@ -25,6 +25,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour legend, a dock that jumps between the two sides of the exchange and folds every tool call,
   a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement; with
   JavaScript off the console still renders, posts, and folds.
+- Shift-Enter sends a message and plain Enter breaks the line, which is that way round because a
+  message here is prose that often wants a second paragraph and a fenced block. An empty box refuses
+  from the keyboard exactly as it refuses from the button.
 - `mainplate install` and `mainplate uninstall`, which converge and remove a user systemd unit
   pointing at the interpreter that ran them. Any `MAINPLATE_*` setting lives in an
   `EnvironmentFile` created `0600` on the first install and never overwritten.

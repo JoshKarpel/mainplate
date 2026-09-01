@@ -22,12 +22,6 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from gallery import CATALOGUE
-from gallery import CONVERSATION
-from gallery import LISTED
-from gallery import TOOL_IN_FLIGHT
-from gallery import recorded
-
 from mainplate.agent import Choice
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
@@ -37,6 +31,11 @@ from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
 from mainplate.sessions import read_session
+from scripts.gallery import CATALOGUE
+from scripts.gallery import CONVERSATION
+from scripts.gallery import LISTED
+from scripts.gallery import TOOL_IN_FLIGHT
+from scripts.gallery import recorded
 
 DEFAULT_DATABASE = Path("mainplate-demo.db")
 

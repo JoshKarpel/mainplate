@@ -134,6 +134,15 @@ REPOSITORY_ID: Final = "repository"
 
 SENDING_ID: Final = "sending"
 
+# The form the picker's controls belong to, named because on the start page they do not sit inside
+# it. There the choosing fills `main`'s growing row and the box is pinned under it, so the endpoint
+# radios, the model radios and the two selects are *siblings* of the form that posts them; without
+# this the browser submits a message with no endpoint and no model on it and the console refuses its
+# own page. `form` is what associates a control with a form it is not inside, so the layout stays
+# what it is and the page still posts with no script at all. The fork page nests its picker inside
+# the same-named form, where the attribute simply names the ancestor it already had.
+CHOOSING_ID: Final = "choosing"
+
 # What each kind of panel is called where a person reads it: the role label on the panel, and the
 # chip in the key that governs it. One mapping, so the legend and the thing it is a legend for
 # cannot come to disagree about what a kind is called.
@@ -410,7 +419,13 @@ def model_card(described: Described, chosen: bool) -> Element:
         children=[
             input_(
                 cls="model__pick",
-                attrs={"type": "radio", "name": "model", "value": facts.id, "checked": chosen},
+                attrs={
+                    "type": "radio",
+                    "name": "model",
+                    "value": facts.id,
+                    "checked": chosen,
+                    "form": CHOOSING_ID,
+                },
             ),
             span(cls="model__name", children=facts.label),
             span(cls="model__id", children=facts.id),
@@ -534,6 +549,7 @@ def endpoint_card(links: Links, offering: Offering, chosen: bool) -> Element:
                     "name": "endpoint",
                     "value": offering.endpoint,
                     "checked": chosen,
+                    "form": CHOOSING_ID,
                     "hx-get": links.to_endpoint_models(),
                     "hx-target": f"#{MODEL_ID}",
                     "hx-swap": "outerHTML",
@@ -572,7 +588,7 @@ def thinking_select(chosen: ThinkingLevel | None) -> Element:
     one, and gating here would hide a level that in fact works.
     """
     return select(
-        attrs={"id": THINKING_ID, "name": THINKING_FIELD, "aria-label": "Thinking"},
+        attrs={"id": THINKING_ID, "name": THINKING_FIELD, "form": CHOOSING_ID, "aria-label": "Thinking"},
         children=[
             option(attrs={"value": name, "selected": level == chosen}, children=name)
             for name, level in THINKING_CHOICES
@@ -601,7 +617,7 @@ def repository_select(reachable: Reachable, chosen: str | None) -> Element:
     identical rows is guessing.
     """
     return select(
-        attrs={"id": REPOSITORY_ID, "name": REPOSITORY_FIELD, "aria-label": "Repository"},
+        attrs={"id": REPOSITORY_ID, "name": REPOSITORY_FIELD, "form": CHOOSING_ID, "aria-label": "Repository"},
         children=[
             option(attrs={"value": NO_REPOSITORY, "selected": chosen is None}, children="no repository"),
             *(
@@ -1146,6 +1162,7 @@ def composer(
     live: bool,
     refusing: bool = False,
     above: Placed = None,
+    identified: str | None = None,
 ) -> Element:
     """
     The box you type in, which posts to `action`, with `beneath` under it.
@@ -1171,6 +1188,10 @@ def composer(
     from the working dots in the transcript: this one says *your message has not landed yet*, and
     it is over in a round trip. The one in the transcript says the model has not answered yet, and
     is read off the checkpoint rather than off a request.
+
+    `identified` is what the picker's controls name to reach this form from outside it, and is given
+    only on the page that has one: an id nothing points at would say there is something here to
+    associate with.
     """
     driving = (
         {
@@ -1191,7 +1212,7 @@ def composer(
     )
     return form(
         cls="composer",
-        attrs={"method": "post", "action": action, **driving},
+        attrs={"method": "post", "action": action, "id": identified, **driving},
         children=[
             above,
             div(
@@ -1208,7 +1229,12 @@ def composer(
                             "aria-label": "Message",
                         }
                     ),
-                    button(attrs={"type": "submit", "disabled": refusing}, children="Send"),
+                    # The key is named on the button because otherwise nothing on the page says it
+                    # exists, and a shortcut nobody can find is one nobody uses.
+                    button(
+                        attrs={"type": "submit", "disabled": refusing, "title": "Shift-Enter"},
+                        children="Send",
+                    ),
                 ],
             ),
             div(
@@ -1276,7 +1302,7 @@ def start_page(
             showing=None,
             pane=[
                 div(cls="setup", children=picker(links, catalogue, reachable, reference)),
-                composer(links.to_start(), None, live=False, above=naming()),
+                composer(links.to_start(), None, live=False, above=naming(), identified=CHOOSING_ID),
             ],
         ),
     )
@@ -1390,7 +1416,7 @@ def fork_page(
             pane=[
                 form(
                     cls="forking",
-                    attrs={"method": "post", "action": links.to_fork(showing.session.id)},
+                    attrs={"method": "post", "action": links.to_fork(showing.session.id), "id": CHOOSING_ID},
                     children=[
                         h1(children="Fork this conversation"),
                         p(cls="forking__kept", children=inheriting(at, asked is not None)),

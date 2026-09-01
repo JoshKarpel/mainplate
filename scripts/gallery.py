@@ -311,9 +311,9 @@ def pages() -> dict[str, str]:
     }
 
 
-def write(into: Path) -> None:
+def write(into: Path) -> tuple[str, ...]:
     """
-    Every page, into a directory holding those pages and nothing else.
+    Every page, into a directory holding those pages and nothing else, named back to the caller.
 
     A page renamed or dropped is *removed* rather than left behind, because the alternative is a
     directory that accumulates: a stale page sits beside the current ones, a screenshot run can be
@@ -330,8 +330,8 @@ def write(into: Path) -> None:
         stale.unlink()
     for name, markup in written.items():
         (into / name).write_text(markup)
-    print(json.dumps(sorted(written), indent=2))
+    return tuple(sorted(written))
 
 
 if __name__ == "__main__":
-    write(Path(sys.argv[1] if len(sys.argv) > 1 else "build/gallery"))
+    print(json.dumps(write(Path(sys.argv[1] if len(sys.argv) > 1 else "build/gallery")), indent=2))

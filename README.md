@@ -254,7 +254,11 @@ Beside the conversation is a rail: find-and-step search, a key that filters by k
 the colour legend, a dock that jumps between the two sides and folds every call at once, a
 follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
 off the console still renders, still posts messages, and every tool call is still a fold that
-opens; what goes is the rail.
+opens; what goes is the rail and the keyboard send.
+
+Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
+often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
+you cannot write one in.
 
 ## What it does not do yet
 

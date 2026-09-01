@@ -483,6 +483,28 @@
       });
     };
 
+    // Shift-Enter sends, and plain Enter still breaks the line. That way round because a message
+    // here is prose that often wants a second paragraph and a fenced block, and a box where the
+    // obvious key sends is a box you cannot write one in without learning a second key first.
+    //
+    // `requestSubmit` rather than `submit`, and the difference is the whole of why this works on
+    // both pages: `submit()` posts without dispatching a `submit` event, so htmx would never see
+    // the send on a session page and the browser would navigate away from a conversation. It also
+    // runs the form's own validation, so an empty box refuses here exactly as it refuses the
+    // button, rather than posting a message nobody typed.
+    //
+    // Delegated, because the composer is rebuilt whenever a page is: this is one listener for every
+    // box on every page rather than one wired per form at load.
+    const wireSend = () => {
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || !event.shiftKey) return;
+        const box = event.target;
+        if (!(box instanceof HTMLTextAreaElement) || box.name !== "prompt" || !box.form) return;
+        event.preventDefault();
+        box.form.requestSubmit();
+      });
+    };
+
     // --- Swaps -------------------------------------------------------------
     //
     // The marks come off before the swap and go back on after it. Taking them off first is not
@@ -503,6 +525,7 @@
     wireFolds();
     wireTheme();
     wireClasp();
+    wireSend();
     wireSwaps();
     wireHash();
 

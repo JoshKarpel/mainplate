@@ -104,8 +104,23 @@ class Settings(BaseSettings):
         Beside the database because the two are the halves of one session: the checkpoint says what
         was said and the worktree holds what it was said about, so a console pointed at another
         database gets its own worktrees rather than sharing the first one's.
+
+        **Absolute, always.** A relative path here is not a place, it is a place *plus* whatever
+        directory the process happens to be in, and everything below this runs `git` with a `cwd` of
+        its own choosing: a clone is made from the clones root, a worktree is added from the
+        repository. Handing either a relative destination means git resolves it under that `cwd`
+        rather than under this root, so the clone lands at `workspaces/clones/workspaces/clones/...`
+        and the worktree lands inside the repository. Worse, the checks that make both operations
+        idempotent then look at the path that was *asked for*, never find it, and every pass tries
+        again - which is a `SnapshotFailed` on a session's second turn.
+
+        Resolved here rather than in each of those callers because this is where a configured path
+        enters the process, and one absolute value cannot be got wrong by the next consumer. The
+        default is relative to begin with (`mainplate.db` in the working directory is what a fresh
+        checkout gets), so this is the common case rather than the odd one.
         """
-        return self.workspaces if self.workspaces is not None else self.database.parent / "workspaces"
+        named = self.workspaces if self.workspaces is not None else self.database.parent / "workspaces"
+        return named.resolve()
 
     lease: timedelta = Field(default=timedelta(minutes=10), gt=timedelta())
     """

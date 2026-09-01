@@ -99,6 +99,7 @@ dev = [
     "types-pygments>=2.18",
     "watchfiles>=1.2.0",
     "types-pyyaml>=6.0.12.20260815",
+    "playwright>=1.62.0",
 ]
 
 [tool.pytest.ini_options]
@@ -110,6 +111,11 @@ addopts = [
 ]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+# So `scripts/` imports as a package. The browser tests drive the gallery, and the gallery is
+# rendered by the same code `just gallery` runs rather than by a second set of fixtures that
+# resembles it.
+pythonpath = ["."]
 
 # A per-test timeout so a deadlocked async test fails loudly instead of hanging the suite.
 # `thread` works without signals, so it is xdist-safe. Raise it per-test with
@@ -126,6 +132,12 @@ show_error_codes = true
 plugins = ["pydantic.mypy"]
 
 files = ["."]
+
+# The clones and worktrees a local console makes, which land beside the database and so land here
+# whenever `just serve` or `just demo` is run from this directory. They hold *other people's*
+# repositories, checked out by a session, so type-checking them is checking somebody else's code
+# against this project's settings. `.gitignore` does not reach mypy, which walks the tree itself.
+exclude = "^workspaces/"
 
 check_untyped_defs = true
 disallow_incomplete_defs = true
