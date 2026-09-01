@@ -23,7 +23,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SQLite file.
 - A conversation read as panels of blocks, so reasoning and a tool call each get their own panel
   and their own colour beside the answer they belong to. Messages are rendered as Markdown and
-  sanitised before they reach the page.
+  sanitised before they reach the page, and a tool's arguments are laid out rather than shown as
+  the one line the model sent.
+- A turn drawn as it happens, rather than all at once when it finishes. The responses and tool
+  results behind a running turn are already in the checkpoint, recorded step by step so a resumed
+  pass does not pay for them twice, so the page reads those instead of waiting for the turn's
+  messages: reasoning appears, then a call with its arguments, then its result, then the next
+  request. A call still out is drawn working, which is a state the transcript could always describe
+  and nothing could previously produce.
+- One live connection per page, held open for as long as the page is, carrying whatever it is
+  watching as that changes. Each message is a whole current render rather than a delta, so a
+  dropped connection costs nothing and a reconnect needs no replay; each names the region it is
+  for, so a second region joins the same connection rather than opening another. The server notices
+  by counting a session's recorded steps, which decodes none of them, so a quiet console sends no
+  bytes at all.
 - A rail beside the conversation: find-and-step search, a key that filters and doubles as the
   colour legend, a dock that jumps between the two sides of the exchange and folds every tool call,
   a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement; with
@@ -114,10 +127,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reaches it and the recorded id once none does. It is read out of the session's own `choice` with
   one join rather than held in the index: a checkpoint is a row per key, so this costs one small
   row per session and keeps the index the settled facts it already held.
-- A `recorded` disclosure under every panel, showing the JSON the checkpoint actually holds behind
-  it: the prompt for a person's panel, and the stored parts for every other. Fetched only when it
-  is opened, so the transcript that swaps once a second does not carry it, and preserved across
-  that swap so it does not shut under the reader's hand.
+- A `recorded` disclosure under every settled panel, showing the JSON the checkpoint actually holds
+  behind it: the prompt for a person's panel, and the stored parts for every other. Fetched only
+  when it is opened, so the transcript a running turn keeps updating does not carry it, and
+  preserved across that update so it does not shut under the reader's hand. A panel of the turn in
+  flight offers none, because what is behind it is still being written.
 - Syntax highlighting on fenced code blocks, in the console's own palette rather than an imported
   theme. Only Pygments' own token classes survive sanitising, so a reply cannot paint itself as any
   part of the console's chrome.

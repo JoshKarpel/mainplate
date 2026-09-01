@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from itertools import pairwise
 from typing import Never
 
 import pytest
@@ -37,13 +38,17 @@ from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.conversation import blocks_of
 from mainplate.conversation import messages_key
+from mainplate.conversation import model_key
 from mainplate.conversation import panelled
 from mainplate.conversation import parse_choice
+from mainplate.conversation import parse_messages
 from mainplate.conversation import parse_prompt
 from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
+from mainplate.conversation import so_far
 from mainplate.conversation import sourced_at
+from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
 from mainplate.durability import stepping
@@ -282,6 +287,129 @@ class TestWhatAPanelWasReadOutOf:
             ],
         }
         assert sourced_at(recorded, 0, 1) == [{"part_kind": "text", "content": "the real one"}]
+
+
+# The same exchange `FOUR_PANELS` holds, as the steps written while it was still running: the two
+# model responses one at a time, and the call's result between them. Written out rather than derived
+# from the messages above, because what these tests are for is that two independent recordings of
+# one turn read the same way, and deriving either from the other would assume the answer.
+THINKING_AND_CALL: dict[str, object] = {
+    "kind": "response",
+    "parts": [
+        {"part_kind": "thinking", "content": "have a look"},
+        {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"},
+    ],
+}
+THE_ANSWER: dict[str, object] = {"kind": "response", "parts": [{"part_kind": "text", "content": "it says hello"}]}
+
+# What the turn looked like at each moment, from nothing recorded to every step in. The person's
+# message is in every one of them, because it is what queues the turn in the first place.
+ASKED: dict[str, object] = {prompt_key(0): "go"}
+REASONED: dict[str, object] = {**ASKED, model_key(0, 0): THINKING_AND_CALL}
+READ: dict[str, object] = {**REASONED, tool_key(0, "c1"): "b"}
+ANSWERED: dict[str, object] = {**READ, model_key(0, 1): THE_ANSWER}
+
+
+class TestWatchingATurnHappen:
+    """
+    The turn being answered, read from the steps behind it rather than from messages it has not
+    written yet.
+
+    The risk here is two readings of one turn drifting apart. The page morphs one into the other as
+    the turn lands, so a disagreement is not a wrong render but a render that silently rewrites
+    itself under whoever is reading it.
+    """
+
+    def test_the_keys_are_the_ones_the_capability_writes(self) -> None:
+        """
+        Asserted against the literal strings rather than built with `Stepping`, which is the whole
+        point: these names are built at both ends and nothing makes the two agree, so a test that
+        round-tripped through the writer would pass while the reader looked in the wrong place.
+        """
+        assert model_key(3, 1) == "turn:3:model:1"
+        assert tool_key(3, "toolu_017") == "turn:3:tool:toolu_017"
+
+    def test_a_turn_nothing_has_been_recorded_for_yet_has_produced_nothing(self) -> None:
+        assert so_far(ASKED, 0) == ()
+
+    def test_a_response_is_readable_as_soon_as_it_is_recorded(self) -> None:
+        assert so_far(REASONED, 0) == (
+            Reasoning(text="have a look"),
+            ToolUse(tool="read", arguments='{"path":"x"}', returned=None),
+        )
+
+    def test_a_call_carries_its_result_as_soon_as_that_lands(self) -> None:
+        assert so_far(READ, 0) == (
+            Reasoning(text="have a look"),
+            ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned(outcome="success", content="b")),
+        )
+
+    def test_a_call_that_returned_nothing_is_finished_rather_than_still_out(self) -> None:
+        """
+        A step holding `None` is a step that ran, which the store keeps distinguishable from a key
+        that was never written. Read together, a tool that answers with nothing would show a spinner
+        for as long as the turn lasted.
+        """
+        returned = so_far({**REASONED, tool_key(0, "c1"): None}, 0)[1]
+        assert returned == ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned("success", ""))
+
+    def test_a_structured_result_reads_as_the_model_was_handed_it(self) -> None:
+        """
+        The same text `ToolReturnPart.model_response_str` produces, down to the spacing, because the
+        settled reading of this call uses that and this one has to agree with it.
+        """
+        held = so_far({**REASONED, tool_key(0, "c1"): {"lines": [1, 2]}}, 0)[1]
+        assert held == ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned("success", '{"lines":[1,2]}'))
+
+    def test_the_two_readings_of_a_finished_turn_agree(self) -> None:
+        """
+        The property the whole thing rests on. Once every step is in, reading the turn from its
+        steps and reading it from its messages produce the same blocks, so the moment the messages
+        land the page morphs into markup it is already showing.
+        """
+        assert so_far(ANSWERED, 0) == blocks_of(parse_messages(FOUR_PANELS[messages_key(0)]))
+
+    def test_a_turn_grows_at_the_end_and_never_in_the_middle(self) -> None:
+        """
+        What makes the morph safe: a panel keeps its position for the life of the turn, so nothing a
+        reader has unfolded or scrolled to moves under them. Only the last block ever changes, and
+        only by a call gaining the result it was waiting for.
+        """
+        stages = [so_far(recorded, 0) for recorded in (ASKED, REASONED, READ, ANSWERED)]
+        assert [len(blocks) for blocks in stages] == [0, 2, 2, 3]
+        for earlier, later in pairwise(stages):
+            settled = max(len(earlier) - 1, 0)
+            assert earlier[:settled] == later[:settled]
+
+    def test_the_turn_in_flight_is_drawn_and_the_ones_queued_behind_it_are_not(self) -> None:
+        """
+        One reply is actually being written. A message typed while it runs has been said and not yet
+        started, so it is a person's panel and nothing else until its own turn comes up.
+        """
+        said = transcript({**READ, prompt_key(1): "and another thing"})
+        assert [(panel.turn, panel.kind) for panel in said.panels] == [
+            (0, "person"),
+            (0, "thinking"),
+            (0, "tool"),
+            (1, "person"),
+        ]
+        assert said.awaiting is True
+
+    def test_only_what_was_read_from_steps_is_unsettled(self) -> None:
+        """
+        A prompt is written before the turn runs and nothing rewrites one, so the person's panel
+        offers its record even mid-turn. The panels read from steps do not, because what is behind
+        them is still being written.
+        """
+        drawn = transcript(READ).panels
+        assert [(panel.kind, panel.settled) for panel in drawn] == [
+            ("person", True),
+            ("thinking", False),
+            ("tool", False),
+        ]
+
+    def test_an_answered_turn_is_settled_throughout(self) -> None:
+        assert all(panel.settled for panel in transcript(FOUR_PANELS).panels)
 
 
 class TestChoosingATurn:

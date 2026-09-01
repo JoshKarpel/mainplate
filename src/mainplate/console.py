@@ -14,9 +14,12 @@ from urllib.parse import parse_qs
 from pydantic_ai.settings import ThinkingLevel
 from without_asgi import Response
 from without_asgi import html_content
+from without_asgi.sse import event_stream
+from without_asgi.sse import with_heartbeat
 from without_web import INT
 from without_web import STR
 from without_web import ExtractionError
+from without_web import Reply
 from without_web import Route
 from without_web import body
 from without_web import get
@@ -41,6 +44,7 @@ from mainplate.pages import start_page
 from mainplate.pages import transcript_region
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
+from mainplate.streaming import watching
 from mainplate.thinking import DEFAULT_THINKING
 from mainplate.thinking import UnknownThinking
 from mainplate.thinking import thinking_named
@@ -57,6 +61,11 @@ LONGEST_PROMPT = 100_000
 session_id = path_param("session", STR)
 # The endpoint whose models to render, which is the value of the select that asks for them.
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
+# Which conversation a watching page is showing. A query parameter rather than a path segment
+# because the stream belongs to the page: this narrows what one connection reports on, where a path
+# segment would say the connection is a thing *of* that session. It is what lets a second region
+# join the same connection later without the path becoming a lie.
+watched = query_param("session", once(str), schema={"type": "string"})
 # Which turn a fork would start at, which is the first turn the branch does not inherit.
 at_turn = query_param("at", once(int), schema={"type": "integer"})
 # The two halves of a panel's identity, in the path because that is what they are: a panel is named
@@ -364,23 +373,29 @@ async def show_session(service: Service, session: str) -> Response:
     return page_response(200, session_page(LINKS, await service.listed(), found, service.reachable))
 
 
-@get(t"/fragments/sessions/{session_id}", session_id, summary="One session's transcript alone, for a live region")
-async def session_fragment(service: Service, session: str) -> Response:
+@get("/fragments/stream", watched, summary="What a page is watching, sent as it changes")
+async def stream(service: Service, session: str) -> Reply:
     """
-    The same transcript the page holds, built by the same function, with no document around it.
+    The live connection a page holds open, carrying whatever it is watching as that changes.
 
-    Under `fragments/` rather than at `/sessions/{id}/transcript`, so the segment after a session
-    id keeps meaning something about that session rather than sometimes naming part of a page.
-    Fetching one gives an unstyled element with no document around it, which is not a promise a
-    path shaped like a detail page should make; and it is the disposable half of the URL space,
-    so keeping it out of the durable half leaves something saying which is which. It is also
-    where nearly all the traffic goes while a reply is in flight, which makes it one filter in a
-    log rather than a growing list of paths scattered through the resource tree.
+    One per page rather than one per region, which is why the session is a query parameter and not
+    a path segment: this does not pick a conversation out of the resource tree, it tells a
+    page-level connection which one that page is showing. What comes back is `<hx-partial>`
+    elements naming their own targets, so a second region joins the same connection rather than
+    opening another.
+
+    Under `fragments/` for the reason every other swap-shaped path is: it is the disposable half of
+    the URL space, and it is now where all of a watching page's traffic goes, which makes it one
+    filter in a log rather than a growing list of paths.
+
+    The session is checked here rather than inside the stream, because a refusal has to be a
+    refusal: an event stream that opened and immediately ended would be reconnected by the client
+    forever, where a `404` is an answer it can act on.
     """
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(transcript_region(LINKS, session, found.said, stalled_by(found))))
+    return event_stream(with_heartbeat(watching(service, LINKS, session, service.watching)))
 
 
 @get(
@@ -432,7 +447,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
     start,
     show_session,
-    session_fragment,
+    stream,
     endpoint_models,
     fork_form,
     fork,
@@ -445,7 +460,7 @@ LINKS = Links(
     start=start,
     session=show_session,
     say=say,
-    session_fragment=session_fragment,
+    stream=stream,
     panel_record=panel_record,
     endpoint_models=endpoint_models,
     fork_form=fork_form,

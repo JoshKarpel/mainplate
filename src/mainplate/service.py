@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 
 from without_durability_sqlite import Database
@@ -49,6 +50,12 @@ from mainplate.sessions import name_from
 from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
+from mainplate.settings import DEFAULT_WATCHING
+
+# How many steps a session has recorded. A count and not a hash of them, because what it is asked
+# for is whether to look again rather than what changed, and the store's own primary key already
+# orders the rows this scans.
+RECORDED = "SELECT COUNT(*) FROM workflow_checkpoint WHERE workflow = ?"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +133,15 @@ class Service:
     nobody asked to look one up.
     """
 
+    watching: timedelta = DEFAULT_WATCHING
+    """
+    How often a page's live connection asks whether the session it is showing has moved.
+
+    Here because a route reads it and a route is handed this and nothing else. The value is
+    `Settings.watching`, put in at startup; the default is the same constant that setting defaults
+    to, so a `Service` built without one behaves as a configured console does.
+    """
+
     now: Callable[[], datetime] = now_utc
 
     def repository_of(self, chosen: Choice | None) -> str | None:
@@ -175,6 +191,28 @@ class Service:
             repository=self.repository_of(chosen),
             workspace=self.workspaces.at(session) if self.workspaces is not None and working else None,
         )
+
+    async def token(self, session: str) -> int:
+        """
+        How much has been recorded for a session, as the one number that says whether to read again.
+
+        What a live connection asks several times a second, so it has to be cheaper than the answer
+        it guards: `load` decodes every step's JSON, which for a long conversation is megabytes to
+        find out that nothing happened. This counts rows over the primary key's own prefix and reads
+        no value at all.
+
+        A count is a sound change token because a checkpoint is append-only: a step's key is written
+        once and `ON CONFLICT` keeps the value it already had, so nothing is ever rewritten and the
+        only way this moves is a record that did not exist before. It says how much, never what, and
+        that is all a reader needs to decide to look properly.
+
+        NOTE: this reaches past `SqliteCheckpointer` into `without-durability-sqlite`'s own table,
+        which is the one place this console knows the store's schema rather than its interface. It
+        belongs upstream as a method on the checkpointer; until it is one, a rename of that table is
+        a change that has to be made here too.
+        """
+        counted = await self.database.run(lambda connection: connection.execute(RECORDED, (session,)).fetchone())
+        return int(counted[0])
 
     async def recorded_at(self, session: str, turn: int, at: int) -> object | None:
         """

@@ -67,12 +67,14 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.run import AgentRunResult
 from pydantic_ai.settings import ThinkingLevel
+from pydantic_core import to_json
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
 from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.durability import parse_model_response
 from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
@@ -86,6 +88,12 @@ CHOICE_KEY: StepKey = "choice"
 THINKING_FIELD: Final = "thinking"
 
 REPOSITORY_FIELD: Final = "repository"
+
+# A value no checkpoint can hold, so that "no such key" stays distinguishable from a step that
+# recorded `None`. The store keeps those apart deliberately - its `value` column is `NOT NULL` - and
+# a tool that returns nothing is an ordinary tool, so a reader that ran both together would draw a
+# finished call as one still out for as long as the turn lasted.
+NOTHING: Final = object()
 
 # Which endpoint the session is answered on, inside the recorded choice and on the form that starts
 # one. Named once here for the reason the turn keys are: the code that writes it and the code that
@@ -151,6 +159,35 @@ def tree_key(turn: int, at: int) -> StepKey:
     numbering here and the numbering of `turn:{n}:model:{i}` advance together.
     """
     return f"{turn_prefix(turn)}:tree:{at}"
+
+
+def model_key(turn: int, at: int) -> StepKey:
+    """
+    The `at`-th model response of this turn, as `StepwiseDurability` recorded it.
+
+    Read rather than merely written, because a turn's responses land one at a time while the turn
+    is still running and its `messages` do not land until it ends. That is the whole of what lets a
+    reader watch a turn happen: the record is already there, a request at a time.
+
+    Built here and by `Stepping.key("model")` there, from opposite ends, with nothing enforcing that
+    the two agree - the same standing hazard `tree_key` carries, and answered the same way, by
+    asserting the literal string in `test_conversation.py`.
+    """
+    return f"{turn_prefix(turn)}:model:{at}"
+
+
+def tool_key(turn: int, call: str) -> StepKey:
+    """
+    What one call of this turn came back with, named by the call's own id.
+
+    By id and not by position, because a batch of calls runs concurrently and counting them would
+    name a record by whichever won a race. The id is asked for here rather than searched for: it is
+    part of the model response already read out of `model_key`, so a reader is handed the same id
+    the writer used and never has to scan the checkpoint for keys of this shape.
+
+    The counterpart of `Stepping.identified("tool", id)`, with the same drift hazard as `model_key`.
+    """
+    return f"{turn_prefix(turn)}:tool:{call}"
 
 
 def opening_tree_key(turn: int) -> StepKey:
@@ -364,6 +401,20 @@ class Panel:
     is configured, since a hash for a directory nobody chose would be a fact about nothing.
     """
 
+    settled: bool = True
+    """
+    Whether what is behind this panel has stopped changing, which decides if it offers its record.
+
+    False only for the panels of the turn currently being answered, which are read from that turn's
+    recorded steps rather than from its messages. A call still out gets its result, and the response
+    after it has not been made, so there is no settled value for a disclosure to fetch once and
+    keep. The person's panel is settled even there, because a prompt is written before the turn runs
+    and nothing ever rewrites one.
+
+    A field rather than a question asked of the transcript, because the panel is what the page has
+    in hand when it decides whether to draw the disclosure.
+    """
+
     @property
     def anchor(self) -> str:
         return f"panel-{self.turn}-{self.at}"
@@ -472,9 +523,14 @@ class Source:
 type Sourced = tuple[Block, Source]
 
 
-def parted(messages: Sequence[ModelMessage]) -> tuple[Sourced, ...]:
+def blocks_in(response: ModelResponse, returned: Mapping[str, Returned]) -> Iterator[tuple[Block, int]]:
     """
-    What a turn's messages are worth reading as, each with where it was read from.
+    One response's parts as blocks, each with the index of the part it was read from.
+
+    The one rule about what a part is worth reading as, so the two readings of a turn cannot come to
+    disagree about it. A finished turn is read from its messages and the turn in flight is read from
+    its recorded responses, and both arrive here: what differs between them is only where the
+    responses came from and how a call's result was found, never what a part becomes.
 
     A part this console has no rendering for is passed over rather than refused. That is not a
     swallowed error: the provider and Pydantic AI are both free to add a part kind, and a console
@@ -482,33 +538,96 @@ def parted(messages: Sequence[ModelMessage]) -> tuple[Sourced, ...]:
     *required* here is the text, and a turn that produced none renders as a turn that said
     nothing, which is the honest report.
 
+    A call whose id is not in `returned` is one still out, which `ToolUse` has always been able to
+    say and which nothing could previously produce: by the time a turn's messages are recorded every
+    call has an answer. Reading a turn as it runs is what finally reaches that state.
+    """
+    for at, part in enumerate(response.parts):
+        match part:
+            case TextPart(content=said) if said.strip():
+                yield Prose(text=said), at
+            case ThinkingPart(content=thought) if thought.strip():
+                yield Reasoning(text=thought), at
+            case ToolCallPart(tool_name=tool, tool_call_id=call):
+                yield ToolUse(tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call)), at
+            case _:
+                continue
+
+
+def parted(messages: Sequence[ModelMessage]) -> tuple[Sourced, ...]:
+    """
+    What a turn's messages are worth reading as, each with where it was read from.
+
     The indices are this walk's to hand out because it is the walk that decides which parts become
     blocks at all. Recovered by a second pass they would be a guess at what this one did, and the
-    skipping above is exactly what makes that guess wrong.
+    skipping in `blocks_in` is exactly what makes that guess wrong.
     """
     returned = returns_in(messages)
-    sourced: list[Sourced] = []
-    for index, message in enumerate(messages):
-        if not isinstance(message, ModelResponse):
-            continue
-        for at, part in enumerate(message.parts):
-            source = Source(message=index, part=at)
-            match part:
-                case TextPart(content=said) if said.strip():
-                    sourced.append((Prose(text=said), source))
-                case ThinkingPart(content=thought) if thought.strip():
-                    sourced.append((Reasoning(text=thought), source))
-                case ToolCallPart(tool_name=tool, tool_call_id=call):
-                    use = ToolUse(tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call))
-                    sourced.append((use, source))
-                case _:
-                    continue
-    return tuple(sourced)
+    return tuple(
+        (block, Source(message=index, part=at))
+        for index, message in enumerate(messages)
+        if isinstance(message, ModelResponse)
+        for block, at in blocks_in(message, returned)
+    )
 
 
 def blocks_of(messages: Sequence[ModelMessage]) -> tuple[Block, ...]:
     """What a turn's messages are worth reading as, in the order the model produced them."""
     return tuple(block for block, _ in parted(messages))
+
+
+def returned_step(recorded: object) -> Returned:
+    """
+    What one recorded tool step is as a reader sees it, in the words the settled reading would use.
+
+    The text has to match what `ToolReturnPart.model_response_str` produces for the same value, and
+    matching it is the point rather than a nicety: the same call is read from this step while the
+    turn runs and from the turn's messages once it ends, so any difference here is a result that
+    silently rewrites itself under the reader the moment the turn lands. Hence `to_json` rather than
+    the standard library's `dumps`, whose spacing differs.
+
+    Always a success, because a tool that raised recorded no step at all: a `ModelRetry` propagates
+    out of the step and the call stays out until the retry lands, then reads as failed once the
+    turn's messages say so. A `ToolReturn` carrying metadata would be unwrapped by the settled
+    reading and not by this one, which is a difference to fix in the tool rather than here if one
+    is ever written.
+    """
+    if recorded is None:
+        return Returned(outcome="success", content="")
+    said = recorded if isinstance(recorded, str) else to_json(recorded).decode()
+    return Returned(outcome="success", content=said)
+
+
+def so_far(recorded: Mapping[str, object], turn: int) -> tuple[Block, ...]:
+    """
+    What the turn being answered has produced up to now, read from its steps rather than its
+    messages.
+
+    The second of the two readings of a turn, and the reason a reader watches one happen instead of
+    waiting for the whole of it: `turn:{n}:messages` is written when the turn *ends*, where the
+    responses and the results behind it are written as they arrive. Nothing here is a second copy of
+    anything - these are the records the durability capability already keeps so that a resumed pass
+    does not pay for the same request twice.
+
+    Consecutive from zero, so the scan stops at the first response not yet made rather than
+    searching for the highest key, exactly as `reached` walks turns. A pass numbers its requests
+    from zero within the turn, so this cannot be fooled by how many turns came before.
+
+    What comes out is a *prefix* of what `blocks_of` will produce once the turn is answered: the
+    same responses, in the same order, cut by the same rule, with the results that have not arrived
+    yet still out. That is what lets the page morph one into the other without a panel ever moving.
+    """
+    responses: list[ModelResponse] = []
+    while (answered := recorded.get(model_key(turn, len(responses)))) is not None:
+        responses.append(parse_model_response(answered))
+    returned = {
+        part.tool_call_id: returned_step(held)
+        for response in responses
+        for part in response.parts
+        if isinstance(part, ToolCallPart)
+        and (held := recorded.get(tool_key(turn, part.tool_call_id), NOTHING)) is not NOTHING
+    }
+    return tuple(block for response in responses for block, _ in blocks_in(response, returned))
 
 
 def runs[T](items: Sequence[T], kind: Callable[[T], Kind]) -> Iterator[tuple[int, Kind, tuple[T, ...]]]:
@@ -528,10 +647,17 @@ def runs[T](items: Sequence[T], kind: Callable[[T], Kind]) -> Iterator[tuple[int
         yield at + 1, of_kind, tuple(run)
 
 
-def panelled(turn: int, blocks: Sequence[Block]) -> Iterator[Panel]:
-    """One turn's blocks cut into panels, a panel per run of blocks of the same kind."""
+def panelled(turn: int, blocks: Sequence[Block], settled: bool = True) -> Iterator[Panel]:
+    """
+    One turn's blocks cut into panels, a panel per run of blocks of the same kind.
+
+    `settled` is the reading these blocks came out of rather than anything about the blocks: an
+    answered turn is read from its messages and is settled, and the turn in flight is read from its
+    steps and is not. It is passed down rather than worked out here because this is a cut of a
+    sequence and knows nothing about where the sequence came from.
+    """
     for at, kind, run in runs(blocks, kind_of):
-        yield Panel(turn=turn, at=at, kind=kind, blocks=run)
+        yield Panel(turn=turn, at=at, kind=kind, blocks=run, settled=settled)
 
 
 def said_by(turn: int, prompt: str, tree: str | None = None) -> Panel:
@@ -548,10 +674,15 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     reply. Written as one loop with a branch, the second case would read as though a turn could be
     answered after an unanswered one, which the body cannot produce.
 
-    A turn is read from its recorded messages rather than from its model steps, because those
-    messages are what the *agent* concluded the turn was: with tools in the picture a turn is
+    An answered turn is read from its recorded messages rather than from its model steps, because
+    those messages are what the *agent* concluded the turn was: with tools in the picture a turn is
     several model responses and several tool returns, and the message list is already the shape
     that says which is which.
+
+    The turn being answered has no such list yet, so it is read from the steps behind it instead,
+    which is the only place its progress exists until it ends. Only the first unanswered turn, and
+    not the ones queued behind it: one reply is actually being written, and a queued turn has been
+    said and not yet started.
     """
     panels: list[Panel] = []
     turn = 0
@@ -568,6 +699,8 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     awaiting = False
     while (waiting := recorded.get(prompt_key(turn))) is not None:
         panels.append(said_by(turn, parse_prompt(waiting), parse_tree(recorded.get(opening_tree_key(turn)))))
+        if not awaiting:
+            panels.extend(panelled(turn, so_far(recorded, turn), settled=False))
         awaiting = True
         turn += 1
     return Transcript(panels=tuple(panels), awaiting=awaiting, turns=turn)

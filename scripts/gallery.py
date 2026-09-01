@@ -39,9 +39,12 @@ from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.console import LINKS
 from mainplate.conversation import messages_key
+from mainplate.conversation import model_key
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import prompt_key
+from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
+from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
 from mainplate.pages import fork_page
@@ -227,6 +230,17 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
     ),
 ]
 
+# The one response a turn has produced so far, as the capability recorded it partway through. Two
+# calls in one response because that is the case worth looking at: they run at once, so one comes
+# back while the other is still out, and the panel has to read as both at the same time.
+PARTWAY = ModelResponse(
+    parts=[
+        ThinkingPart(content="Two files to look at. I can read them at the same time."),
+        ToolCallPart(tool_name="read", args={"path": "src/mainplate/streaming.py"}, tool_call_id="call-7"),
+        ToolCallPart(tool_name="read", args={"path": "src/mainplate/pages.py", "depth": 2}, tool_call_id="call-8"),
+    ]
+)
+
 
 def opening(messages: Sequence[ModelMessage]) -> str:
     """
@@ -301,6 +315,14 @@ def pages() -> dict[str, str]:
     waiting = dict(settled)
     waiting[prompt_key(2)] = "And what about a turn still being answered?"
 
+    # A turn part way through, read from the steps behind it rather than from messages it has not
+    # written yet. The state exists only while a pass is actually running, so a fixture is the one
+    # way to look at it - and looking at it is the point, since what it has to prove is that a
+    # half-drawn turn reads as a turn in progress rather than as a broken one.
+    answering = dict(waiting)
+    answering[model_key(2, 0)] = ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
+    answering[tool_key(2, "call-7")] = "# The one connection a page holds open, and what goes down it."
+
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
 
     return {
@@ -310,6 +332,7 @@ def pages() -> dict[str, str]:
         "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),
+        "answering.html": session_page(LINKS, LISTED, showing(PARENT, answering), REACHABLE),
         "stalled.html": session_page(LINKS, LISTED, stalled, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session

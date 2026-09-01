@@ -46,12 +46,20 @@ answers them with fixtures and the assets are copied beside the output, so a sta
 what the console renders. Every shot asserts the document never scrolls sideways, which is how the
 `:target` rule that widened a panel past its container was found.
 
-`tests/test_browser.py` is the other half and asks a different kind of question, over the same
-gallery. What a still cannot show is that *two* panels are drawn as where the reader is, or that a
-form posts controls that sit outside it, so behaviour gets a real Chromium and its own assertions.
-It is in the suite rather than in a recipe of its own because a check nobody runs is a check that
-catches nothing: both of the bugs it now pins were live while an equivalent script sat beside it
-unrun. A browser that is not installed fails loudly rather than skipping, for the same reason.
+`tests/test_browser.py` is the other half and asks a different kind of question, mostly over the
+same gallery. What a still cannot show is that *two* panels are drawn as where the reader is, or
+that a form posts controls that sit outside it, so behaviour gets a real Chromium and its own
+assertions. It is in the suite rather than in a recipe of its own because a check nobody runs is a
+check that catches nothing: both of the bugs it first pinned were live while an equivalent script
+sat beside it unrun. A browser that is not installed fails loudly rather than skipping, for the same
+reason.
+
+Its `console` fixture is the one thing there that leaves the gallery, and it has to. The gallery
+proves how a conversation *renders*; what the live connection has to prove is that the page changes
+when the checkpoint does, which is a second render arriving at a page nobody reloaded. So that
+fixture serves the real app on a real port and hands the test the `Service` behind it, and the test
+writes the steps a pass would write while the browser is looking - which is also the only way to
+hold a turn half-finished long enough to assert on it.
 
 It drives Playwright's **async** binding, which is not a preference: `sync_playwright` runs an event
 loop on the calling thread, and this suite is already running one, so the sync API leaves every
@@ -113,7 +121,7 @@ with nothing to dereference.
 
 ## The key scheme
 
-One key for the session and five per turn, written by five different places and read by four:
+One key for the session and five per turn, written by five different places and read by five:
 
 ```text
 choice               the endpoint, model, repository and thinking level; written by `Service.start`
@@ -149,14 +157,29 @@ into a fork without being taught each new kind of step: a `turn:3:approval:0` no
 is turn 3 already, and `turn:3:tool:toolu_017` was too before anything read tool keys.
 
 **The names are built in two places and have to agree.** `conversation.py` names them for the
-readers (`prompt_key`, `tree_key`, `opening_tree_key`, `messages_key`, read by `choice_of` and
-`reached` for the body, `transcript` for the page, `before` for a fork, `planting` for a fork's
-worktree). `Stepping` in `durability.py` builds them for the writers, from a turn prefix and a kind,
-which is what lets one capability name a step without importing the conversation. `tree_key(n, i)`
-and `Stepping.key("tree")` therefore produce the same string from opposite ends, and nothing
-enforces that: change one and change the other. The tests in `test_conversation.py` assert the shape
-against literal recorded values rather than round-tripping through the writer, which is what turns a
-drift into a failure rather than a silently unfindable record.
+readers (`prompt_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`, read
+by `choice_of` and `reached` for the body, `transcript` and `so_far` for the page, `before` for a
+fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them for the writers,
+from a turn prefix and a kind, which is what lets one capability name a step without importing the
+conversation. `tree_key(n, i)` and `Stepping.key("tree")` therefore produce the same string from
+opposite ends, and nothing enforces that: change one and change the other. The tests in
+`test_conversation.py` assert the shape against literal recorded values rather than round-tripping
+through the writer, which is what turns a drift into a failure rather than a silently unfindable
+record.
+
+**The two indexed kinds have a reader now, and that is what draws a turn as it happens.** `so_far`
+walks `model:{i}` from zero and looks each call's result up under `tool:{id}`, so the turn being
+answered renders from the steps behind it rather than waiting for its `messages`. It is not a second
+copy of anything: those records exist so that a resumed pass does not pay for the same request
+twice, and this reads them.
+
+What holds the two readings together is that **`so_far` produces a prefix of what `blocks_of` will
+produce once the turn lands**: the same responses, in the same order, cut by `blocks_in`, with the
+results that have not arrived still out. That is why a panel never moves as a turn fills in, and why
+the morph when `messages` finally lands touches nothing. `test_conversation.py` asserts the two
+readings of a finished turn are equal, which is also what catches the subtle half of it - a tool
+result's text has to be what `ToolReturnPart.model_response_str` produces, so `returned_step` uses
+`pydantic_core.to_json` and not `json.dumps`, whose spacing differs on every structured return.
 
 ## Endpoints, discovery, and per-session auth
 
@@ -226,9 +249,11 @@ kept apart:
   checked: the provider's own refusal is the authoritative answer about a model and it arrives on
   the turn, where gating here would strand a conversation nobody broke.
 
-A session whose endpoint is gone renders with a sentence naming it and no poll, because a spinner
-that will never resolve is the one state a person cannot diagnose. `test_console.py` pins both
-halves, including that a session on an unlisted-but-routable model keeps its poll.
+A session whose endpoint is gone renders with a sentence naming it and no spinner, because a
+spinner that will never resolve is the one state a person cannot diagnose. `test_console.py` pins
+both halves, including that a session on an unlisted-but-routable model keeps its spinner. The
+connection stays open either way, which is a different question: it is the page's rather than the
+turn's, so what a stalled session must not do is claim something is coming.
 
 `exe.py` is the exe.dev half, and it answers reflection twice over: which LLM gateways are attached
 (so `mainplate install` writes keyless endpoints) and which GitHub repositories are (so a session
@@ -361,8 +386,8 @@ Three things there are load-bearing:
   moment a choice *may* differ and deliberately not the moment it must.
 
 The confirm page is a page rather than a control in the transcript, because the transcript is
-replaced once a second while a turn is in flight: a picker per person panel would be rebuilt under
-the reader's hand, and there would be one per turn.
+re-rendered every time a turn in flight records anything: a picker per person panel would be
+rebuilt under the reader's hand, and there would be one per turn.
 
 ## The workspace
 
@@ -624,35 +649,61 @@ the price of the OpenAI-compatible half of a gateway being reachable at all.
 
 ## The console
 
-htmx **4**, vendored at `assets/htmx.min.js`, which reads very differently from htmx 2: explicit
+htmx **4**, vendored at `assets/htmax.min.js`, which reads very differently from htmx 2: explicit
 `:inherited`, lowercase colon-separated event names (`hx-on:htmx:after:swap`), `hx-status:` in
-place of `responseHandling`, and every status swapping except `204` and `304`. That last one is
-why the poll carries `hx-status:4xx="swap:none"`: a refusal swapped into the region would replace
-the conversation *and* take away the trigger that would have recovered it.
+place of `responseHandling`, and every status swapping except `204` and `304`.
+
+**`htmax` and not `htmx`, and the extensions are gated by a meta tag.** `htmax` is core plus every
+bundled extension in one file, taken because one file cannot drift from itself: core and an
+extension vendored separately are two files that have to be kept on one version, and the failure
+when they are not is a swap that silently misbehaves rather than an error anybody sees. The price
+is ten extensions this console does not want, several of which would change how a page behaves
+just by being included - `history-cache` puts back the history store htmx 4 deliberately removed,
+and `hx-live` and `alpine-compat` are reactive scripting. `<meta name="htmx-config" content=
+"extensions: ...">` is the allowlist, read before any of them register, so a name absent from
+`EXTENSIONS` in `pages.py` is never installed rather than installed and unused.
 
 Pages are `without-html` node trees, pure functions of already-answered questions. A page and the
 fragment inside it are the same function called at two depths, which is what stops the two
 renderings from disagreeing.
 
-The transcript swaps with **`outerMorph`**, and two things follow from that:
+**A page holds one connection and the transcript carries no `hx-` attribute of its own.** The
+region neither asks for itself nor decides when to: `streaming.py` sends it down the page's event
+stream whenever the session records anything. That deletes a whole class of bug rather than moving
+it - a trigger on a region that is itself replaced had to be `every` and never `load`, because
+morphing keeps the element and a `load` poll fires exactly once and then waits forever on an answer
+that already arrived, invisibly to any markup assertion. A region with no trigger has nothing to
+get wrong.
 
-- **The poll is `every 1s`, never `load`.** A `load` trigger fires once per element *load*, so it
-  repeated only because each answer replaced the region. Morphing keeps the element, so a `load`
-  poll fires exactly once and the conversation then waits forever on an answer that already
-  arrived, with nothing on the page saying so. The failure is invisible to a markup assertion,
-  because the markup is identical either way; `test_console.py` pins the trigger for that reason.
-- **A reader's own changes survive an answer arriving.** Morphing merges rather than replaces, so
-  an unfolded tool call, the caret, and a scroll position are not thrown away once a second. The
-  server still renders the whole conversation from the checkpoint, which is the property worth
-  keeping: the swap got cleverer, not the endpoint.
+Three things about that connection are decided rather than incidental:
+
+- **It lives outside everything that swaps**, directly under `body`. Held by the transcript it
+  would be a connection its own traffic kept tearing down. Its target is itself with `innerHTML`,
+  so it is an inert sink: every message is `<hx-partial>` elements naming their own targets, which
+  htmx applies while leaving the connecting element alone, and anything else lands somewhere
+  harmless rather than over the conversation.
+- **Every message is a whole current render, never a delta.** So a reconnect needs no replay and no
+  cursor, a dropped frame costs nothing, and a duplicate morphs to a no-op. It is also why the
+  first thing a stream sends is the current state: what a page that has just connected needs and
+  what one connected for an hour needs are the same thing.
+- **The server notices by polling a change token**, not by being told. `Service.token` counts a
+  session's recorded steps, which is sound because a checkpoint is append-only and cheap because it
+  decodes none of them. The two halves of the process stay joined only by the store, exactly as
+  they would be if the worker were elsewhere.
+
+The transcript still swaps with **`outerMorph`**, and that is what lets a turn be watched: a turn
+records several times while it runs, so a replacement would shut a call the reader opened to watch,
+over and over, precisely while they were reading it. `test_browser.py` pins that against a real
+Chromium and a real server, because it is a second render reaching a page nobody reloaded and
+neither a still nor a markup assertion can see one.
 
 The rail (search, key, dock, theme) lives **outside** the region that swaps, so no control is
 rebuilt under a reader's finger. What it projects back *onto* the transcript — search marks, the
 panel landed on, which kinds are set aside, which calls are unfolded — cannot live in the markup
 either, so `assets/mainplate.js` holds it as values and reapplies it after every swap. That
 projection is one idempotent `repaint()` serving the first render, every swap, and every press.
-Everything it drives is an enhancement: with the file absent the page still renders, posts, polls,
-and folds.
+Everything it drives is an enhancement: with the file absent the page still renders, posts, and
+folds.
 
 The picker's controls are **associated with their form by name, not by nesting**, and that is
 load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned
@@ -698,8 +749,8 @@ answer, its reasoning drawn back toward the ink, a call in ochre). A kind added 
 decided by that rather than chosen for it. A part kind `parted` has no rendering for is passed
 over rather than refused, because the provider and Pydantic AI are both free to add one.
 
-Every panel carries a **`recorded` disclosure** showing the JSON the checkpoint holds behind it, and
-three things there are decided rather than incidental:
+Every **settled** panel carries a `recorded` disclosure showing the JSON the checkpoint holds behind
+it, and four things there are decided rather than incidental:
 
 - **Nothing is stored per panel**, so the panel and its record have to come out of one walk.
   `parted` is that walk and hands out `Source` indices as it goes; `runs` is the one grouping rule
@@ -710,13 +761,24 @@ three things there are decided rather than incidental:
   today's Pydantic AI would write, which agrees with the record right up until a release renames a
   field and then disagrees silently. A person's panel is the exception and is one whole key,
   `turn:{n}:prompt`.
-- **Fetched on demand and `hx-preserve`d.** The transcript swaps once a second, so the raw record of
-  every panel is not something to carry in it; and because the server renders the disclosure closed,
-  a morph takes the `open` attribute back off unless the element is preserved. htmx reads
-  `hx-preserve` off the *incoming* markup, so taking it off the live node proves nothing. `once` is
-  safe because a panel exists only once what is behind it has stopped changing.
+- **Fetched on demand and `hx-preserve`d.** A running turn re-renders the transcript repeatedly, so
+  the raw record of every panel is not something to carry in it; and because the server renders the
+  disclosure closed, a morph takes the `open` attribute back off unless the element is preserved.
+  htmx reads `hx-preserve` off the *incoming* markup, so taking it off the live node proves nothing.
+- **`Panel.settled` is what decides a panel offers one at all**, and `once` is what makes it cheap.
+  A panel of the turn in flight is read from that turn's *steps*, where `sourced_at` answers out of
+  its messages, which are not written until the turn ends: offering the disclosure there would
+  fetch nothing, once, and keep the nothing. It appears when the turn lands.
 
 Tests drive the app through `without-http`'s in-memory loopback client (`tests/calling.py`), so
-nothing binds a port and the suite parallelizes. The `app` fixture deliberately runs the console
-over a store with **no worker**, so a test asserting on a pending turn cannot race one; what the
-worker does is tested in `test_conversation.py`, a pass at a time.
+nothing binds a port and the suite parallelizes; `Caller.watching` consumes a real event stream
+through the same encoder and decoder a socket would, which is how the console tests see the
+transcript with no document around it now that no endpoint serves one. The `app` fixture
+deliberately runs the console over a store with **no worker**, so a test asserting on a pending turn
+cannot race one; what the worker does is tested in `test_conversation.py`, a pass at a time.
+
+`test_browser.py`'s `console` fixture is the exception that binds a port, and it has to: what a
+live connection must prove is that a *second* render reaches a page nobody reloaded, which needs a
+real server, a real Chromium, and a test writing steps into the checkpoint while the browser
+watches. It has no worker either, for the same reason and one more: writing the steps by hand is
+the only way to hold a turn half-finished long enough to assert on it.

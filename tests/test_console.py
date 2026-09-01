@@ -21,6 +21,7 @@ from mainplate.console import NotAMessage
 from mainplate.console import parse_form_prompt
 from mainplate.conversation import messages_key
 from mainplate.conversation import prompt_key
+from mainplate.pages import TRANSCRIPT_ID
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
@@ -32,6 +33,23 @@ async def a_session(app: ASGIApp, said: str = "what is a mainplate", title: str 
         answered = await caller.post("/sessions", starting_form(said, title=title))
         assert answered.status == 303
         return answered.location.rsplit("/", 1)[-1]
+
+
+async def watched(app: ASGIApp, session: str) -> str:
+    """
+    The transcript alone, as the page's live connection sends it.
+
+    The one way to see the conversation with no document around it, which several tests below need
+    rather than prefer: a session is named after its first message, so a page also carries that text
+    in the sidebar, where it is escaped as an ordinary child. Asserting on the page would pass on
+    the sidebar's copy whatever the transcript did with the same text, which is a check that cannot
+    fail measuring the wrong thing.
+
+    The first message and then out, because a stream has no end: what it opens with is current
+    state, which is the whole of what these want.
+    """
+    async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
+        return (await anext(events)).data
 
 
 # A catalogue offering something else entirely, for the session whose pair went away. It stands in
@@ -106,38 +124,38 @@ class TestTheConsole:
         recorded = await service.checkpointer.load(session)
         assert recorded[prompt_key(0)] == "what is a mainplate"
 
-    async def test_an_unanswered_session_renders_the_question_and_asks_again(self, app: ASGIApp) -> None:
+    async def test_an_unanswered_session_renders_the_question_and_watches_for_the_answer(self, app: ASGIApp) -> None:
         session = await a_session(app)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert answered.status == 200
         assert "what is a mainplate" in answered.text
-        assert f'hx-get="/fragments/sessions/{session}"' in answered.text
+        assert f'hx-sse:connect="/fragments/stream?session={session}"' in answered.text
 
-    async def test_an_unanswered_session_asks_again_on_a_timer_rather_than_on_a_load(self, app: ASGIApp) -> None:
+    async def test_the_connection_is_held_outside_everything_that_swaps(self, app: ASGIApp) -> None:
         """
-        The swap is a morph, which keeps the element rather than replacing it.
+        The connection is the page's, not the transcript's, and the difference is load-bearing.
 
-        A `load` trigger fires once per element load, so it repeats only where each answer replaces
-        the region. Under a morph it fires exactly once and the conversation then waits forever on
-        an answer that has already arrived, with nothing on the page saying so. Pinned here because
-        that failure is invisible to every other assertion in this file: the markup is identical
-        either way.
+        Every message morphs the transcript, so a connection held by that region would be one its
+        own traffic kept tearing down and re-establishing. Pinned as an ordering because that is
+        what a reader of the markup can check: the connecting element opens before the region it
+        updates and is closed before it, so it cannot be inside it.
         """
         session = await a_session(app)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
-        assert 'hx-trigger="every 1s"' in answered.text
-        assert 'hx-swap="outerMorph"' in answered.text
+        connecting = answered.text.index("hx-sse:connect")
+        assert answered.text.index('id="stream"') < connecting
+        assert connecting < answered.text.index('id="transcript"')
 
-    async def test_an_answered_session_carries_no_trigger_at_all(self, app: ASGIApp, service: Service) -> None:
+    async def test_the_transcript_asks_for_nothing_on_its_own(self, app: ASGIApp, service: Service) -> None:
         """
-        A console with nothing running asks for nothing, which is what stops the polling.
+        The region is markup and nothing else, whether or not a turn is in flight.
 
-        Named against the poll's own trigger and its own URL rather than against `hx-get` and
-        `hx-trigger` at large. A settled panel carries a disclosure that fetches what the
-        checkpoint holds behind it, which is an htmx attribute this assertion must not read as a
-        conversation still waiting for an answer.
+        It neither fetches itself nor decides when to, so there is no trigger to get right and none
+        to remember to remove. Named against the region's own attributes rather than `hx-` at
+        large, because a settled panel carries a disclosure that fetches what the checkpoint holds
+        behind it and that is not the conversation asking for itself.
         """
         session = await a_session(app)
         await service.checkpointer.supply(
@@ -146,9 +164,42 @@ class TestTheConsole:
             [{"kind": "response", "parts": [{"part_kind": "text", "content": "it is a plate"}]}],
         )
         async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}")
+            answered = await caller.get(f"/sessions/{session}")
         assert 'hx-trigger="every 1s"' not in answered.text
         assert f'hx-get="/fragments/sessions/{session}"' not in answered.text
+
+    async def test_a_stream_sends_the_conversation_as_soon_as_it_is_opened(self, app: ASGIApp) -> None:
+        """
+        What makes a reconnect need no replay: the only thing this ever sends is current state, so
+        a page that has just connected and one that has been connected for an hour are handed the
+        same thing.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
+            first = await anext(events)
+        assert "what is a mainplate" in first.data
+        assert f'hx-target="#{TRANSCRIPT_ID}"' in first.data
+        assert 'hx-swap="outerMorph"' in first.data
+
+    async def test_a_message_names_the_region_it_is_for_rather_than_the_connection(self, app: ASGIApp) -> None:
+        """
+        A message made only of partials leaves the connecting element alone, which is what lets one
+        connection drive several regions and what keeps the sink inert.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
+            first = await anext(events)
+        assert first.data.startswith("<hx-partial")
+        assert first.type == "message", "unnamed, so htmx swaps it rather than firing an event"
+
+    async def test_a_stream_for_a_session_nobody_started_is_refused_rather_than_opened(self, app: ASGIApp) -> None:
+        """
+        A refusal has to be a refusal. An event stream that opened and ended would be reconnected
+        by the client forever, where a `404` is an answer it can act on.
+        """
+        async with calling(app) as caller:
+            answered = await caller.get("/fragments/stream?session=nothing-here")
+        assert answered.status == 404
 
     async def test_a_message_into_a_session_answers_with_the_transcript_alone(self, app: ASGIApp) -> None:
         session = await a_session(app)
@@ -192,11 +243,6 @@ class TestTheConsole:
             answered = await caller.post("/sessions/nothing-here/messages", {"prompt": "hello"})
         assert answered.status == 404
 
-    async def test_a_fragment_for_a_session_nobody_started_is_refused(self, app: ASGIApp) -> None:
-        async with calling(app) as caller:
-            answered = await caller.get("/fragments/sessions/nothing-here")
-        assert answered.status == 404
-
     async def test_a_path_nothing_serves_is_a_page_rather_than_a_bare_status(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
             answered = await caller.get("/nowhere")
@@ -220,7 +266,7 @@ class TestTheConsole:
 
     async def test_the_page_serves_its_own_stylesheet_and_scripts(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            for asset in ("/assets/mainplate.css", "/assets/mainplate.js", "/assets/htmx.min.js"):
+            for asset in ("/assets/mainplate.css", "/assets/mainplate.js", "/assets/htmax.min.js"):
                 assert (await caller.get(asset)).status == 200
 
     async def test_the_start_page_offers_every_profile_and_the_defaults_models(self, app: ASGIApp) -> None:
@@ -337,15 +383,19 @@ class TestTheConsole:
         assert f"{DEFAULT_CHOICE.model}" in answered.text
         assert 'name="endpoint"' not in answered.text, "a session's choice is fixed, so offering one would lie"
 
-    async def test_a_session_whose_profile_is_gone_says_so_and_stops_asking(
+    async def test_a_session_whose_profile_is_gone_says_so_and_draws_no_spinner(
         self, app: ASGIApp, service: Service
     ) -> None:
         """
         The one state a person cannot otherwise diagnose: a spinner that will never resolve.
 
-        The worker cannot answer the session, so a page that kept polling would show a pending
-        panel forever with nothing saying why. Naming the endpoint is the whole of the fix, because
+        The worker cannot answer the session, so a page drawing a pending panel would show it
+        forever with nothing saying why. Naming the endpoint is the whole of the fix, because
         putting it back is what makes the conversation continue where it stopped.
+
+        The connection stays open, and that is not the same question. It is the page's rather than
+        the turn's, so it is held whether or not anything is expected down it; what a stalled
+        session must not do is claim something is coming.
         """
         session = await a_session(app)
         narrowed = replace(service, catalogues=Catalogues(current=OTHER_CATALOGUE))
@@ -353,9 +403,7 @@ class TestTheConsole:
             answered = await caller.get(f"/sessions/{session}")
         assert DEFAULT_CHOICE.endpoint in answered.text
         assert "no longer declares" in answered.text
-        assert f'hx-get="/fragments/sessions/{session}"' not in answered.text, (
-            "a session nothing will answer must stop asking"
-        )
+        assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
 
     async def test_a_session_on_a_model_the_picker_stopped_listing_is_not_stuck(
         self, app: ASGIApp, service: Service
@@ -366,8 +414,8 @@ class TestTheConsole:
         The case is real rather than hypothetical: exe.dev's gateway answers `claude-sonnet-4-6`
         while listing it as `anthropic/claude-sonnet-4-6`, so every session recorded before that
         prefix appeared names a model discovery will never return. Calling those stuck would tell
-        somebody to restore a model nobody removed, and would stop the poll on a conversation the
-        worker can still answer.
+        somebody to restore a model nobody removed, and would take the spinner off a conversation
+        the worker is still going to answer.
         """
         session = await a_session(app)
         thinned = Catalogue(
@@ -385,15 +433,12 @@ class TestTheConsole:
         async with calling(build_app(already(narrowed))) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert "no longer" not in answered.text
-        assert f'hx-get="/fragments/sessions/{session}"' in answered.text, (
-            "the worker can still answer it, so the page must keep asking"
-        )
+        assert 'id="waiting"' in answered.text, "the worker can still answer it, so an answer is coming"
 
     async def test_a_message_is_rendered_as_the_markdown_it_was_written_as(self, app: ASGIApp) -> None:
         session = await a_session(app, "a **strong** point")
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}")
-        assert "<strong>strong</strong>" in answered.text
+        region = await watched(app, session)
+        assert "<strong>strong</strong>" in region
 
     async def test_markup_in_a_message_does_not_become_markup(self, app: ASGIApp) -> None:
         """
@@ -405,11 +450,10 @@ class TestTheConsole:
         cannot fail measuring the wrong thing.
         """
         session = await a_session(app, "<script>alert(1)</script> and <img src=x onerror=alert(2)>")
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}")
-        assert "<script" not in answered.text
-        assert "alert(1)" not in answered.text
-        assert "onerror" not in answered.text
+        region = await watched(app, session)
+        assert "<script" not in region
+        assert "alert(1)" not in region
+        assert "onerror" not in region
 
 
 ANSWERED = [
@@ -438,10 +482,9 @@ class TestShowingWhatWasRecorded:
 
     async def test_a_panel_carries_a_disclosure_pointed_at_its_own_record(self, app: ASGIApp, service: Service) -> None:
         session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}")
-        assert f'hx-get="/fragments/sessions/{session}/panels/0/1"' in answered.text
-        assert f'hx-get="/fragments/sessions/{session}/panels/0/2"' in answered.text
+        region = await watched(app, session)
+        assert f'hx-get="/fragments/sessions/{session}/panels/0/1"' in region
+        assert f'hx-get="/fragments/sessions/{session}/panels/0/2"' in region
 
     async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
         """
@@ -450,10 +493,9 @@ class TestShowingWhatWasRecorded:
         the reading of it.
         """
         session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}")
-        assert "the trigger fires once" in answered.text, "the reading of the part is on the page"
-        assert '"part_kind"' not in answered.text, "the record behind it is not"
+        region = await watched(app, session)
+        assert "the trigger fires once" in region, "the reading of the part is on the page"
+        assert '"part_kind"' not in region, "the record behind it is not"
 
     async def test_the_disclosure_survives_the_poll_that_replaces_the_conversation(
         self, app: ASGIApp, service: Service
@@ -467,10 +509,9 @@ class TestShowingWhatWasRecorded:
         incoming markup, so this response is where it has to be.
         """
         session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}")
-        assert "hx-preserve" in answered.text
-        assert 'hx-trigger="toggle once"' in answered.text, "settled for good, so asked for once"
+        region = await watched(app, session)
+        assert "hx-preserve" in region
+        assert 'hx-trigger="toggle once"' in region, "settled for good, so asked for once"
 
     async def test_a_model_panel_answers_with_the_parts_it_was_read_out_of(
         self, app: ASGIApp, service: Service

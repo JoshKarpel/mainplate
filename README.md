@@ -326,11 +326,20 @@ Server-rendered HTML with [htmx](https://four.htmx.org/), built from
 htmx are all served from the process rather than a CDN, so a console on a machine with no route
 out still renders.
 
-One live region, and it is the transcript: while a turn is unanswered it asks for itself once a
-second, and the answer comes back carrying no trigger, which is how the polling stops. A console
-with nothing in flight makes no requests. The answer is *morphed* into the page rather than
-replacing it, so what a reader has done to the conversation, an unfolded tool call, a search, the
-place they had scrolled to, is not thrown away once a second by an answer arriving.
+A page holds **one connection**, open for as long as the page is, and the server sends the
+conversation down it whenever the session records anything. Every message is a whole current render
+rather than a delta, which is what makes a dropped connection cost nothing and a reconnect need no
+replay, and each names the region it is for, so a second region joins the same connection rather
+than opening another. A render is *morphed* into the page rather than replacing it, so what a reader
+has done to the conversation, an unfolded tool call, a search, the place they had scrolled to,
+survives an update arriving.
+
+**A turn is drawn as it happens.** The responses and tool results behind a running turn are already
+in the checkpoint, recorded step by step so that a resumed pass does not pay for them twice, so the
+page reads those rather than waiting for the turn to write its messages: reasoning appears, then a
+call with its arguments, then its result, then the next request. A call still out is drawn working.
+Nothing is stored to make this work and nothing is streamed from the provider; it is the same
+checkpoint, read sooner.
 
 A turn is drawn as panels: a coloured edge per run of one kind, with the person's message, the
 model's reasoning, its calls, and its answer each in their own. The palette runs on one axis, cool
@@ -338,10 +347,11 @@ for what reached the model and warm for what it produced, so a reader scrolling 
 apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
 page.
 
-Under each panel is a `recorded` fold, which shows the JSON the checkpoint actually holds behind it:
-the prompt for a person's message, and the stored model parts for everything else. Since the
-checkpoint *is* the conversation, this is the state itself rather than a debug view of it, and it is
-fetched only when you open it so the transcript that swaps once a second never carries it.
+Under each settled panel is a `recorded` fold, which shows the JSON the checkpoint actually holds
+behind it: the prompt for a person's message, and the stored model parts for everything else. Since
+the checkpoint *is* the conversation, this is the state itself rather than a debug view of it, and
+it is fetched only when you open it so the transcript never carries it. A panel of the turn in
+flight offers none, because what is behind it has not stopped changing.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that jumps between the two sides and folds every call at once, a

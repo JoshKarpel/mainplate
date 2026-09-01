@@ -22,6 +22,11 @@ DEFAULT_DATABASE = Path("mainplate.db")
 
 DEFAULT_INSTRUCTIONS = "You are a helpful assistant, working with a software engineer. Be concise and direct."
 
+# How often a live connection looks for something new. Named here rather than written twice,
+# because `Service` carries the value a handler reads and this is where the configured one enters
+# the process: two defaults for one interval is a pair that can come to disagree.
+DEFAULT_WATCHING = timedelta(milliseconds=200)
+
 
 class Settings(BaseSettings):
     """
@@ -94,6 +99,20 @@ class Settings(BaseSettings):
     you are looking at the console; a price moves or a record is filled in when somebody upstream
     ships a release, which is not. Re-reading a four-megabyte document every fifteen minutes would
     spend real bandwidth re-learning a value that changes a few times a month.
+    """
+
+    watching: timedelta = Field(default=DEFAULT_WATCHING, gt=timedelta())
+    """
+    How often a page's live connection asks whether its session has recorded anything new.
+
+    The whole of what decides how soon a reader sees a reply take shape, because everything else on
+    that path is already immediate: a step is recorded the moment it happens and the page morphs
+    whatever arrives. Two hundred milliseconds is under what a person reads as a delay and well
+    above what the check costs, which is a count over one session's rows and no decoding at all.
+
+    It bounds the *staleness* rather than the work: a connection that finds nothing new sends
+    nothing, so a quiet console with ten tabs open makes fifty of those counts a second and no
+    renders and no bytes.
     """
 
     @property

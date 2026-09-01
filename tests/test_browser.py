@@ -5,16 +5,27 @@ from collections.abc import Iterator
 from functools import partial
 from http.server import SimpleHTTPRequestHandler
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 
 import pytest
 import pytest_asyncio
+from conftest import DEFAULT_CHOICE
+from conftest import LEASE
+from conftest import already
 from playwright.async_api import Browser
 from playwright.async_api import Page
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
 from playwright.async_api import expect
+from without_http import serving
 
+from mainplate.app import build_app
+from mainplate.app import open_store
+from mainplate.catalogue import Catalogues
+from mainplate.conversation import model_key
+from mainplate.conversation import tool_key
+from mainplate.service import Service
 from scripts.gallery import write
 
 # The gallery rather than a running console, which is the bargain `scripts/gallery.py` already
@@ -88,6 +99,27 @@ async def browser() -> AsyncIterator[Browser]:
             yield launched
         finally:
             await launched.close()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple[str, Service]]:
+    """
+    The real console on a real port, with the store it reads handed back beside it.
+
+    The gallery cannot answer what these need. A page is a pure function of a checkpoint, so a still
+    of one proves how a conversation *renders*; what a live connection has to prove is that the page
+    changes when the checkpoint does, and nothing on disk changes. So this is a running server,
+    a browser pointed at it, and a `Service` a test writes through to make the thing it is watching
+    for actually happen.
+
+    No worker, for the reason the console tests have none: a pass answering the session at a moment
+    no test chose would make every assertion here a race against how fast the machine is. What a
+    turn records, a test records itself, a step at a time - which is also the only way to hold a
+    turn half-finished for long enough to look at it.
+    """
+    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues) as service:
+        async with serving(build_app(already(service)), port=0) as server:
+            yield f"http://{server.host}:{server.port}", service
 
 
 @pytest_asyncio.fixture(loop_scope="session")
@@ -273,3 +305,92 @@ class TestSendingFromTheKeyboard:
         await page.evaluate(WATCH_SUBMITS)
         await page.press("textarea[name=prompt]", "Shift+Enter")
         assert await page.evaluate("() => window.submitted") == []
+
+
+# One response of a turn, as the capability records it partway through: the model reasoned and asked
+# for two files at once. Two calls because that is the state worth watching arrive - they run
+# together, so one comes back while the other is still out.
+PARTWAY = {
+    "kind": "response",
+    "parts": [
+        {"part_kind": "thinking", "content": "Two files to look at."},
+        {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "a.py"}, "tool_call_id": "call-1"},
+        {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "b.py"}, "tool_call_id": "call-2"},
+    ],
+}
+
+
+class TestWatchingATurnArrive:
+    """
+    A turn appearing in the page as it is recorded, which is the whole point of the live connection.
+
+    Nothing in a still can show this and no markup assertion can either: what both would check is
+    one render, where what has to hold is that a *second* render reaches a page nobody reloaded.
+    Every step here is written into the checkpoint from the test while the browser is looking at it,
+    which is exactly what a pass does and the only way to hold a turn half-finished long enough to
+    assert on.
+    """
+
+    async def started(self, console: tuple[str, Service], page: Page) -> Service:
+        """A session with a question in it, open in the browser, with nothing answered yet."""
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+        self.session = session.id
+        return service
+
+    async def test_a_response_appears_without_the_page_being_reloaded(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        service = await self.started(console, page)
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(0)
+        await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
+        await expect(page.locator(".panel[data-kind=thinking]")).to_contain_text("Two files to look at.")
+
+    async def test_a_call_still_out_is_working_and_fills_in_when_its_result_lands(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The state `ToolUse` has always been able to describe and nothing could previously produce:
+        by the time a turn's messages are written every call has an answer, so a call still out
+        exists only while the turn is running.
+        """
+        service = await self.started(console, page)
+        await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
+        await expect(page.locator(".tool .waiting")).to_have_count(2)
+        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), "the first file")
+        await expect(page.locator(".tool .waiting")).to_have_count(1)
+        await expect(page.locator(".tool").first).to_contain_text("the first file")
+
+    async def test_a_reader_keeps_what_they_unfolded_while_the_turn_goes_on(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The reason every message is morphed rather than swapped. A turn records several times a
+        second while it runs, so a replacement would shut a call the reader opened to watch, over
+        and over, exactly while they were reading it.
+        """
+        service = await self.started(console, page)
+        await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
+        opened = page.locator("details.tool").first
+        await expect(opened).to_have_attribute("open", "")
+        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), "the first file")
+        await service.checkpointer.supply(self.session, tool_key(0, "call-2"), "the second file")
+        # Both are back, so the server renders both closed; the one the reader has open stays open.
+        await expect(page.locator("details.tool")).to_have_count(2)
+        await expect(opened).to_have_attribute("open", "")
+
+    async def test_a_message_leaves_the_connection_and_its_sink_alone(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        A message made only of partials updates the regions it names and nothing else. If it ever
+        swapped into the connecting element instead, the conversation would stop updating and the
+        connection would be replaced by the markup it delivered.
+        """
+        service = await self.started(console, page)
+        await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
+        assert await page.locator("#stream").inner_html() == ""
+        assert await page.get_attribute("#stream", "hx-sse:connect") is not None

@@ -75,6 +75,7 @@ from mainplate.reference import refreshed
 from mainplate.reference import refreshing as refreshing_reference
 from mainplate.service import Service
 from mainplate.sessions import prepare
+from mainplate.settings import DEFAULT_WATCHING
 from mainplate.settings import Settings
 
 # Every place a repository can come from. One entry today because one exists; a `GitHub` through an
@@ -128,6 +129,7 @@ async def open_store(
     catalogues: Catalogues,
     workspaces: Workspaces | None = None,
     references: References | None = None,
+    watching: timedelta = DEFAULT_WATCHING,
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -150,6 +152,7 @@ async def open_store(
             # holder is a console that was never told to look anything up, which is a different
             # state from one whose database would not load and the state a card must not report.
             references=references if references is not None else References(),
+            watching=watching,
         )
     finally:
         # Never `connection.close()`: the store's own `aclose` waits out any statement still
@@ -194,7 +197,9 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     references = References()
     if config.model_reference is not None:
         await refreshed(references, config.model_reference)
-    async with open_store(settings.database, settings.lease, catalogues, workspaces, references) as service:
+    async with open_store(
+        settings.database, settings.lease, catalogues, workspaces, references, settings.watching
+    ) as service:
         answering = work(
             service.durable, conversing(endpoints, settings.instructions, workspaces), limit=settings.passes
         )

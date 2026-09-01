@@ -5,16 +5,16 @@
 # what lets a page and the fragment inside it be the *same* function called at two depths rather
 # than two renderings of one thing that can disagree.
 #
-# One live region, and it is the transcript. A turn in flight is the only thing on this console
-# that changes without somebody doing anything, so it is the only thing that asks again: the
-# transcript asks for itself once a second while it is waiting on an answer, and carries no poll
-# at all once it has one. A console with nothing running makes no requests.
+# One live region, and it is the transcript. A turn being answered is the only thing on this console
+# that changes without somebody doing anything, and it changes several times while it runs, so the
+# region carries no `hx-` attribute of its own: the page holds one connection, outside everything
+# that swaps, and the server sends this region down it whenever the session records anything.
 #
 # The chrome that navigates the conversation (the search, the key, the dock) is deliberately
-# *outside* that region, so a swap cannot take a control away mid-press and nothing has to be
-# rebuilt a second later. What the chrome projects back onto the transcript (search marks, the
-# panel a reader landed on, which kinds are set aside) is reapplied after each swap by the script,
-# which holds that state as values rather than reading it back out of the markup.
+# *outside* that region too, so a swap cannot take a control away mid-press and nothing has to be
+# rebuilt under a reader's finger. What the chrome projects back onto the transcript (search marks,
+# the panel a reader landed on, which kinds are set aside) is reapplied after each swap by the
+# script, which holds that state as values rather than reading it back out of the markup.
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ from typing import assert_never
 from pydantic_ai.settings import ThinkingLevel
 from without_html import DOCTYPE
 from without_html import Element
-from without_html import Node
 from without_html import VoidElement
 from without_html import a
 from without_html import article
@@ -97,33 +96,28 @@ from mainplate.sessions import Session
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
 
-# How often a transcript with an unanswered turn asks again. A person is watching for a reply
-# that takes seconds, so this is short enough to feel like an answer arriving rather than a page
-# refreshing. It costs nothing when nothing is pending, because a settled transcript carries no
-# trigger at all.
-#
-# `every` and not `load delay:1s`, and the difference is not a preference. A `load` trigger fires
-# once per element load, so it repeated only because each answer *replaced* the region and the
-# replacement loaded. Morphing keeps the element, which is the whole point of it, so a `load` poll
-# fires exactly once and a conversation waits forever on an answer that has already arrived. An
-# interval belongs to the element rather than to its arrival, and htmx cancels it when the
-# attribute goes, which is what a settled transcript comes back without.
-WAITING = "every 1s"
-
 # What every swap of the transcript does. `outerMorph` rather than `outerHTML`, because the server
-# renders the whole conversation on every poll and a wholesale replacement would throw away
+# renders the whole conversation into every message and a wholesale replacement would throw away
 # everything a reader had done to it: a tool call they had unfolded, the search marks laid over it,
 # the panel they had landed on, and the caret if it were ever in there. Morphing merges the new
-# markup into the DOM already on screen, so a panel that did not change is not touched, and an
-# attribute the new markup omits (the poll's own trigger, when a turn has been answered) is removed
-# rather than left behind. The server stays a pure function of the checkpoint either way, which is
-# the property worth keeping: it is the swap that got cleverer, not the endpoint.
+# markup into the DOM already on screen, so a panel that did not change is not touched. The server
+# stays a pure function of the checkpoint either way, which is the property worth keeping: it is the
+# swap that got cleverer, not the endpoint.
+#
+# It is also what makes a message that changed nothing free. A stream sends whole current state
+# rather than deltas, so a reader may be handed markup they are already showing, and morphing that
+# in touches no node at all.
 SWAP: Final = "outerMorph"
 
+# The element holding the page's live connection: an inert sink, not a region. A message carrying
+# only `<hx-partial>` elements leaves it alone, and one that somehow carried bare markup lands here
+# rather than over a conversation somebody is reading.
+STREAM_ID: Final = "stream"
+
 # What a send does, which is the same merge plus a scroll: a message just typed is the one thing a
-# reader definitely wants to be looking at, and unlike the poll this cannot fight somebody reading
-# further up, because they were typing. The poll carries no scroll at all; following the end is the
-# dock's to offer and the reader's to switch off.
+# reader definitely wants to be looking at, and unlike an update arriving on its own this cannot
+# fight somebody reading further up, because they were typing. What the stream sends carries no
+# scroll at all; following the end is the dock's to offer and the reader's to switch off.
 SEND_SWAP: Final = "outerMorph scroll:bottom"
 
 TRANSCRIPT_ID: Final = "transcript"
@@ -192,7 +186,7 @@ class Links:
     start: Reversible
     session: Reversible
     say: Reversible
-    session_fragment: Reversible
+    stream: Reversible
     panel_record: Reversible
     endpoint_models: Reversible
     fork_form: Reversible
@@ -214,8 +208,15 @@ class Links:
     def to_say(self, session: str) -> str:
         return url_for(self.say, {"session": session})
 
-    def to_session_fragment(self, session: str) -> str:
-        return url_for(self.session_fragment, {"session": session})
+    def to_stream(self, session: str) -> str:
+        """
+        The connection a page holds open, told which conversation it is showing.
+
+        A query parameter for the reason `to_endpoint_models` uses one: it narrows what a single
+        connection reports on rather than picking a resource out. The stream is the page's, and the
+        session is what the page happens to be looking at.
+        """
+        return f"{url_for(self.stream)}?session={session}"
 
     def to_endpoint_models(self) -> str:
         """
@@ -248,7 +249,44 @@ class Links:
         return f"{self.assets}/{name}"
 
 
-def document(links: Links, heading: str, children: Node, session: str | None = None) -> str:
+# Which of the bundled extensions this console installs. An allowlist rather than a bundle taken
+# whole: `htmax` registers everything it carries on inclusion, and several of those would change
+# how this page behaves without being asked for - `history-cache` would put back the history store
+# htmx 4 deliberately removed, and `hx-live` and `alpine-compat` are reactive scripting this
+# console does not want. htmx reads it from the meta tag before any extension registers, so a name
+# absent here is never installed rather than installed and unused.
+EXTENSIONS: Final = "sse"
+
+
+def stream_element(links: Links, session: str) -> Element:
+    """
+    The page's one live connection, and the sink a message that named no region would land in.
+
+    Outside everything that swaps, which is what makes it the page's rather than a region's: the
+    transcript is morphed whenever the session moves, and a connection held by the element being
+    morphed would be a connection re-established by its own traffic. It sits directly under `body`
+    for the same reason the rail sits outside the transcript.
+
+    `hx-target` is itself and the swap is `innerHTML`, so this is an inert sink. Every message
+    carries `<hx-partial>` elements naming their own targets, which htmx applies while leaving the
+    connecting element untouched; the sink is what a message carrying anything else would land in,
+    where a target pointing at the conversation would let a stray message replace it.
+
+    Only where there is a session, because that is the only thing there is to watch. A page-level
+    connection with nothing to report on would be a held socket and a heartbeat.
+    """
+    return div(
+        attrs={
+            "id": STREAM_ID,
+            "hidden": True,
+            "hx-sse:connect": links.to_stream(session),
+            "hx-target": "this",
+            "hx-swap": "innerHTML",
+        }
+    )
+
+
+def document(links: Links, heading: str, children: Element, session: str | None = None) -> str:
     """
     The whole document, which every page is this with something different in the middle.
 
@@ -266,6 +304,14 @@ def document(links: Links, heading: str, children: Node, session: str | None = N
     htmx is a plain blocking script tag, which is what the library asks for: `defer`,
     `type="module"`, and injecting it over AJAX are all documented as unreliable, and the failure
     is a page where no attribute does anything.
+
+    It is `htmax`, which is htmx bundled with its extensions in one file, and the reason is one
+    file rather than the extension it is here for. Core and an extension vendored separately are
+    two files that have to be kept on one version, and the failure when they are not is a swap that
+    silently does the wrong thing rather than an error anybody sees. The price is a bundle carrying
+    ten extensions this console does not use, which the `htmx-config` meta gates: `extensions`
+    is an allowlist read before any of them register, so every one not named there is never
+    installed. Naming them here is also the honest statement of which this console depends on.
 
     The console's own script is blocking and in the head for a different reason: it pins the
     reader's chosen theme on `<html>` before the first paint, so a page opened dark does not flash
@@ -285,11 +331,15 @@ def document(links: Links, heading: str, children: Node, session: str | None = N
                             title(children=heading),
                             link(attrs={"rel": "icon", "href": "data:,"}),
                             link(attrs={"rel": "stylesheet", "href": links.to_asset("mainplate.css")}),
-                            script(attrs={"src": links.to_asset("htmx.min.js")}),
+                            meta(attrs={"name": "htmx-config", "content": f"extensions: {EXTENSIONS}"}),
+                            script(attrs={"src": links.to_asset("htmax.min.js")}),
                             script(attrs={"src": links.to_asset("mainplate.js")}),
                         ]
                     ),
-                    body(attrs={"data-session": session}, children=children),
+                    body(
+                        attrs={"data-session": session},
+                        children=[*((stream_element(links, session),) if session else ()), children],
+                    ),
                 ],
             ),
         ]
@@ -799,6 +849,31 @@ def working() -> Element:
     )
 
 
+# How wide JSON is indented where a person reads it. Two, because the point of showing it is the
+# shape, and a value nested four deep at four spaces is mostly margin in a column this narrow.
+INDENT: Final = 2
+
+
+def laid_out(said: str) -> str:
+    """
+    JSON laid out to be read, and anything else left exactly as it arrived.
+
+    What a model hands a tool is JSON by construction, and a single line of it is where a reader
+    has to count brackets to find the argument they came for. It is not *reliably* well-formed,
+    though: `args_as_json_str` returns whatever the provider sent when the arguments arrived as a
+    string, so a malformed call reaches here as that text. Showing it unchanged is the honest
+    rendering, and it is the call a reader most needs to look at.
+
+    Deliberately not used on what a call *returned*. That is whatever the tool produced - usually
+    the contents of a file - so text that merely happens to parse as JSON would be reformatted, and
+    a reader would be shown something other than what the model was handed.
+    """
+    try:
+        return json.dumps(json.loads(said), indent=INDENT, ensure_ascii=False)
+    except ValueError:
+        return said
+
+
 def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     """
     One call, folded, with what it was handed and what it gave back.
@@ -807,15 +882,15 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     prose they read through, and a real `<details>` because that is what works with no script at
     all and what the dock's fold controls act on.
 
-    The id is the panel's own plus this block's place in it, which is stable for the same reason
-    the panel's anchor is: a turn is rendered only once its messages are recorded, so the blocks
-    inside a panel never change afterwards. The script needs it to put a reader's unfolded calls
-    back after a swap, since the server renders `open` for one state only and morphing removes an
-    attribute the new markup does not carry.
+    The id is the panel's own plus this block's place in it, which is stable because a panel's
+    blocks only ever grow at the end: a call keeps its place in the panel once made, whether or not
+    it has come back yet. The script needs it to put a reader's unfolded calls back after a swap,
+    since the server renders `open` for one state only and morphing removes an attribute the new
+    markup does not carry.
 
-    A call with no result is drawn open and working. Today that means a turn whose run ended
-    between the call and its return, because a turn is written to the checkpoint whole; when the
-    turn in flight becomes readable from its own model steps, this is already what it looks like.
+    A call with no result is drawn open and working, which is what a call still out looks like
+    while the turn that made it runs, and what a turn whose run ended between the call and its
+    return looks like afterwards.
     """
     return details(
         cls="tool",
@@ -837,7 +912,7 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
                 cls="tool__body",
                 children=[
                     dt(children="called with"),
-                    dd(children=pre(children=used.arguments)),
+                    dd(children=pre(children=laid_out(used.arguments))),
                     *(
                         ()
                         if used.returned is None
@@ -859,12 +934,6 @@ def block_element(block: Block, anchor: str, at: int) -> Element:
             return div(cls=("block", "block--tool"), children=tool_block(block, anchor, at))
         case _ as unreachable:
             assert_never(unreachable)
-
-
-# How wide the stored JSON is indented where a person reads it. Two, because the point of showing
-# it is the shape, and a value nested four deep at four spaces is mostly margin in a column this
-# narrow.
-INDENT: Final = 2
 
 
 def record_json(held: object) -> Element:
@@ -984,7 +1053,12 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
             # Only where there is a session to ask, which the gallery's pages are rendered without:
             # a control pointed at no conversation is a dead button rather than an offer, which is
             # the same reason the fork link is conditional above.
-            *((record_element(links, session, panel),) if session else ()),
+            #
+            # And only once what is behind the panel has stopped changing. A panel of the turn in
+            # flight is read from that turn's steps, and `sourced_at` answers out of its messages,
+            # which are not written until the turn ends: offering the disclosure there would fetch
+            # nothing, once, and keep the nothing. It appears when the turn lands.
+            *((record_element(links, session, panel),) if session and panel.settled else ()),
         ],
     )
 
@@ -1006,29 +1080,18 @@ def waiting_panel() -> Element:
 
 def transcript_region(links: Links, session: str, said: Transcript, stalled: str | None = None) -> Element:
     """
-    The conversation, and whether it is still asking for the rest of it.
+    The conversation, and whether it is still waiting on the rest of it.
 
-    The trigger is on the region itself, so a transcript that has been answered comes back
-    carrying no trigger and the polling stops. Nothing has to be told to stop it: morphing removes
-    an attribute the new markup does not have, exactly as replacement did.
+    Markup and nothing else: it carries no `hx-` attribute at all, because it neither asks for
+    itself nor decides when to. The page's one connection sends this region whenever the session
+    records anything, so what used to be a trigger the region carried, cancelled by its own absence
+    once a turn was answered, is now a message that simply stops arriving.
 
-    A refusal or a fault is refused a swap. htmx 4 swaps every status but `204` and `304`, so
-    what a poll does with an error is this page's decision rather than the library's default, and
-    the right one is to leave the last good render on screen and ask again: the answer after a
-    hiccup is usually a real one, where swapping would replace the conversation with an error and
-    take the trigger that would have recovered it away at the same time.
+    That is a real simplification rather than a move. A trigger on a region that is itself replaced
+    has to be got exactly right (`every` and not `load`, since morphing keeps the element and a
+    `load` poll would fire once and wait forever); a region with no trigger has nothing to get
+    wrong.
     """
-    polling = (
-        {
-            "hx-get": links.to_session_fragment(session),
-            "hx-trigger": WAITING,
-            "hx-swap": SWAP,
-            "hx-status:4xx": "swap:none",
-            "hx-status:5xx": "swap:none",
-        }
-        if said.awaiting and stalled is None
-        else {}
-    )
     drawn: list[Element] = [panel_element(links, session, panel) for panel in said.panels]
     if said.awaiting and stalled is None:
         drawn.append(waiting_panel())
@@ -1036,7 +1099,7 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
         drawn.append(p(cls="stalled", children=stalled))
     return div(
         cls="transcript",
-        attrs={"id": TRANSCRIPT_ID, **polling},
+        attrs={"id": TRANSCRIPT_ID},
         children=drawn or p(cls="empty", children="Ask it something."),
     )
 
