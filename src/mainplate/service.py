@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -31,11 +32,12 @@ from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
-from mainplate.conversation import parse_tree
 from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
+from mainplate.forge import Reachable
+from mainplate.forge import Workspaces
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
@@ -44,7 +46,6 @@ from mainplate.sessions import name_from
 from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
-from mainplate.snapshots import Worktrees
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +69,14 @@ class Conversation:
     chosen: Choice | None
     answerable: bool
 
-    repository: Path | None = None
-    """The repository this session works in, or nothing where the console has none."""
+    repository: str | None = None
+    """
+    The repository this session works in, as a person reads it, or nothing where it works in none.
+
+    `owner/repo` while a forge still reaches it, and the recorded id once none does. A name rather
+    than a path, because the path is an implementation detail of this console and the name is the
+    thing somebody recognises.
+    """
 
     workspace: Path | None = None
     """
@@ -97,16 +104,41 @@ class Service:
     anything anybody said.
     """
 
-    worktrees: Worktrees | None = None
+    workspaces: Workspaces | None = None
     """
-    The repository each session gets a worktree of, or nothing at all to keep no workspaces.
+    Where sessions' files come from and live, or nothing at all to keep no workspaces.
 
-    Held here because creating a session is what plants one, and because a page has to be able to
-    say where a session works. What the *worker* does with it is take snapshots, and it is handed
-    the same value separately: this object answers questions and never runs an agent.
+    Held here so a page can say which repository a session works in and where its worktree is, both
+    of which are questions with no I/O in them. Making the worktree *exist* is the worker's, and it
+    is handed the same value separately: this object answers questions and never runs an agent.
     """
 
     now: Callable[[], datetime] = now_utc
+
+    def repository_of(self, chosen: Choice | None) -> str | None:
+        """
+        What a page calls the repository a session works in, or nothing where it works in none.
+
+        The repository a *forge* currently reaches when there is one, so a page shows `owner/repo`
+        rather than the id, and the recorded id itself when no forge reaches it any more. That is
+        not a fallback but the honest reading: the session is still on that repository, and the id
+        is all anybody knows about it now.
+        """
+        if chosen is None or chosen.repository is None:
+            return None
+        if self.workspaces is None:
+            return chosen.repository
+        found = self.workspaces.named(chosen.repository)
+        return found.name if found is not None else chosen.repository
+
+    def reaches(self, repository: str) -> bool:
+        """Whether a forge currently offers this repository, which is what a new session needs."""
+        return self.workspaces is not None and self.workspaces.named(repository) is not None
+
+    @property
+    def reachable(self) -> Reachable:
+        """What the picker offers, which is nothing at all where there are no workspaces."""
+        return self.workspaces.reaching.current if self.workspaces is not None else Reachable(repositories=())
 
     async def listed(self) -> tuple[Session, ...]:
         return await read_sessions(self.database)
@@ -124,13 +156,14 @@ class Service:
             return None
         recorded = await self.checkpointer.load(session)
         chosen = choice_of(recorded)
+        working = chosen is not None and chosen.repository is not None
         return Conversation(
             session=found,
             said=transcript(recorded),
             chosen=chosen,
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.profile) is not None,
-            repository=self.worktrees.repo if self.worktrees is not None else None,
-            workspace=self.worktrees.at(session) if self.worktrees is not None else None,
+            repository=self.repository_of(chosen),
+            workspace=self.workspaces.at(session) if self.workspaces is not None and working else None,
         )
 
     async def start(self, said: str, chosen: Choice) -> Session:
@@ -145,11 +178,9 @@ class Service:
         """
         session = Session(id=mint_session_id(), created_at=self.now(), title=name_from(said))
         await enrol(self.database, session)
-        # Before the message, with the choice, for the same reason: the message is what queues the
-        # session, and a worker taking it before the worktree exists would snapshot a directory
-        # that is not there. A session started rather than forked begins where the repository is.
-        if self.worktrees is not None:
-            await self.worktrees.plant(session.id)
+        # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
+        # clone is a network fetch that can take minutes; the first pass does both, where slow work
+        # already lives. Until then the session renders, names its repository, and has no files.
         await self.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(chosen))
         await self.say(session.id, turn=0, said=said)
         return session
@@ -187,6 +218,12 @@ class Service:
             return None
         recorded = await self.checkpointer.load(session)
         carried = before(recorded, at)
+        # The repository is inherited here rather than taken from the caller, so that no form can
+        # change it by omission or otherwise. The fork page offers no control for it because
+        # re-asking a turn against different files is a different question; making that true by
+        # *construction* is what stops a posted form quietly dropping it.
+        was = choice_of(recorded)
+        chosen = replace(chosen, repository=was.repository if was is not None else None)
         forked = Session(
             id=mint_session_id(),
             created_at=self.now(),
@@ -198,14 +235,18 @@ class Service:
         await enrol(self.database, forked)
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
-        # The worktree the forked turn *originally started on*, so the branch answers the same
-        # question against the same files. Planting at the repository's head instead would ask the
-        # new model to redo turn 3 against whatever the disk holds now, which is a different
-        # question wearing the same words, and the disagreement would be invisible in the
-        # transcript. Nothing recorded means the parent ran with no workspace, so there is no
-        # earlier state to reproduce and the fork starts where the repository is.
-        if self.worktrees is not None:
-            await self.worktrees.plant(forked.id, tree=parse_tree(recorded.get(tree_key(at))))
+        # The tree of the turn being re-asked, carried across on its own even though that turn's
+        # prompt and messages are not. It is what makes the branch answer the *same* question: the
+        # first pass plants the fork's worktree at this tree rather than at the repository's head,
+        # so the new model sees the files the original turn saw. Redoing turn 3 against whatever
+        # the disk holds now would be a different question wearing the same words, and the
+        # disagreement would be invisible in the transcript.
+        #
+        # Recorded here rather than planted here for the reason `start` clones nothing: this is a
+        # request, and a checkout is not.
+        started_on = recorded.get(tree_key(at))
+        if started_on is not None:
+            await self.checkpointer.supply(forked.id, tree_key(at), started_on)
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
         if said:
             await self.say(forked.id, turn=at, said=said)

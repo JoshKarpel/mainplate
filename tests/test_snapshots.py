@@ -5,19 +5,30 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from calling import calling
 from conftest import DEFAULT_CHOICE
 from conftest import INSTRUCTIONS
 from conftest import Provider
+from conftest import already
 from test_conversation import pass_at
+from without_asgi import ASGIApp
 
+from mainplate.agent import Choice
+from mainplate.app import build_app
+from mainplate.conversation import NoSuchRepository
+from mainplate.conversation import choice_of
 from mainplate.conversation import conversing
 from mainplate.conversation import parse_tree
 from mainplate.conversation import tree_key
+from mainplate.forge import Clones
+from mainplate.forge import Reachable
+from mainplate.forge import Reaching
+from mainplate.forge import Repository
+from mainplate.forge import Workspaces
 from mainplate.service import Service
 from mainplate.snapshots import SNAPSHOT_REF
 from mainplate.snapshots import NotAWorkspace
 from mainplate.snapshots import Workspace
-from mainplate.snapshots import Worktrees
 from mainplate.snapshots import deletions
 
 
@@ -55,22 +66,39 @@ async def workspace(tmp_path: Path) -> Workspace:
     return Workspace(root=root)
 
 
-@pytest.fixture
-async def worktrees(workspace: Workspace, tmp_path: Path) -> Worktrees:
-    """
-    The repository above, with somewhere outside it for each session's worktree.
-
-    Outside deliberately, and the tests below would not notice if it were not: a worktree planted
-    *inside* the repository would be captured by the snapshots it exists to take, so every session
-    would hold a copy of every other session's files.
-    """
-    return Worktrees(repo=workspace.root, root=tmp_path / "worktrees")
+# What a stand-in forge reaches, which is the repository above. `git clone` takes a path as
+# readily as a URL, so a test needs no server to exercise the whole path a real session takes:
+# reach a repository, clone it, plant a worktree of the clone.
+FIXTURE = "test:fixture"
 
 
 @pytest.fixture
-async def planting(service: Service, worktrees: Worktrees) -> Service:
-    """The service, with worktrees, so starting a session plants one and forking checks one out."""
-    return replace(service, worktrees=worktrees)
+async def workspaces(workspace: Workspace, tmp_path: Path) -> Workspaces:
+    """
+    Somewhere to clone the repository above and to plant each session's worktree of it.
+
+    Both outside the repository deliberately, and these tests would not notice if they were not: a
+    worktree planted *inside* it would be captured by the snapshots it exists to take, so every
+    session would hold a copy of every other session's files.
+    """
+    reaching = Reaching(
+        current=Reachable(
+            repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(workspace.root)),)
+        )
+    )
+    return Workspaces(clones=Clones(root=tmp_path / "clones"), root=tmp_path / "worktrees", reaching=reaching)
+
+
+@pytest.fixture
+def on_fixture() -> Choice:
+    """The default choice, working in the fixture repository."""
+    return replace(DEFAULT_CHOICE, repository=FIXTURE)
+
+
+@pytest.fixture
+async def planting(service: Service, workspaces: Workspaces) -> Service:
+    """The service, with workspaces, so a session names a repository and a fork carries its tree."""
+    return replace(service, workspaces=workspaces)
 
 
 class TestDecidingWhatToRemove:
@@ -238,112 +266,280 @@ class TestRestoring:
 
 
 class TestAWorktreePerSession:
-    async def test_starting_a_session_plants_it_a_worktree_of_its_own(
-        self, planting: Service, worktrees: Worktrees
+    async def test_creating_a_session_clones_nothing(
+        self, planting: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        session = await planting.start("hello", DEFAULT_CHOICE)
+        """
+        Somebody is waiting on that request and a clone is a network fetch. The session exists,
+        renders, and names its repository; the files arrive when the first pass runs.
+        """
+        session = await planting.start("hello", on_fixture)
 
-        assert worktrees.at(session.id) in await worktrees.planted()
-        assert (worktrees.at(session.id) / "src" / "kept.txt").read_text() == "original\n"
+        assert not workspaces.clones.cloned(FIXTURE)
+        assert not workspaces.at(session.id).exists()
 
-    async def test_two_sessions_do_not_see_each_other_s_files(self, planting: Service, worktrees: Worktrees) -> None:
+    async def test_the_first_pass_clones_the_repository_and_plants_the_worktree(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
+
+        await pass_at(planting, body, session.id)
+
+        assert workspaces.clones.cloned(FIXTURE)
+        assert (workspaces.at(session.id) / "src" / "kept.txt").read_text() == "original\n"
+
+    async def test_two_sessions_do_not_see_each_other_s_files(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
         """
         The reason for a worktree apiece. Two writers in one directory make a snapshot
         unattributable, and the person is always one of the two.
         """
-        one = await planting.start("first", DEFAULT_CHOICE)
-        two = await planting.start("second", DEFAULT_CHOICE)
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        one = await planting.start("first", on_fixture)
+        two = await planting.start("second", on_fixture)
+        await pass_at(planting, body, one.id)
+        await pass_at(planting, body, two.id)
 
-        (worktrees.at(one.id) / "src" / "only-mine.txt").write_text("mine\n")
+        (workspaces.at(one.id) / "src" / "only-mine.txt").write_text("mine\n")
 
-        assert not (worktrees.at(two.id) / "src" / "only-mine.txt").exists()
+        assert not (workspaces.at(two.id) / "src" / "only-mine.txt").exists()
 
-    async def test_planting_a_worktree_that_is_already_there_keeps_the_work_in_it(
-        self, planting: Service, worktrees: Worktrees
+    async def test_a_second_session_reuses_the_clone_rather_than_making_another(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        """Re-planting would either refuse the request or throw away what a session had done."""
-        session = await planting.start("hello", DEFAULT_CHOICE)
-        (worktrees.at(session.id) / "src" / "in-progress.txt").write_text("half done\n")
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        one = await planting.start("first", on_fixture)
+        two = await planting.start("second", on_fixture)
+        await pass_at(planting, body, one.id)
+        await pass_at(planting, body, two.id)
 
-        await worktrees.plant(session.id)
+        assert [each.name for each in workspaces.clones.root.iterdir()] == [workspaces.clones.at(FIXTURE).name]
 
-        assert (worktrees.at(session.id) / "src" / "in-progress.txt").read_text() == "half done\n"
+    async def test_a_later_pass_keeps_the_work_in_a_worktree_already_planted(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """Every pass reaches the planting; re-planting would throw away what the session had done."""
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
+        await pass_at(planting, body, session.id)
+        (workspaces.at(session.id) / "src" / "in-progress.txt").write_text("half done\n")
+
+        await pass_at(planting, body, session.id)
+
+        assert (workspaces.at(session.id) / "src" / "in-progress.txt").read_text() == "half done\n"
+
+    async def test_a_session_naming_a_repository_nobody_reaches_says_so(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        Loud, because the answer is a person's: an integration was detached, and attaching it again
+        is the fix. Only a repository that was *never cloned* reaches here.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository="test:long-gone"))
+
+        with pytest.raises(NoSuchRepository, match="long-gone"):
+            await pass_at(planting, body, session.id)
 
 
 class TestForkingTheWorktreeToo:
     async def test_a_fork_starts_from_the_files_the_forked_turn_saw(
-        self, planting: Service, provider: Provider, worktrees: Worktrees
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         """
         The consistency the whole thing is for. Turn 1 ran against one state of the files; forking
         turn 1 has to re-ask it against *that* state, or the new model is answering a different
         question in the same words and nothing in the transcript would say so.
         """
-        body = conversing(provider.endpoints(), INSTRUCTIONS, worktrees)
-        session = await planting.start("first", DEFAULT_CHOICE)
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("first", on_fixture)
         await pass_at(planting, body, session.id)
 
         # What turn 1 will see, and then a later edit that turn 1 never saw.
-        (worktrees.at(session.id) / "src" / "kept.txt").write_text("as turn one saw it\n")
+        (workspaces.at(session.id) / "src" / "kept.txt").write_text("as turn one saw it\n")
         await planting.say(session.id, turn=1, said="second")
         await pass_at(planting, body, session.id)
-        (worktrees.at(session.id) / "src" / "kept.txt").write_text("changed long after\n")
+        (workspaces.at(session.id) / "src" / "kept.txt").write_text("changed long after\n")
 
-        forked = await planting.fork(session.id, at=1, chosen=DEFAULT_CHOICE, said="second, differently")
-
+        forked = await planting.fork(session.id, at=1, chosen=on_fixture, said="second, differently")
         assert forked is not None
-        assert (worktrees.at(forked.id) / "src" / "kept.txt").read_text() == "as turn one saw it\n"
+        # The fork's own first pass plants it, exactly as a new session's does. What the fork
+        # carried across is the *tree* turn 1 started on, so the planting checks that out rather
+        # than the repository's head.
+        await pass_at(planting, body, forked.id)
+
+        assert (workspaces.at(forked.id) / "src" / "kept.txt").read_text() == "as turn one saw it\n"
 
     async def test_the_parent_s_worktree_is_untouched_by_being_forked(
-        self, planting: Service, provider: Provider, worktrees: Worktrees
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        body = conversing(provider.endpoints(), INSTRUCTIONS, worktrees)
-        session = await planting.start("first", DEFAULT_CHOICE)
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("first", on_fixture)
         await pass_at(planting, body, session.id)
-        (worktrees.at(session.id) / "src" / "kept.txt").write_text("where the parent is now\n")
+        (workspaces.at(session.id) / "src" / "kept.txt").write_text("where the parent is now\n")
 
-        await planting.fork(session.id, at=0, chosen=DEFAULT_CHOICE, said="again")
+        forked = await planting.fork(session.id, at=0, chosen=on_fixture, said="again")
+        assert forked is not None
+        await pass_at(planting, body, forked.id)
 
-        assert (worktrees.at(session.id) / "src" / "kept.txt").read_text() == "where the parent is now\n"
+        assert (workspaces.at(session.id) / "src" / "kept.txt").read_text() == "where the parent is now\n"
 
-    async def test_a_fork_of_a_session_that_had_no_workspace_starts_where_the_repository_is(
-        self, planting: Service, worktrees: Worktrees
+    async def test_a_fork_of_a_turn_that_never_ran_starts_where_the_repository_is(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        """No recorded tree is not a failure to handle; it is a session that never had one."""
-        session = await planting.start("first", DEFAULT_CHOICE)
+        """
+        No recorded tree is not a failure to handle; it is a turn nothing has answered yet, so
+        there is no earlier state to reproduce and the repository's head is the honest start.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("first", on_fixture)
 
-        forked = await planting.fork(session.id, at=0, chosen=DEFAULT_CHOICE, said="again")
+        forked = await planting.fork(session.id, at=0, chosen=on_fixture, said="again")
+        assert forked is not None
+        await pass_at(planting, body, forked.id)
+
+        assert (workspaces.at(forked.id) / "src" / "kept.txt").read_text() == "original\n"
+
+    async def test_a_fork_inherits_the_repository_even_when_the_caller_names_none(
+        self, planting: Service, on_fixture: Choice
+    ) -> None:
+        """
+        The fork page offers no repository control, so the form it posts names none. Inheriting it
+        in the service rather than trusting the caller is what stops that omission silently moving
+        a branch into no repository at all: re-asking a turn against different files is a different
+        question, and against *no* files it is not a question.
+        """
+        session = await planting.start("first", on_fixture)
+
+        forked = await planting.fork(session.id, at=0, chosen=replace(on_fixture, repository=None), said="again")
 
         assert forked is not None
-        assert (worktrees.at(forked.id) / "src" / "kept.txt").read_text() == "original\n"
+        recorded = choice_of(await planting.checkpointer.load(forked.id))
+        assert recorded is not None
+        assert recorded.repository == FIXTURE
+
+    async def test_a_fork_cannot_be_moved_to_another_repository_by_a_posted_form(
+        self, planting: Service, on_fixture: Choice
+    ) -> None:
+        session = await planting.start("first", on_fixture)
+
+        forked = await planting.fork(
+            session.id, at=0, chosen=replace(on_fixture, repository="test:somewhere-else"), said="again"
+        )
+
+        assert forked is not None
+        recorded = choice_of(await planting.checkpointer.load(forked.id))
+        assert recorded is not None
+        assert recorded.repository == FIXTURE
+
+
+class TestPickingOneThroughTheConsole:
+    """
+    The path a browser actually takes, which is the one a test that calls `Service` directly
+    misses. Forking lost its repository exactly this way: the service was right and the form that
+    reached it was not.
+    """
+
+    @pytest.fixture
+    def app(self, planting: Service) -> ASGIApp:
+        return build_app(already(planting))
+
+    async def test_the_picker_offers_what_the_forges_reach(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+
+        assert 'value="test:fixture"' in answered.text
+        assert ">me/fixture<" in answered.text
+
+    async def test_a_posted_repository_is_recorded_on_the_session(self, app: ASGIApp, planting: Service) -> None:
+        async with calling(app) as caller:
+            answered = await caller.post(
+                "/sessions",
+                {"prompt": "hello", "profile": "here", "model": "ripe/fast", "repository": FIXTURE},
+            )
+
+        assert answered.status == 303
+        started = answered.location.rsplit("/", 1)[-1]
+        chosen = choice_of(await planting.checkpointer.load(started))
+        assert chosen is not None
+        assert chosen.repository == FIXTURE
+
+    async def test_choosing_no_repository_is_an_ordinary_session(self, app: ASGIApp, planting: Service) -> None:
+        """The empty option, which is what this console was before there were repositories."""
+        async with calling(app) as caller:
+            answered = await caller.post(
+                "/sessions", {"prompt": "hello", "profile": "here", "model": "ripe/fast", "repository": ""}
+            )
+
+        assert answered.status == 303
+        chosen = choice_of(await planting.checkpointer.load(answered.location.rsplit("/", 1)[-1]))
+        assert chosen is not None
+        assert chosen.repository is None
+
+    async def test_a_repository_no_forge_reaches_is_refused(self, app: ASGIApp) -> None:
+        """A select is a suggestion the page made, not a constraint on what can be posted."""
+        async with calling(app) as caller:
+            answered = await caller.post(
+                "/sessions",
+                {"prompt": "hello", "profile": "here", "model": "ripe/fast", "repository": "test:invented"},
+            )
+
+        assert answered.status == 422
+
+    async def test_the_fork_page_offers_no_repository_control(self, app: ASGIApp, planting: Service) -> None:
+        """Because a fork inherits one; offering a choice that cannot be honoured would be a lie."""
+        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
+
+        assert answered.status == 200
+        assert 'id="repository"' not in answered.text
+
+    async def test_forking_through_the_console_keeps_the_repository(self, app: ASGIApp, planting: Service) -> None:
+        """The bug this class exists for: the form carries no repository, so the service supplies it."""
+        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        async with calling(app) as caller:
+            answered = await caller.post(
+                f"/sessions/{session.id}/forks",
+                {"at": "0", "profile": "here", "model": "ripe/fast", "prompt": "again"},
+            )
+
+        assert answered.status == 303
+        chosen = choice_of(await planting.checkpointer.load(answered.location.rsplit("/", 1)[-1]))
+        assert chosen is not None
+        assert chosen.repository == FIXTURE
 
 
 class TestWhatATurnRecords:
     async def test_a_turn_records_the_tree_of_its_own_worktree(
-        self, planting: Service, provider: Provider, worktrees: Worktrees
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        body = conversing(provider.endpoints(), INSTRUCTIONS, worktrees)
-        session = await planting.start("hello", DEFAULT_CHOICE)
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
 
         await pass_at(planting, body, session.id)
 
         recorded = await planting.checkpointer.load(session.id)
-        assert parse_tree(recorded[tree_key(0)]) == await worktrees.workspace(session.id).capture("the same tree")
+        assert parse_tree(recorded[tree_key(0)]) == await workspaces.workspace(session.id).capture("the same tree")
 
     async def test_a_later_pass_replays_the_recorded_tree_rather_than_reading_the_worktree_again(
-        self, planting: Service, provider: Provider, worktrees: Worktrees
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         """
         The rule the mechanism asks for. Reading a worktree answers differently every time it is
         asked, so a pass that re-read it would resume a conversation against a directory that has
         moved since; a recorded step hands back what the first pass saw.
         """
-        body = conversing(provider.endpoints(), INSTRUCTIONS, worktrees)
-        session = await planting.start("hello", DEFAULT_CHOICE)
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
         await pass_at(planting, body, session.id)
         was = parse_tree((await planting.checkpointer.load(session.id))[tree_key(0)])
 
-        (worktrees.at(session.id) / "src" / "kept.txt").write_text("changed since\n")
+        (workspaces.at(session.id) / "src" / "kept.txt").write_text("changed since\n")
         await pass_at(planting, body, session.id)
 
         assert parse_tree((await planting.checkpointer.load(session.id))[tree_key(0)]) == was
@@ -361,14 +557,14 @@ class TestWhatATurnRecords:
         assert parse_tree(recorded[tree_key(0)]) is None
 
     async def test_two_turns_edited_between_record_different_trees(
-        self, planting: Service, provider: Provider, worktrees: Worktrees
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         """A person editing between turns is the only writer there is until tools arrive."""
-        body = conversing(provider.endpoints(), INSTRUCTIONS, worktrees)
-        session = await planting.start("first", DEFAULT_CHOICE)
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("first", on_fixture)
         await pass_at(planting, body, session.id)
 
-        (worktrees.at(session.id) / "src" / "kept.txt").write_text("they edited it\n")
+        (workspaces.at(session.id) / "src" / "kept.txt").write_text("they edited it\n")
         await planting.say(session.id, turn=1, said="second")
         await pass_at(planting, body, session.id)
 

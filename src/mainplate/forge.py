@@ -178,6 +178,10 @@ class Clones:
         """The worktrees of one repository, which is what a session is actually planted in."""
         return Worktrees(repo=self.at(repository), root=under)
 
+    def cloned(self, repository: str) -> bool:
+        """Whether this repository is already on disk, which is a question with no I/O in it."""
+        return (self.at(repository) / "HEAD").exists()
+
     async def ensure(self, repository: Repository) -> Path:
         """
         The repository on disk, cloned if this is the first time it has been asked for.
@@ -187,9 +191,58 @@ class Clones:
         on exe.dev it carries no credential at all, because there is none to carry.
         """
         here = self.at(repository.id)
-        if (here / "HEAD").exists():
+        if self.cloned(repository.id):
             return here
         self.root.mkdir(parents=True, exist_ok=True)
         logger.info(f"cloning {repository.name} from {repository.forge}")
         await Workspace(root=self.root).demand("clone", "--bare", repository.url, str(here))
         return here
+
+
+@dataclass(frozen=True, slots=True)
+class Workspaces:
+    """
+    Where a session's files come from and where they live: clones of repositories, worktrees of
+    clones.
+
+    One value rather than three passed around together, because the three only mean anything as a
+    set: a worktree is of a clone, and a clone is of something a forge reaches. It is what the
+    worker is handed to make a session's files exist, and what the service is handed to say where
+    they are.
+    """
+
+    clones: Clones
+    root: Path
+    reaching: Reaching
+
+    def at(self, session: str) -> Path:
+        """Where a session's files are, which is a question a page asks and never a call that fails."""
+        return self.root / session
+
+    def workspace(self, session: str) -> Workspace:
+        return Workspace(root=self.at(session))
+
+    def named(self, repository: str) -> Repository | None:
+        return self.reaching.current.offers(repository)
+
+    async def plant(self, session: str, repository: str, *, tree: str | None = None) -> Workspace | None:
+        """
+        A session's worktree, cloning the repository first if this console has not seen it before.
+
+        Idempotent at both levels, so this is what every pass calls and only the first one does any
+        work: a clone that exists is reused, and a worktree that exists is left exactly as the
+        session left it.
+
+        A repository **no forge currently reaches is still usable once cloned**, which is the same
+        stance a model missing from the catalogue gets. An integration detached this morning does
+        not strand a conversation whose files are already on disk; what it stops is starting a new
+        session on one that was never cloned, and that is the honest failure because there is
+        nowhere to get it from.
+        """
+        if not self.clones.cloned(repository):
+            found = self.named(repository)
+            if found is None:
+                return None
+            await self.clones.ensure(found)
+        worktrees = self.clones.worktrees(repository, self.root)
+        return await worktrees.plant(session, tree=tree)

@@ -46,28 +46,19 @@ class Settings(BaseSettings):
 
     instructions: str = DEFAULT_INSTRUCTIONS
 
-    repository: Path | None = None
+    workspaces: Path | None = None
     """
-    The git repository sessions work in, or nothing at all to keep no workspaces.
+    Where this console keeps repositories and the worktrees sessions work in, or beside the
+    database when not named.
 
-    Absent is the meaning rather than an omission: a console being used to talk rather than to edit
-    a repository has none, and giving a session a worktree of a directory nobody chose would be
-    inventing a fact. Naming one gives every session a worktree of its own and records what that
-    worktree looked like at each turn.
+    There is no setting naming a *repository*, and that is the design rather than an omission: what
+    a session works in is picked when it is created, from whatever the forges reach, and recorded
+    on the session. A process-wide answer would be a second answer to a question each session
+    already answers, exactly as a process-wide model would be.
 
-    Checked at startup rather than at the first session, so a path that is not a repository is a
-    service that refuses to come up naming it. A console that accepted it and quietly recorded
-    nothing would look like it was keeping a history it was not, and the first anybody would know
-    is the first time they tried to go back.
-    """
-
-    worktrees: Path | None = None
-    """
-    Where each session's worktree is planted, or beside the database when not named.
-
-    Deliberately *outside* the repository. A worktree inside it would be captured by the very
-    snapshots it exists to take, so every session would hold a copy of every other session's files
-    and the trees would grow without bound.
+    Clones and worktrees both live under here, in `clones/` and `worktrees/`, and both are outside
+    any repository they hold. A worktree inside its own repository would be captured by the very
+    snapshots it exists to take, so every session would hold a copy of every other session's files.
     """
 
     host: str = "127.0.0.1"
@@ -95,15 +86,15 @@ class Settings(BaseSettings):
     """
 
     @property
-    def worktree_root(self) -> Path:
+    def workspace_root(self) -> Path:
         """
-        Where worktrees go, which is what was named or a directory beside the database.
+        Where clones and worktrees go, which is what was named or a directory beside the database.
 
         Beside the database because the two are the halves of one session: the checkpoint says what
         was said and the worktree holds what it was said about, so a console pointed at another
-        database gets another set of worktrees rather than sharing the first one's.
+        database gets its own worktrees rather than sharing the first one's.
         """
-        return self.worktrees if self.worktrees is not None else self.database.parent / "worktrees"
+        return self.workspaces if self.workspaces is not None else self.database.parent / "workspaces"
 
     lease: timedelta = Field(default=timedelta(minutes=10), gt=timedelta())
     """

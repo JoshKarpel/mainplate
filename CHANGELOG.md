@@ -56,7 +56,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before the forked turn's message, which comes across editable and is asked again on the new
   model, so seeing a turn answered differently never means retyping the question. The sidebar draws
   the resulting tree, each fork under what it came from and labelled with the turn it left at.
-- Git snapshots: with `MAINPLATE_REPOSITORY` set, every session gets a worktree of its own and each
+- A repository picker on the new-chat page, alongside the profile, model and thinking level. Where
+  the repositories come from is an interface (`forge.py`) with one implementation: on an exe.dev VM,
+  `ExeDevGitHub` offers whatever GitHub integrations are attached, which needs no credential at all
+  because exe.dev injects one at its own edge. Anywhere else no forge reaches anything, the picker
+  does not appear, and the console is what it was before: a place to talk. A session may also choose
+  no repository, and a fork inherits its parent's rather than being offered another.
+- Git snapshots: a session that picked a repository gets a worktree of its own and each
   turn records the tree it started on. Snapshots go through a shadow index, so nothing a reader can
   see moves - not their staged changes, not `HEAD`, not a branch, not `git log` - and are chained
   under `refs/mainplate/snapshots` so they survive `git gc`. An unchanged worktree writes no new

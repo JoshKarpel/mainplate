@@ -759,15 +759,28 @@ main > header h1 {
 /* What a session will be answered on: a control before it exists, a fact after. */
 .picker {
     display: flex;
-    gap: 0.4rem;
+    /* Four controls and two words do not fit a narrow window on one line, and a row that overflows
+       scrolls the whole page sideways rather than the row. Wrapping is what a picker can do that a
+       transcript cannot: nothing here has to stay beside anything else. */
+    flex-wrap: wrap;
+    gap: var(--space-3);
     align-items: center;
-    min-height: 1.6rem;
+    min-height: var(--space-7);
     color: var(--ink-faint);
     font-size: 0.8rem;
 }
 
+/* The words between the controls read as one thing each, so they break beside a control rather
+   than through themselves: "Answer / with" is two lines saying nothing. */
+.picker .label {
+    white-space: nowrap;
+}
+
 .picker select {
-    padding: 0.15rem 0.3rem;
+    /* Long enough to hold `owner/repository (attachment)` without the row pushing the page wider,
+       and free to shrink under it: a select that cannot shrink is a select that overflows. */
+    max-width: 100%;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--edge);
     border-radius: 0.35rem;
     background: var(--raised);

@@ -70,6 +70,7 @@ from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import grouped
+from mainplate.conversation import REPOSITORY_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
 from mainplate.conversation import Kind
@@ -78,6 +79,7 @@ from mainplate.conversation import Prose
 from mainplate.conversation import Reasoning
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
+from mainplate.forge import Reachable
 from mainplate.markup import as_markup
 from mainplate.service import Conversation
 from mainplate.sessions import Session
@@ -118,6 +120,8 @@ TRANSCRIPT_ID: Final = "transcript"
 MODEL_ID: Final = "model"
 
 THINKING_ID: Final = "thinking"
+
+REPOSITORY_ID: Final = "repository"
 
 SENDING_ID: Final = "sending"
 
@@ -415,7 +419,39 @@ def thinking_select(chosen: ThinkingLevel | None) -> Element:
     )
 
 
-def picker(links: Links, catalogue: Catalogue, chosen: Choice | None = None) -> Element:
+NO_REPOSITORY: Final = ""
+
+
+def repository_select(reachable: Reachable, chosen: str | None) -> Element:
+    """
+    Which repository a session works in, offered only where there is one to offer.
+
+    Nothing at all when no forge reaches anything, rather than an empty or disabled select: off
+    exe.dev, or on a machine with no integrations attached, this console is what it was before
+    repositories existed and a control for a choice with no options is a question nobody can
+    answer.
+
+    "No repository" is always offered even when there are some, because a conversation that is not
+    about code is an ordinary thing to want and picking a repository for it would give the agent
+    files nobody meant it to have.
+
+    Labels come from `Reachable`, which qualifies a row only where two would otherwise read the
+    same: the same repository can be attached twice with different rights, and choosing between two
+    identical rows is guessing.
+    """
+    return select(
+        attrs={"id": REPOSITORY_ID, "name": REPOSITORY_FIELD, "aria-label": "Repository"},
+        children=[
+            option(attrs={"value": NO_REPOSITORY, "selected": chosen is None}, children="no repository"),
+            *(
+                option(attrs={"value": repository.id, "selected": repository.id == chosen}, children=label)
+                for repository, label in reachable.labelled()
+            ),
+        ],
+    )
+
+
+def picker(links: Links, catalogue: Catalogue, reachable: Reachable, chosen: Choice | None = None) -> Element:
     """
     The three selects, which appear where a session is created and where one is branched.
 
@@ -435,11 +471,19 @@ def picker(links: Links, catalogue: Catalogue, chosen: Choice | None = None) -> 
             profile_select(links, catalogue, starting.profile),
             model_select(catalogue.offered[starting.profile], starting.model),
             thinking_select(starting.thinking),
+            # Only where a session is being *created*. A fork inherits its parent's repository and
+            # is not offered another, because re-asking a turn against different files is a
+            # different question wearing the same words.
+            *(
+                (span(cls="label", children="in"), repository_select(reachable, starting.repository))
+                if reachable.repositories and chosen is None
+                else ()
+            ),
         ],
     )
 
 
-def chosen_note(chosen: Choice | None, repository: Path | None = None, workspace: Path | None = None) -> Element:
+def chosen_note(chosen: Choice | None, repository: str | None = None, workspace: Path | None = None) -> Element:
     """
     What an existing session is on, as a fact rather than a control: it cannot be changed.
 
@@ -463,9 +507,15 @@ def chosen_note(chosen: Choice | None, repository: Path | None = None, workspace
                     span(
                         cls="workspace",
                         # The repository is what a reader recognises and the worktree is where to
-                        # point an editor, so one is shown and the other is there to be read.
-                        attrs={"title": f"This session's worktree: {workspace}"},
-                        children=f"\N{MIDDLE DOT} {repository.name}",
+                        # point an editor, so one is shown and the other is there to be read. No
+                        # worktree yet is an ordinary state rather than a missing one: the first
+                        # pass makes it, so a session says where it works before it has worked.
+                        attrs={
+                            "title": f"This session's worktree: {workspace}"
+                            if workspace is not None
+                            else "This session works here once its first turn runs"
+                        },
+                        children=f"\N{MIDDLE DOT} {repository}",
                     ),
                 )
                 if repository is not None
@@ -959,7 +1009,7 @@ def shell(
     )
 
 
-def start_page(links: Links, listed: tuple[Session, ...], catalogue: Catalogue) -> str:
+def start_page(links: Links, listed: tuple[Session, ...], catalogue: Catalogue, reachable: Reachable) -> str:
     """
     Where a session begins: an empty transcript, a box, and what to answer it with.
 
@@ -976,7 +1026,7 @@ def start_page(links: Links, listed: tuple[Session, ...], catalogue: Catalogue) 
             showing=None,
             pane=[
                 transcript_region(links, session="", said=Transcript(panels=(), awaiting=False, turns=0)),
-                composer(links.to_start(), picker(links, catalogue), live=False),
+                composer(links.to_start(), picker(links, catalogue, reachable), live=False),
             ],
         ),
     )
@@ -1090,7 +1140,7 @@ def fork_page(links: Links, listed: tuple[Session, ...], showing: Conversation, 
                             },
                             children=asked or "",
                         ),
-                        picker(links, catalogue, showing.chosen),
+                        picker(links, catalogue, Reachable(repositories=()), showing.chosen),
                         div(
                             cls="forking__act",
                             children=[

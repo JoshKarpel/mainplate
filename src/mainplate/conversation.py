@@ -10,11 +10,13 @@
 # been said is what has been recorded, so the page renders the checkpoint, a crash resumes from
 # it, and a second process reading the same file sees exactly what the first one did.
 #
-# One key for the session, and three per turn. The whole scheme is here so that the code that
+# One key for the session, and four per turn. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
-#     choice               which profile and model this session is on, written once at creation
+#     choice               the profile, model, repository and thinking level this session is on,
+#                          written once at creation
 #     turn:{n}:prompt      what the person said, written from outside the pass by `arrive`
+#     turn:{n}:tree        the worktree that turn started on, written by the body before the agent
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
 #
@@ -22,7 +24,8 @@
 # is: it has to be the same on every pass and after every restart, and the checkpoint is the thing
 # that already promises that. It is also why it is written before the first prompt and never
 # again, since a session that changed endpoint halfway would replay recorded answers from one and
-# continue on another.
+# continue on another. Forking is how a session's choice changes, and it changes it by making a
+# different session rather than by rewriting this one.
 #
 # `messages` is what makes resuming cheap. The stepwise mechanism re-runs the code *between*
 # steps, so a body that looped over every past turn would re-drive the agent graph for all of
@@ -64,8 +67,8 @@ from mainplate.agent import Choice
 from mainplate.agent import Endpoints
 from mainplate.agent import agent_for
 from mainplate.durability import stepping
+from mainplate.forge import Workspaces
 from mainplate.snapshots import Workspace
-from mainplate.snapshots import Worktrees
 from mainplate.thinking import BY_LEVEL
 
 CHOICE_KEY: StepKey = "choice"
@@ -73,6 +76,8 @@ CHOICE_KEY: StepKey = "choice"
 # What the thinking level is called inside the recorded choice. Named once here because the writer
 # and the reader are both in this file and must not drift, which is the same reason the keys are.
 THINKING_FIELD: Final = "thinking"
+
+REPOSITORY_FIELD: Final = "repository"
 
 
 def turn_prefix(turn: int) -> str:
@@ -181,7 +186,15 @@ def parse_choice(recorded: object) -> Choice:
     profile, model = recorded.get("profile"), recorded.get("model")
     if not isinstance(profile, str) or not isinstance(model, str):
         raise TypeError(f"a choice must name a profile and a model, not {recorded!r}")
-    return Choice(profile=profile, model=model, thinking=parse_thinking(recorded.get(THINKING_FIELD)))
+    repository = recorded.get(REPOSITORY_FIELD)
+    if repository is not None and not isinstance(repository, str):
+        raise TypeError(f"a repository must be an id or nothing, not {repository!r}")
+    return Choice(
+        profile=profile,
+        model=model,
+        repository=repository,
+        thinking=parse_thinking(recorded.get(THINKING_FIELD)),
+    )
 
 
 def recorded_choice(chosen: Choice) -> dict[str, object]:
@@ -193,7 +206,12 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
     the sessions recorded before this existed have no such key and are answerable exactly as they
     were.
     """
-    return {"profile": chosen.profile, "model": chosen.model, THINKING_FIELD: chosen.thinking}
+    return {
+        "profile": chosen.profile,
+        "model": chosen.model,
+        REPOSITORY_FIELD: chosen.repository,
+        THINKING_FIELD: chosen.thinking,
+    }
 
 
 def choice_of(recorded: Mapping[str, object]) -> Choice | None:
@@ -525,8 +543,36 @@ def snapshotting(workspace: Workspace | None, turn: int) -> Callable[[], Awaitab
     return capture
 
 
+class NoSuchRepository(LookupError):
+    """
+    A session names a repository no forge reaches and nothing has ever cloned.
+
+    Its own type for the reason `UnknownChoice` is one: the answer is a person's rather than a
+    retry's. A GitHub integration was detached, or the console moved to a machine that cannot see
+    it, and the fix is to attach it again. A repository already cloned does *not* reach here, so
+    detaching one strands only the sessions whose files were never fetched.
+    """
+
+
+async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn: int) -> Workspace | None:
+    """
+    The session's own worktree, made to exist before the turn that will work in it.
+
+    A turn already carrying a recorded tree is planted *at* it, which is what a fork is: it
+    inherits the tree of the turn it is re-asking, so the branch answers the same question against
+    the same files. Every other turn plants at whatever the repository's head is, which only
+    happens once because the worktree is then already there.
+    """
+    if workspaces is None or chosen.repository is None:
+        return None
+    planted = await workspaces.plant(run.workflow, chosen.repository, tree=parse_tree(run.recorded.get(tree_key(turn))))
+    if planted is None:
+        raise NoSuchRepository(f"no forge reaches {chosen.repository!r} and it has never been cloned")
+    return planted
+
+
 def conversing(
-    endpoints: Endpoints, instructions: str, worktrees: Worktrees | None = None
+    endpoints: Endpoints, instructions: str, workspaces: Workspaces | None = None
 ) -> Callable[[Run], Awaitable[Never]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -555,13 +601,19 @@ def conversing(
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no profile, so it was never started by this console")
         agent = agent_for(endpoints, chosen, instructions)
-        # The session's *own* worktree, named from the workflow id rather than passed in, for the
-        # same reason the choice is read from the checkpoint: one body serves every session, and
-        # what differs between them is not the body but which files it is working in.
-        workspace = worktrees.workspace(run.workflow) if worktrees is not None else None
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
+            # Cloning and checking out happen *here* rather than when the session was created,
+            # because creating one is a request somebody is waiting on and a clone is a network
+            # fetch that can take minutes. A pass is where slow work already lives and where a
+            # lease already covers it. Both halves are idempotent, so every later pass reaches this
+            # and does nothing.
+            #
+            # It is an effect outside a step, and that is sound rather than an exception: what it
+            # does is make a directory exist, which is the same on every pass, so there is no
+            # result to record and nothing for a replay to disagree with.
+            workspace = await planting(workspaces, run, chosen, at.turn)
             # After the prompt and before the agent, which is the one moment in a turn when the
             # worktree is nobody's business but the person's: they have just sent a message, so
             # whatever they were editing they have stopped editing. It is also the state a rewind

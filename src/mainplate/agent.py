@@ -68,6 +68,21 @@ class Choice:
     profile: str
     model: str
 
+    repository: str | None = None
+    """
+    Which repository this session works in, as the id a forge gave it, or nothing for none.
+
+    Fixed for life like the rest, and for a plainer reason than the model is: a conversation is
+    *about* the files it is looking at, so one that changed repository halfway would have a
+    transcript whose earlier half discusses code the later half cannot see. Forking inherits it
+    rather than offering to change it, since re-asking a turn against a different repository is a
+    different question wearing the same words.
+
+    An id rather than a path or a URL, because how to reach a repository is a discovery-time fact
+    and which repository it is is not. Absent means a session with no files at all, which is what a
+    console being used to talk rather than to edit has and what every session had before this.
+    """
+
     thinking: ThinkingLevel | None = None
     """
     How hard to think, or nothing at all to leave the setting off the request.

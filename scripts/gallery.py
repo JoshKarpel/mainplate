@@ -39,6 +39,8 @@ from mainplate.conversation import messages_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
+from mainplate.forge import Reachable
+from mainplate.forge import Repository
 from mainplate.pages import fork_page
 from mainplate.pages import session_page
 from mainplate.pages import start_page
@@ -184,8 +186,20 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
 # A stand-in repository and one session's worktree of it, so the pages show what a console with
 # snapshots on looks like: the tree each turn started on, beside the fork link that would put it
 # back, and the repository the session is working in.
-REPOSITORY = Path("/home/you/projects/mainplate")
-WORKSPACE = Path("/home/you/.local/share/mainplate/worktrees")
+REPOSITORY = "JoshKarpel/mainplate"
+WORKSPACE = Path("/home/you/.local/share/mainplate/workspaces/worktrees")
+
+# What a forge reaches, so the start page's picker has something in it. Two attachments of one
+# repository, because that is the case the labels have to disambiguate and a screenshot is where
+# you find out whether they read well.
+REACHABLE = Reachable(
+    repositories=(
+        Repository(forge="exe-github", key="mainplate", name="JoshKarpel/mainplate", url="https://x.invalid/a.git"),
+        Repository(forge="exe-github", key="without", name="JoshKarpel/without", url="https://x.invalid/b.git"),
+        Repository(forge="exe-github", key="dotfiles-rw", name="JoshKarpel/dotfiles", url="https://x.invalid/c.git"),
+        Repository(forge="exe-github", key="dotfiles-ro", name="JoshKarpel/dotfiles", url="https://x.invalid/d.git"),
+    )
+)
 
 TREES = ("9e75602b2554519c9f620dfdb2010586fde7e076", "3de66468884176acb6dc1a522aa8cfa5ace6f0e0")
 
@@ -215,7 +229,7 @@ def pages() -> dict[str, str]:
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
 
     return {
-        "start.html": start_page(LINKS, LISTED, CATALOGUE),
+        "start.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE),
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled)),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting)),
         "stalled.html": session_page(LINKS, LISTED, stalled),

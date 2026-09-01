@@ -25,6 +25,7 @@ from without_web import post
 from without_web import query_param
 
 from mainplate.agent import Choice
+from mainplate.conversation import REPOSITORY_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.pages import Links
 from mainplate.pages import fork_page
@@ -100,7 +101,15 @@ def parse_form_start(raw: bytes) -> Started:
     model = fields.get("model", [""])[0].strip()
     if not profile or not model:
         raise NotAMessage("a message needs a profile and a model to be answered on")
-    return Started(said=said, chosen=Choice(profile=profile, model=model, thinking=posted_thinking(fields)))
+    return Started(
+        said=said,
+        chosen=Choice(
+            profile=profile,
+            model=model,
+            repository=fields.get(REPOSITORY_FIELD, [""])[0].strip() or None,
+            thinking=posted_thinking(fields),
+        ),
+    )
 
 
 def posted_thinking(fields: Mapping[str, list[str]]) -> ThinkingLevel | None:
@@ -208,7 +217,7 @@ def seeing(where: str) -> Response:
 
 @get("/", summary="Start a session")
 async def start_here(service: Service) -> Response:
-    return page_response(200, start_page(LINKS, await service.listed(), service.catalogues.current))
+    return page_response(200, start_page(LINKS, await service.listed(), service.catalogues.current, service.reachable))
 
 
 @post("/sessions", starting, summary="Say the first thing, which is what creates a session")
@@ -232,6 +241,11 @@ async def start(service: Service, started: Started) -> Response:
     """
     if not service.catalogues.current.offers(started.chosen.profile, started.chosen.model):
         return page_response(422, refusal_page(LINKS, 422, f"no profile on offer serves {started.chosen.model}"))
+    # The repository is held to what the picker offered for the same reason the pair is, and the
+    # check is only made where one was asked for: a session with no repository is an ordinary
+    # session, and this console answered nothing else until repositories existed.
+    if started.chosen.repository is not None and not service.reaches(started.chosen.repository):
+        return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {started.chosen.repository}"))
     session = await service.start(started.said, started.chosen)
     return seeing(LINKS.to_session(session.id))
 

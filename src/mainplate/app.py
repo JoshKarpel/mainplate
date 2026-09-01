@@ -59,6 +59,12 @@ from mainplate.console import LINKS
 from mainplate.console import page_response
 from mainplate.console import recover
 from mainplate.conversation import conversing
+from mainplate.exe import ExeDevGitHub
+from mainplate.forge import Clones
+from mainplate.forge import Forge
+from mainplate.forge import Reaching
+from mainplate.forge import Workspaces
+from mainplate.forge import discover as reachable
 from mainplate.pages import refusal_page
 from mainplate.profiles import Config
 from mainplate.profiles import config_path
@@ -66,7 +72,13 @@ from mainplate.profiles import read_config
 from mainplate.service import Service
 from mainplate.sessions import prepare
 from mainplate.settings import Settings
-from mainplate.snapshots import Worktrees
+
+# Every place a repository can come from. One entry today because one exists; a `GitHub` through an
+# App is another line here and nothing else, which is the whole point of the interface. Declared
+# rather than configured, because a forge that needs configuring will carry its own settings and a
+# forge that does not needs no switch to turn it on: `ExeDevGitHub` reaches nothing off exe.dev,
+# which is the correct behaviour there rather than something to disable.
+FORGES: Final[tuple[Forge, ...]] = (ExeDevGitHub(),)
 
 ASSET_ROOT: Final = Path(__file__).parent / "assets"
 
@@ -107,7 +119,7 @@ def build_router() -> Router[Service]:
 
 @asynccontextmanager
 async def open_store(
-    database: Path, lease: timedelta, catalogues: Catalogues, worktrees: Worktrees | None = None
+    database: Path, lease: timedelta, catalogues: Catalogues, workspaces: Workspaces | None = None
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -125,7 +137,7 @@ async def open_store(
             durable=SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease)),
             checkpointer=checkpointer,
             catalogues=catalogues,
-            worktrees=worktrees,
+            workspaces=workspaces,
         )
     finally:
         # Never `connection.close()`: the store's own `aclose` waits out any statement still
@@ -151,18 +163,20 @@ async def open_console(settings: Settings, config: Config, endpoints: Endpoints)
     """
     catalogues = Catalogues(current=await discover(endpoints, config))
     logger.info(f"models discovered: {summarise(catalogues.current)}")
-    worktrees = (
-        Worktrees(repo=settings.repository, root=settings.worktree_root) if settings.repository is not None else None
+    # Discovered beside the models and for the same reasons, with one difference that matters: a
+    # forge reaching nothing is an ordinary answer rather than a startup failure. Off exe.dev this
+    # finds no repositories and the console is exactly what it was before there were any - a place
+    # to talk, with no files.
+    reaching = Reaching(current=await reachable(FORGES))
+    logger.info(f"repositories reachable: {len(reaching.current.repositories)}")
+    workspaces = Workspaces(
+        clones=Clones(root=settings.workspace_root / "clones"),
+        root=settings.workspace_root / "worktrees",
+        reaching=reaching,
     )
-    if worktrees is not None:
-        # Beside discovery, and for the same reason: this is a lifespan, so a path that is not a
-        # repository refuses the start rather than failing on whichever session first tried to
-        # plant a worktree. `confirm` raises `NotAWorkspace`, which reaches the CLI as `DidNotStart`.
-        await worktrees.confirm()
-        logger.info(f"sessions work in {settings.repository}, with worktrees under {settings.worktree_root}")
-    async with open_store(settings.database, settings.lease, catalogues, worktrees) as service:
+    async with open_store(settings.database, settings.lease, catalogues, workspaces) as service:
         answering = work(
-            service.durable, conversing(endpoints, settings.instructions, worktrees), limit=settings.passes
+            service.durable, conversing(endpoints, settings.instructions, workspaces), limit=settings.passes
         )
         keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
         async with background_task(answering), background_task(keeping_current):

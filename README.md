@@ -35,8 +35,10 @@ Then open <http://127.0.0.1:8100>. Sessions are stored in `mainplate.db` in the 
 so pointing the console at a different project is `--database`, and reading a session back is
 opening the same file again.
 
-`mainplate serve --help` lists the rest; each option is a field of `Settings`, which also reads
-them from `MAINPLATE_`-prefixed environment variables.
+`mainplate serve --help` lists the flags. They are the few worth reaching for at a shell; every
+other setting is a field of `Settings` read from a `MAINPLATE_`-prefixed environment variable, so
+`MAINPLATE_REFRESH` sets how often the models are re-read and `MAINPLATE_PASSES` how many sessions
+are answered at once. Read `settings.py` for the whole set, each with what it is for.
 
 ### Profiles
 
@@ -51,8 +53,8 @@ reaches models the other does not. It also decides what `base_url` has to be: th
 appends `/v1/messages` to what it is given, so it wants the host, and the OpenAI SDK appends
 `/chat/completions`, so it wants the host and `/v1`.
 
-A session records the profile, the model *and* a thinking level, at the moment it is created, and
-all three are fixed for its life. The profile is what carries the wire, which is why it is recorded
+A session records the profile, the model, a thinking level *and* a repository, at the moment it is
+created, and all four are fixed for its life. The profile is what carries the wire, which is why it is recorded
 rather than looked up later: the same model id can sit behind two wires, and the two serialize a
 conversation differently. You pick all three under the composer on the new-chat page, where the
 models are grouped by the vendor each comes from; after that the session says what it is on rather
@@ -226,15 +228,16 @@ Named plainly, because they are the next things rather than omissions nobody not
   them readable and stuck; the page names the profile so putting it back is obvious. Forking one
   onto a profile that still exists is the way out. A model dropping out of the picker is *not* that
   case and does not stop a session, since an endpoint routes more ids than it advertises.
-- **Snapshots are kept but not yet restored.** With a repository configured, each session works in
-  a worktree of its own and every turn records the tree it started on, and forking checks the new
-  worktree out at the tree the forked turn saw. What is missing is a rewind: putting an existing
-  session's files back to an earlier turn.
-- **The repository has to be a local checkout.** `MAINPLATE_REPOSITORY` names one on disk. Owning
-  its own clones, so a console works on repositories that were never checked out beside it, is the
-  direction: `forge.py` is the interface and `ExeDevGitHub` reads the GitHub integrations attached
-  to an exe.dev VM, which needs no credential because exe.dev injects one at its own edge. What is
-  missing is the picker that would let a new session choose among them.
+- **Snapshots are kept but not yet restored.** A session that picked a repository works in a
+  worktree of its own, every turn records the tree it started on, and a fork is checked out at the
+  tree the forked turn saw. What is missing is a rewind: putting an *existing* session's files back
+  to an earlier turn.
+- **One forge, and it is exe.dev's.** `ExeDevGitHub` reads the GitHub integrations attached to a
+  VM. Anywhere else it reaches nothing, so the picker does not appear and the console is a place to
+  talk. Reaching GitHub through an App, so this works off exe.dev, is another class behind the same
+  interface.
+- **Nothing removes a worktree.** A session's clone and worktree stay after it, because nothing
+  deletes a session either.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.

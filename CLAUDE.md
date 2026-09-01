@@ -83,8 +83,8 @@ with nothing to dereference.
 One key for the session and four per turn, written by five different places and read by four:
 
 ```text
-choice               the profile, model and thinking level; written by `Service.start` and by
-                     `Service.fork`, before the prompt
+choice               the profile, model, repository and thinking level; written by `Service.start`
+                     and by `Service.fork`, before the prompt
 turn:{n}:prompt      the person's message; written from outside a pass, by `Service.say`
 turn:{n}:tree        the worktree that turn started on; written by the conversation body
 turn:{n}:model:{i}   the i-th model response of that turn; written by `StepwiseDurability`
@@ -208,11 +208,21 @@ Three things there are decided rather than incidental:
   answers "Repository not found" for any repository but its own.
 
 `Clones` keeps one **bare** clone per repository, so there is no "main" checkout to confuse with a
-session's and every worktree is a linked one off a shared object store.
+session's and every worktree is a linked one off a shared object store. `Workspaces` is the three
+of them as one value - clones, worktree root, and what the forges reach - because they only mean
+anything as a set: a worktree is of a clone, and a clone is of something a forge reached.
 
-None of this is wired into the app yet: nothing constructs a forge, and `MAINPLATE_REPOSITORY`
-still names a local checkout. The picker, recording a repository on a session, and cloning from the
-worker rather than from a request handler are the next steps.
+**The worker clones, never a request handler.** `Service.start` records the choice and returns; the
+session's first pass clones the repository and plants the worktree. A clone is a network fetch that
+can take minutes and creating a session is a POST somebody is waiting on, so putting it there is
+exactly the coupling the control-plane rule argues against. Both halves are idempotent, so every
+later pass reaches the same call and does nothing. It is an effect *outside* a step deliberately:
+what it does is make a directory exist, which is the same on every pass, so there is no result to
+record and nothing for a replay to disagree with.
+
+`FORGES` in `app.py` is the list, declared rather than configured. A forge that needs configuring
+will carry its own settings; one that does not needs no switch, because `ExeDevGitHub` reaching
+nothing off exe.dev is the correct behaviour there rather than something to turn off.
 
 ## Keeping the catalogue current
 
@@ -258,11 +268,16 @@ the reader's hand, and there would be one per turn.
 
 ## The workspace
 
-With `MAINPLATE_REPOSITORY` set, **every session gets a git worktree of its own** under
-`MAINPLATE_WORKTREES` (beside the database by default, and never inside the repository, which would
-put every session's files in every other session's snapshots). A worktree apiece rather than one
-shared tree, because two writers in one directory make a snapshot unattributable and the person is
-always one of the two.
+A session that picked a repository gets **a git worktree of its own**, under `MAINPLATE_WORKSPACES`
+(beside the database by default, and never inside any repository, which would put every session's
+files in every other session's snapshots). A worktree apiece rather than one shared tree, because
+two writers in one directory make a snapshot unattributable and the person is always one of the two.
+
+There is deliberately **no setting naming a repository**. What a session works in is picked when it
+is created and recorded on the session, so a process-wide answer would be a second answer to a
+question each session already answers, exactly as a process-wide model would be. A session may
+choose *no* repository, which is what this console was before there were any: a place to talk, with
+no files.
 
 `snapshots.py` captures a tree through a *shadow index*, so nothing a reader can see moves: not
 their staged changes, not `HEAD`, not a branch, not `git log`. Four things there are easy to undo:
@@ -287,10 +302,16 @@ want of something installed, you install it, you go back to before the call, and
 still there. The cost is that an ignored path the agent itself wrote goes stale while the source
 around it moves back, and it is the contract git already offers so nobody has to learn a second one.
 
-**Forking checks the new worktree out at the tree the forked turn originally saw**, so a branch
+**A fork's worktree is checked out at the tree the forked turn originally saw**, so a branch
 re-asks its question against the files that question was asked about. Planting at the repository's
 head instead would ask the new model to redo turn 3 against whatever the disk holds now, which is a
 different question wearing the same words and invisible in the transcript.
+
+The mechanism is one extra key rather than a checkout in a request handler: `Service.fork` copies
+`turn:{at}:tree` across on its own, even though that turn's prompt and messages are *not* inherited,
+and the fork's first pass plants at whatever tree is already recorded for the turn it is about to
+run. So the fork also inherits the repository, and is not offered another - re-asking a turn
+against different files is a different question.
 
 `Workspace.restore` is written and tested but nothing calls it yet: today a snapshot is a record of
 what disk looked like, not something to go back to.

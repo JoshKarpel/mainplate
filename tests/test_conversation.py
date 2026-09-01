@@ -229,14 +229,34 @@ class TestTheRecordedChoice:
     file and has to keep reading back as the same choice.
     """
 
-    def test_a_choice_is_recorded_as_the_three_things_it_is(self) -> None:
-        chosen = Choice(profile="gateway", model="wide/steady", thinking="high")
-        assert recorded_choice(chosen) == {"profile": "gateway", "model": "wide/steady", "thinking": "high"}
+    def test_a_choice_is_recorded_as_the_four_things_it_is(self) -> None:
+        chosen = Choice(profile="gateway", model="wide/steady", repository="exe-github:blog", thinking="high")
+        assert recorded_choice(chosen) == {
+            "profile": "gateway",
+            "model": "wide/steady",
+            "repository": "exe-github:blog",
+            "thinking": "high",
+        }
 
-    def test_saying_nothing_about_thinking_is_recorded_rather_than_left_out(self) -> None:
+    def test_what_a_session_did_not_choose_is_recorded_rather_than_left_out(self) -> None:
         """Stated, so a reader can tell "asked for nothing" from "written before there was a knob"."""
         recorded = recorded_choice(Choice(profile="here", model="ripe/fast"))
-        assert recorded == {"profile": "here", "model": "ripe/fast", "thinking": None}
+        assert recorded == {"profile": "here", "model": "ripe/fast", "repository": None, "thinking": None}
+
+    def test_a_choice_written_before_repositories_existed_still_parses(self) -> None:
+        """A session started when this console could only talk works in no repository, not a broken one."""
+        parsed = parse_choice({"profile": "here", "model": "ripe/fast", "thinking": "low"})
+
+        assert parsed == Choice(profile="here", model="ripe/fast", repository=None, thinking="low")
+
+    def test_a_repository_survives_the_checkpoint(self) -> None:
+        chosen = Choice(profile="here", model="ripe/fast", repository="exe-github:mainplate")
+
+        assert parse_choice(recorded_choice(chosen)) == chosen
+
+    def test_a_repository_the_checkpoint_should_not_hold_is_refused_loudly(self) -> None:
+        with pytest.raises(TypeError, match="not 17"):
+            parse_choice({"profile": "here", "model": "ripe/fast", "repository": 17})
 
     def test_a_choice_written_before_thinking_existed_still_parses(self) -> None:
         """The compatibility that matters: no `thinking` key at all is the level that asks nothing."""
