@@ -29,6 +29,15 @@ look never takes down the service. `just install` runs `uv sync` first, and that
 convenience: the unit names this checkout's interpreter, so an install from a stale environment
 points systemd at a venv missing whatever was just added.
 
+**A real turn costs real money, so do not spend one to see something a fixture already shows.**
+`just seed` plants the gallery's checkpoints into the demo database, which is a whole conversation
+to read, fold, search, fork and screenshot without a provider ever being asked anything. That is
+the right tool for a rendering, a stylesheet, a control, or anything downstream of a checkpoint,
+which is most of what changes here. When a change genuinely needs a live pass - the wires, the
+catalogue, durability, the worker - start the session on the cheapest model the endpoint lists and
+say the shortest thing that exercises it. Reach for a frontier model only when the change is about
+what a frontier model does differently, and say so.
+
 **The stylesheet is a deliverable, and no string assertion checks one.** `just shots` renders every
 page from fixture checkpoints and drives a real Chromium over them, so a styling change can be
 looked at rather than argued about. It needs no server, no database, no provider and no
