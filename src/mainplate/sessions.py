@@ -16,17 +16,27 @@
 # statement here and a checkpoint write reach the same tables, which is what would let a later
 # version write this row inside a pass's own transaction with `Run.transact`. Today's creation
 # path does not need that, and `enrol` says why.
+#
+# It is also what lets a read here reach *into* a checkpoint rather than copying out of one. A
+# session's repository is recorded in its `choice`, and a checkpoint is a row per key rather than
+# one value, so one join reads that one small row per session and this table stays the three
+# settled facts it holds. A sixth column would be the second copy the whole console is built to
+# avoid.
 
 from __future__ import annotations
 
 import secrets
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from typing import Final
 
 from without_durability_sqlite import Database
+
+from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import REPOSITORY_FIELD
 
 # Created here rather than in the store's own `migrate`, which owns three tables of its own and
 # knows nothing about sessions. Both run at startup and both are idempotent.
@@ -107,6 +117,20 @@ class Session:
     resembles.
     """
 
+    repository: str | None = None
+    """
+    Which repository this session works in, as the id a forge gave it, or nothing for none.
+
+    Read out of the session's own `choice` rather than held in this table, which is why it is here
+    at all rather than being a sixth column: it is already recorded, and a second copy would be one.
+    The checkpoint is a row per key, so reaching it costs one small row per session and not a word
+    of any conversation.
+
+    An id and not a name, for the reason `Choice.repository` holds one: which repository it is is
+    settled, and how to reach it is discovered. `Reachable.readable` is what turns it into the
+    `owner/repo` a person recognises.
+    """
+
 
 def mint_session_id() -> str:
     return secrets.token_hex(ID_BYTES)
@@ -131,8 +155,36 @@ async def prepare(database: Database) -> None:
     await database.run(migrate)
 
 
-# What every read selects, spelled once so the column order and `parse_session` cannot drift.
+# This table's own columns, which are the ones `enrol` writes.
 COLUMNS = "id, created_at, title, forked_from, forked_at"
+
+# What every read selects, spelled once so the column order and `parse_session` cannot drift.
+#
+# The join is what keeps the repository out of this table. A session's checkpoint is a row per key
+# rather than one value, so `choice` is one small object per session and reading the field out of
+# it costs a row apiece - where a column here would be a second copy of something already recorded,
+# which is the one thing this console does not keep. Both tables are in the one file, so this is a
+# single statement rather than a fan-out.
+#
+# `LEFT JOIN` because a session is enrolled before its choice is written, and that window is an
+# ordinary state rather than a fault: it renders as a session working in no repository, which is
+# also what a JSON `null` there means, so the two need not be told apart.
+SELECTION = """
+SELECT sessions.id,
+       sessions.created_at,
+       sessions.title,
+       sessions.forked_from,
+       sessions.forked_at,
+       json_extract(choice.value, :repository_path)
+  FROM sessions
+  LEFT JOIN workflow_checkpoint AS choice
+    ON choice.workflow = sessions.id AND choice.step = :choice_key
+"""
+
+# Named rather than positional, so the two statements below can add their own without counting
+# question marks. They name the key scheme, which lives in `conversation.py` for exactly this
+# reason: the code writing a choice and the statement reading one cannot drift apart.
+SCHEME: Final = {"choice_key": CHOICE_KEY, "repository_path": f"$.{REPOSITORY_FIELD}"}
 
 
 async def enrol(database: Database, session: Session) -> None:
@@ -161,19 +213,19 @@ async def enrol(database: Database, session: Session) -> None:
 
 async def read_sessions(database: Database) -> tuple[Session, ...]:
     """Every session, newest first, which is the order a chat console reads in."""
-    rows = await selecting(database, f"SELECT {COLUMNS} FROM sessions ORDER BY created_at DESC, id DESC", ())
+    rows = await selecting(database, f"{SELECTION} ORDER BY sessions.created_at DESC, sessions.id DESC", SCHEME)
     return tuple(parse_session(row) for row in rows)
 
 
 async def read_session(database: Database, session: str) -> Session | None:
-    rows = await selecting(database, f"SELECT {COLUMNS} FROM sessions WHERE id = ?", (session,))
+    rows = await selecting(database, f"{SELECTION} WHERE sessions.id = :session", {**SCHEME, "session": session})
     return parse_session(rows[0]) if rows else None
 
 
-type Row = tuple[str, str, str, str | None, int | None]
+type Row = tuple[str, str, str, str | None, int | None, str | None]
 
 
-async def selecting(database: Database, statement: str, parameters: tuple[str, ...]) -> list[Row]:
+async def selecting(database: Database, statement: str, parameters: Mapping[str, str]) -> list[Row]:
     """
     A query's rows, as the columns every statement here selects.
 
@@ -189,15 +241,18 @@ async def selecting(database: Database, statement: str, parameters: tuple[str, .
                 str(title),
                 None if forked_from is None else str(forked_from),
                 None if forked_at is None else int(forked_at),
+                None if repository is None else str(repository),
             )
-            for identifier, created_at, title, forked_from, forked_at in connection.execute(statement, parameters)
+            for identifier, created_at, title, forked_from, forked_at, repository in connection.execute(
+                statement, parameters
+            )
         ]
 
     return await database.run(query)
 
 
 def parse_session(row: Row) -> Session:
-    identifier, created_at, title, forked_from, forked_at = row
+    identifier, created_at, title, forked_from, forked_at, repository = row
     return Session(
         id=identifier,
         created_at=datetime.fromisoformat(created_at),
@@ -206,6 +261,7 @@ def parse_session(row: Row) -> Session:
         # the other is a database somebody edited by hand, and reading it as "not a fork" is the
         # quieter wrong answer; this says so instead.
         forked=parse_origin(identifier, forked_from, forked_at),
+        repository=repository,
     )
 
 

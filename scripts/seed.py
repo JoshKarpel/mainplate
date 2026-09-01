@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def planted() -> tuple[tuple[Session, Choice, dict[str, object]], ...]:
     The branch relationships are the ones `LISTED` already declares, so the tree the sidebar draws
     here is the tree the screenshots show.
     """
-    parent, branch, deeper, other = LISTED
+    parent, branch, deeper, other, detached = LISTED
     return (
         (parent, ON_SONNET, recorded(CONVERSATION, TOOL_IN_FLIGHT)),
         # Branched at turn 1 and answered on a different model, so it carries turn 0 and nothing
@@ -66,6 +67,8 @@ def planted() -> tuple[tuple[Session, Choice, dict[str, object]], ...]:
         # A branch of that branch, at turn 2, on the other wire entirely: turns 0 and 1 come across.
         (deeper, ON_GPT, recorded(CONVERSATION, TOOL_IN_FLIGHT)),
         (other, ON_SONNET, recorded(CONVERSATION)),
+        # On a repository nothing reaches, so a demo console has the row that renders a bare id.
+        (detached, ON_SONNET, recorded(CONVERSATION)),
     )
 
 
@@ -74,7 +77,12 @@ async def plant(service: Service, session: Session, chosen: Choice, checkpoint: 
     if await read_session(service.database, session.id) is not None:
         return False
     await enrol(service.database, session)
-    await service.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(chosen))
+    # The repository comes off the fixture row rather than being restated on the choice, because a
+    # read puts it there: the index holds no such column and the sidebar gets it out of `choice`.
+    # Declaring it twice is how a seeded session would come to say one thing and render another.
+    await service.checkpointer.supply(
+        session.id, CHOICE_KEY, recorded_choice(replace(chosen, repository=session.repository))
+    )
     for key, value in checkpoint.items():
         await service.checkpointer.supply(session.id, key, value)
     return True

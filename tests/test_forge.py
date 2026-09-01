@@ -198,6 +198,20 @@ class TestOfferingOneBack:
         assert Reachable(repositories=(ONE,)).offers("elsewhere:three") is None
 
 
+class TestCallingOneByItsName:
+    """The one rule a sidebar row and the note under a message box both ask, so neither can drift."""
+
+    def test_a_repository_a_forge_reaches_is_called_what_a_person_calls_it(self) -> None:
+        assert Reachable(repositories=(ONE, TWO)).readable("there:two") == "me/two"
+
+    def test_one_nothing_reaches_is_called_by_the_id_the_session_recorded(self) -> None:
+        """
+        Not a fallback but the honest reading: an integration detached this morning does not move
+        the session, and the id is all anybody knows about the repository now.
+        """
+        assert Reachable(repositories=(ONE,)).readable("elsewhere:three") == "elsewhere:three"
+
+
 class TestNamingThemForAPicker:
     def test_a_repository_reached_once_is_called_what_it_is(self) -> None:
         assert Reachable(repositories=(ONE, TWO)).labelled() == ((ONE, "me/one"), (TWO, "me/two"))

@@ -1,4 +1,4 @@
-# The console's routes: six paths, and what each of them reads or writes.
+# The console's routes, and what each of them reads or writes.
 #
 # Nothing here runs an agent. A write puts a message into a session's checkpoint and asks for the
 # session to be looked at; the worker is what turns that into a model call, in its own time and
@@ -14,6 +14,7 @@ from urllib.parse import parse_qs
 from pydantic_ai.settings import ThinkingLevel
 from without_asgi import Response
 from without_asgi import html_content
+from without_web import INT
 from without_web import STR
 from without_web import ExtractionError
 from without_web import Route
@@ -30,7 +31,9 @@ from mainplate.conversation import THINKING_FIELD
 from mainplate.pages import Links
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
+from mainplate.pages import missing_record
 from mainplate.pages import model_cards
+from mainplate.pages import record_json
 from mainplate.pages import refusal_page
 from mainplate.pages import session_page
 from mainplate.pages import stalled_by
@@ -56,6 +59,11 @@ session_id = path_param("session", STR)
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # Which turn a fork would start at, which is the first turn the branch does not inherit.
 at_turn = query_param("at", once(int), schema={"type": "integer"})
+# The two halves of a panel's identity, in the path because that is what they are: a panel is named
+# by its turn and its position within it, which is the same pair its anchor and its label are built
+# from. A query string would say these narrow something down, where they pick one thing out.
+of_turn = path_param("turn", INT)
+at_panel = path_param("at", INT)
 
 
 class NotAMessage(ValueError):
@@ -353,7 +361,7 @@ async def show_session(service: Service, session: str) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, session_page(LINKS, await service.listed(), found))
+    return page_response(200, session_page(LINKS, await service.listed(), found, service.reachable))
 
 
 @get(t"/fragments/sessions/{session_id}", session_id, summary="One session's transcript alone, for a live region")
@@ -373,6 +381,32 @@ async def session_fragment(service: Service, session: str) -> Response:
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return page_response(200, fragment(transcript_region(LINKS, session, found.said, stalled_by(found))))
+
+
+@get(
+    t"/fragments/sessions/{session_id}/panels/{of_turn}/{at_panel}",
+    session_id,
+    of_turn,
+    at_panel,
+    summary="What the checkpoint holds behind one panel",
+)
+async def panel_record(service: Service, session: str, turn: int, at: int) -> Response:
+    """
+    The stored JSON a panel was read out of, fetched only when somebody opens the disclosure.
+
+    On demand rather than rendered into the transcript, because the transcript is swapped once a
+    second while a turn is in flight: the raw record of every panel is several times the size of
+    the reading of it, and it would be carried by every poll for something almost always closed.
+
+    Whatever it answers is settled for good, which is what lets the page fetch it once and keep it.
+    A turn's messages are recorded when the turn ends, so a panel exists only once what is behind
+    it has stopped changing, and the one panel that exists before then - the person's, waiting to
+    be answered - is a prompt, which nothing ever rewrites.
+    """
+    held = await service.recorded_at(session, turn, at)
+    if held is None:
+        return page_response(404, fragment(missing_record(turn, at)))
+    return page_response(200, fragment(record_json(held)))
 
 
 @post(t"/sessions/{session_id}/messages", session_id, prompt, summary="Say something to a session")
@@ -403,6 +437,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     fork_form,
     fork,
     say,
+    panel_record,
 )
 
 LINKS = Links(
@@ -411,6 +446,7 @@ LINKS = Links(
     session=show_session,
     say=say,
     session_fragment=session_fragment,
+    panel_record=panel_record,
     endpoint_models=endpoint_models,
     fork_form=fork_form,
     fork=fork,

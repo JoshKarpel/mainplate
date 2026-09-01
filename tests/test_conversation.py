@@ -43,6 +43,7 @@ from mainplate.conversation import parse_prompt
 from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
+from mainplate.conversation import sourced_at
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
 from mainplate.durability import stepping
@@ -196,6 +197,91 @@ class TestReadingACheckpoint:
     def test_a_prompt_that_is_not_text_is_refused_rather_than_rendered(self) -> None:
         with pytest.raises(TypeError):
             parse_prompt({"content": "nice try"})
+
+
+# One turn holding a panel of every kind, so the pairing below is asked against a checkpoint whose
+# panels are known: the person at 0, reasoning at 1, the call at 2, and the answer at 3.
+FOUR_PANELS: dict[str, object] = {
+    prompt_key(0): "go",
+    messages_key(0): [
+        {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "go"}]},
+        {
+            "kind": "response",
+            "parts": [
+                {"part_kind": "thinking", "content": "have a look"},
+                {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"},
+            ],
+        },
+        {
+            "kind": "request",
+            "parts": [{"part_kind": "tool-return", "tool_name": "read", "content": "b", "tool_call_id": "c1"}],
+        },
+        {"kind": "response", "parts": [{"part_kind": "text", "content": "it says hello"}]},
+    ],
+}
+
+
+class TestWhatAPanelWasReadOutOf:
+    """
+    The record behind a panel, which is the checkpoint's own JSON and not a re-serialization of it.
+
+    The whole risk here is disagreement: a panel is a run of parts and nothing stores one, so the
+    walk that cuts panels and the walk that finds their parts have to be the same walk.
+    """
+
+    def test_a_persons_panel_is_the_prompt_key_and_nothing_else(self) -> None:
+        assert sourced_at(FOUR_PANELS, 0, 0) == "go"
+
+    def test_a_reasoning_panel_is_the_stored_part_it_was_read_from(self) -> None:
+        assert sourced_at(FOUR_PANELS, 0, 1) == [{"part_kind": "thinking", "content": "have a look"}]
+
+    def test_a_call_panel_carries_the_call_and_not_its_return(self) -> None:
+        """
+        A return arrives in the *request* after the response that asked for it, so it is not a part
+        of the panel. What the panel is a reading of is the call, which is what this hands back.
+        """
+        assert sourced_at(FOUR_PANELS, 0, 2) == [
+            {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"}
+        ]
+
+    def test_the_last_panel_is_the_answer(self) -> None:
+        assert sourced_at(FOUR_PANELS, 0, 3) == [{"part_kind": "text", "content": "it says hello"}]
+
+    def test_every_panel_the_transcript_draws_has_a_record_behind_it(self) -> None:
+        """
+        The pairing itself, asked of the two functions together rather than of either alone. A
+        panel the page draws and nothing can answer for is the failure this exists to catch.
+        """
+        drawn = transcript(FOUR_PANELS).panels
+        assert len(drawn) == 4
+        assert all(sourced_at(FOUR_PANELS, panel.turn, panel.at) is not None for panel in drawn)
+
+    def test_a_panel_past_the_end_is_nothing(self) -> None:
+        assert sourced_at(FOUR_PANELS, 0, 4) is None
+
+    def test_a_turn_nobody_reached_is_nothing(self) -> None:
+        assert sourced_at(FOUR_PANELS, 7, 0) is None
+        assert sourced_at(FOUR_PANELS, 7, 1) is None
+
+    def test_a_part_the_console_passes_over_is_not_counted_into_a_panel(self) -> None:
+        """
+        The indices come from the walk that decides which parts become blocks, because that walk
+        skips. Recovered by counting parts afterwards they would be off by one from the first
+        unrenderable part onwards, and every panel after it would show somebody else's record.
+        """
+        recorded: dict[str, object] = {
+            prompt_key(0): "go",
+            messages_key(0): [
+                {
+                    "kind": "response",
+                    "parts": [
+                        {"part_kind": "text", "content": "   "},
+                        {"part_kind": "text", "content": "the real one"},
+                    ],
+                }
+            ],
+        }
+        assert sourced_at(recorded, 0, 1) == [{"part_kind": "text", "content": "the real one"}]
 
 
 class TestChoosingATurn:

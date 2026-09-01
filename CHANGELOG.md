@@ -76,6 +76,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   originally saw, so a branch re-asks its question against the files that question was asked about.
   Snapshots are gitignore-aware, so going back to a turn restores what is version-controlled and
   leaves the environment alone.
+- The repository a session works in, on its row in the sidebar, as `owner/repo` while a forge
+  reaches it and the recorded id once none does. It is read out of the session's own `choice` with
+  one join rather than held in the index: a checkpoint is a row per key, so this costs one small
+  row per session and keeps the index the settled facts it already held.
+- A `recorded` disclosure under every panel, showing the JSON the checkpoint actually holds behind
+  it: the prompt for a person's panel, and the stored parts for every other. Fetched only when it
+  is opened, so the transcript that swaps once a second does not carry it, and preserved across
+  that swap so it does not shut under the reader's hand.
 - Syntax highlighting on fenced code blocks, in the console's own palette rather than an imported
   theme. Only Pygments' own token classes survive sanitising, so a reply cannot paint itself as any
   part of the console's chrome.

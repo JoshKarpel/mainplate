@@ -125,10 +125,19 @@ REFERENCE = Reference(
     upstream={},
 )
 
-PARENT = Session(id="aa" * 16, created_at=WHEN, title="Why does the poll stop after one answer")
+WORKING_IN = "exe-github:mainplate"
+
+# A repository no forge reaches any more, so one row is drawn as the recorded id. That is the case
+# a screenshot is for: the name and the id are different lengths and different shapes, and whether
+# the second one still reads as a repository is not a thing a markup assertion can answer.
+DETACHED = "exe-github:archived"
+
+PARENT = Session(id="aa" * 16, created_at=WHEN, title="Why does the poll stop after one answer", repository=WORKING_IN)
 
 # A branch, and a branch of that branch, so the sidebar's nesting is drawn at more than one depth
-# and the turn each left at is visible on the row.
+# and the turn each left at is visible on the row. A fork inherits its parent's repository, so the
+# three of them read the same, and the two below are the other states a row can be in: one working
+# in nothing, one working in something nothing reaches.
 LISTED = (
     PARENT,
     Session(
@@ -136,14 +145,17 @@ LISTED = (
         created_at=WHEN + timedelta(minutes=4),
         title=PARENT.title,
         forked=Origin(session=PARENT.id, turn=1),
+        repository=WORKING_IN,
     ),
     Session(
         id="cc" * 16,
         created_at=WHEN + timedelta(minutes=9),
         title=PARENT.title,
         forked=Origin(session="bb" * 16, turn=2),
+        repository=WORKING_IN,
     ),
     Session(id="dd" * 16, created_at=WHEN, title="Add a thinking control to the picker"),
+    Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
 )
 
 # One turn per kind of thing a panel can hold, so a styling change can be seen against all of them
@@ -296,9 +308,9 @@ def pages() -> dict[str, str]:
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
         "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
-        "session.html": session_page(LINKS, LISTED, showing(PARENT, settled)),
-        "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting)),
-        "stalled.html": session_page(LINKS, LISTED, stalled),
+        "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
+        "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),
+        "stalled.html": session_page(LINKS, LISTED, stalled, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one.

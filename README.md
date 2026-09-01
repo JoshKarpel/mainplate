@@ -85,6 +85,11 @@ a turn against different files is a different question wearing the same words. A
 *no* repository is the exception, and forking one is how you pick a repository up: think something
 through first, then fork it into the code.
 
+Each row in the sidebar names the repository its session works in, which is what tells two
+conversations apart once you are working in more than one. It reads `owner/repo` while a forge still
+reaches it, and the recorded id once none does, so a detached integration leaves the row saying
+where the session is rather than saying nothing.
+
 A new session starts on whichever model the default endpoint listed first, which for most gateways is
 their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
 since dropped falls back to the first rather than stopping the console. `default_thinking` names the
@@ -249,6 +254,11 @@ model's reasoning, its calls, and its answer each in their own. The palette runs
 for what reached the model and warm for what it produced, so a reader scrolling can tell the sides
 apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
 page.
+
+Under each panel is a `recorded` fold, which shows the JSON the checkpoint actually holds behind it:
+the prompt for a person's message, and the stored model parts for everything else. Since the
+checkpoint *is* the conversation, this is the state itself rather than a debug view of it, and it is
+fetched only when you open it so the transcript that swaps once a second never carries it.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that jumps between the two sides and folds every call at once, a

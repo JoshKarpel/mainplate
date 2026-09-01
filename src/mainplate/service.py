@@ -35,6 +35,7 @@ from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
+from mainplate.conversation import sourced_at
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
 from mainplate.forge import Reachable
@@ -132,16 +133,13 @@ class Service:
         What a page calls the repository a session works in, or nothing where it works in none.
 
         The repository a *forge* currently reaches when there is one, so a page shows `owner/repo`
-        rather than the id, and the recorded id itself when no forge reaches it any more. That is
-        not a fallback but the honest reading: the session is still on that repository, and the id
-        is all anybody knows about it now.
+        rather than the id, and the recorded id itself when no forge reaches it any more. The rule
+        is `Reachable.readable`'s, so the note under a message box and a row in the sidebar cannot
+        come to call one repository two different things.
         """
         if chosen is None or chosen.repository is None:
             return None
-        if self.workspaces is None:
-            return chosen.repository
-        found = self.workspaces.named(chosen.repository)
-        return found.name if found is not None else chosen.repository
+        return self.reachable.readable(chosen.repository)
 
     def reaches(self, repository: str) -> bool:
         """Whether a forge currently offers this repository, which is what a new session needs."""
@@ -177,6 +175,23 @@ class Service:
             repository=self.repository_of(chosen),
             workspace=self.workspaces.at(session) if self.workspaces is not None and working else None,
         )
+
+    async def recorded_at(self, session: str, turn: int, at: int) -> object | None:
+        """
+        What the checkpoint holds behind one panel, or nothing at all where there is no such panel.
+
+        One answer for "no session" and "no panel", because they are the same answer to the reader:
+        the address names nothing. Nothing recorded can itself be `None`, so this is unambiguous - a
+        prompt is refused before it is written and a panel is a run of at least one part.
+
+        The whole checkpoint is loaded to answer it, which is what every read here does and what the
+        one idea costs: there is no second index of what a turn holds, and a panel is a reading of
+        the record rather than a row in it.
+        """
+        found = await read_session(self.database, session)
+        if found is None:
+            return None
+        return sourced_at(await self.checkpointer.load(session), turn, at)
 
     async def start(self, said: str, chosen: Choice, title: str | None = None) -> Session:
         """

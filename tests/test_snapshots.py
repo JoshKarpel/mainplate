@@ -567,6 +567,69 @@ class TestPickingOneThroughTheConsole:
         assert 'id="repository"' in answered.text
         assert f'value="{FIXTURE}"' in answered.text
 
+
+class TestWhatTheSidebarSaysASessionWorksIn:
+    """
+    The repository on a session's row, which is read out of its `choice` rather than held in the
+    index. A session page is where these are asked, because it draws the sidebar and no picker, so
+    a repository name in the markup came from a row and not from a control.
+    """
+
+    @pytest.fixture
+    def app(self, planting: Service) -> ASGIApp:
+        return build_app(already(planting))
+
+    async def test_a_row_names_the_repository_its_session_works_in(self, app: ASGIApp, planting: Service) -> None:
+        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session.id}")
+
+        assert answered.status == 200
+        assert '<span class="where" title="me/fixture">me/fixture</span>' in answered.text
+
+    async def test_a_row_for_a_session_working_in_nothing_says_nothing(self, app: ASGIApp, planting: Service) -> None:
+        """Most of a list is one or the other, and the majority does not need labelling."""
+        session = await planting.start("first", DEFAULT_CHOICE)
+
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session.id}")
+
+        assert answered.status == 200
+        assert 'class="where"' not in answered.text
+
+    async def test_a_row_falls_back_to_the_recorded_id_when_no_forge_reaches_it(
+        self, app: ASGIApp, planting: Service
+    ) -> None:
+        """
+        An integration detached this morning does not stop the session being readable, and the id
+        is all anybody knows about the repository now. Saying nothing would be the quieter wrong
+        answer, since the session is still working somewhere.
+        """
+        session = await planting.start("first", replace(DEFAULT_CHOICE, repository="test:detached"))
+
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session.id}")
+
+        assert answered.status == 200
+        assert '<span class="where" title="test:detached">test:detached</span>' in answered.text
+
+    async def test_the_repository_is_read_without_the_index_holding_a_column_for_it(self, planting: Service) -> None:
+        """
+        The whole point of the join: `sessions` keeps the three settled facts it always did, and
+        the fourth is reached in the checkpoint the session already records it in. A column here
+        would be the second copy of what was said that this console does not keep.
+        """
+        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        held = await planting.database.run(
+            lambda connection: {str(row[1]) for row in connection.execute("PRAGMA table_info(sessions)")}
+        )
+        assert "repository" not in held
+
+        listed = await planting.listed()
+        assert [one.repository for one in listed if one.id == session.id] == [FIXTURE]
+
     async def test_attaching_a_repository_through_the_fork_form_works(self, app: ASGIApp, planting: Service) -> None:
         session = await planting.start("first", DEFAULT_CHOICE)
 

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ from without_html import article
 from without_html import aside
 from without_html import body
 from without_html import button
+from without_html import code
 from without_html import dd
 from without_html import details
 from without_html import div
@@ -191,6 +193,7 @@ class Links:
     session: Reversible
     say: Reversible
     session_fragment: Reversible
+    panel_record: Reversible
     endpoint_models: Reversible
     fork_form: Reversible
     fork: Reversible
@@ -223,6 +226,16 @@ class Links:
         interpolation and the select needs no script to build one.
         """
         return url_for(self.endpoint_models)
+
+    def to_panel_record(self, session: str, turn: int, at: int) -> str:
+        """
+        What the checkpoint holds behind one panel, addressed the way the panel itself is.
+
+        Path segments rather than a query string, because a panel's identity *is* the pair: the
+        anchor a permalink is built on is already `turn` and `at`, so this is the same address in
+        another shape rather than a filter over something.
+        """
+        return url_for(self.panel_record, {"session": session, "turn": turn, "at": at})
 
     def to_fork_form(self, session: str, at: int) -> str:
         """Where to ask what a branch from this turn should be answered with."""
@@ -319,7 +332,7 @@ def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
     return tuple(arranged)
 
 
-def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> Element:
+def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reachable: Reachable) -> Element:
     """
     Every session, newest first, with branches under what they branched from and the current one marked.
 
@@ -327,6 +340,12 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> E
     what it buys: a branch made this morning sits with the conversation it came from rather than at
     the top away from it, and the ordering within any one group is still the one a chat console
     reads in.
+
+    A row says which repository its session works in, because that is the thing two conversations
+    with the same opening line are actually told apart by once a console is used to work in more
+    than one. `reachable` is what turns the recorded id into the name somebody recognises, and a
+    session working in nothing says nothing rather than saying so - most of a list is one or the
+    other, and the majority does not need labelling.
     """
     return aside(
         cls="sessions",
@@ -352,6 +371,20 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> E
                                         *(
                                             (span(cls="from", children=f"\N{RIGHTWARDS ARROW}{session.forked.turn}"),)
                                             if session.forked
+                                            else ()
+                                        ),
+                                        *(
+                                            (
+                                                span(
+                                                    cls="where",
+                                                    # Titled as well as drawn, because a row this
+                                                    # narrow cuts a name that two sessions may
+                                                    # differ only in the tail of.
+                                                    attrs={"title": reachable.readable(session.repository)},
+                                                    children=reachable.readable(session.repository),
+                                                ),
+                                            )
+                                            if session.repository is not None
                                             else ()
                                         ),
                                     ],
@@ -828,6 +861,66 @@ def block_element(block: Block, anchor: str, at: int) -> Element:
             assert_never(unreachable)
 
 
+# How wide the stored JSON is indented where a person reads it. Two, because the point of showing
+# it is the shape, and a value nested four deep at four spaces is mostly margin in a column this
+# narrow.
+INDENT: Final = 2
+
+
+def record_json(held: object) -> Element:
+    """
+    One panel's stored value, as the text the checkpoint holds it as.
+
+    `ensure_ascii` off, because a conversation is prose: escaping every non-ASCII character turns a
+    message somebody can read into one they have to decode, and this is served as UTF-8 either way.
+
+    Text and not markup, which is the whole of what makes it safe to show. Everything in here was
+    shaped by whatever reached the message box, and a node tree escapes a text child, so the raw
+    record of a reply that contains a `<script>` renders as those characters.
+    """
+    return pre(cls="record__json", children=code(children=json.dumps(held, indent=INDENT, ensure_ascii=False)))
+
+
+def missing_record(turn: int, at: int) -> Element:
+    """What a panel nothing was recorded for says, which is a fragment rather than a refusal page."""
+    return p(cls="record__missing", children=f"Nothing is recorded for panel {turn}.{at}.")
+
+
+def record_element(links: Links, session: str, panel: Panel) -> Element:
+    """
+    The disclosure that shows what the checkpoint actually holds behind this panel.
+
+    Closed and unfetched until somebody asks, because the transcript around it is swapped once a
+    second while a turn is in flight and the raw record is several times the size of the reading of
+    it. `once` is safe rather than merely cheap: a panel exists only once the value behind it has
+    stopped changing, so what comes back is settled and there is nothing to ask again for.
+
+    `hx-preserve` is what makes that hold through a poll, and it is load-bearing rather than
+    decorative: the server renders this closed, so a morph over the region takes the `open`
+    attribute back off and shuts the disclosure under the reader's hand once a second. Preserved,
+    the swap steps over the element and leaves it as they left it.
+
+    htmx reads the attribute off the *incoming* markup rather than off the element on screen, which
+    is worth knowing before trying to check this: taking it off the live node proves nothing,
+    because the next response puts it back.
+    """
+    return details(
+        cls="record",
+        attrs={
+            "id": f"{panel.anchor}-record",
+            "hx-preserve": True,
+            "hx-get": links.to_panel_record(session, panel.turn, panel.at),
+            "hx-trigger": "toggle once",
+            "hx-target": "find .record__json",
+            "hx-swap": "outerHTML",
+        },
+        children=[
+            summary(cls="record__summary", children="recorded"),
+            pre(cls="record__json", children=code(children="\N{HORIZONTAL ELLIPSIS}")),
+        ],
+    )
+
+
 def panel_element(links: Links, session: str, panel: Panel) -> Element:
     """
     One run of one kind of thing, with the facts about it above it.
@@ -888,6 +981,10 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 ],
             ),
             *(block_element(block, panel.anchor, at) for at, block in enumerate(panel.blocks)),
+            # Only where there is a session to ask, which the gallery's pages are rendered without:
+            # a control pointed at no conversation is a dead button rather than an offer, which is
+            # the same reason the fork link is conditional above.
+            *((record_element(links, session, panel),) if session else ()),
         ],
     )
 
@@ -1256,13 +1353,14 @@ def shell(
     links: Links,
     listed: tuple[Session, ...],
     showing: str | None,
+    reachable: Reachable,
     pane: Sequence[Element],
     aside_rail: Iterable[Element] = (),
 ) -> Element:
     return div(
         cls="shell",
         children=[
-            sidebar(links, listed, showing),
+            sidebar(links, listed, showing, reachable),
             main(children=[header(children=h1(children="mainplate")), *pane]),
             *aside_rail,
         ],
@@ -1300,6 +1398,7 @@ def start_page(
             links,
             listed,
             showing=None,
+            reachable=reachable,
             pane=[
                 div(cls="setup", children=picker(links, catalogue, reachable, reference)),
                 composer(links.to_start(), None, live=False, above=naming(), identified=CHOOSING_ID),
@@ -1328,7 +1427,7 @@ def stalled_by(showing: Conversation) -> str | None:
     )
 
 
-def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation) -> str:
+def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation, reachable: Reachable) -> str:
     stalled = stalled_by(showing)
     return document(
         links,
@@ -1337,6 +1436,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             links,
             listed,
             showing=showing.session.id,
+            reachable=reachable,
             pane=[
                 transcript_region(links, showing.session.id, showing.said, stalled),
                 composer(
@@ -1413,6 +1513,7 @@ def fork_page(
             links,
             listed,
             showing=showing.session.id,
+            reachable=reachable,
             pane=[
                 form(
                     cls="forking",

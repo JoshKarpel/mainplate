@@ -131,7 +131,14 @@ class TestTheConsole:
         assert 'hx-swap="outerMorph"' in answered.text
 
     async def test_an_answered_session_carries_no_trigger_at_all(self, app: ASGIApp, service: Service) -> None:
-        """A console with nothing running makes no requests, which is what stops the polling."""
+        """
+        A console with nothing running asks for nothing, which is what stops the polling.
+
+        Named against the poll's own trigger and its own URL rather than against `hx-get` and
+        `hx-trigger` at large. A settled panel carries a disclosure that fetches what the
+        checkpoint holds behind it, which is an htmx attribute this assertion must not read as a
+        conversation still waiting for an answer.
+        """
         session = await a_session(app)
         await service.checkpointer.supply(
             session,
@@ -140,8 +147,8 @@ class TestTheConsole:
         )
         async with calling(app) as caller:
             answered = await caller.get(f"/fragments/sessions/{session}")
-        assert "hx-trigger" not in answered.text
-        assert "hx-get" not in answered.text
+        assert 'hx-trigger="every 1s"' not in answered.text
+        assert f'hx-get="/fragments/sessions/{session}"' not in answered.text
 
     async def test_a_message_into_a_session_answers_with_the_transcript_alone(self, app: ASGIApp) -> None:
         session = await a_session(app)
@@ -346,7 +353,9 @@ class TestTheConsole:
             answered = await caller.get(f"/sessions/{session}")
         assert DEFAULT_CHOICE.endpoint in answered.text
         assert "no longer declares" in answered.text
-        assert "hx-get" not in answered.text, "a session nothing will answer must stop asking"
+        assert f'hx-get="/fragments/sessions/{session}"' not in answered.text, (
+            "a session nothing will answer must stop asking"
+        )
 
     async def test_a_session_on_a_model_the_picker_stopped_listing_is_not_stuck(
         self, app: ASGIApp, service: Service
@@ -376,7 +385,9 @@ class TestTheConsole:
         async with calling(build_app(already(narrowed))) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert "no longer" not in answered.text
-        assert "hx-get" in answered.text, "the worker can still answer it, so the page must keep asking"
+        assert f'hx-get="/fragments/sessions/{session}"' in answered.text, (
+            "the worker can still answer it, so the page must keep asking"
+        )
 
     async def test_a_message_is_rendered_as_the_markdown_it_was_written_as(self, app: ASGIApp) -> None:
         session = await a_session(app, "a **strong** point")
@@ -399,3 +410,118 @@ class TestTheConsole:
         assert "<script" not in answered.text
         assert "alert(1)" not in answered.text
         assert "onerror" not in answered.text
+
+
+ANSWERED = [
+    {
+        "kind": "response",
+        "parts": [
+            {"part_kind": "thinking", "content": "the trigger fires once"},
+            {"part_kind": "text", "content": "it is a plate"},
+        ],
+    }
+]
+
+
+class TestShowingWhatWasRecorded:
+    """
+    The disclosure under a panel, and the fragment behind it.
+
+    A panel is a *reading* of the checkpoint rather than a row in it, so what these pin is that the
+    two agree about which stored parts a given panel was read out of.
+    """
+
+    async def answered_session(self, app: ASGIApp, service: Service) -> str:
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        return session
+
+    async def test_a_panel_carries_a_disclosure_pointed_at_its_own_record(self, app: ASGIApp, service: Service) -> None:
+        session = await self.answered_session(app, service)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}")
+        assert f'hx-get="/fragments/sessions/{session}/panels/0/1"' in answered.text
+        assert f'hx-get="/fragments/sessions/{session}/panels/0/2"' in answered.text
+
+    async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
+        """
+        Fetched rather than rendered, which is the whole reason it is an endpoint: the transcript
+        is swapped once a second while a turn is in flight, and this is several times the size of
+        the reading of it.
+        """
+        session = await self.answered_session(app, service)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}")
+        assert "the trigger fires once" in answered.text, "the reading of the part is on the page"
+        assert '"part_kind"' not in answered.text, "the record behind it is not"
+
+    async def test_the_disclosure_survives_the_poll_that_replaces_the_conversation(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        `hx-preserve` is load-bearing and invisible to a reader of the markup, so it is pinned here.
+
+        The region morphs, and the server renders this closed. Without the attribute a morph takes
+        the `open` attribute back off and shuts the disclosure under the reader's hand once a
+        second, which a driven Chromium confirms and no string assertion can. htmx reads it off the
+        incoming markup, so this response is where it has to be.
+        """
+        session = await self.answered_session(app, service)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}")
+        assert "hx-preserve" in answered.text
+        assert 'hx-trigger="toggle once"' in answered.text, "settled for good, so asked for once"
+
+    async def test_a_model_panel_answers_with_the_parts_it_was_read_out_of(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await self.answered_session(app, service)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/1")
+        assert answered.status == 200
+        assert '"part_kind": "thinking"' in answered.text
+        assert '"the trigger fires once"' in answered.text
+        assert "it is a plate" not in answered.text, "the prose panel is a panel of its own"
+
+    async def test_a_person_panel_answers_with_the_one_key_that_is_that_panel(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The exception, and the only panel the checkpoint has a key for on its own."""
+        session = await self.answered_session(app, service)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/0")
+        assert answered.status == 200
+        assert '"what is a mainplate"' in answered.text
+
+    async def test_a_panel_nobody_recorded_is_refused_rather_than_rendered_empty(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await self.answered_session(app, service)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/9")
+        assert answered.status == 404
+        assert "Nothing is recorded" in answered.text
+
+    async def test_a_session_nobody_started_is_refused(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/fragments/sessions/deadbeef/panels/0/0")
+        assert answered.status == 404
+
+    async def test_markup_inside_a_record_does_not_become_markup(self, app: ASGIApp, service: Service) -> None:
+        """
+        The raw record carries whatever the model said, which is shaped by whatever reached the box.
+
+        Shown as text and not as rendered Markdown, so the sanitiser this page uses elsewhere is not
+        in the path at all: what stands in for it is that a node tree escapes a text child.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            [{"kind": "response", "parts": [{"part_kind": "text", "content": "<script>alert(1)</script>"}]}],
+        )
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/1")
+        assert answered.status == 200
+        assert "<script" not in answered.text
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in answered.text

@@ -435,44 +435,85 @@ def returns_in(messages: Sequence[ModelMessage]) -> dict[str, Returned]:
     return found
 
 
-def blocks_of(messages: Sequence[ModelMessage]) -> tuple[Block, ...]:
+@dataclass(frozen=True, slots=True)
+class Source:
     """
-    What a turn's messages are worth reading as, in the order the model produced them.
+    Where in a turn's recorded messages a block was read from, as two indices into the stored value.
+
+    Indices rather than the part itself, because what they are for is showing somebody the JSON the
+    checkpoint *holds*. A parsed part dumped again states what this console's Pydantic AI would
+    write today, which is a different claim and the weaker one: it agrees with the record until a
+    release changes a default or renames a field, and then it disagrees silently, which is the one
+    thing a reader looking at raw state cannot afford.
+    """
+
+    message: int
+    part: int
+
+
+type Sourced = tuple[Block, Source]
+
+
+def parted(messages: Sequence[ModelMessage]) -> tuple[Sourced, ...]:
+    """
+    What a turn's messages are worth reading as, each with where it was read from.
 
     A part this console has no rendering for is passed over rather than refused. That is not a
     swallowed error: the provider and Pydantic AI are both free to add a part kind, and a console
     that crashed on one it had never heard of would be broken by somebody else's release. What is
     *required* here is the text, and a turn that produced none renders as a turn that said
     nothing, which is the honest report.
+
+    The indices are this walk's to hand out because it is the walk that decides which parts become
+    blocks at all. Recovered by a second pass they would be a guess at what this one did, and the
+    skipping above is exactly what makes that guess wrong.
     """
     returned = returns_in(messages)
-    blocks: list[Block] = []
-    for message in messages:
+    sourced: list[Sourced] = []
+    for index, message in enumerate(messages):
         if not isinstance(message, ModelResponse):
             continue
-        for part in message.parts:
+        for at, part in enumerate(message.parts):
+            source = Source(message=index, part=at)
             match part:
                 case TextPart(content=said) if said.strip():
-                    blocks.append(Prose(text=said))
+                    sourced.append((Prose(text=said), source))
                 case ThinkingPart(content=thought) if thought.strip():
-                    blocks.append(Reasoning(text=thought))
+                    sourced.append((Reasoning(text=thought), source))
                 case ToolCallPart(tool_name=tool, tool_call_id=call):
-                    blocks.append(ToolUse(tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call)))
+                    use = ToolUse(tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call))
+                    sourced.append((use, source))
                 case _:
                     continue
-    return tuple(blocks)
+    return tuple(sourced)
+
+
+def blocks_of(messages: Sequence[ModelMessage]) -> tuple[Block, ...]:
+    """What a turn's messages are worth reading as, in the order the model produced them."""
+    return tuple(block for block, _ in parted(messages))
+
+
+def runs[T](items: Sequence[T], kind: Callable[[T], Kind]) -> Iterator[tuple[int, Kind, tuple[T, ...]]]:
+    """
+    One turn's items cut into runs of a single kind, each with the position that names it.
+
+    Consecutive rather than gathered, so the page shows the order the model worked in: a reply
+    that reasoned, called a tool, and then answered is three runs in that sequence, not a
+    reasoning run and a tool run hoisted above the answer.
+
+    Generic over the item because two callers need the same cut of the same sequence: the page
+    wants the blocks in each panel and `sourced_at` wants where those blocks came from. Written
+    twice, the second would eventually disagree about which panel `at` names, and a reader would
+    be shown the record of a panel they were not looking at with nothing saying so.
+    """
+    for at, (of_kind, run) in enumerate(groupby(items, key=kind)):
+        yield at + 1, of_kind, tuple(run)
 
 
 def panelled(turn: int, blocks: Sequence[Block]) -> Iterator[Panel]:
-    """
-    One turn's blocks cut into panels, a panel per run of blocks of the same kind.
-
-    Consecutive rather than gathered, so the page shows the order the model worked in: a reply
-    that reasoned, called a tool, and then answered is three panels in that sequence, not a
-    reasoning panel and a tool panel hoisted above the answer.
-    """
-    for at, (kind, run) in enumerate(groupby(blocks, key=kind_of)):
-        yield Panel(turn=turn, at=at + 1, kind=kind, blocks=tuple(run))
+    """One turn's blocks cut into panels, a panel per run of blocks of the same kind."""
+    for at, kind, run in runs(blocks, kind_of):
+        yield Panel(turn=turn, at=at, kind=kind, blocks=run)
 
 
 def said_by(turn: int, prompt: str, tree: str | None = None) -> Panel:
@@ -512,6 +553,52 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         awaiting = True
         turn += 1
     return Transcript(panels=tuple(panels), awaiting=awaiting, turns=turn)
+
+
+def stored_part(answered: object, source: Source) -> object:
+    """
+    One part as the checkpoint holds it, reached by the indices `parted` handed out.
+
+    The narrowing is not defensive: `parse_messages` has already validated this value, so what is
+    left is that the checkpoint's type is `object` and indexing it needs the shape stated. It is
+    loud rather than lenient for the same reason `parse_prompt` is, because a checkpoint that does
+    not have this shape is not something to render half of.
+    """
+    if not isinstance(answered, list):
+        raise TypeError(f"a turn's messages must be a list, not {answered!r}")
+    message = answered[source.message]
+    if not isinstance(message, dict):
+        raise TypeError(f"a message must be a mapping, not {message!r}")
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        raise TypeError(f"a message's parts must be a list, not {parts!r}")
+    return parts[source.part]
+
+
+def sourced_at(recorded: Mapping[str, object], turn: int, at: int) -> object | None:
+    """
+    What the checkpoint holds behind one panel, or nothing at all where there is no such panel.
+
+    A panel is a *reading* of the record rather than a thing the record has a key for, and this is
+    where the two are put back together. A person's panel is the exception and is one key exactly:
+    `turn:{n}:prompt` is that panel and nothing else. Every other panel is a run of parts inside
+    `turn:{n}:messages`, so what comes back is the list of those parts as they are stored - the
+    slice of one value, not a value of its own, which is the honest thing to show.
+
+    JSON-native and not text, because how to render it is the page's to decide: this says what was
+    stored and the page says how wide the indent is.
+    """
+    if at == 0:
+        # `None` here is a turn nobody has reached, not a turn with an empty message: a prompt is
+        # refused before it is recorded, so there is no such thing as one that is nothing.
+        return recorded.get(prompt_key(turn))
+    answered = recorded.get(messages_key(turn))
+    if answered is None:
+        return None
+    for position, _, run in runs(parted(parse_messages(answered)), lambda sourced: kind_of(sourced[0])):
+        if position == at:
+            return [stored_part(answered, source) for _, source in run]
+    return None
 
 
 def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:

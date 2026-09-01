@@ -83,6 +83,13 @@ session index (`sessions.py`) is the one row per session that exists, because
 *not* a copy of changing state, because a session is named after its first message and nothing
 ever renames it.
 
+What the index does *not* hold, it **reaches for rather than copies**. A checkpoint is a row per
+key rather than one value, and both tables are in the one file, so `SELECTION` reads a session's
+repository straight out of its `choice` with a `LEFT JOIN` and `json_extract`: one small row per
+session, and no word of any conversation. That is the shape any further "what is this session on"
+question should take. A column here would be the second copy the whole console is built to avoid,
+and unlike the title it would be a copy of something recorded elsewhere and already authoritative.
+
 The model catalogue (`catalogue.py`) is the one piece of process state that genuinely changes under
 a reader, and it is not an exception either: nothing in it is anything anybody said. It is
 configuration that happens to live at the far end of a request rather than on disk, so it is
@@ -545,8 +552,26 @@ A block is prose, reasoning, or a call with its result; a panel is a run of bloc
 it is what the page draws a coloured edge down. The palette runs on one axis and every kind takes
 its side from it: cool is what reached the model (the person), warm is what the model produced (its
 answer, its reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue
-decided by that rather than chosen for it. A part kind `blocks_of` has no rendering for is passed
+decided by that rather than chosen for it. A part kind `parted` has no rendering for is passed
 over rather than refused, because the provider and Pydantic AI are both free to add one.
+
+Every panel carries a **`recorded` disclosure** showing the JSON the checkpoint holds behind it, and
+three things there are decided rather than incidental:
+
+- **Nothing is stored per panel**, so the panel and its record have to come out of one walk.
+  `parted` is that walk and hands out `Source` indices as it goes; `runs` is the one grouping rule
+  `panelled` and `sourced_at` both use. Recovered by a second pass the indices would be a guess at
+  what the first did, and the skipping in `parted` is exactly what makes that guess wrong from the
+  first unrenderable part onwards - every panel after it would show somebody else's record.
+- **Indices into the stored value, never the parsed part dumped again.** A round trip states what
+  today's Pydantic AI would write, which agrees with the record right up until a release renames a
+  field and then disagrees silently. A person's panel is the exception and is one whole key,
+  `turn:{n}:prompt`.
+- **Fetched on demand and `hx-preserve`d.** The transcript swaps once a second, so the raw record of
+  every panel is not something to carry in it; and because the server renders the disclosure closed,
+  a morph takes the `open` attribute back off unless the element is preserved. htmx reads
+  `hx-preserve` off the *incoming* markup, so taking it off the live node proves nothing. `once` is
+  safe because a panel exists only once what is behind it has stopped changing.
 
 Tests drive the app through `without-http`'s in-memory loopback client (`tests/calling.py`), so
 nothing binds a port and the suite parallelizes. The `app` fixture deliberately runs the console

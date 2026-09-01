@@ -200,6 +200,11 @@ body {
 .session .when {
     color: var(--ink-faint);
     font-size: 0.75rem;
+    /* Fixed width and never broken, so the repository beside it is the thing that gives way. A
+       date wrapped onto two lines costs the row a line and reads as a layout that ran out of
+       room; a repository cut at the tail reads as a name that did not fit, which is what it is. */
+    flex: none;
+    white-space: nowrap;
 }
 
 /* --- The conversation ------------------------------------------------- */
@@ -692,6 +697,76 @@ main > header h1 {
     overflow-x: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+/* --- What the checkpoint holds behind a panel -------------------------- */
+
+/* Quieter than a tool call and for the opposite reason: a call's arguments are part of reading the
+   conversation, where this is the machinery under it. So the summary is a faint word at the end of
+   the panel rather than a box across it, and nothing about a closed one competes with the prose
+   above. */
+.record {
+    margin-top: var(--space-3);
+}
+
+.record > summary {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    list-style: none;
+}
+
+.record > summary::-webkit-details-marker {
+    display: none;
+}
+
+.record > summary::before {
+    content: "\25B8";
+    transition: transform 0.12s ease;
+}
+
+.record[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.record > summary:hover {
+    color: var(--ink-soft);
+}
+
+/* Hidden rather than absent while closed, because htmx swaps into this element and a target that
+   does not exist yet is a swap with nowhere to go. */
+.record:not([open]) .record__json {
+    display: none;
+}
+
+.record__json {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    /* Bounded, because a turn's parts are longer than anything else on the page and an unbounded
+       one would push the composer off the bottom of a conversation somebody is reading. */
+    max-height: 24rem;
+    overflow: auto;
+    /* Wrapped rather than scrolled sideways, which trades the column alignment for being able to
+       read the thing at all: a `content` field holds the whole of what a model said, so a line
+       here runs thousands of characters and the indentation it would preserve is two levels deep.
+       The same trade a tool call's body already makes, for the same reason. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.record__missing {
+    margin: var(--space-2) 0 0;
+    color: var(--ink-faint);
+    font-size: 0.72rem;
 }
 
 /* --- Waiting ---------------------------------------------------------- */
@@ -1645,11 +1720,30 @@ main:has(> .forking) {
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
+    /* A flex item's minimum is its min-content, so without this the repository name floors the row
+       at its own unbreakable width and the sidebar pushes the document sideways rather than
+       cutting the name. */
+    min-width: 0;
+}
+
+/* Which repository the session works in, which is what tells two conversations apart once a
+   console is used to work in more than one. Last in the row and the only thing that shrinks, so a
+   long `owner/repo` is cut rather than the date it sits beside. */
+.session .where {
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
 }
 
 /* Which turn the fork left its parent at, which is the one fact that distinguishes two forks of
    the same conversation from each other. */
 .session .from {
+    flex: none;
     color: var(--mark);
     font-size: 0.68rem;
     font-family: var(--mono);
