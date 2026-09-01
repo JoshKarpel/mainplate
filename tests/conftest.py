@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from without_asgi import ASGIApp
@@ -172,6 +174,52 @@ class Provider:
     def body(self) -> Callable[[Run], Awaitable[Never]]:
         """The workflow body, over the stand-in endpoints."""
         return conversing(self.endpoints(), INSTRUCTIONS)
+
+
+@dataclass(slots=True)
+class Scripted:
+    """
+    A stand-in model that answers with responses written out in advance.
+
+    What `Provider` cannot do, and what a turn with tools in it needs: a response holding
+    `ToolCallPart`s, followed by a different response once the results come back. The script is
+    consumed in order and the last entry answers every request after it, so a test says what the
+    interesting responses are and not how many times the agent will loop.
+
+    `asked` is the point, exactly as it is on `Provider`: a replayed request must not reach the
+    model again, and only a count can tell a replay from a second identical answer.
+    """
+
+    script: tuple[ModelResponse, ...]
+    asked: int = 0
+
+    def model(self) -> FunctionModel:
+        def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            answering = self.script[min(self.asked, len(self.script) - 1)]
+            self.asked += 1
+            return answering
+
+        return FunctionModel(respond)
+
+    def endpoints(self) -> Wires:
+        shared = self.model()
+        return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+
+def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:
+    """
+    One response asking for a batch of tool calls, each named by an id a test can assert on.
+
+    A `Mapping` rather than a `dict`, because `dict` is invariant in its value type and every
+    caller here writes a literal of strings: typed as `dict[str, object]` this would refuse
+    `{"what": "alpha"}` at every call site.
+    """
+    return ModelResponse(
+        parts=[
+            ToolCallPart(tool_name=tool, args=dict(arguments), tool_call_id=f"call-{tool}-{at}")
+            for at, (tool, arguments) in enumerate(wanted)
+        ]
+    )
 
 
 @pytest.fixture

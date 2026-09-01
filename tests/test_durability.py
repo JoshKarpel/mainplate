@@ -2,15 +2,24 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from dataclasses import field
 
 import pytest
+from conftest import INSTRUCTIONS
 from conftest import Provider
+from conftest import Scripted
+from conftest import calls
+from pydantic_ai import Agent
+from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.toolsets import FunctionToolset
 from without_durability.interfaces import claimed
 from without_durability.memory import MemoryCheckpointer
 from without_durability.stepwise import Run
 
+from mainplate.conversation import turn_of
 from mainplate.durability import CheckpointedModel
 from mainplate.durability import Stepping
 from mainplate.durability import StepwiseDurability
@@ -47,11 +56,28 @@ class TestNamingASteppingScope:
     async def test_each_kind_is_numbered_on_its_own(self, checkpointer: MemoryCheckpointer) -> None:
         async with a_pass(checkpointer) as run:
             scope = Stepping(run=run, prefix="turn:0")
-            assert (scope.key("model"), scope.key("tool"), scope.key("model")) == (
+            assert (scope.key("model"), scope.key("tree"), scope.key("model")) == (
                 "turn:0:model:0",
-                "turn:0:tool:0",
+                "turn:0:tree:0",
                 "turn:0:model:1",
             )
+
+    async def test_a_step_whose_order_is_not_fixed_is_named_by_its_own_identity(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        Tool calls in one batch run concurrently, so a counter would name a record by whichever
+        won a race. Asking twice gives the same name, which a counter could never do.
+        """
+        async with a_pass(checkpointer) as run:
+            scope = Stepping(run=run, prefix="turn:3")
+            assert scope.identified("tool", "toolu_017") == scope.identified("tool", "toolu_017")
+            assert scope.identified("tool", "toolu_017") == "turn:3:tool:toolu_017"
+
+    async def test_a_tool_key_still_says_which_turn_it_belongs_to(self, checkpointer: MemoryCheckpointer) -> None:
+        """What a fork reads to carry a prefix of a conversation across without knowing the kinds."""
+        async with a_pass(checkpointer) as run:
+            assert turn_of(Stepping(run=run, prefix="turn:7").identified("tool", "toolu_017")) == 7
 
     async def test_a_scope_is_only_in_force_inside_its_block(self, checkpointer: MemoryCheckpointer) -> None:
         async with a_pass(checkpointer) as run:
@@ -99,6 +125,131 @@ class TestRecordingAModelRequest:
             with pytest.raises(StreamingNotRecorded):
                 async with model.request_stream([], None, ModelRequestParameters()):
                     pass  # pragma: no cover - the refusal happens on the way in
+
+
+@dataclass(slots=True)
+class Noting:
+    """A toolset that records every call it actually performed, so a replay is visible as silence."""
+
+    ran: list[str] = field(default_factory=list)
+
+    def toolset(self) -> FunctionToolset[None]:
+        held = self.ran
+
+        async def note(what: str) -> str:
+            """
+            Note something down.
+
+            Args:
+                what: The thing to note.
+
+            """
+            held.append(what)
+            return f"noted {what}"
+
+        toolset = FunctionToolset[None]()
+        toolset.add_function(note)
+        return toolset
+
+
+def calling(scripted: Scripted, tools: Noting) -> Agent[None, str]:
+    """An agent over a scripted model and a counting toolset, built the way a pass builds one."""
+    return Agent(
+        scripted.model(),
+        name="mainplate",
+        instructions=INSTRUCTIONS,
+        capabilities=[StepwiseDurability()],
+        toolsets=[tools.toolset()],
+    )
+
+
+class TestRecordingAToolCall:
+    async def test_the_tool_runs_once_and_is_replayed_afterwards(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        The reason a tool call has to be a step at all. A tool that reads answers differently every
+        time it is asked, and a tool that writes has already written, so a pass that re-ran one
+        would either resume against a file that moved or repeat an effect.
+        """
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        tools = Noting()
+        agent = calling(scripted, tools)
+
+        for _ in range(3):
+            async with a_pass(checkpointer) as run:
+                with stepping(run, "turn:0"):
+                    answered = await agent.run("go")
+
+        assert answered.output == "done"
+        assert tools.ran == ["alpha"], "the tool ran on the first pass and was replayed on the rest"
+        assert scripted.asked == 2
+
+    async def test_a_call_is_recorded_under_its_own_id(self, checkpointer: MemoryCheckpointer) -> None:
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await calling(scripted, Noting()).run("go")
+
+        assert (await checkpointer.load(WORKFLOW))["turn:0:tool:call-note-0"] == "noted alpha"
+
+    async def test_several_calls_in_one_response_keep_their_results_apart(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        Why the key is the call's id and not its position. A model can ask for several tools at
+        once and they run concurrently, so counting them would name a record by whichever won a
+        race and hand a later pass somebody else's result.
+        """
+        wanted = (("note", {"what": "alpha"}), ("note", {"what": "beta"}), ("note", {"what": "gamma"}))
+        scripted = Scripted(script=(calls(*wanted), ModelResponse(parts=[TextPart("done")])))
+        tools = Noting()
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await calling(scripted, tools).run("go")
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert sorted(tools.ran) == ["alpha", "beta", "gamma"]
+        assert [recorded[f"turn:0:tool:call-note-{at}"] for at in range(3)] == [
+            "noted alpha",
+            "noted beta",
+            "noted gamma",
+        ]
+
+    async def test_a_replayed_call_hands_back_what_the_first_pass_saw(self, checkpointer: MemoryCheckpointer) -> None:
+        """Not just that it is silent, but that the conversation continues on the recorded answer."""
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        tools = Noting()
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await calling(scripted, tools).run("go")
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                answered = await calling(scripted, tools).run("go")
+
+        returns = [
+            part.content
+            for message in answered.all_messages()
+            for part in message.parts
+            if hasattr(part, "content") and part.part_kind == "tool-return"
+        ]
+        assert returns == ["noted alpha"]
+
+    async def test_outside_a_scope_a_tool_is_not_recorded(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        A durable-capable agent stays an ordinary agent outside a scope, which is what keeps one
+        usable in a script or a test. A script apiece, so each run reaches the tool call rather
+        than the second one resuming where the first left the sequence.
+        """
+        tools = Noting()
+
+        for _ in range(2):
+            scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+            await calling(scripted, tools).run("go")
+
+        assert tools.ran == ["alpha", "alpha"], "nothing was recorded, so the tool ran both times"
+        assert await checkpointer.load(WORKFLOW) == {}
 
 
 class TestTheCapabilityItself:

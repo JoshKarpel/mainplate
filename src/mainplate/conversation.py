@@ -10,15 +10,22 @@
 # been said is what has been recorded, so the page renders the checkpoint, a crash resumes from
 # it, and a second process reading the same file sees exactly what the first one did.
 #
-# One key for the session, and four per turn. The whole scheme is here so that the code that
+# One key for the session, and five per turn. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
 #     choice               the endpoint, model, repository and thinking level this session is on,
 #                          written once at creation
 #     turn:{n}:prompt      what the person said, written from outside the pass by `arrive`
-#     turn:{n}:tree        the worktree that turn started on, written by the body before the agent
+#     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
+#     turn:{n}:tool:{id}   what one tool call returned, named by the call's own id
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
+#
+# The two indexed kinds are numbered by *position* within the turn and the tool key deliberately is
+# not. A model request happens in a fixed order, so counting them gives a name that is the same on
+# every pass; a batch of tool calls runs concurrently, so counting those would name them by whoever
+# won a race. A call already carries an id, and that id is part of the model response this
+# conversation recorded, so a replay is handed the same one for free.
 #
 # `choice` is in the checkpoint rather than beside the session's row for the reason everything else
 # is: it has to be the same on every pass and after every restart, and the checkpoint is the thing
@@ -66,6 +73,7 @@ from without_durability.stepwise import StepKey
 from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
 from mainplate.snapshots import Workspace
@@ -97,8 +105,10 @@ def turn_of(key: StepKey) -> int | None:
     the code that builds these names and the code that reads them apart must move together.
 
     It answers about the *shape* rather than about a known list of key kinds, which is what a fork
-    needs: `turn:3:messages`, `turn:3:model:1` and a `turn:3:tool:0` nobody has written yet are all
-    turn 3, so copying a prefix of a conversation does not have to be taught each new kind of step.
+    needs: `turn:3:messages`, `turn:3:model:1`, `turn:3:tool:toolu_017` and a `turn:3:approval:0`
+    nobody has written yet are all turn 3, so copying a prefix of a conversation does not have to be
+    taught each new kind of step. Tool keys are the proof rather than the hypothesis: they arrived
+    after this was written and needed no change here, which is what the shape test buys.
     """
     marker, _, rest = key.partition(":")
     if marker != "turn":
@@ -127,24 +137,32 @@ def messages_key(turn: int) -> StepKey:
     return f"{turn_prefix(turn)}:messages"
 
 
-def tree_key(turn: int) -> StepKey:
+def tree_key(turn: int, at: int) -> StepKey:
     """
-    What the workspace looked like when this turn started.
+    What the workspace looked like before the `at`-th model request of this turn.
 
-    One per turn today, because with no tools nothing changes the worktree *during* one: the only
-    writer between two turns is the person, editing in whatever they have the directory open in.
-    When tools arrive this becomes one per model request, numbered by `Stepping` alongside
-    `turn:{n}:model:{i}`, because a model request is the boundary at which no tool is running and
-    so the only point where the tree is a coherent thing to read at all.
+    One per model request rather than one per turn, because with tools the worktree changes
+    *during* a turn and a single snapshot at the top would describe only the state the first
+    request saw. A model request is also the only honest place to take one: it is the boundary at
+    which every tool of the previous batch has returned, where a capture between two calls of the
+    same batch would record a tree the other calls were still writing to.
+
+    Written by `Stepping.snapshot`, which builds the same name from the turn's prefix, so the
+    numbering here and the numbering of `turn:{n}:model:{i}` advance together.
     """
-    return f"{turn_prefix(turn)}:tree"
+    return f"{turn_prefix(turn)}:tree:{at}"
 
 
-def parse_tree(recorded: object) -> str | None:
-    """A recorded tree hash, or nothing at all for a turn taken with no workspace configured."""
-    if recorded is None or isinstance(recorded, str):
-        return recorded
-    raise TypeError(f"a tree must be a hash or nothing, not {recorded!r}")
+def opening_tree_key(turn: int) -> StepKey:
+    """
+    The tree a turn *started* on, which is the one two other things mean by "this turn's tree".
+
+    A fork plants its worktree at it, so a branch re-asks its question against the files that
+    question was asked about; and the person's panel shows it, because that is where the fork link
+    already is and what going back to this turn would put on disk. Both want the state before the
+    turn did anything, which is the snapshot taken before its first model request.
+    """
+    return tree_key(turn, 0)
 
 
 def parse_prompt(recorded: object) -> str:
@@ -541,7 +559,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answered = recorded.get(messages_key(turn))
         if answered is None:
             break
-        panels.append(said_by(turn, parse_prompt(asked), parse_tree(recorded.get(tree_key(turn)))))
+        panels.append(said_by(turn, parse_prompt(asked), parse_tree(recorded.get(opening_tree_key(turn)))))
         panels.extend(panelled(turn, blocks_of(parse_messages(answered))))
         turn += 1
     # Several, because a person can type again while a reply is still coming. Those messages are
@@ -549,7 +567,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     # showing only the first would be hiding a message somebody had already sent.
     awaiting = False
     while (waiting := recorded.get(prompt_key(turn))) is not None:
-        panels.append(said_by(turn, parse_prompt(waiting), parse_tree(recorded.get(tree_key(turn)))))
+        panels.append(said_by(turn, parse_prompt(waiting), parse_tree(recorded.get(opening_tree_key(turn)))))
         awaiting = True
         turn += 1
     return Transcript(panels=tuple(panels), awaiting=awaiting, turns=turn)
@@ -616,25 +634,6 @@ def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
     return record
 
 
-def snapshotting(workspace: Workspace | None, turn: int) -> Callable[[], Awaitable[object]]:
-    """
-    What a turn records about the workspace it starts on, as the effect `Run.step` takes.
-
-    A step rather than a plain read, and that is the rule the mechanism asks for rather than a
-    preference: reading a worktree returns a different answer every time it is asked, so a pass
-    that re-read it would resume a conversation against a directory that has moved since. Recorded
-    once, every later pass is handed the hash the first one saw.
-
-    No workspace records `None` rather than nothing at all, so a turn taken before one was
-    configured is distinguishable from a turn nobody has reached yet.
-    """
-
-    async def capture() -> object:
-        return None if workspace is None else await workspace.capture(f"turn {turn}")
-
-    return capture
-
-
 class NoSuchRepository(LookupError):
     """
     A session names a repository no forge reaches and nothing has ever cloned.
@@ -657,10 +656,25 @@ async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn
     """
     if workspaces is None or chosen.repository is None:
         return None
-    planted = await workspaces.plant(run.workflow, chosen.repository, tree=parse_tree(run.recorded.get(tree_key(turn))))
+    at = parse_tree(run.recorded.get(opening_tree_key(turn)))
+    planted = await workspaces.plant(run.workflow, chosen.repository, tree=at)
     if planted is None:
         raise NoSuchRepository(f"no forge reaches {chosen.repository!r} and it has never been cloned")
     return planted
+
+
+def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> Workspace | None:
+    """
+    Where this session's files are, as a value, without asking whether they are there yet.
+
+    A path rather than a planted worktree, because it is needed *before* the pass reaches the turn
+    that plants one: the agent is built once per pass and its file tools are bound to this root,
+    and the snapshot scope needs the same root for the same reason. Naming a directory cannot
+    fail, and nothing here touches it until a tool is called, which is after `planting` has run.
+    """
+    if workspaces is None or chosen.repository is None:
+        return None
+    return workspaces.workspace(session)
 
 
 def conversing(
@@ -692,7 +706,11 @@ def conversing(
         chosen = choice_of(run.recorded)
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no endpoint, so it was never started by this console")
-        agent = agent_for(endpoints, chosen, instructions)
+        # One value for the session's files, used twice: the agent's tools are bound to it, and
+        # every snapshot inside a turn is taken of it. A session with no repository has none, and
+        # gets an agent with no file tools rather than tools that refuse every call.
+        workspace = working_in(workspaces, run.workflow, chosen)
+        agent = agent_for(endpoints, chosen, instructions, workspace=workspace)
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
@@ -705,17 +723,18 @@ def conversing(
             # It is an effect outside a step, and that is sound rather than an exception: what it
             # does is make a directory exist, which is the same on every pass, so there is no
             # result to record and nothing for a replay to disagree with.
-            workspace = await planting(workspaces, run, chosen, at.turn)
-            # After the prompt and before the agent, which is the one moment in a turn when the
-            # worktree is nobody's business but the person's: they have just sent a message, so
-            # whatever they were editing they have stopped editing. It is also the state a rewind
-            # to this turn puts back.
-            await run.step(tree_key(at.turn), snapshotting(workspace, at.turn), parse_tree)
+            await planting(workspaces, run, chosen, at.turn)
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
             # from zero within it, so a turn's keys do not depend on how many turns preceded it in
             # this pass. A pass that resumes mid-conversation issues its first request under
             # `turn:7:model:0` exactly as the pass that first reached turn 7 did.
-            with stepping(run, turn_prefix(at.turn)):
+            #
+            # The snapshots are inside this rather than taken here, and that is what the workspace
+            # is handed over for. One per model request is the only cadence that holds once tools
+            # can write: the first is taken before the model is asked anything, which is the state
+            # a rewind to this turn puts back, and each later one records what the previous batch
+            # of calls left behind.
+            with stepping(run, turn_prefix(at.turn), workspace):
                 answered = await agent.run(prompt, message_history=list(at.history))
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             at = Reached(turn=at.turn + 1, history=(*at.history, *said))

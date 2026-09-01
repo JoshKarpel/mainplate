@@ -33,11 +33,11 @@ from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
+from mainplate.conversation import opening_tree_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import sourced_at
 from mainplate.conversation import transcript
-from mainplate.conversation import tree_key
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.reference import References
@@ -290,9 +290,9 @@ class Service:
         #
         # Recorded here rather than planted here for the reason `start` clones nothing: this is a
         # request, and a checkout is not.
-        started_on = recorded.get(tree_key(at))
+        started_on = recorded.get(opening_tree_key(at))
         if started_on is not None:
-            await self.checkpointer.supply(forked.id, tree_key(at), started_on)
+            await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
         if said:
             await self.say(forked.id, turn=at, said=said)

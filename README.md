@@ -7,9 +7,10 @@ a durable workflow rather than a process's memory. Ask it something, kill the se
 again: the session is where you left it, and the reply that was in flight is answered rather than
 lost.
 
-It is early and it is experimental. Today the agent has no tools, so what it does is chat; what
-the work so far is about is the substrate underneath, because a coding agent that forgets what it
-was doing when its process dies is the failure worth designing out first.
+It is early and it is experimental. A session that picks a repository gets a git worktree of its
+own and the agent can read, edit and create files in it; the work so far is mostly about the
+substrate underneath, because a coding agent that forgets what it was doing when its process dies
+is the failure worth designing out first.
 
 ## Running it
 
@@ -222,19 +223,74 @@ The two things a pass writes are what make the second run cheap and the first on
 
 - **`run.step(messages_key(turn), ...)`** records the messages a turn produced, so resuming reads
   the history back instead of re-driving the agent over every past turn.
-- **`stepping(run, ...)`** puts the agent's *model requests* through the checkpoint, one recorded
-  step each, so a pass that reaches the provider and then dies does not pay for that answer twice.
+- **`stepping(run, ...)`** puts the agent's *model requests and tool calls* through the checkpoint,
+  one recorded step each, so a pass that reaches the provider and then dies does not pay for that
+  answer twice, and a tool that already read a file or wrote one is not run again against a
+  directory that has moved since.
 
 That second one is a Pydantic AI **capability**, `StepwiseDurability`, in the same shape as the
 bundled Temporal, DBOS, and Prefect ones: attach it to an agent and, inside a session, every model
-request becomes a recorded step. Outside one it does nothing at all, so the same agent is an
-ordinary agent in a script or a test.
+request and every tool call becomes a recorded step. Outside one it does nothing at all, so the
+same agent is an ordinary agent in a script or a test.
 
 It is built on `AbstractCapability` and `WrapperModel`, the surface Pydantic AI documents for
 third-party integrations, rather than on the internals the bundled three share. Most of what that
 base class carries is about crossing a *serialization* boundary, and there is no such boundary
 here: the workflow body runs in this process, only a step's result is ever encoded, so the model
 instance is simply in scope.
+
+## How the agent edits files
+
+A session that picked a repository gets `read`, `edit` and `create`, bound to that session's own
+git worktree and refusing any path outside it. A session that picked no repository gets no tools at
+all, which is what this console was before there were repositories: a place to talk.
+
+**A line is addressed by a hash of its own content, not by its position.** A read puts a four-letter
+anchor in front of every line:
+
+```text
+app.py, 6 lines
+
+cxec def greet(name):
+infr     return f"hello {name}"
+
+
+zafq def farewell(name):
+vhvn     return f"bye {name}"
+```
+
+A line number is the one address that cannot fail: an edit above shifts everything below it and
+`47` still resolves, so a stale line number silently edits the wrong place. An anchor either
+resolves to exactly one line or does not resolve at all, so the same mistake is a refusal that says
+to read the file again. It also means the model never retypes the text it is replacing, which is
+the expensive half of a search-and-replace edit.
+
+Nothing is stored between calls. Anchors are recomputed on every read, and where two lines would
+share one, each takes in the line above it until they differ. Blank lines get no anchor: they are
+17% of the lines in a typical file and none of them is unique on its own content, so they were the
+largest single source of both cost and instability.
+
+An `edit` takes a **list** of operations, resolved against one reading of the file and applied
+together, so operations in one call cannot shift each other and a batch that contradicts itself is
+refused entire rather than half-applied. Which lines a span covers is said by the field name rather
+than by a flag:
+
+```json
+{"op": "splice", "from": "zafq", "before": "vhvn", "text": ""}
+```
+
+`from` and `to` are inside the span; `after` and `before` are outside it. One of them alone inserts
+at that point. That is also how a span reaches blank lines: deleting a function and the blank lines
+after it names the *next* code line with `before`, so it neither names a blank nor retypes the line
+it stops short of. A `substitute` operation replaces text inside one anchored line, for when
+retyping a whole paragraph to change a word is the wasteful part.
+
+Every reply shows the changed regions with their new anchors, and names any anchor elsewhere in the
+file that changed as a result, so a run of edits needs no re-read in between.
+
+There is deliberately no tool that overwrites a whole file. `create` refuses a path that already
+exists, because a tool that rewrites a file wholesale is the escape hatch that makes all of this
+pointless: the first refused edit becomes a full rewrite, discarding whatever had not been read.
 
 ## The console
 
@@ -274,9 +330,10 @@ you cannot write one in.
 
 Named plainly, because they are the next things rather than omissions nobody noticed:
 
-- **No tools.** The agent is a model and some instructions. Tool calls become another kind of
-  recorded step, which is the shape `Stepping.key` already numbers. The console reads and draws
-  them already, so a toolset is the change; the panel it appears in is not.
+- **Three file tools, and no way to run anything.** The agent reads, edits and creates files in its
+  worktree, and cannot run a command, search across files, or list a directory. Each of those is
+  another tool on the same toolset rather than a change to anything under it, since a tool call is
+  already a recorded step and the console already draws one.
 - **Two API formats, not every format.** An endpoint's `format` takes `anthropic` or `openai`, which
   between them cover most gateways. A third is one `Endpoint` class saying how to name a model over
   that format and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.
@@ -285,9 +342,9 @@ Named plainly, because they are the next things rather than omissions nobody not
   onto an endpoint that still exists is the way out. A model dropping out of the picker is *not* that
   case and does not stop a session, since an endpoint routes more ids than it advertises.
 - **Snapshots are kept but not yet restored.** A session that picked a repository works in a
-  worktree of its own, every turn records the tree it started on, and a fork is checked out at the
-  tree the forked turn saw. What is missing is a rewind: putting an *existing* session's files back
-  to an earlier turn.
+  worktree of its own, the tree is recorded before every model request, and a fork is checked out
+  at the tree the forked turn saw. What is missing is a rewind: putting an *existing* session's
+  files back to an earlier point.
 - **One forge, and it is exe.dev's.** `ExeDevGitHub` reads the GitHub integrations attached to a
   VM. Anywhere else it reaches nothing, so the picker does not appear and the console is a place to
   talk. Reaching GitHub through an App, so this works off exe.dev, is another class behind the same

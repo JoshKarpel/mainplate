@@ -113,16 +113,29 @@ with nothing to dereference.
 
 ## The key scheme
 
-One key for the session and four per turn, written by five different places and read by four:
+One key for the session and five per turn, written by five different places and read by four:
 
 ```text
 choice               the endpoint, model, repository and thinking level; written by `Service.start`
                      and by `Service.fork`, before the prompt
 turn:{n}:prompt      the person's message; written from outside a pass, by `Service.say`
-turn:{n}:tree        the worktree that turn started on; written by the conversation body
+turn:{n}:tree:{i}    the worktree before the i-th model request; written by `StepwiseDurability`
 turn:{n}:model:{i}   the i-th model response of that turn; written by `StepwiseDurability`
+turn:{n}:tool:{id}   what one tool call returned; written by `StepwiseDurability`
 turn:{n}:messages    what the agent run produced; written by the conversation body
 ```
+
+**The two indexed kinds are numbered by position and the tool key deliberately is not.** Model
+requests happen in a fixed order, so counting them names a step the same way on every pass, and the
+tree captured before each one rides the same counter so `tree:{i}` and `model:{i}` are the two
+halves of one request. A *batch* of tool calls runs concurrently, so counting those would name a
+record by whichever won a race and hand a later pass somebody else's result. A call already carries
+an id, and that id is part of the model response the conversation recorded, so a replay is handed
+the same one for free. `Stepping.key` is the positional form and `Stepping.identified` is the other.
+
+`opening_tree_key(n)` is `turn:{n}:tree:0`, and it is what two things mean by "this turn's tree": a
+fork plants its worktree at it, and the person's panel shows it. Both want the state before the turn
+did anything.
 
 `choice` goes in before the first prompt and never again *within a session*. The order is
 load-bearing: the prompt is what *queues* a session, so writing it first would let a worker take the
@@ -132,14 +145,18 @@ changes, and it changes it by making a different session rather than by rewritin
 
 `turn_of` is the inverse of `turn_prefix`, and it answers about the key's *shape* rather than
 against a list of known kinds. That is what lets `before` carry a whole prefix of a conversation
-into a fork without being taught each new kind of step: a `turn:3:tool:0` nobody has written yet is
-turn 3 already.
+into a fork without being taught each new kind of step: a `turn:3:approval:0` nobody has written yet
+is turn 3 already, and `turn:3:tool:toolu_017` was too before anything read tool keys.
 
-They all live in `conversation.py` so that the code writing them and the functions reading them
-(`choice_of` and `reached` for the body, `transcript` for the page, `before` for a fork) cannot
-drift apart. The tests in `test_conversation.py` assert the shape against literal recorded values
-rather than round-tripping through the writer, so a change to the scheme has to be made in both
-places.
+**The names are built in two places and have to agree.** `conversation.py` names them for the
+readers (`prompt_key`, `tree_key`, `opening_tree_key`, `messages_key`, read by `choice_of` and
+`reached` for the body, `transcript` for the page, `before` for a fork, `planting` for a fork's
+worktree). `Stepping` in `durability.py` builds them for the writers, from a turn prefix and a kind,
+which is what lets one capability name a step without importing the conversation. `tree_key(n, i)`
+and `Stepping.key("tree")` therefore produce the same string from opposite ends, and nothing
+enforces that: change one and change the other. The tests in `test_conversation.py` assert the shape
+against literal recorded values rather than round-tripping through the writer, which is what turns a
+drift into a failure rather than a silently unfindable record.
 
 ## Endpoints, discovery, and per-session auth
 
@@ -388,7 +405,9 @@ their staged changes, not `HEAD`, not a branch, not `git log`. Four things there
   after each tool call. A model can issue several calls in one response and they run at once; while
   they do, `git add -A` walks a tree somebody is still writing to and records a mixture that never
   existed. Between one model request and the next, every tool of the previous batch has returned by
-  construction.
+  construction. That is why `Stepping.snapshot` is called from `CheckpointedModel.request` and
+  nowhere else: it is the one place in the process that stands at that boundary. A replayed request
+  replays its snapshot too, so a later pass runs no git at all and the pair cannot drift.
 
 Snapshots are **gitignore-aware**, deliberately. A rewind then restores what is version-controlled
 and leaves the environment alone, which is what makes the motivating case work: a tool fails for
@@ -402,9 +421,10 @@ head instead would ask the new model to redo turn 3 against whatever the disk ho
 different question wearing the same words and invisible in the transcript.
 
 The mechanism is one extra key rather than a checkout in a request handler: `Service.fork` copies
-`turn:{at}:tree` across on its own, even though that turn's prompt and messages are *not* inherited,
-and the fork's first pass plants at whatever tree is already recorded for the turn it is about to
-run.
+`turn:{at}:tree:0` across on its own, even though that turn's prompt and messages are *not*
+inherited, and the fork's first pass plants at whatever tree is already recorded for the turn it is
+about to run. The `:0` is the point: a turn now records a tree per model request, and what a fork
+wants is the one before the turn did anything.
 
 **A fork may attach a repository and may not swap one.** The two look alike and are not. Swapping
 re-asks a turn against different files, which is a different question wearing the same words and
@@ -418,6 +438,78 @@ of trust actually produced.
 `Workspace.restore` is written and tested but nothing calls it yet: today a snapshot is a record of
 what disk looked like, not something to go back to.
 
+## How a model names a line
+
+`anchors.py` is pure and `files.py` is the shell around it, which is the split that lets the
+interesting half be tested with a list of strings. A session with a repository gets `read`, `edit`
+and `create` bound to its own worktree; a session with none gets **no toolset at all**, because
+three tools that can only fail are worse than none and cost a description on every request.
+
+**A line is addressed by a hash of its own content.** A line number is the one address that cannot
+fail, so a stale one silently edits the wrong place; a content hash either resolves to exactly one
+line or does not resolve, which turns that into a loud refusal. It also means the model never
+retypes what it is replacing, which is the expensive half of a search-and-replace edit and the half
+that lands in *output* tokens.
+
+Four things about the scheme were measured against this repository rather than chosen, and the
+numbers are the reason not to "simplify" any of them:
+
+- **Four lowercase letters.** 26^4 expects about one collision per thousand distinct lines. Three
+  base62 characters, which the published implementations of this idea use, collide 88% of the time
+  over a thousand lines, which is why they need probe-based tie-breaking and then a persistent store
+  to keep the probe order stable. One more character deletes that whole tower.
+- **Letters, not digits.** OpenAI's tokenizer packs digit runs three to a token, so digits look
+  ideal there; Qwen and StarCoder2 spend one token per digit, where a six-digit anchor costs three
+  times as much. Four lowercase letters cost 2.4 to 3.1 extra tokens per line on every tokenizer
+  tested. A plain space separator costs a token per line less than a box-drawing character.
+- **Blank lines get no anchor.** They are 17% of the lines here and *none* is unique on its own
+  content, so they were the largest single source of both overhead and instability. Leaving them out
+  takes the share of lines unique on their own content from 62.5% to 75.6% and cuts the lines
+  needing three or more lines of context by 41%.
+- **A duplicate line and a hash collision are the same problem**, so one rule answers both: where
+  two lines share an anchor, extend each with the line before it and hash again. About 24% of
+  anchorable lines need one line of context and 5% need two, capped at `MAX_DEPTH`; past that a line
+  is inside a run nothing tells apart and gets no anchor, which the model routes around.
+
+The cost of that last rule is the thing to know before changing it: an extended anchor depends on
+its neighbours, so an edit just above one invalidates it. Measured here, a single-line edit
+invalidates 0.59 anchors and 0.13 of those are more than five lines away. **Both are answered by
+what the reply says rather than by making anchors survive changes they should not survive**: the
+changed regions come back with fresh anchors, and any anchor that moved elsewhere comes back as an
+explicit remapping. `written` has both tables in hand, so the remapping costs a comparison rather
+than any state kept between calls. There is deliberately no store of anything.
+
+`edit` takes a **list** of operations, resolved against one reading of the file and applied
+together. That is the thing content addressing buys that search-and-replace cannot: overlap is
+*decidable* before anything is written, so a contradictory batch is refused entire instead of
+resolved in an order nobody chose.
+
+Which lines a span covers is said by the **field name**, so there is no inclusive-or-exclusive flag
+to get backwards: `from`/`to` are inside the span and `after`/`before` are outside it. One bound
+alone inserts there, and only the exclusive forms may do that, since an inclusive bound with no
+partner does not describe a span. The exclusive forms are also how a span reaches a blank line,
+which has no anchor: deleting a function and the blanks after it is `from` its first line `before`
+the next code line.
+
+Two things are refusals rather than omissions. **There is no `write`**: a tool that overwrites a
+whole file is the escape hatch that makes anchored editing pointless, since the first refused edit
+becomes a full rewrite that discards whatever was not read. `create` refuses an existing path.
+And **the formatter is not wired into `edit`**, which was tried and dropped: exclusive bounds fix
+the addressing gap that made blank-line hygiene awkward, where a formatter would only have tidied
+the symptom, at the price of a per-repository configuration decision on every write.
+
+Everything a tool turns down reaches the model as a `ModelRetry`, because all of it is correctable
+from the message: a stale anchor, a `find` occurring twice, a batch that overlaps. `RETRIES` is
+above Pydantic AI's default of one for that reason, and the reason is observed rather than
+theoretical - a smaller model got an operation's shape wrong once and the default turned a
+correctable mistake into a failed turn.
+
+`Text` carries the two things `splitlines` throws away, the line endings and the final newline, and
+`files.py` reads and writes with `newline=""` so universal-newline translation does not quietly
+normalise a CRLF file. Without both halves an edit to one line is a diff on every line of the file,
+attributed to an edit that touched one. It splits on `\n` and not with `splitlines`, which also
+breaks on form feed - a page break some source files genuinely use.
+
 ## Durability
 
 `StepwiseDurability` is a Pydantic AI capability on the *public* extension surface,
@@ -426,21 +518,35 @@ the bundled Temporal/DBOS/Prefect capabilities share, and their module docstring
 almost everything in them is about crossing a serialization boundary that does not exist here,
 since `without-durability` runs the body in this process. Do not reach for them.
 
-The capability finds its checkpoint through a `ContextVar` set by `stepping(run, prefix)`, because
-no Pydantic AI hook carries one. Outside such a block it is transparent, which is what keeps a
-durable-capable agent usable in a script or a test.
+The capability finds its checkpoint through a `ContextVar` set by `stepping(run, prefix, workspace)`,
+because no Pydantic AI hook carries one. Outside such a block it is transparent, which is what keeps
+a durable-capable agent usable in a script or a test.
+
+It wraps two things, `wrap_model_request` and `wrap_tool_execute`, and the second is required rather
+than an optimisation. A tool that *reads* answers differently every time it is asked, so a pass that
+re-ran one would resume the conversation against a file that moved since the model was told what it
+said. A tool that *writes* has already written, and re-running it here fails against anchors its own
+first run invalidated, which is a refusal for an edit that actually succeeded.
 
 Two rules the mechanism asks for, both easy to break silently:
 
 - **Effects live in steps; the code around them is pure.** A pass re-runs the body from the top,
   so anything between steps runs again. Nothing enforces this.
-- **A step's key must be stable across passes.** `Stepping` numbers requests positionally within
-  a turn, so a pass that issues its model requests in a different order finds the wrong records.
+- **A step's key must be stable across passes.** `Stepping.key` numbers positionally within a turn,
+  so a pass that issues its model requests in a different order finds the wrong records. Anything
+  whose order is *not* fixed must use `Stepping.identified` instead; see the key scheme.
 
 `Run.step` records what the *codec* takes, which is stdlib `json`: a value has to be JSON-native
 going in, and comes back as an `object` needing a `Parse` on the way out. That is why every step
 here pairs a `dump_python(..., mode="json")` with a matching parser, on the pass that ran it as
-much as on the one that resumed.
+much as on the one that resumed. A tool return goes through `to_jsonable_python` and comes back
+unnarrowed, because a toolset is unrelated functions with unrelated return types and there is no one
+type to validate against; both passes see the round trip, so they agree.
+
+This is `step` and not `transact`, so a tool is **at-least-once**: a crash between the tool
+returning and the record landing re-runs it next pass. That window is one store round trip, and
+anchored editing is what makes the failure mild rather than corrupting, since an edit whose anchors
+no longer resolve is refused rather than applied somewhere wrong.
 
 ## The systemd unit
 
@@ -458,9 +564,11 @@ accident:
 - **The environment file is written once and never overwritten.** It holds the credential, so an
   install that rewrote it would delete the key on every upgrade.
 
-There is no `Protect*`/`ReadWritePaths` hardening, deliberately: this project's whole direction is
-an agent that edits repositories, so a sandbox written for today's no-tools console would be wrong
-at the first tool, and one loose enough to survive that protects nothing.
+There is no `Protect*`/`ReadWritePaths` hardening, deliberately. The agent edits repositories, so
+the paths it legitimately writes are the worktree root and everything under it, which is exactly
+what a `ReadWritePaths` would have to name; the boundary that actually holds is `Files.resolved`,
+which resolves every path and refuses anything that lands outside the session's own worktree. A unit
+sandbox loose enough to permit the worktree protects nothing the tools do not already refuse.
 
 ## Dependencies
 

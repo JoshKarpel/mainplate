@@ -24,10 +24,12 @@
 # over it, and how to ask it what it serves. They are together because they are the same knowledge,
 # and because a third format should be one class rather than an edit in three files.
 #
-# No tools yet, deliberately: the thing worth getting right first is that a conversation survives
-# the process running it, and a tool call is another effect to record rather than a different kind
-# of one. When tools arrive they are a toolset on these agents, and `StepwiseDurability` is where
-# the recording of their calls will go.
+# The file tools hang off the agent as a toolset, and they hang off it *per session* rather than
+# once for the process, because what makes a path safe is the worktree it is resolved inside and
+# every session has its own. A session with no repository is built with no toolset at all: a console
+# used to talk rather than to edit is what this was before there were repositories, and three tools
+# that can only fail are worse than none. `StepwiseDurability` is what records the calls, on the
+# same capability that already records the model requests.
 
 from __future__ import annotations
 
@@ -52,6 +54,9 @@ from pydantic_ai.settings import ThinkingLevel
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.durability import StepwiseDurability
+from mainplate.files import Files
+from mainplate.files import file_tools
+from mainplate.snapshots import Workspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,7 +401,23 @@ def build_wires(config: Config) -> Wires:
     return Wires(by_endpoint={name: build_wire(endpoint) for name, endpoint in config.endpoints.items()})
 
 
-def agent_for(wires: Wires, chosen: Choice, instructions: str) -> Agent[None, str]:
+def working_note(workspace: Workspace) -> str:
+    """
+    What the agent is told about the directory its tools reach, which is where it is and nothing more.
+
+    How to *use* the tools is on the tools, because that is where it stays true: a description of
+    the anchor scheme written here would be a second copy of what `files.py` already says, kept in
+    step by hand. What cannot live there is which directory this session got, since a toolset is
+    built per session and its own description is not.
+    """
+    return (
+        f"You are working in a git worktree at {workspace.root}. The file tools take paths relative "
+        f"to it and reach nothing outside it. Changes you make there are snapshotted automatically; "
+        f"you never need to commit, and you should not run git commands to record your work."
+    )
+
+
+def agent_for(wires: Wires, chosen: Choice, instructions: str, workspace: Workspace | None = None) -> Agent[None, str]:
     """
     The agent one session is answered by, built for the pass that is about to run it.
 
@@ -408,11 +429,19 @@ def agent_for(wires: Wires, chosen: Choice, instructions: str) -> Agent[None, st
     The settings come off the choice rather than being passed in, because they are recorded with it
     and are as fixed as it is: a pass that resumed a session at a different effort would continue a
     conversation whose earlier answers were reasoned at another.
+
+    **A session with no workspace gets no file tools at all**, rather than tools that refuse every
+    call. A console being used to talk rather than to edit is what this was before there were any
+    repositories, and offering a model three tools that cannot work is worse than offering none:
+    it spends the description on every request and invites a call that can only fail.
     """
+    tools = [] if workspace is None else [file_tools(Files(root=workspace.root))]
+    spoken = instructions if workspace is None else f"{instructions}\n\n{working_note(workspace)}"
     return Agent(
         wires.for_endpoint(chosen.endpoint).model(chosen.model),
         name="mainplate",
-        instructions=instructions,
+        instructions=spoken,
         model_settings=chosen.settings,
         capabilities=[StepwiseDurability()],
+        toolsets=tools,
     )

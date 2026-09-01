@@ -32,9 +32,14 @@ class TestReadingAKeyBack:
             ("turn:0:prompt", 0),
             ("turn:7:messages", 7),
             ("turn:12:model:3", 12),
-            # A step kind nothing writes yet. The point of reading the shape rather than a list of
-            # known kinds: a fork carries the whole of a turn without being taught each new one.
-            ("turn:4:tool:0", 4),
+            ("turn:12:tree:3", 12),
+            # Named by the call's own id rather than by a position, so the last segment is not a
+            # number and this still has to read the *shape* rather than parse the whole key.
+            ("turn:4:tool:toolu_017", 4),
+            # A step kind nothing writes yet, which is the point of reading the shape rather than a
+            # list of known kinds: a fork carries the whole of a turn without being taught each new
+            # one. Tool keys were this case until they arrived, and needed no change here.
+            ("turn:9:approval:0", 9),
             ("choice", None),
             ("turn:notanumber:prompt", None),
             ("nonsense", None),
@@ -49,13 +54,23 @@ class TestReadingAKeyBack:
             prompt_key(0): "first",
             messages_key(0): [],
             "turn:0:model:0": {"kind": "response"},
+            "turn:0:tree:0": "a1b2c3",
+            "turn:0:tool:toolu_017": "noted",
             prompt_key(1): "second",
             messages_key(1): [],
             prompt_key(2): "third",
         }
         carried = before(recorded, 2)
 
-        assert set(carried) == {prompt_key(0), messages_key(0), "turn:0:model:0", prompt_key(1), messages_key(1)}
+        assert set(carried) == {
+            prompt_key(0),
+            messages_key(0),
+            "turn:0:model:0",
+            "turn:0:tree:0",
+            "turn:0:tool:toolu_017",
+            prompt_key(1),
+            messages_key(1),
+        }
         assert CHOICE_KEY not in carried, "the branch answers the choice itself"
 
 

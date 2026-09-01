@@ -292,10 +292,12 @@ class Unit:
         The unit file this install would have.
 
         Deliberately unhardened: no `ProtectSystem`, no `ReadWritePaths`, no `NoNewPrivileges`.
-        Those are worth adding to a service whose reach is known, and this one's is about to
-        change: the point of the project is an agent that edits repositories, so a sandbox written
-        now would describe today's no-tools console and be wrong at the first tool. The
-        alternative, a sandbox loose enough to survive that, protects nothing.
+
+        The agent edits repositories, so the paths it legitimately writes are the worktree root and
+        everything beneath it, which is exactly what a `ReadWritePaths` would have to name. The
+        boundary that actually holds is `Files.resolved`, which resolves every path a tool is given
+        and refuses one landing outside the session's own worktree; a unit sandbox loose enough to
+        permit that root protects nothing the tools do not already refuse.
         """
         return UNIT.format(
             executable=self.executable,

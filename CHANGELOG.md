@@ -12,10 +12,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A chat console over a Pydantic AI agent, where each session is a durable workflow under
   `without-durability`'s SQLite store: the checkpoint *is* the conversation, so a session survives
   a restart and a reply in flight is answered rather than lost.
-- `StepwiseDurability`, a Pydantic AI capability that routes an agent's model requests through the
-  running session's checkpoint, so a pass that reaches the provider and then dies does not pay for
-  that answer twice. It is transparent outside a session, so the same agent stays usable in a
-  script or a test.
+- `StepwiseDurability`, a Pydantic AI capability that routes an agent's model requests *and* its
+  tool calls through the running session's checkpoint, so a pass that reaches the provider and then
+  dies does not pay for that answer twice, and a tool that has already read a file or written one
+  is not run again against a directory that has moved since. Model requests are numbered by
+  position within the turn; tool calls are keyed by the call's own id instead, because a batch of
+  them runs concurrently and a counter would name a record by whichever won the race. It is
+  transparent outside a session, so the same agent stays usable in a script or a test.
 - `mainplate serve`, which runs the console and the worker that answers its sessions over one
   SQLite file.
 - A conversation read as panels of blocks, so reasoning and a tool call each get their own panel
@@ -68,14 +71,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one for another: re-asking a turn against different files is a different question, where carrying
   on with files where there were none is the ordinary shape of thinking something through and then
   going to work on it.
-- Git snapshots: a session that picked a repository gets a worktree of its own and each
-  turn records the tree it started on. Snapshots go through a shadow index, so nothing a reader can
+- Git snapshots: a session that picked a repository gets a worktree of its own, and the tree is
+  recorded before every model request rather than once per turn, so a turn that edits files records
+  the state on each side of the work. A model request is the only boundary where that is honest:
+  the tools of the previous batch have all returned, where a capture between two calls of one batch
+  would record a tree the other calls were still writing to. Snapshots go through a shadow index,
+  so nothing a reader can
   see moves - not their staged changes, not `HEAD`, not a branch, not `git log` - and are chained
   under `refs/mainplate/snapshots` so they survive `git gc`. An unchanged worktree writes no new
   object at all. Forking checks the new session's worktree out at the tree the forked turn
   originally saw, so a branch re-asks its question against the files that question was asked about.
   Snapshots are gitignore-aware, so going back to a turn restores what is version-controlled and
   leaves the environment alone.
+- File tools, on sessions that picked a repository: `read`, `edit`, and `create`, bound to that
+  session's own worktree and refusing any path outside it. Lines are addressed by a four-letter
+  anchor derived from the line's own content rather than by a line number, so an edit elsewhere in
+  the file leaves other anchors valid and a line that has changed since it was read is a loud
+  refusal instead of a silent edit in the wrong place. Nothing is stored between calls: the anchors
+  are recomputed on every read, and where two lines would share one they take in the line above
+  until they differ.
+- An `edit` that names a span by its ends, with the field name saying whether each end is inside it
+  (`from`/`to`) or outside it (`after`/`before`). One end alone inserts there. Blank lines carry no
+  anchor, so an exclusive end is how a span reaches them: deleting a function and the blank lines
+  after it names the next code line with `before` and neither names a blank nor retypes that line.
+  A `substitute` operation replaces text inside one anchored line, for when retyping a whole line
+  of prose to change a word is the wasteful part. Operations are given as a list, resolved against
+  one reading of the file and applied together, so they cannot shift each other and a batch whose
+  operations overlap is refused entire rather than resolved in an order nobody chose. Every reply
+  shows the changed regions with their new anchors, and names any anchor elsewhere in the file that
+  changed as a result, so a run of edits needs no re-read between them.
+- There is deliberately no tool that overwrites a whole file. `create` refuses a path that already
+  exists, so making a file and changing one stay separate operations: a tool that rewrote a file
+  wholesale would be the escape hatch from anchored editing, discarding whatever had not been read.
 - The repository a session works in, on its row in the sidebar, as `owner/repo` while a forge
   reaches it and the recorded id once none does. It is read out of the session's own `choice` with
   one join rather than held in the index: a checkpoint is a row per key, so this costs one small

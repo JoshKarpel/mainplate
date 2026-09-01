@@ -9,7 +9,11 @@ from calling import calling
 from conftest import DEFAULT_CHOICE
 from conftest import INSTRUCTIONS
 from conftest import Provider
+from conftest import Scripted
 from conftest import already
+from conftest import calls
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import TextPart
 from test_conversation import pass_at
 from without_asgi import ASGIApp
 
@@ -18,8 +22,9 @@ from mainplate.app import build_app
 from mainplate.conversation import NoSuchRepository
 from mainplate.conversation import choice_of
 from mainplate.conversation import conversing
-from mainplate.conversation import parse_tree
+from mainplate.conversation import opening_tree_key
 from mainplate.conversation import tree_key
+from mainplate.durability import parse_tree
 from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
@@ -676,7 +681,9 @@ class TestWhatATurnRecords:
         await pass_at(planting, body, session.id)
 
         recorded = await planting.checkpointer.load(session.id)
-        assert parse_tree(recorded[tree_key(0)]) == await workspaces.workspace(session.id).capture("the same tree")
+        assert parse_tree(recorded[opening_tree_key(0)]) == await workspaces.workspace(session.id).capture(
+            "the same tree"
+        )
 
     async def test_a_later_pass_replays_the_recorded_tree_rather_than_reading_the_worktree_again(
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
@@ -689,12 +696,12 @@ class TestWhatATurnRecords:
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
         session = await planting.start("hello", on_fixture)
         await pass_at(planting, body, session.id)
-        was = parse_tree((await planting.checkpointer.load(session.id))[tree_key(0)])
+        was = parse_tree((await planting.checkpointer.load(session.id))[opening_tree_key(0)])
 
         (workspaces.at(session.id) / "src" / "kept.txt").write_text("changed since\n")
         await pass_at(planting, body, session.id)
 
-        assert parse_tree((await planting.checkpointer.load(session.id))[tree_key(0)]) == was
+        assert parse_tree((await planting.checkpointer.load(session.id))[opening_tree_key(0)]) == was
 
     async def test_a_console_with_no_repository_records_that_it_had_none(
         self, service: Service, provider: Provider
@@ -705,13 +712,83 @@ class TestWhatATurnRecords:
         await pass_at(service, conversing(provider.endpoints(), INSTRUCTIONS, None), session.id)
 
         recorded = await service.checkpointer.load(session.id)
-        assert tree_key(0) in recorded
-        assert parse_tree(recorded[tree_key(0)]) is None
+        assert opening_tree_key(0) in recorded
+        assert parse_tree(recorded[opening_tree_key(0)]) is None
+
+    async def test_a_turn_that_calls_a_tool_records_a_tree_on_each_side_of_it(
+        self, planting: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        Why the tree is recorded per model request rather than per turn. With tools the worktree
+        changes *during* a turn, so a single snapshot at the top would describe only the state the
+        first request saw and a rewind to anywhere later would have nothing to go back to.
+        """
+        scripted = Scripted(
+            script=(
+                calls(("create", {"path": "src/added.txt", "content": "written by a tool\n"})),
+                ModelResponse(parts=[TextPart("made it")]),
+            )
+        )
+        session = await planting.start("hello", on_fixture)
+
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        opening = parse_tree(recorded[tree_key(0, 0)])
+        after = parse_tree(recorded[tree_key(0, 1)])
+        assert opening is not None
+        assert after is not None
+        assert opening != after, "the tool wrote a file between the two requests"
+        assert (workspaces.at(session.id) / "src" / "added.txt").read_text() == "written by a tool\n"
+
+    async def test_the_tree_after_a_tool_call_holds_what_the_tool_wrote(
+        self, planting: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """The snapshot is of the worktree, so what a tool created is reachable from it afterwards."""
+        scripted = Scripted(
+            script=(
+                calls(("create", {"path": "src/added.txt", "content": "written by a tool\n"})),
+                ModelResponse(parts=[TextPart("made it")]),
+            )
+        )
+        session = await planting.start("hello", on_fixture)
+
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        after = parse_tree(recorded[tree_key(0, 1)])
+        assert after is not None
+        held = await workspaces.workspace(session.id).paths(after)
+        assert "src/added.txt" in held
+        assert "src/added.txt" not in await workspaces.workspace(session.id).paths(
+            str(parse_tree(recorded[tree_key(0, 0)]))
+        )
+
+    async def test_a_later_pass_takes_no_new_snapshots(
+        self, planting: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """A replayed request replays its snapshot too, so nothing runs git and the pair stay in step."""
+        scripted = Scripted(
+            script=(
+                calls(("create", {"path": "src/added.txt", "content": "written by a tool\n"})),
+                ModelResponse(parts=[TextPart("made it")]),
+            )
+        )
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
+        await pass_at(planting, body, session.id)
+        was = await planting.checkpointer.load(session.id)
+
+        (workspaces.at(session.id) / "src" / "kept.txt").write_text("moved on since\n")
+        await pass_at(planting, body, session.id)
+
+        now = await planting.checkpointer.load(session.id)
+        assert [now[tree_key(0, at)] for at in (0, 1)] == [was[tree_key(0, at)] for at in (0, 1)]
 
     async def test_two_turns_edited_between_record_different_trees(
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        """A person editing between turns is the only writer there is until tools arrive."""
+        """The other writer besides the tools: a person editing the worktree between two turns."""
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
         session = await planting.start("first", on_fixture)
         await pass_at(planting, body, session.id)
@@ -721,7 +798,7 @@ class TestWhatATurnRecords:
         await pass_at(planting, body, session.id)
 
         recorded = await planting.checkpointer.load(session.id)
-        assert parse_tree(recorded[tree_key(0)]) != parse_tree(recorded[tree_key(1)])
+        assert parse_tree(recorded[opening_tree_key(0)]) != parse_tree(recorded[opening_tree_key(1)])
 
 
 class TestRefusingWhatIsNotAWorkspace:

@@ -39,9 +39,9 @@ from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.console import LINKS
 from mainplate.conversation import messages_key
+from mainplate.conversation import opening_tree_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import transcript
-from mainplate.conversation import tree_key
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
 from mainplate.pages import fork_page
@@ -277,7 +277,7 @@ TREES = ("9e75602b2554519c9f620dfdb2010586fde7e076", "3de66468884176acb6dc1a522a
 
 def snapshotted(written: dict[str, object]) -> dict[str, object]:
     """The same checkpoint with a tree recorded per turn, as a console with a workspace writes."""
-    return {**written, **{tree_key(turn): tree for turn, tree in enumerate(TREES)}}
+    return {**written, **{opening_tree_key(turn): tree for turn, tree in enumerate(TREES)}}
 
 
 def showing(
