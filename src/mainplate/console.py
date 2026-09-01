@@ -298,10 +298,10 @@ async def fork_form(service: Service, session: str, at: int) -> Response:
     The page that asks what to answer a branch with, before anything is created.
 
     A page of its own rather than a control inside the transcript, and the reason is what the
-    transcript is: a region replaced once a second while a turn is in flight. A picker rendered per
-    person panel would be rebuilt under the reader's hand on every poll, and there would be one per
-    turn. Here the question is asked once, on a page that is not swapping, and the answer arrives
-    as an ordinary form post that a browser with no script can make.
+    transcript is: a region re-rendered whenever the turn in flight records anything. A picker
+    rendered per person panel would be rebuilt under the reader's hand every time, and there would
+    be one per turn. Here the question is asked once, on a page that is not swapping, and the answer
+    arrives as an ordinary form post that a browser with no script can make.
     """
     found = await service.read(session)
     if found is None:
@@ -430,8 +430,12 @@ async def say(service: Service, session: str, said: str) -> Response:
     Put a message into a session's checkpoint and answer with the transcript that now holds it.
 
     A `200` carrying the transcript rather than a redirect, because htmx is driving this one and
-    the address bar does not change: the swap replaces the conversation with one showing the
-    message as pending, carrying the poll that will replace it again once it is answered.
+    the address bar does not change: the swap shows the message as pending straight away.
+
+    It renders what the page's live connection would send a moment later, and that is deliberate
+    rather than duplicated work: this is the one request somebody is actually waiting on, so it
+    answers rather than leaving a message to appear whenever the stream next looks. The connection
+    then sends the same thing, which morphs to nothing.
     """
     found = await service.read(session)
     if found is None:

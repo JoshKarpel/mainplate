@@ -77,8 +77,9 @@ def as_markup(text: str) -> Markup:
     `text` as Markdown, rendered and then sanitised into markup a page can carry.
 
     Cached because it is a pure function of its input and the console is not: a transcript is
-    re-rendered whole on every poll while a reply is in flight, so an unmemoised conversion would
-    re-parse the entire conversation once a second to redraw the one panel that changed.
+    re-rendered whole whenever the turn in flight records anything, so an unmemoised conversion
+    would re-parse the entire conversation several times a turn to redraw the one panel that
+    changed.
 
     The cache is bounded, and what it can hold is bounded twice over besides: a message is capped
     at the boundary that accepts it, and a key is the exact text, so the same message renders once

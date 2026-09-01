@@ -148,25 +148,31 @@ class TestTheConsole:
         assert answered.text.index('id="stream"') < connecting
         assert connecting < answered.text.index('id="transcript"')
 
-    async def test_the_transcript_asks_for_nothing_on_its_own(self, app: ASGIApp, service: Service) -> None:
+    @pytest.mark.parametrize("answered", [True, False])
+    async def test_the_transcript_asks_for_nothing_on_its_own(
+        self, app: ASGIApp, service: Service, answered: bool
+    ) -> None:
         """
         The region is markup and nothing else, whether or not a turn is in flight.
 
         It neither fetches itself nor decides when to, so there is no trigger to get right and none
-        to remember to remove. Named against the region's own attributes rather than `hx-` at
-        large, because a settled panel carries a disclosure that fetches what the checkpoint holds
-        behind it and that is not the conversation asking for itself.
+        to remember to remove. Asserted against the region's *own opening tag* rather than against
+        the page, which is the difference between a check and a spelling: a settled panel carries a
+        disclosure that fetches what the checkpoint holds behind it, so `hx-` appears all over this
+        page and only here does it mean the conversation asking for itself.
         """
         session = await a_session(app)
-        await service.checkpointer.supply(
-            session,
-            messages_key(0),
-            [{"kind": "response", "parts": [{"part_kind": "text", "content": "it is a plate"}]}],
-        )
+        if answered:
+            await service.checkpointer.supply(
+                session,
+                messages_key(0),
+                [{"kind": "response", "parts": [{"part_kind": "text", "content": "it is a plate"}]}],
+            )
         async with calling(app) as caller:
-            answered = await caller.get(f"/sessions/{session}")
-        assert 'hx-trigger="every 1s"' not in answered.text
-        assert f'hx-get="/fragments/sessions/{session}"' not in answered.text
+            page = (await caller.get(f"/sessions/{session}")).text
+        drawn = page[page.index(f'<div class="transcript" id="{TRANSCRIPT_ID}"') :]
+        opening = drawn[: drawn.index(">") + 1]
+        assert "hx-" not in opening, f"the region asks for something on its own: {opening}"
 
     async def test_a_stream_sends_the_conversation_as_soon_as_it_is_opened(self, app: ASGIApp) -> None:
         """
@@ -489,8 +495,8 @@ class TestShowingWhatWasRecorded:
     async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
         """
         Fetched rather than rendered, which is the whole reason it is an endpoint: the transcript
-        is swapped once a second while a turn is in flight, and this is several times the size of
-        the reading of it.
+        is re-rendered whenever the turn in flight records anything, and this is several times the
+        size of the reading of it.
         """
         session = await self.answered_session(app, service)
         region = await watched(app, session)

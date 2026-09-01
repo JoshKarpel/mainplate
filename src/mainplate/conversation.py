@@ -444,8 +444,8 @@ class Transcript:
 
     `awaiting` is not derivable from the panels, which is why it is a field: a turn with a message
     and no answer looks exactly like an answered turn whose model said nothing. It is what decides
-    whether the page polls, so it is read from the checkpoint rather than guessed at from a
-    rendering.
+    whether the page says an answer is still coming, so it is read from the checkpoint rather than
+    guessed at from a rendering.
 
     `turns` is how many turns have been started, which is also the turn a new message goes into.
     Counted by the same walk that built the panels rather than recovered from them, and counted

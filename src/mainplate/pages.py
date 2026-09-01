@@ -290,10 +290,11 @@ def document(links: Links, heading: str, children: Element, session: str | None 
     """
     The whole document, which every page is this with something different in the middle.
 
-    `session` is on the body because what the reader has decided about a conversation (which kinds
-    they set aside, which calls they unfolded, whether they are following the end) belongs to that
-    conversation and to no other. Every session on this console shares one origin, so a store not
-    scoped by it would be one conversation's state imposed on all of them.
+    `session` is on the body because what the reader has decided about a conversation, which is
+    which kinds they set aside, belongs to that conversation and to no other. Every session on this
+    console shares one origin, so a store not scoped by it would be one conversation's decisions
+    imposed on all of them. The theme is the exception and is deliberately unscoped: it is the
+    reader's rather than any conversation's.
 
     The stylesheet and htmx are served from this process rather than from a CDN. The reason that
     matters most here is the last one anybody thinks of: a coding agent is pointed at a
@@ -724,7 +725,11 @@ def picker(
     One block rather than a row of selects, because choosing a model is the one real decision on
     this page and a row of selects made it look like a footnote to the message box. The endpoints
     come first because the model list depends on which one is picked; the models are the body of it;
-    the two settings that apply whatever you picked sit under them.
+    the settings that apply whatever you picked sit under them, a line each.
+
+    The models are also the only part that scrolls, and that is what keeps the settings reachable:
+    the list is as long as whatever gateway you are pointed at makes it, where everything else here
+    is a fixed handful of rows, so it is the part that gives up height when there is not enough.
 
     `chosen` is what the controls start on, defaulting to the configured default for a new session.
     A fork passes the parent's own choice instead, so continuing on the same model is the path that
@@ -839,8 +844,8 @@ def working() -> Element:
     Three dots that say something is still happening.
 
     Not an `hx-indicator`: those show while a *request* is in flight, and this is the opposite
-    case, a fact read off the checkpoint that holds however many polls it takes. The two are drawn
-    alike because a reader is being told the same thing.
+    case, a fact read off the checkpoint that holds across however many renders it takes. The two
+    are drawn alike because a reader is being told the same thing.
     """
     return span(
         cls="waiting",
@@ -959,15 +964,15 @@ def record_element(links: Links, session: str, panel: Panel) -> Element:
     """
     The disclosure that shows what the checkpoint actually holds behind this panel.
 
-    Closed and unfetched until somebody asks, because the transcript around it is swapped once a
-    second while a turn is in flight and the raw record is several times the size of the reading of
-    it. `once` is safe rather than merely cheap: a panel exists only once the value behind it has
-    stopped changing, so what comes back is settled and there is nothing to ask again for.
+    Closed and unfetched until somebody asks, because the transcript around it is re-rendered
+    whenever the turn in flight records anything and the raw record is several times the size of the
+    reading of it. `once` is safe rather than merely cheap: this is drawn only under a *settled*
+    panel, so what comes back has stopped changing and there is nothing to ask again for.
 
-    `hx-preserve` is what makes that hold through a poll, and it is load-bearing rather than
+    `hx-preserve` is what makes that hold through a swap, and it is load-bearing rather than
     decorative: the server renders this closed, so a morph over the region takes the `open`
-    attribute back off and shuts the disclosure under the reader's hand once a second. Preserved,
-    the swap steps over the element and leaves it as they left it.
+    attribute back off and shuts the disclosure under the reader's hand, over and over while a turn
+    is being answered. Preserved, the swap steps over the element and leaves it as they left it.
 
     htmx reads the attribute off the *incoming* markup rather than off the element on screen, which
     is worth knowing before trying to check this: taking it off the live node proves nothing,

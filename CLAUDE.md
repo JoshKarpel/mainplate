@@ -106,11 +106,19 @@ asking a gateway. The test for a change here is the same one: does it keep a sec
 was *said*?
 
 The console's `localStorage` is the last thing that looks like an exception and is not. It holds
-only what a *reader* decided (the theme, which kinds are set aside, which calls are unfolded,
-whether they are following the end), never a word of the conversation, so a browser with it wiped
-renders exactly what one without it does. It is keyed by session id, and that scoping is
-load-bearing rather than tidy: every session shares one origin, so an unscoped key would be one
-conversation's folds imposed on all of them.
+only what a *reader* decided and would want to find again: the theme, and which kinds are set
+aside. Never a word of the conversation, so a browser with it wiped renders exactly what one
+without it does. The theme is the reader's across every session; what is set aside is a fact about
+one conversation, so it is keyed by session id, and that scoping is load-bearing rather than tidy:
+every session shares one origin, so an unscoped key would be one conversation's decisions imposed
+on all of them.
+
+Two things the script holds are deliberately *not* stored, and the line between them is worth
+keeping. Which calls a reader has unfolded, and whether they are following the end, are modes
+within a visit rather than decisions about a conversation: unfolding a call is how you read one
+answer, and following is a mode you fall out of by scrolling up and back into by scrolling down.
+Carried across a reload either would be a page that opens somewhere the reader has to notice and
+undo. Both survive every swap, which is what they actually have to do.
 
 A **fork** is the one thing here that copies what was said, and it is not the exception it looks
 like. The rule is against a copy that has to be kept in step with something that changes; a fork
@@ -696,6 +704,26 @@ records several times while it runs, so a replacement would shut a call the read
 over and over, precisely while they were reading it. `test_browser.py` pins that against a real
 Chromium and a real server, because it is a second render reaching a page nobody reloaded and
 neither a still nor a markup assertion can see one.
+
+**A panel that arrives or changes is marked for a beat** (`data-fresh`, a colour fade in the
+panel's own kind hue), because a re-render that lands silently leaves the reader to spot what
+moved. Two things there are decided:
+
+- **The change is worked out here, not taken from the swap.** Morphing reports nothing a listener
+  can hear: `htmx:before:morph:node` is an extension hook rather than a DOM event, and it fires
+  before htmx has decided whether the node differs. So `mainplate.js` keeps a signature per panel.
+- **The signature is the *text* of a panel's blocks.** A reader unfolding a call, a search mark laid
+  over a word, a kind switched off in the key: all change a panel's markup and none is news. It is
+  blocks rather than the whole panel because the `recorded` disclosure is `hx-preserve`d, so what a
+  reader fetched into it survives every swap and would otherwise read as the panel having changed.
+  The first render marks nothing, since every panel is new to the script then and a conversation
+  flashing top to bottom points at everything.
+
+**Following the end is being at the end**, decided in both directions by where the reader has
+scrolled, and re-entered by sending a message. `land` therefore has to route its scroll through
+`scrolling()` like `toEnd` does: without it, landing on the *last* panel puts the reader at the
+bottom and the scroll listener switches following back on at the very moment they asked to be
+somewhere in particular.
 
 The rail (search, key, dock, theme) lives **outside** the region that swaps, so no control is
 rebuilt under a reader's finger. What it projects back *onto* the transcript — search marks, the

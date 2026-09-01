@@ -14,6 +14,7 @@ from conftest import DEFAULT_CHOICE
 from conftest import LEASE
 from conftest import already
 from playwright.async_api import Browser
+from playwright.async_api import Locator
 from playwright.async_api import Page
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
@@ -23,6 +24,7 @@ from without_http import serving
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
+from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import tool_key
 from mainplate.service import Service
@@ -394,3 +396,126 @@ class TestWatchingATurnArrive:
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
         assert await page.locator("#stream").inner_html() == ""
         assert await page.get_attribute("#stream", "hx-sse:connect") is not None
+
+    async def test_a_panel_that_arrives_is_marked_and_the_rest_are_not(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The mark says *which* part of a filling-in turn moved, so it has to be only the part that
+        did. A conversation that marked itself top to bottom on every update would be pointing at
+        everything, which is pointing at nothing.
+        """
+        service = await self.started(console, page)
+        await expect(page.locator(".panel[data-fresh]")).to_have_count(0)
+        await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
+        await expect(page.locator(".panel[data-fresh]")).to_have_count(2)
+        assert await page.locator(".panel[data-fresh]").first.get_attribute("data-kind") == "thinking"
+
+    async def test_a_panel_that_changes_is_marked_and_an_unchanged_one_is_not(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        A result filling into a call already on the page changes no panel but that one, and it is
+        the change a reader is most likely to be waiting on. The mark has to survive being told
+        about, so the animation is what takes it off rather than the next update.
+        """
+        service = await self.started(console, page)
+        await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
+        # Both edges of the arrival, and both are needed. Waiting only for the marks to *clear*
+        # would be satisfied the instant it was asked, before the response had even reached the
+        # page, and the next assertion would then be measuring the arrival rather than the result.
+        marked = page.locator(".panel[data-fresh]")
+        await expect(marked).to_have_count(2)
+        await expect(marked).to_have_count(0, timeout=5_000)
+        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), "the first file")
+        await expect(marked).to_have_count(1)
+        assert await marked.first.get_attribute("data-kind") == "tool"
+
+    async def test_a_conversation_is_not_marked_top_to_bottom_when_it_is_opened(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        Every panel is new to the script on a first render, so the mark has to be suppressed there
+        rather than fall out of the comparison. A reader opening a long conversation would otherwise
+        watch the whole of it flash at them.
+        """
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
+        await expect(page.locator(".panel[data-fresh]")).to_have_count(0)
+
+
+class TestFollowingTheEnd:
+    """
+    Following is being at the end, so scrolling decides it in both directions.
+
+    A mode you leave by scrolling up and return to by scrolling back down, rather than a setting to
+    remember you switched off. None of it can be seen in markup: the toggle's `aria-pressed` is
+    written by the script, and what drives it is where a real box has actually been scrolled to.
+    """
+
+    async def a_long_conversation(self, console: tuple[str, Service], page: Page) -> None:
+        """Enough turns that the transcript scrolls, which is the precondition for any of this."""
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        for turn in range(12):
+            await service.checkpointer.supply(
+                session.id,
+                messages_key(turn),
+                [{"kind": "response", "parts": [{"part_kind": "text", "content": f"answer {turn} " + "x " * 400}]}],
+            )
+            await service.say(session.id, turn=turn + 1, said=f"and then {turn}")
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        # The precondition itself, rather than a count standing in for it: none of this means
+        # anything in a transcript short enough to have no end to be away from.
+        assert await page.eval_on_selector("#transcript", "box => box.scrollHeight > box.clientHeight + 100")
+
+    def toggle(self, page: Page) -> Locator:
+        return page.locator('[data-follow="toggle"]')
+
+    async def test_a_page_opens_following_the_end(self, page: Page, console: tuple[str, Service]) -> None:
+        await self.a_long_conversation(console, page)
+        await expect(self.toggle(page)).to_have_attribute("aria-pressed", "true")
+
+    async def test_scrolling_away_from_the_end_stops_following(self, page: Page, console: tuple[str, Service]) -> None:
+        await self.a_long_conversation(console, page)
+        await page.eval_on_selector("#transcript", "box => { box.scrollTop = 0 }")
+        await expect(self.toggle(page)).to_have_attribute("aria-pressed", "false")
+
+    async def test_scrolling_back_to_the_end_starts_following_again(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        await self.a_long_conversation(console, page)
+        await page.eval_on_selector("#transcript", "box => { box.scrollTop = 0 }")
+        await expect(self.toggle(page)).to_have_attribute("aria-pressed", "false")
+        await page.eval_on_selector("#transcript", "box => { box.scrollTop = box.scrollHeight }")
+        await expect(self.toggle(page)).to_have_attribute("aria-pressed", "true")
+
+    async def test_sending_a_message_starts_following_again(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        Whatever the reader had scrolled up to check before typing, what they want to see now is the
+        answer to what they just sent.
+        """
+        await self.a_long_conversation(console, page)
+        await page.eval_on_selector("#transcript", "box => { box.scrollTop = 0 }")
+        await expect(self.toggle(page)).to_have_attribute("aria-pressed", "false")
+        await page.fill("textarea[name=prompt]", "one more thing")
+        await page.press("textarea[name=prompt]", "Shift+Enter")
+        await expect(self.toggle(page)).to_have_attribute("aria-pressed", "true")
+
+    async def test_landing_on_the_last_panel_does_not_start_following(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The trap the two-way rule opens. The dock's "to the end" lands on the last panel, which
+        scrolls to the bottom, so a listener that could not tell this file's scrolls from the
+        reader's would switch following back on at the very moment the reader asked to be put on a
+        particular panel instead.
+        """
+        await self.a_long_conversation(console, page)
+        await page.eval_on_selector("#transcript", "box => { box.scrollTop = 0 }")
+        await page.click('[data-leap="end"]')
+        await expect(page.locator("[data-landed]")).to_have_count(1)
+        await expect(self.toggle(page)).to_have_attribute("aria-pressed", "false")

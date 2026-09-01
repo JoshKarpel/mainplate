@@ -11,8 +11,9 @@
 // Nothing here reads state back out of the DOM in order to decide anything.
 //
 // Everything it drives is an enhancement. With this file absent the page still renders, still
-// posts messages, still polls for answers, and every tool call is still a `<details>` a reader can
-// open; what they lose is the search, the dock, the key, and the theme toggle.
+// posts messages, and every tool call is still a `<details>` a reader can open; what they lose is
+// the search, the dock, the key, the theme toggle, and the live connection that would have brought
+// an answer without a reload.
 (() => {
   "use strict";
 
@@ -108,10 +109,18 @@
     let aside = new Set(); // kinds the key has switched off
     let landed = null; // the panel the console last put the reader on
     let opened = new Set(); // tool calls the reader has unfolded
-    let following = held(scoped("follow")) !== "no"; // pin the end as answers arrive
     let query = "";
     let hits = [];
     let at = -1;
+
+    // Pinned to the end as answers arrive, which is where a page starts and where scrolling back to
+    // the bottom returns it. Not stored, and that is the difference from everything else here: the
+    // rest of this state is a decision the reader made *about a conversation* and should find again
+    // tomorrow, where this one is a mode you fall out of by scrolling up and back into by scrolling
+    // down. Kept across a reload it would be a page that opens somewhere the reader has to notice
+    // and undo, rather than at the end of what was said.
+    let following = true;
+    let signatures = new Map(); // what each panel said, so a change can be told from a repaint
 
     try {
       const stored = JSON.parse(held(scoped("aside")) || "[]");
@@ -135,17 +144,26 @@
 
     const atEnd = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 8;
 
-    // Ours, so the listener that releases following can tell a scroll the reader asked for from
-    // one this file performed. Without it, following would switch itself off the instant it worked.
+    // Ours, so the listener that follows the reader's position can tell a scroll they asked for
+    // from one this file performed. It has to cover both directions, because that listener now
+    // decides following in both: without it, following would switch itself off the instant it
+    // worked, *and* a landing on the last panel would switch it back on the instant it was
+    // deliberately switched off.
     let ours = false;
+
+    const scrolling = (move) => {
+      ours = true;
+      move();
+      requestAnimationFrame(() => {
+        ours = false;
+      });
+    };
 
     const toEnd = () => {
       const box = transcript();
       if (!box) return;
-      ours = true;
-      box.scrollTop = box.scrollHeight;
-      requestAnimationFrame(() => {
-        ours = false;
+      scrolling(() => {
+        box.scrollTop = box.scrollHeight;
       });
     };
 
@@ -186,6 +204,43 @@
       });
     };
 
+    // What a panel says, as the one thing worth telling a reader has changed.
+    //
+    // The text of its blocks, and deliberately not its markup. A reader unfolding a call, a search
+    // mark laid over a word, the kinds the key has switched off: all of those change a panel's
+    // markup and none of them is news. Text changes when the model says something, when a call is
+    // made, and when a result comes back, which while a turn is being answered is exactly what a
+    // reader is watching for.
+    //
+    // Blocks rather than the whole panel, which excludes the `recorded` disclosure: it is
+    // `hx-preserve`d, so whatever a reader fetched into it survives every swap and would otherwise
+    // read as the panel having just changed.
+    // Encoded rather than joined, so two blocks cannot be split differently and read the same: the
+    // separator that would need is a character rendered text is not allowed to contain, and there
+    // is no such character.
+    const signature = (panel) =>
+      JSON.stringify(Array.from(panel.querySelectorAll(":scope > .block"), (block) => block.textContent));
+
+    // Worked out here rather than taken from the swap, because morphing reports nothing a listener
+    // can hear: `htmx:before:morph:node` is an extension hook rather than a DOM event, and it fires
+    // before htmx has decided whether the node differs at all.
+    const paintFresh = (announce) => {
+      const box = transcript();
+      if (!box) return;
+      const said = new Map();
+      box.querySelectorAll(".panel").forEach((panel) => {
+        const now = signature(panel);
+        said.set(panel.id, now);
+        if (!announce || signatures.get(panel.id) === now) return;
+        // Cleared and re-set around a reflow, so a panel that changes twice in a row is marked
+        // twice: re-adding an attribute an element already carries restarts no animation.
+        delete panel.dataset.fresh;
+        void panel.offsetWidth;
+        panel.dataset.fresh = "";
+      });
+      signatures = said;
+    };
+
     const paintFollow = () => {
       const toggle = document.querySelector('[data-follow="toggle"]');
       if (toggle) toggle.setAttribute("aria-pressed", String(following));
@@ -196,7 +251,7 @@
     const clearHits = () => {
       const box = transcript();
       // Nothing marked and nothing asked for is the usual case while a turn is being answered, and
-      // this runs once a second then: `normalize()` walks the whole conversation, so it is worth
+      // this runs on every render then: `normalize()` walks the whole conversation, so it is worth
       // not doing when there is provably nothing to undo.
       if (!box || (!hits.length && !query)) return;
       box.querySelectorAll("mark.hit").forEach((mark) => {
@@ -285,7 +340,11 @@
       paintSearch(go);
     };
 
-    const repaint = () => {
+    // `announce` is false exactly once, on the first render: every panel is new to this file then,
+    // and a conversation that flashed itself top to bottom on being opened would be pointing at
+    // everything, which is pointing at nothing.
+    const repaint = (announce = true) => {
+      paintFresh(announce);
       paintAside();
       paintLanded();
       paintFolds();
@@ -307,7 +366,6 @@
     const land = (panel) => {
       if (!panel) return;
       following = false;
-      hold(scoped("follow"), "no");
       paintFollow();
       landed = panel.id;
       paintLanded();
@@ -316,7 +374,9 @@
       } catch {
         // A page served from somewhere `replaceState` refuses is still perfectly navigable.
       }
-      panel.scrollIntoView({ block: "start", behavior: "auto" });
+      // Through `scrolling`, so landing on the *last* panel does not put the reader at the end and
+      // have the listener below read that as them asking to follow it again.
+      scrolling(() => panel.scrollIntoView({ block: "start", behavior: "auto" }));
     };
 
     // Following a panel's own permalink is the one way of arriving that does *not* go through
@@ -331,7 +391,6 @@
         landed = named || null;
         if (named) {
           following = false;
-          hold(scoped("follow"), "no");
           paintFollow();
         }
         paintLanded();
@@ -410,25 +469,30 @@
       if (toggle) {
         toggle.addEventListener("click", () => {
           following = !following;
-          hold(scoped("follow"), following ? "yes" : "no");
           paintFollow();
           if (following) toEnd();
         });
       }
     };
 
-    // A reader who scrolls away from the end has stopped following, whether they used the wheel,
-    // the keyboard, or the scrollbar. Watching the scroll itself covers all three, which three
-    // separate input listeners would not; `ours` is what keeps this file's own scrolls out of it.
+    // Following *is* being at the end, so where the reader has scrolled to decides it in both
+    // directions: away from the end stops it, back to the end starts it again. One rule rather than
+    // a release and a separate way back, which is what makes it a mode you can leave and return to
+    // by doing the obvious thing, rather than a setting you have to remember you switched off.
+    //
+    // Watching the scroll itself covers the wheel, the keyboard and the scrollbar alike, which
+    // three separate input listeners would not; `ours` is what keeps this file's own scrolls out of
+    // it, and it has to, because every one of those would otherwise answer a question the reader
+    // was not asked.
     const wireScroll = () => {
       document.addEventListener(
         "scroll",
         (event) => {
           const box = transcript();
-          if (!box || event.target !== box || ours || !following) return;
-          if (atEnd(box)) return;
-          following = false;
-          hold(scoped("follow"), "no");
+          if (!box || event.target !== box || ours) return;
+          const now = atEnd(box);
+          if (now === following) return;
+          following = now;
           paintFollow();
         },
         true,
@@ -503,6 +567,35 @@
         event.preventDefault();
         box.form.requestSubmit();
       });
+      // Sending is a decision to be looking at the end: whatever a reader had scrolled up to check
+      // before typing, what they want to see now is the answer to what they just sent. On `submit`
+      // rather than beside the keyboard path above, so the button, the keyboard, and anything else
+      // that submits the form are one rule; `requestSubmit` is what makes that true of the keyboard,
+      // since `submit()` would post without ever dispatching this.
+      document.addEventListener(
+        "submit",
+        (event) => {
+          const form = event.target;
+          if (!(form instanceof HTMLFormElement) || !form.querySelector('textarea[name="prompt"]')) return;
+          following = true;
+          paintFollow();
+        },
+        true,
+      );
+    };
+
+    // The mark comes off when the animation it drives has run, so a panel that changes again is
+    // marked again. Named, because it is not the only animation on the page: the working dots run
+    // forever, and clearing on any animation at all would take the mark off before it was seen.
+    const wireFresh = () => {
+      document.addEventListener(
+        "animationend",
+        (event) => {
+          if (event.animationName !== "panel-arriving") return;
+          if (event.target instanceof HTMLElement) delete event.target.dataset.fresh;
+        },
+        true,
+      );
     };
 
     // --- Swaps -------------------------------------------------------------
@@ -526,6 +619,7 @@
     wireTheme();
     wireClasp();
     wireSend();
+    wireFresh();
     wireSwaps();
     wireHash();
 
@@ -535,7 +629,7 @@
       following = false;
       landed = named;
     }
-    repaint();
+    repaint(false);
   };
 
   if (document.readyState === "loading") {

@@ -281,20 +281,69 @@ main > header h1 {
     scroll-margin-top: var(--space-5);
 }
 
+/* Each kind's own hue, bound to one name on the panel so anything drawing a panel can reach for it
+   without a rule per kind of its own. The edge is what it is for; the arrival flash below is the
+   second reader of it, and a third would be a third `var(--kind)` rather than four more rules. */
 .panel[data-kind="person"] {
-    border-left-color: var(--person-edge);
+    --kind: var(--person-edge);
 }
 
 .panel[data-kind="assistant"] {
-    border-left-color: var(--assistant-edge);
+    --kind: var(--assistant-edge);
 }
 
 .panel[data-kind="thinking"] {
-    border-left-color: var(--thinking-edge);
+    --kind: var(--thinking-edge);
 }
 
 .panel[data-kind="tool"] {
-    border-left-color: var(--tool-edge);
+    --kind: var(--tool-edge);
+}
+
+.panel[data-kind] {
+    border-left-color: var(--kind);
+}
+
+/* A panel that has just arrived, or whose blocks have just said something different: outlined and
+   tinted in its own kind's hue for a beat, then back. While a turn is being answered the transcript
+   is re-rendered whenever anything is recorded, and a reader watching one fill in needs to be told
+   *which* part of it moved - reasoning appearing, a call being made, a result coming back - rather
+   than left to spot it.
+
+   The outline is what actually carries it, and the tint alone did not: a panel's own background is
+   almost entirely covered by the blocks inside it, which have backgrounds of their own, so a tint
+   on the panel shows only in the padding around them. The outline is drawn at the panel's edge, in
+   that same padding, and nothing covers it.
+
+   `outline-offset` is *negative*, so the outline is drawn inside the panel's box rather than around
+   it. That is not cosmetic: an outline outside the box is outside the container the transcript
+   scrolls, which is exactly how something acquires a horizontal scrollbar it never asked for.
+
+   A colour fade and nothing else: no transform, no movement, no repeat, so there is nothing here
+   for `prefers-reduced-motion` to be reducing. `background-image` rather than `background-color`,
+   which is a layer above it, so a panel that is also where the reader is keeps its landed tint
+   underneath rather than losing it for the length of the animation. */
+.panel[data-fresh] {
+    animation: panel-arriving 1.4s ease-out;
+}
+
+@keyframes panel-arriving {
+    from {
+        outline: 2px solid color-mix(in srgb, var(--kind) 85%, transparent);
+        outline-offset: -2px;
+        border-radius: var(--radius);
+        background-image: linear-gradient(
+            color-mix(in srgb, var(--kind) 16%, transparent),
+            color-mix(in srgb, var(--kind) 16%, transparent)
+        );
+    }
+
+    to {
+        outline: 2px solid transparent;
+        outline-offset: -2px;
+        border-radius: var(--radius);
+        background-image: linear-gradient(transparent, transparent);
+    }
 }
 
 /* Where the reader is: whether they followed a permalink (`:target`) or the console put them
@@ -948,7 +997,12 @@ main > header h1 {
 
        `safe` is what makes centring compatible with the scrolling: a centred flex child taller
        than its container overflows equally in both directions and the top becomes unreachable,
-       and `safe` falls back to start-alignment exactly in that case. */
+       and `safe` falls back to start-alignment exactly in that case.
+
+       It still scrolls, but as a last resort rather than as the normal case: the model list inside
+       gives up its height first, so this only overflows in a window too short to hold a choice and
+       a message box at once. That is the whole of why the settings stay put while the models
+       scroll - both are in here, and only one of them is in the part that gives. */
     justify-content: safe center;
     min-height: 0;
     overflow-y: auto;
@@ -964,6 +1018,10 @@ main > header h1 {
     width: 100%;
     max-width: var(--wide);
     margin: 0 auto;
+    /* So the models below can give up height instead of pushing the settings past the bottom of
+       the page. Without it a flex item is floored at its content height and the whole picker grows
+       until `.setup` has to scroll, taking the settings with it. */
+    min-height: 0;
 }
 
 .picker__part {
@@ -971,6 +1029,13 @@ main > header h1 {
     flex-direction: column;
     gap: var(--space-4);
     min-width: 0;
+}
+
+/* The one part that gives. The endpoints are a handful of cards and the settings are two rows, so
+   when there is not enough room it is the model list that should shrink and scroll: it is the part
+   whose length is a property of whatever gateway you are pointed at rather than of this page. */
+.picker__part--models {
+    min-height: 0;
 }
 
 /* The word above each group, drawn as the same faint chrome the panel roles are: it labels the
@@ -985,14 +1050,22 @@ main > header h1 {
     color: var(--ink-faint);
 }
 
-/* The two settings that apply whatever was picked above, on one wrapping row. Wrapping is what a
-   row of controls can do that a transcript cannot: nothing here has to stay beside anything else,
-   and a row that overflowed would scroll the whole page sideways rather than itself. */
+/* The settings that apply whatever was picked above: a line each, label and control, labels
+   aligned down a column. A row each rather than one wrapping row, because they are two unrelated
+   questions and side by side they read as one setting with two halves - and because the answer to
+   the second is `owner/repository (attachment)`, which is long enough that the row wrapped at most
+   widths anyway, putting them on two lines in a way that depended on the window.
+
+   Two columns and `justify-items: start`, so each control is its own natural width: stretched to
+   the column a three-word thinking level would be a select as wide as the page. `minmax(0, ...)`
+   on the second, because a grid column is floored at its content's minimum width otherwise, and a
+   long repository name would push this wider than the picker. */
 .picker__settings {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
     gap: var(--space-3) var(--space-4);
     align-items: center;
+    justify-items: start;
     color: var(--ink-faint);
     font-size: 0.8rem;
 }
@@ -1114,10 +1187,19 @@ main > header h1 {
     display: flex;
     flex-direction: column;
     gap: var(--space-5);
-    /* Its own scroller, bounded, because one endpoint can offer seventy models and a page that grew
-       to hold all of them would put the message box below the fold on the one page whose whole
-       purpose is to reach that box. The endpoints and the settings stay put around it. */
-    max-height: 32rem;
+    /* Its own scroller, because one endpoint can offer seventy models and a page that grew to hold
+       all of them would put the message box below the fold on the one page whose whole purpose is
+       to reach that box.
+
+       Bounded by the room actually left rather than by a fixed height, which is what keeps the
+       endpoints and the settings put: at a fixed bound a short window still overflowed the picker
+       as a whole, so the outer block scrolled and carried the settings off with the models. Here
+       this is the only thing that scrolls, and the settings below it do not move.
+
+       The floor is what stops "shrink to fit" becoming "shrink to nothing": past it the outer block
+       scrolls after all, which is the right answer in a window too short to show a choice and a
+       message box at once. */
+    min-height: 7rem;
     overflow-y: auto;
     overscroll-behavior: contain;
 }
@@ -1645,8 +1727,9 @@ main:has(> .forking) {
     background: var(--raised);
 }
 
-/* Shorter here than on the start page: this page has a transcript under it that a reader has to be
-   able to see, so the models take a bounded slice rather than the middle of the page. */
+/* Bounded here, where on the start page the list simply takes whatever room is left. This page has
+   a transcript under it that a reader has to be able to see in order to choose a turn at all, so
+   the models take a fixed slice rather than as much as they can get. */
 .forking .models {
     max-height: 22rem;
 }

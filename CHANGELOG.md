@@ -41,6 +41,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour legend, a dock that jumps between the two sides of the exchange and folds every tool call,
   a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement; with
   JavaScript off the console still renders, posts, and folds.
+- A panel marked for a beat when it arrives or when what it says changes, tinted in its own kind's
+  hue, so a reader watching a turn fill in is told which part of it moved rather than left to spot
+  it. Worked out from what a panel *says*, so unfolding a call or laying a search mark over one is
+  not mistaken for news, and suppressed on a first render, where every panel is new.
+- Following the end as a mode rather than a setting: a page opens pinned to the end, scrolling away
+  releases it, scrolling back to the bottom re-enters it, and sending a message re-enters it too,
+  since what a reader wants to see after typing is the answer to what they just sent.
 - Shift-Enter sends a message and plain Enter breaks the line, which is that way round because a
   message here is prose that often wants a second paragraph and a fenced block. An empty box refuses
   from the keyboard exactly as it refuses from the button.
@@ -141,7 +148,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   window, output cap, capabilities and release date. Both are radio inputs inside labels, so the
   whole card is the target and the page works with JavaScript off. The picker fills the middle of
   the page and the message box sits under it, which is the arrangement a page with no conversation
-  on it wants.
+  on it wants. The model list is the only part that scrolls, since its length is a property of
+  whichever gateway you are pointed at, so the thinking level and the repository stay put below it
+  rather than scrolling away with it, a line each.
 - An optional name for a session, in a field above the message box. Left empty, a session is named
   after its first message exactly as before. A given name goes through the same rule, so there is
   one answer to what a session name is rather than one per way of arriving at one.

@@ -215,9 +215,10 @@ async def converse(run: Run) -> Never:
 ```
 
 `run.awaiting` suspends the pass until something outside it records a value under that key, which
-is what the console does when you send a message. Nothing polls, nothing is held open, and the
-wait outlives the process that was waiting: the workflow is a row, and whichever worker picks it
-up next runs the body again from the top and reaches further than the last one did.
+is what the console does when you send a message. Nothing polls the store for it, no pass is held
+open waiting, and the wait outlives the process that was waiting: the workflow is a row, and
+whichever worker picks it up next runs the body again from the top and reaches further than the
+last one did.
 
 The two things a pass writes are what make the second run cheap and the first one safe:
 
@@ -352,6 +353,16 @@ behind it: the prompt for a person's message, and the stored model parts for eve
 the checkpoint *is* the conversation, this is the state itself rather than a debug view of it, and
 it is fetched only when you open it so the transcript never carries it. A panel of the turn in
 flight offers none, because what is behind it has not stopped changing.
+
+A panel that arrives, or whose blocks say something different, is **marked for a beat** in its own
+kind's hue. A turn fills in over several renders, and a reader watching one needs to be told which
+part moved rather than left to spot it. It is worked out from what a panel says, so unfolding a
+call or laying a search mark over one is not mistaken for news, and a conversation just opened does
+not flash itself top to bottom.
+
+The page opens **pinned to the end** and stays there as answers arrive. Scrolling away releases it,
+scrolling back to the bottom re-enters it, and so does sending a message: whatever you had scrolled
+up to check, what you want to see now is the answer to what you just sent.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that jumps between the two sides and folds every call at once, a
