@@ -21,9 +21,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 from typing import assert_never
 
+from pydantic_ai.settings import ThinkingLevel
 from without_html import DOCTYPE
 from without_html import Element
 from without_html import Node
@@ -68,6 +70,7 @@ from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import grouped
+from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
 from mainplate.conversation import Kind
 from mainplate.conversation import Panel
@@ -78,6 +81,8 @@ from mainplate.conversation import Transcript
 from mainplate.markup import as_markup
 from mainplate.service import Conversation
 from mainplate.sessions import Session
+from mainplate.thinking import THINKING_CHOICES
+from mainplate.thinking import name_of_thinking
 
 # How often a transcript with an unanswered turn asks again. A person is watching for a reply
 # that takes seconds, so this is short enough to feel like an answer arriving rather than a page
@@ -111,6 +116,8 @@ SEND_SWAP: Final = "outerMorph scroll:bottom"
 TRANSCRIPT_ID: Final = "transcript"
 
 MODEL_ID: Final = "model"
+
+THINKING_ID: Final = "thinking"
 
 SENDING_ID: Final = "sending"
 
@@ -155,6 +162,8 @@ class Links:
     say: Reversible
     session_fragment: Reversible
     profile_models: Reversible
+    fork_form: Reversible
+    fork: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -184,6 +193,13 @@ class Links:
         interpolation and the select needs no script to build one.
         """
         return url_for(self.profile_models)
+
+    def to_fork_form(self, session: str, at: int) -> str:
+        """Where to ask what a branch from this turn should be answered with."""
+        return f"{url_for(self.fork_form, {'session': session})}?at={at}"
+
+    def to_fork(self, session: str) -> str:
+        return url_for(self.fork, {"session": session})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -237,8 +253,51 @@ def document(links: Links, heading: str, children: Node, session: str | None = N
     )
 
 
+# How far a branch is indented from the conversation it came from. Bounded, because the depth of a
+# tree is not something a sidebar seventeen rems wide can keep spending on: past this a branch of a
+# branch is drawn beside its parent rather than under it, and its own row still says where it came
+# from.
+DEEPEST: Final = 3
+
+
+def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
+    """
+    Every session with how deep in the tree it sits, a branch directly under what it branched from.
+
+    Pure, and separate from the rendering, because it is the one piece of real reasoning in the
+    sidebar: the flat list the index hands back says nothing about shape, and the shape is the
+    whole reason forking is worth having a picture of.
+
+    A branch whose parent is not in the list is drawn as a root. That is not a fallback but the
+    honest reading: the row says where it came from either way, and hiding a session because its
+    parent went missing would lose a conversation somebody can still read.
+    """
+    known = {session.id for session in listed}
+    children: dict[str | None, list[Session]] = {}
+    for session in listed:
+        parent = session.forked.session if session.forked and session.forked.session in known else None
+        children.setdefault(parent, []).append(session)
+
+    arranged: list[tuple[Session, int]] = []
+
+    def walk(parent: str | None, depth: int) -> None:
+        for session in children.get(parent, ()):
+            arranged.append((session, depth))
+            walk(session.id, min(depth + 1, DEEPEST))
+
+    walk(None, 0)
+    return tuple(arranged)
+
+
 def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> Element:
-    """Every session, newest first, with the one being read marked."""
+    """
+    Every session, newest first, with branches under what they branched from and the current one marked.
+
+    Newest first among siblings rather than across the whole list, which is what a tree costs and
+    what it buys: a branch made this morning sits with the conversation it came from rather than at
+    the top away from it, and the ordering within any one group is still the one a chat console
+    reads in.
+    """
     return aside(
         cls="sessions",
         children=[
@@ -246,20 +305,31 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None) -> E
             ul(
                 children=[
                     li(
+                        attrs={"data-depth": str(depth)},
                         children=a(
-                            cls=("session", "current" if session.id == showing else None),
+                            cls=("session", "current" if session.id == showing else None, "forked" if depth else None),
                             attrs={"href": links.to_session(session.id)},
                             children=[
                                 span(cls="name", children=session.title or UNTITLED),
-                                time(
-                                    cls="when",
-                                    attrs={"datetime": session.created_at.isoformat()},
-                                    children=session.created_at.strftime("%b %d, %H:%M"),
+                                span(
+                                    cls="meta",
+                                    children=[
+                                        time(
+                                            cls="when",
+                                            attrs={"datetime": session.created_at.isoformat()},
+                                            children=session.created_at.strftime("%b %d, %H:%M"),
+                                        ),
+                                        *(
+                                            (span(cls="from", children=f"\N{RIGHTWARDS ARROW}{session.forked.turn}"),)
+                                            if session.forked
+                                            else ()
+                                        ),
+                                    ],
                                 ),
                             ],
-                        )
+                        ),
                     )
-                    for session in listed
+                    for session, depth in arrange(listed)
                 ]
             ),
         ],
@@ -295,7 +365,7 @@ def model_select(models: Sequence[Listed], chosen: str | None = None) -> Element
     )
 
 
-def profile_select(links: Links, catalogue: Catalogue) -> Element:
+def profile_select(links: Links, catalogue: Catalogue, chosen: str | None = None) -> Element:
     """
     Which endpoint to answer on, and the control that swaps the model list beside it.
 
@@ -320,29 +390,89 @@ def profile_select(links: Links, catalogue: Catalogue) -> Element:
             "hx-status:5xx": "swap:none",
         },
         children=[
-            option(attrs={"value": name, "selected": name == catalogue.default.profile}, children=name)
+            option(attrs={"value": name, "selected": name == (chosen or catalogue.default.profile)}, children=name)
             for name in catalogue.profiles
         ],
     )
 
 
-def picker(links: Links, catalogue: Catalogue) -> Element:
-    """The two selects, which appear only where a session is being created."""
-    return div(
-        cls="picker",
+def thinking_select(chosen: ThinkingLevel | None) -> Element:
+    """
+    How hard to think, as a plain select with no cascade behind it.
+
+    Unlike the model list this is the same everywhere, because it is a property of the request
+    rather than of the endpoint: every level is offered against every profile, and a model that
+    cannot reason refuses or ignores it on the turn. That is the same stance the model id gets, and
+    for the same reason - the provider's own answer about what it supports is the authoritative
+    one, and gating here would hide a level that in fact works.
+    """
+    return select(
+        attrs={"id": THINKING_ID, "name": THINKING_FIELD, "aria-label": "Thinking"},
         children=[
-            span(cls="label", children="Answer with"),
-            profile_select(links, catalogue),
-            model_select(catalogue.offered[catalogue.default.profile], catalogue.default.model),
+            option(attrs={"value": name, "selected": level == chosen}, children=name)
+            for name, level in THINKING_CHOICES
         ],
     )
 
 
-def chosen_note(chosen: Choice | None) -> Element:
-    """What an existing session is on, as a fact rather than a control: it cannot be changed."""
+def picker(links: Links, catalogue: Catalogue, chosen: Choice | None = None) -> Element:
+    """
+    The three selects, which appear where a session is created and where one is branched.
+
+    `chosen` is what the controls start on, defaulting to the configured default for a new session.
+    A branch passes the parent's own choice instead, so continuing on the same model is the path
+    that needs nothing touched: the fork exists to let the choice change, not to require it.
+
+    A choice naming a profile the catalogue no longer has falls back to the default rather than
+    rendering a select with nothing selected. That is the same case `stalled_by` explains on the
+    session page, and here there is a sensible thing to show.
+    """
+    starting = chosen if chosen is not None and chosen.profile in catalogue.offered else catalogue.default
+    return div(
+        cls="picker",
+        children=[
+            span(cls="label", children="Answer with"),
+            profile_select(links, catalogue, starting.profile),
+            model_select(catalogue.offered[starting.profile], starting.model),
+            thinking_select(starting.thinking),
+        ],
+    )
+
+
+def chosen_note(chosen: Choice | None, repository: Path | None = None, workspace: Path | None = None) -> Element:
+    """
+    What an existing session is on, as a fact rather than a control: it cannot be changed.
+
+    The thinking level is named only when there is one to name. A session that said nothing about
+    thinking is not a session set to some level called "default"; it is one that never raised the
+    question, and printing a word for that would invent a setting nobody chose. The workspace is
+    named on the same terms, and its absence means the same thing: no snapshots are being kept, so
+    there is nothing a later fork could put back on disk.
+    """
     if chosen is None:
         return span(cls="picker")
-    return span(cls=("picker", "settled"), children=f"{chosen.profile} \N{MIDDLE DOT} {chosen.model}")
+    said = f"{chosen.profile} \N{MIDDLE DOT} {chosen.model}"
+    if chosen.thinking is not None:
+        said = f"{said} \N{MIDDLE DOT} thinking {name_of_thinking(chosen.thinking)}"
+    return span(
+        cls=("picker", "settled"),
+        children=[
+            span(children=said),
+            *(
+                (
+                    span(
+                        cls="workspace",
+                        # The repository is what a reader recognises and the worktree is where to
+                        # point an editor, so one is shown and the other is there to be read.
+                        attrs={"title": f"This session's worktree: {workspace}"},
+                        children=f"\N{MIDDLE DOT} {repository.name}",
+                    ),
+                )
+                if repository is not None
+                else ()
+            ),
+        ],
+    )
 
 
 def written(text: str) -> Element:
@@ -434,13 +564,19 @@ def block_element(block: Block, anchor: str, at: int) -> Element:
             assert_never(unreachable)
 
 
-def panel_element(panel: Panel) -> Element:
+def panel_element(links: Links, session: str, panel: Panel) -> Element:
     """
     One run of one kind of thing, with the facts about it above it.
 
     `data-kind` and `data-side` are the whole of what the chrome needs to know: the key filters by
     kind, the dock's flanking arrows step by side, and the stylesheet draws the edge from the same
     attribute. Nothing has to keep a list of selectors in step with a list of kinds.
+
+    Only a person's panel offers a branch, and that is the whole of where a session may be forked.
+    It is not a simplification: what a fork has to hand the next model is a conversation with no
+    half-finished exchange in it, and the boundary between one turn and the next is the only place
+    a conversation is in that state. Inside a turn there is a call awaiting its result, or
+    reasoning signed by the model that produced it, and neither survives being handed to another.
     """
     return article(
         cls="panel",
@@ -455,10 +591,35 @@ def panel_element(panel: Panel) -> Element:
                 cls="panel__meta",
                 children=[
                     span(cls="panel__role", children=dict(NAMES)[panel.kind]),
+                    *(
+                        (
+                            span(
+                                cls="panel__tree",
+                                attrs={"title": f"The worktree this turn started on: {panel.tree}"},
+                                children=panel.short_tree,
+                            ),
+                        )
+                        if panel.short_tree is not None
+                        else ()
+                    ),
+                    *(
+                        (
+                            a(
+                                cls="panel__fork",
+                                attrs={
+                                    "href": links.to_fork_form(session, panel.turn),
+                                    "title": f"Fork from turn {panel.turn}",
+                                },
+                                children="fork",
+                            ),
+                        )
+                        if panel.kind == "person" and session
+                        else ()
+                    ),
                     a(
                         cls="panel__anchor",
                         attrs={"href": f"#{panel.anchor}"},
-                        children=f"#{panel.turn}",
+                        children=f"#{panel.label}",
                     ),
                 ],
             ),
@@ -507,7 +668,7 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
         if said.awaiting and stalled is None
         else {}
     )
-    drawn: list[Element] = [panel_element(panel) for panel in said.panels]
+    drawn: list[Element] = [panel_element(links, session, panel) for panel in said.panels]
     if said.awaiting and stalled is None:
         drawn.append(waiting_panel())
     if stalled is not None:
@@ -854,7 +1015,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                 transcript_region(links, showing.session.id, showing.said, stalled),
                 composer(
                     links.to_say(showing.session.id),
-                    chosen_note(showing.chosen),
+                    chosen_note(showing.chosen, showing.repository, showing.workspace),
                     live=True,
                     refusing=stalled is not None,
                 ),
@@ -863,6 +1024,93 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             # exist yet every control in it would be pointed at an empty transcript, which is a
             # row of dead buttons rather than an offer.
             aside_rail=[rail()],
+        ),
+        session=showing.session.id,
+    )
+
+
+def inheriting(at: int, asking: bool) -> str:
+    """
+    What a fork from `at` would carry, said in turns.
+
+    Stated rather than left to the transcript below, because "fork at turn 3" has two readings and
+    the wrong one silently throws away the turn somebody meant to keep. The cases are written out
+    because a single sentence with a range in it reads as nonsense at both ends: forking at turn 1
+    would say "turns 0 to 0", and at turn 0 there is no range at all.
+
+    `asking` is whether there is a turn to re-ask. Forking one of a conversation's turns offers
+    that turn's message back, so the fork *asks it again* on the new model; forking the end has
+    nothing to re-ask and simply waits.
+    """
+    carried = "Carries nothing" if at == 0 else "Carries turn 0" if at == 1 else f"Carries turns 0 to {at - 1}"
+    return f"{carried}, then asks turn {at} again." if asking else f"{carried}, then waits for turn {at}."
+
+
+def fork_page(links: Links, listed: tuple[Session, ...], showing: Conversation, at: int, catalogue: Catalogue) -> str:
+    """
+    What a branch from one turn would be, and the one control that may answer differently.
+
+    It shows what carries over rather than only asking a question, because "fork at turn 3" is a
+    sentence with two readings and the wrong one silently discards work. What is kept is stated in
+    turns, and the transcript beneath is the same one the session page draws, cut to the prefix
+    the branch inherits.
+
+    The picker is the *session's* choice rather than the configured default, so the common branch -
+    go back and try that turn again on the same model - is the one that needs nothing changed. A
+    fork is the one moment a choice may differ, and it is deliberately not the moment it must.
+    """
+    kept = tuple(panel for panel in showing.said.panels if panel.turn < at)
+    asked = showing.said.asked_at(at)
+    return document(
+        links,
+        f"Fork {showing.session.title or UNTITLED}",
+        shell(
+            links,
+            listed,
+            showing=showing.session.id,
+            pane=[
+                form(
+                    cls="forking",
+                    attrs={"method": "post", "action": links.to_fork(showing.session.id)},
+                    children=[
+                        h1(children="Fork this conversation"),
+                        p(cls="forking__kept", children=inheriting(at, asked is not None)),
+                        input_(attrs={"type": "hidden", "name": "at", "value": str(at)}),
+                        # The turn's own message, back in a box you can edit. Without it a fork is
+                        # a conversation that stops where you wanted it to continue, and seeing the
+                        # same turn answered differently would mean retyping the question first,
+                        # which is a different question by the time you have retyped it.
+                        textarea(
+                            attrs={
+                                "name": "prompt",
+                                "rows": 3,
+                                "autofocus": True,
+                                "placeholder": "Say something" if asked is None else None,
+                                "aria-label": "Message",
+                            },
+                            children=asked or "",
+                        ),
+                        picker(links, catalogue, showing.chosen),
+                        div(
+                            cls="forking__act",
+                            children=[
+                                button(attrs={"type": "submit"}, children="Fork" if asked is None else "Fork and ask"),
+                                a(
+                                    cls="forking__back",
+                                    attrs={"href": links.to_session(showing.session.id)},
+                                    children="Back to the conversation",
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                div(
+                    cls="transcript",
+                    attrs={"id": TRANSCRIPT_ID},
+                    children=[panel_element(links, "", panel) for panel in kept]
+                    or p(cls="empty", children="Nothing carries over."),
+                ),
+            ],
         ),
         session=showing.session.id,
     )

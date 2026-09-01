@@ -14,10 +14,28 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Final
 
 import nh3
 from markdown import Markdown
 from markupsafe import Markup
+from pygments.token import STANDARD_TYPES
+
+# The wrapper `codehilite` puts around a highlighted block, which is the one class here that is not
+# a token: Pygments names the spans inside, and the extension names the box.
+HIGHLIGHT: Final = "codehilite"
+
+# Every class a highlighted block can carry, taken from Pygments' own table rather than listed
+# here. A hand-written list would be a second declaration of somebody else's vocabulary, wrong the
+# first time a language used a token nobody thought of, and wrong silently: the class would be
+# stripped and that run of code would render unhighlighted with nothing saying why.
+TOKENS: Final[frozenset[str]] = frozenset({name for name in STANDARD_TYPES.values() if name} | {HIGHLIGHT})
+
+# Which classes survive sanitising, per tag. `allowed_classes` rather than allowing the `class`
+# attribute itself, and the difference is the whole point: this text is shaped by a model, so
+# `class` left open would let a reply paint itself as any part of this console's own chrome. A
+# closed set of Pygments token names cannot.
+ALLOWED_CLASSES: Final[dict[str, set[str]]] = {tag: set(TOKENS) for tag in ("div", "pre", "code", "span")}
 
 # One converter for the process. `Markdown` accumulates state across a conversion and must be
 # reset between them, which makes it a place rather than a value; holding one is safe here only
@@ -27,6 +45,10 @@ CONVERTER = Markdown(
     extensions=[
         # Fenced code, because a console answered by a model is mostly code.
         "fenced_code",
+        # Highlighting, because the same is true of what is *in* the fence. It emits classes rather
+        # than inline styles so the colours come from the console's own palette and follow the
+        # reader's theme; inline styles would also mean allowing `style` through the sanitiser.
+        "codehilite",
         "tables",
         # Without this, a list whose markers change mid-way silently merges into one list.
         "sane_lists",
@@ -34,6 +56,17 @@ CONVERTER = Markdown(
         # two trailing spaces) is a rule about documents, and nobody typing a message knows it.
         "nl2br",
     ],
+    extension_configs={
+        "codehilite": {
+            # An unlabelled fence is left alone rather than guessed at. Guessing is slow, it is
+            # wrong often enough to be noticeable on short snippets, and a wrong guess colours
+            # tokens by a grammar the text is not written in, which reads worse than no colour.
+            "guess_lang": False,
+            # A language Pygments does not know renders as a plain fence rather than raising, which
+            # matters because the fence's label is written by a model.
+            "noclasses": False,
+        }
+    },
     output_format="html",
 )
 
@@ -52,4 +85,4 @@ def as_markup(text: str) -> Markup:
     however many times it is drawn.
     """
     CONVERTER.reset()
-    return Markup(nh3.clean(CONVERTER.convert(text)))
+    return Markup(nh3.clean(CONVERTER.convert(text), allowed_classes=ALLOWED_CLASSES))

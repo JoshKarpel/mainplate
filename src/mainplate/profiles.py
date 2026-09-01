@@ -31,7 +31,11 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import SecretStr
 from pydantic import ValidationError
+from pydantic import field_validator
 from pydantic import model_validator
+
+from mainplate.thinking import DEFAULT_THINKING
+from mainplate.thinking import thinking_named
 
 # What the Anthropic SDK is given when the endpoint authenticates by itself. It refuses to
 # construct without a key, and a gateway that injects credentials at its edge has no use for one,
@@ -137,6 +141,25 @@ class Config(BaseModel):
     what it offers. `catalogue.py` is where a name that no longer resolves falls back to the first
     discovered, since a model retired overnight must not stop the console from starting.
     """
+
+    default_thinking: str = DEFAULT_THINKING
+    """
+    How hard a new session thinks by default, as one of the names the picker offers.
+
+    A name rather than the level itself, so the file reads the same as the control does and there
+    is one spelling of "high" in the system. `"default"` means the request says nothing about
+    thinking at all, which is what a model without this setting has always been asked.
+
+    Unlike `default_model` this *is* checked here, because it can be: the levels are a closed set
+    known before anything is discovered, so a typo is a startup failure naming the file rather than
+    a picker quietly showing something else.
+    """
+
+    @field_validator("default_thinking")
+    @classmethod
+    def thinking_is_offered(cls, name: str) -> str:
+        thinking_named(name)
+        return name
 
     @model_validator(mode="after")
     def default_names_a_profile(self) -> Config:

@@ -319,6 +319,25 @@
       panel.scrollIntoView({ block: "start", behavior: "auto" });
     };
 
+    // Following a panel's own permalink is the one way of arriving that does *not* go through
+    // `land`: the browser moves the hash itself, so `:target` follows along and `landed` does not.
+    // Left unwired the two disagree the moment a second link is clicked, and because the
+    // stylesheet draws them alike, the page shows two panels highlighted with no way to tell which
+    // one the reader is actually on. Syncing here rather than dropping `data-landed` altogether,
+    // because `replaceState` is still not navigation and `:target` still cannot see it.
+    const wireHash = () => {
+      window.addEventListener("hashchange", () => {
+        const named = decodeURIComponent((location.hash || "").replace(/^#/, ""));
+        landed = named || null;
+        if (named) {
+          following = false;
+          hold(scoped("follow"), "no");
+          paintFollow();
+        }
+        paintLanded();
+      });
+    };
+
     // --- The controls ----------------------------------------------------
 
     const wireKey = () => {
@@ -485,6 +504,7 @@
     wireTheme();
     wireClasp();
     wireSwaps();
+    wireHash();
 
     // A panel named in the URL is where the reader asked to be, and outranks following the end.
     const named = decodeURIComponent((location.hash || "").replace(/^#/, ""));

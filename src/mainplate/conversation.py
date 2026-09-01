@@ -40,9 +40,11 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import groupby
+from typing import Final
 from typing import Literal
 from typing import Never
 from typing import assert_never
+from typing import cast
 
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
@@ -54,6 +56,7 @@ from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.run import AgentRunResult
+from pydantic_ai.settings import ThinkingLevel
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
@@ -61,12 +64,49 @@ from mainplate.agent import Choice
 from mainplate.agent import Endpoints
 from mainplate.agent import agent_for
 from mainplate.durability import stepping
+from mainplate.snapshots import Workspace
+from mainplate.snapshots import Worktrees
+from mainplate.thinking import BY_LEVEL
 
 CHOICE_KEY: StepKey = "choice"
+
+# What the thinking level is called inside the recorded choice. Named once here because the writer
+# and the reader are both in this file and must not drift, which is the same reason the keys are.
+THINKING_FIELD: Final = "thinking"
 
 
 def turn_prefix(turn: int) -> str:
     return f"turn:{turn}"
+
+
+def turn_of(key: StepKey) -> int | None:
+    """
+    Which turn a recorded key belongs to, or nothing at all for one that belongs to the session.
+
+    The inverse of `turn_prefix`, and here beside it for the reason everything else in this file is:
+    the code that builds these names and the code that reads them apart must move together.
+
+    It answers about the *shape* rather than about a known list of key kinds, which is what a fork
+    needs: `turn:3:messages`, `turn:3:model:1` and a `turn:3:tool:0` nobody has written yet are all
+    turn 3, so copying a prefix of a conversation does not have to be taught each new kind of step.
+    """
+    marker, _, rest = key.partition(":")
+    if marker != "turn":
+        return None
+    counted, _, _ = rest.partition(":")
+    return int(counted) if counted.isdigit() else None
+
+
+def before(recorded: Mapping[str, object], turn: int) -> dict[str, object]:
+    """
+    Everything a fork inherits: every recorded key belonging to a turn before `turn`.
+
+    By turn rather than by key kind, so the whole of a shared past comes across whether it is a
+    prompt, the messages a turn produced, or a step some later version records. What is left behind
+    is `choice`, which the fork is about to answer differently, and that is the only key here that
+    belongs to the session rather than to one of its turns.
+    """
+    return {key: value for key, value in recorded.items() if (at := turn_of(key)) is not None and at < turn}
 
 
 def prompt_key(turn: int) -> StepKey:
@@ -75,6 +115,26 @@ def prompt_key(turn: int) -> StepKey:
 
 def messages_key(turn: int) -> StepKey:
     return f"{turn_prefix(turn)}:messages"
+
+
+def tree_key(turn: int) -> StepKey:
+    """
+    What the workspace looked like when this turn started.
+
+    One per turn today, because with no tools nothing changes the worktree *during* one: the only
+    writer between two turns is the person, editing in whatever they have the directory open in.
+    When tools arrive this becomes one per model request, numbered by `Stepping` alongside
+    `turn:{n}:model:{i}`, because a model request is the boundary at which no tool is running and
+    so the only point where the tree is a coherent thing to read at all.
+    """
+    return f"{turn_prefix(turn)}:tree"
+
+
+def parse_tree(recorded: object) -> str | None:
+    """A recorded tree hash, or nothing at all for a turn taken with no workspace configured."""
+    if recorded is None or isinstance(recorded, str):
+        return recorded
+    raise TypeError(f"a tree must be a hash or nothing, not {recorded!r}")
 
 
 def parse_prompt(recorded: object) -> str:
@@ -94,9 +154,23 @@ def parse_messages(recorded: object) -> tuple[ModelMessage, ...]:
     return tuple(ModelMessagesTypeAdapter.validate_python(recorded))
 
 
+def parse_thinking(recorded: object) -> ThinkingLevel | None:
+    """
+    A recorded thinking level, or a loud failure if the checkpoint holds something else.
+
+    Absent reads as `None`, which is the level meaning "say nothing about thinking". That is not a
+    default papering over a parser that forgot the key: it is what every session recorded before
+    this setting existed asked for, and what those sessions must keep asking for on the pass that
+    resumes them.
+    """
+    if recorded is None or isinstance(recorded, bool) or recorded in BY_LEVEL:
+        return cast(ThinkingLevel | None, recorded)
+    raise TypeError(f"a thinking level must be a boolean or an effort, not {recorded!r}")
+
+
 def parse_choice(recorded: object) -> Choice:
     """
-    The profile and model a session was started on, or a loud failure if the record is not one.
+    What a session was started on, or a loud failure if the record is not a choice.
 
     Strict about shape and silent about whether the pair is still *available*, which is a
     different question with a different answer: this says what the session chose, and `Catalogue`
@@ -107,12 +181,19 @@ def parse_choice(recorded: object) -> Choice:
     profile, model = recorded.get("profile"), recorded.get("model")
     if not isinstance(profile, str) or not isinstance(model, str):
         raise TypeError(f"a choice must name a profile and a model, not {recorded!r}")
-    return Choice(profile=profile, model=model)
+    return Choice(profile=profile, model=model, thinking=parse_thinking(recorded.get(THINKING_FIELD)))
 
 
-def recorded_choice(chosen: Choice) -> dict[str, str]:
-    """A choice as the JSON-native value the store's codec will take."""
-    return {"profile": chosen.profile, "model": chosen.model}
+def recorded_choice(chosen: Choice) -> dict[str, object]:
+    """
+    A choice as the JSON-native value the store's codec will take.
+
+    The thinking level goes in whatever it is, `None` included, so what a session asked for is
+    stated rather than inferred from a key's absence. Absence still reads back as `None`, because
+    the sessions recorded before this existed have no such key and are answerable exactly as they
+    were.
+    """
+    return {"profile": chosen.profile, "model": chosen.model, THINKING_FIELD: chosen.thinking}
 
 
 def choice_of(recorded: Mapping[str, object]) -> Choice | None:
@@ -232,9 +313,36 @@ class Panel:
     kind: Kind
     blocks: tuple[Block, ...]
 
+    tree: str | None = None
+    """
+    The worktree this turn started on, for the panel that opens one, and nothing for the rest.
+
+    On the person's panel because that is where the snapshot is taken and where the fork link
+    already is: the two are the same point, so a reader deciding to go back to a turn can see what
+    going back would put on disk. Absent everywhere else, and absent altogether where no workspace
+    is configured, since a hash for a directory nobody chose would be a fact about nothing.
+    """
+
     @property
     def anchor(self) -> str:
         return f"panel-{self.turn}-{self.at}"
+
+    @property
+    def short_tree(self) -> str | None:
+        """The hash as a person reads one, which is the first several characters and no more."""
+        return None if self.tree is None else self.tree[:8]
+
+    @property
+    def label(self) -> str:
+        """
+        What a panel is called where somebody reads it, which is its whole position and not half.
+
+        The turn alone names four things in a turn that reasoned, called a tool, and answered, so a
+        reader following one permalink out of four had no way to tell which they were looking at
+        and no way to say which they meant. `at` is already what makes the anchor unique; this is
+        the same pair, said out loud.
+        """
+        return f"{self.turn}.{self.at}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +365,19 @@ class Transcript:
     panels: tuple[Panel, ...]
     awaiting: bool
     turns: int
+
+    def asked_at(self, turn: int) -> str | None:
+        """
+        What the person said to open `turn`, or nothing where the conversation never reached it.
+
+        What a fork needs, and the reason it is read off the transcript rather than the checkpoint:
+        forking a turn offers its message back for re-sending, so the text the page puts in the box
+        has to be the text the page is showing above it.
+        """
+        for panel in self.panels:
+            if panel.turn == turn and panel.kind == "person":
+                return "\n".join(block.text for block in panel.blocks if isinstance(block, Prose))
+        return None
 
 
 def kind_of(block: Block) -> Kind:
@@ -331,9 +452,9 @@ def panelled(turn: int, blocks: Sequence[Block]) -> Iterator[Panel]:
         yield Panel(turn=turn, at=at + 1, kind=kind, blocks=tuple(run))
 
 
-def said_by(turn: int, prompt: str) -> Panel:
+def said_by(turn: int, prompt: str, tree: str | None = None) -> Panel:
     """A turn's opening panel, which is the person's own message and is always its first."""
-    return Panel(turn=turn, at=0, kind="person", blocks=(Prose(text=prompt),))
+    return Panel(turn=turn, at=0, kind="person", blocks=(Prose(text=prompt),), tree=tree)
 
 
 def transcript(recorded: Mapping[str, object]) -> Transcript:
@@ -356,7 +477,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answered = recorded.get(messages_key(turn))
         if answered is None:
             break
-        panels.append(said_by(turn, parse_prompt(asked)))
+        panels.append(said_by(turn, parse_prompt(asked), parse_tree(recorded.get(tree_key(turn)))))
         panels.extend(panelled(turn, blocks_of(parse_messages(answered))))
         turn += 1
     # Several, because a person can type again while a reply is still coming. Those messages are
@@ -364,7 +485,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     # showing only the first would be hiding a message somebody had already sent.
     awaiting = False
     while (waiting := recorded.get(prompt_key(turn))) is not None:
-        panels.append(said_by(turn, parse_prompt(waiting)))
+        panels.append(said_by(turn, parse_prompt(waiting), parse_tree(recorded.get(tree_key(turn)))))
         awaiting = True
         turn += 1
     return Transcript(panels=tuple(panels), awaiting=awaiting, turns=turn)
@@ -385,7 +506,28 @@ def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
     return record
 
 
-def conversing(endpoints: Endpoints, instructions: str) -> Callable[[Run], Awaitable[Never]]:
+def snapshotting(workspace: Workspace | None, turn: int) -> Callable[[], Awaitable[object]]:
+    """
+    What a turn records about the workspace it starts on, as the effect `Run.step` takes.
+
+    A step rather than a plain read, and that is the rule the mechanism asks for rather than a
+    preference: reading a worktree returns a different answer every time it is asked, so a pass
+    that re-read it would resume a conversation against a directory that has moved since. Recorded
+    once, every later pass is handed the hash the first one saw.
+
+    No workspace records `None` rather than nothing at all, so a turn taken before one was
+    configured is distinguishable from a turn nobody has reached yet.
+    """
+
+    async def capture() -> object:
+        return None if workspace is None else await workspace.capture(f"turn {turn}")
+
+    return capture
+
+
+def conversing(
+    endpoints: Endpoints, instructions: str, worktrees: Worktrees | None = None
+) -> Callable[[Run], Awaitable[Never]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
 
@@ -413,9 +555,18 @@ def conversing(endpoints: Endpoints, instructions: str) -> Callable[[Run], Await
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no profile, so it was never started by this console")
         agent = agent_for(endpoints, chosen, instructions)
+        # The session's *own* worktree, named from the workflow id rather than passed in, for the
+        # same reason the choice is read from the checkpoint: one body serves every session, and
+        # what differs between them is not the body but which files it is working in.
+        workspace = worktrees.workspace(run.workflow) if worktrees is not None else None
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
+            # After the prompt and before the agent, which is the one moment in a turn when the
+            # worktree is nobody's business but the person's: they have just sent a message, so
+            # whatever they were editing they have stopped editing. It is also the state a rewind
+            # to this turn puts back.
+            await run.step(tree_key(at.turn), snapshotting(workspace, at.turn), parse_tree)
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
             # from zero within it, so a turn's keys do not depend on how many turns preceded it in
             # this pass. A pass that resumes mid-conversation issues its first request under

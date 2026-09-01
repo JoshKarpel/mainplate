@@ -44,3 +44,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the reflection integration and writes keyless profiles, so the box holds no credential
   at all. One gateway gets one profile per wire, which between them reach Anthropic, OpenAI,
   Fireworks, and xAI: around seventy models with nothing configured.
+- A thinking level on every session, chosen beside the profile and the model and fixed with them
+  for its life. Eight values, because saying nothing about thinking, asking for it to be off, and
+  asking for it at the provider's own budget are three different requests rather than gradations of
+  one. The effort names come from Pydantic AI's own type, so a level it adds reaches the picker
+  without a change here. `default_thinking` names the one a new session starts on.
+- Forking: any turn can be branched into a new session that carries the turns before it, on a
+  different model, a different profile, or a different thinking level. A fork is a *copy* of an
+  immutable prefix rather than a pointer into its parent, so each session's checkpoint stays the
+  whole of its own conversation and neither can change what the other reads. The branch point is
+  before the forked turn's message, which comes across editable and is asked again on the new
+  model, so seeing a turn answered differently never means retyping the question. The sidebar draws
+  the resulting tree, each fork under what it came from and labelled with the turn it left at.
+- Git snapshots: with `MAINPLATE_REPOSITORY` set, every session gets a worktree of its own and each
+  turn records the tree it started on. Snapshots go through a shadow index, so nothing a reader can
+  see moves - not their staged changes, not `HEAD`, not a branch, not `git log` - and are chained
+  under `refs/mainplate/snapshots` so they survive `git gc`. An unchanged worktree writes no new
+  object at all. Forking checks the new session's worktree out at the tree the forked turn
+  originally saw, so a branch re-asks its question against the files that question was asked about.
+  Snapshots are gitignore-aware, so going back to a turn restores what is version-controlled and
+  leaves the environment alone.
+- Syntax highlighting on fenced code blocks, in the console's own palette rather than an imported
+  theme. Only Pygments' own token classes survive sanitising, so a reply cannot paint itself as any
+  part of the console's chrome.

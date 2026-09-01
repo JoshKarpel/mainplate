@@ -17,6 +17,7 @@ from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
+from pydantic_ai.settings import ThinkingLevel
 from without_durability.interfaces import claimed
 from without_durability.stepwise import Completed
 from without_durability.stepwise import Run
@@ -24,6 +25,7 @@ from without_durability.stepwise import Sleeping
 from without_durability.stepwise import Waiting
 from without_durability.stepwise import resume
 
+from mainplate.agent import Choice
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import NeverStarted
 from mainplate.conversation import Panel
@@ -36,6 +38,7 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import blocks_of
 from mainplate.conversation import messages_key
 from mainplate.conversation import panelled
+from mainplate.conversation import parse_choice
 from mainplate.conversation import parse_prompt
 from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
@@ -215,6 +218,38 @@ class TestChoosingATurn:
             prompt_key(2): "d",
         }
         assert transcript(recorded).turns == 3
+
+
+class TestTheRecordedChoice:
+    """
+    The written shape, asserted against literals rather than round-tripped through the writer.
+
+    A round trip through `recorded_choice` would agree with itself however the scheme moved, which
+    is exactly what these exist to catch: a session on disk was written by an older version of this
+    file and has to keep reading back as the same choice.
+    """
+
+    def test_a_choice_is_recorded_as_the_three_things_it_is(self) -> None:
+        chosen = Choice(profile="gateway", model="wide/steady", thinking="high")
+        assert recorded_choice(chosen) == {"profile": "gateway", "model": "wide/steady", "thinking": "high"}
+
+    def test_saying_nothing_about_thinking_is_recorded_rather_than_left_out(self) -> None:
+        """Stated, so a reader can tell "asked for nothing" from "written before there was a knob"."""
+        recorded = recorded_choice(Choice(profile="here", model="ripe/fast"))
+        assert recorded == {"profile": "here", "model": "ripe/fast", "thinking": None}
+
+    def test_a_choice_written_before_thinking_existed_still_parses(self) -> None:
+        """The compatibility that matters: no `thinking` key at all is the level that asks nothing."""
+        assert parse_choice({"profile": "here", "model": "ripe/fast"}) == Choice(profile="here", model="ripe/fast")
+
+    @pytest.mark.parametrize("level", [False, True, "minimal", "low", "medium", "high", "xhigh"])
+    def test_every_level_survives_the_checkpoint(self, level: ThinkingLevel) -> None:
+        chosen = Choice(profile="gateway", model="wide/steady", thinking=level)
+        assert parse_choice(recorded_choice(chosen)) == chosen
+
+    def test_a_level_the_checkpoint_should_not_hold_is_refused_loudly(self) -> None:
+        with pytest.raises(TypeError, match="not 'ferocious'"):
+            parse_choice({"profile": "here", "model": "ripe/fast", "thinking": "ferocious"})
 
 
 class TestAnsweringASession:

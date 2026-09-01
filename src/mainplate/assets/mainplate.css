@@ -31,6 +31,9 @@
     --sienna: light-dark(#8a5a10, #cf9a4c);
     --vermilion: light-dark(#b0281d, #e0715f);
     --amber: light-dark(#9a7310, #d9ad4e);
+    /* Only a highlighted string is drawn in this, and that is the point: nothing a speaker says is
+       green, so a literal inside a fence is the one thing on the page wearing it. */
+    --moss: light-dark(#41682c, #93c07a);
 
     /* Which hue each kind of panel is drawn in. One indirection, so the axis above is stated once
        and every rule that draws an edge, a label, or a chip reads the same token. */
@@ -45,7 +48,24 @@
        talking. */
     --mark: var(--amber);
 
-    --gap: 0.75rem;
+    /* The spacing this console is allowed to use. A closed set, and that is the whole of what it
+       buys: a value picked freehand is a value nobody can tell from a mistake later, and half the
+       gaps here were within a pixel of another one for no reason anybody could name.
+
+       The steps are the sizes already in use, deduplicated - not a scale imposed over them - so
+       adopting it moved nothing by more than about two pixels. What it changes is the next value,
+       which now has to be one of these or an argument for a new step. */
+    --space-1: 0.15rem;
+    --space-2: 0.25rem;
+    --space-3: 0.4rem;
+    --space-4: 0.6rem;
+    --space-5: 0.8rem;
+    --space-6: 1.1rem;
+    --space-7: 1.6rem;
+    --space-8: 2.2rem;
+    --space-9: 4rem;
+
+    --gap: var(--space-5);
     --radius: 0.5rem;
     --sidebar: 17rem;
     --rail: 11rem;
@@ -108,7 +128,7 @@ body {
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: var(--space-2);
 }
 
 .sessions .start {
@@ -131,7 +151,7 @@ body {
 .session {
     display: flex;
     flex-direction: column;
-    gap: 0.1rem;
+    gap: var(--space-1);
     padding: 0.45rem 0.6rem;
     border: 1px solid transparent;
     border-radius: var(--radius);
@@ -167,7 +187,7 @@ main {
 main > header {
     display: flex;
     align-items: baseline;
-    gap: 0.6rem;
+    gap: var(--space-4);
     padding: var(--gap) 0;
 }
 
@@ -192,7 +212,7 @@ main > header h1 {
 }
 
 .transcript .empty {
-    margin-top: 2rem;
+    margin-top: var(--space-8);
     color: var(--ink-faint);
     text-align: center;
 }
@@ -205,10 +225,14 @@ main > header h1 {
 .panel {
     position: relative;
     margin: 1.4rem 0;
-    padding: 0.1rem 0 0.1rem 1.1rem;
+    /* The right padding is carried by every panel rather than added when one is landed on, so
+       being the target changes only colour. Added on arrival it widened the box past its
+       container, which scrolled the whole document sideways and shifted the text under the
+       reader at the moment they had just navigated to it. */
+    padding: var(--space-1) var(--space-6);
     border-left: 2px solid var(--edge);
     /* Clears the sticky nothing above it so a panel navigated to lands with room over it. */
-    scroll-margin-top: 0.75rem;
+    scroll-margin-top: var(--space-5);
 }
 
 .panel[data-kind="person"] {
@@ -234,8 +258,6 @@ main > header h1 {
 .panel[data-landed] {
     background: color-mix(in srgb, var(--mark) 10%, transparent);
     border-radius: 0 var(--radius) var(--radius) 0;
-    padding-right: 1.1rem;
-    margin-right: -1.1rem;
 }
 
 /* A kind the key has switched off. Still drawn, and drawn as struck out rather than removed: a
@@ -248,7 +270,7 @@ main > header h1 {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: 0.3rem 0.8rem;
+    gap: var(--space-2) var(--space-5);
     margin-bottom: 0.25rem;
     font-family: var(--mono);
     font-size: 0.68rem;
@@ -366,8 +388,8 @@ main > header h1 {
 }
 
 .text pre {
-    margin: 0.6rem 0;
-    padding: 0.6rem 0.75rem;
+    margin: var(--space-4) 0;
+    padding: var(--space-4) var(--space-5);
     border: 1px solid var(--edge-soft);
     border-radius: var(--radius);
     background: var(--sunk);
@@ -379,6 +401,119 @@ main > header h1 {
     padding: 0;
     background: none;
     font-size: 0.82rem;
+}
+
+/* --- Highlighting ----------------------------------------------------- */
+
+/* Pygments names the spans and `codehilite` names the box; what the colours are is decided here,
+   from the same hues everything else on this page is drawn in. An imported Pygments theme would be
+   a second palette sitting inside the first, with its own opinion about light and dark, so the
+   token groups are mapped onto tokens that already follow the reader's theme.
+
+   Grouped by what a reader is actually distinguishing rather than by Pygments' full tree: a
+   comment from code, a string from a name, a keyword from both. Every short name in a group is
+   listed because the selector has to match exactly, and an unlisted one simply inherits the
+   block's own colour, which is the right failure. */
+.codehilite {
+    background: none;
+}
+
+/* Comments, in the same faint ink as everything else the eye is meant to skip. */
+.text pre .c,
+.text pre .ch,
+.text pre .cm,
+.text pre .cp,
+.text pre .cpf,
+.text pre .c1,
+.text pre .cs {
+    color: var(--ink-faint);
+    font-style: italic;
+}
+
+/* Keywords and operators that are really keywords: the structure of the language. */
+.text pre .k,
+.text pre .kc,
+.text pre .kd,
+.text pre .kn,
+.text pre .kp,
+.text pre .kr,
+.text pre .kt,
+.text pre .ow {
+    color: var(--lapis);
+    font-weight: 600;
+}
+
+/* Strings and the pieces of them, in the one hue added for this: nothing else on the page is
+   green, which is exactly why a string reads as a string at a glance. */
+.text pre .s,
+.text pre .sa,
+.text pre .sb,
+.text pre .sc,
+.text pre .dl,
+.text pre .sd,
+.text pre .s2,
+.text pre .se,
+.text pre .sh,
+.text pre .si,
+.text pre .sx,
+.text pre .sr,
+.text pre .s1,
+.text pre .ss {
+    color: var(--moss);
+}
+
+/* Numbers, beside strings as the other kind of literal but distinct from them. */
+.text pre .m,
+.text pre .mb,
+.text pre .mf,
+.text pre .mh,
+.text pre .mi,
+.text pre .mo,
+.text pre .il {
+    color: var(--sienna);
+}
+
+/* What a thing is called, where the name is doing work: a definition, a decorator, a builtin. */
+.text pre .nf,
+.text pre .fm,
+.text pre .nc,
+.text pre .nd,
+.text pre .ne {
+    color: var(--claude);
+}
+
+.text pre .nb,
+.text pre .bp,
+.text pre .nt {
+    color: var(--sienna);
+}
+
+/* Errors, in the one hue this console reserves for something being wrong. */
+.text pre .err {
+    color: var(--vermilion);
+}
+
+/* A diff inside a fence, which is what a coding agent shows most often after code itself. */
+.text pre .gd {
+    color: var(--vermilion);
+}
+
+.text pre .gi {
+    color: var(--moss);
+}
+
+.text pre .gh,
+.text pre .gu {
+    color: var(--ink-soft);
+    font-weight: 600;
+}
+
+.text pre .ge {
+    font-style: italic;
+}
+
+.text pre .gs {
+    font-weight: 600;
 }
 
 .text table {
@@ -436,7 +571,7 @@ main > header h1 {
 .tool > summary {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
+    gap: var(--space-4);
     padding: 0.35rem 0.6rem;
     color: var(--ink-soft);
     cursor: pointer;
@@ -483,7 +618,7 @@ main > header h1 {
 
 .tool__body {
     margin: 0;
-    padding: 0 0.6rem 0.5rem;
+    padding: 0 var(--space-4) var(--space-4);
 }
 
 .tool__body dt {
@@ -500,7 +635,7 @@ main > header h1 {
 
 .tool__body pre {
     margin: 0;
-    padding: 0.4rem 0.55rem;
+    padding: var(--space-3) var(--space-4);
     border-radius: calc(var(--radius) / 1.5);
     background: var(--sunk);
     overflow-x: auto;
@@ -580,7 +715,7 @@ main > header h1 {
 .composer {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: var(--space-3);
     width: 100%;
     max-width: var(--measure);
     margin: 0 auto;
@@ -605,7 +740,7 @@ main > header h1 {
 }
 
 .composer button {
-    padding: 0.55rem 1.1rem;
+    padding: var(--space-4) var(--space-6);
     border: 1px solid transparent;
     border-radius: var(--radius);
     background: var(--person-edge);
@@ -649,7 +784,7 @@ main > header h1 {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 0.4rem;
+    gap: var(--space-3);
     padding: var(--gap) var(--gap) var(--gap) 0;
     overflow-y: auto;
 }
@@ -702,8 +837,8 @@ main > header h1 {
 
     .rail {
         position: fixed;
-        top: 0.8rem;
-        right: 0.8rem;
+        top: var(--space-5);
+        right: var(--space-5);
         bottom: 0.8rem;
         z-index: 10;
         width: var(--rail);
@@ -744,7 +879,7 @@ main > header h1 {
 .search {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: var(--space-2);
 }
 
 .search__input {
@@ -764,7 +899,7 @@ main > header h1 {
 .search__bar {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: var(--space-2);
 }
 
 .search__count {
@@ -805,7 +940,7 @@ mark.hit.current {
 .key {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 0.2rem 0.3rem;
+    gap: var(--space-2);
 }
 
 .key__chip {
@@ -856,7 +991,7 @@ mark.hit.current {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.2rem;
+    gap: var(--space-2);
 }
 
 /* Three columns of up/down arrows: a person column and an assistant column each seeking one side
@@ -864,14 +999,14 @@ mark.hit.current {
 .dock__nav {
     display: grid;
     grid-template-columns: repeat(3, 2.1rem);
-    gap: 0.15rem;
+    gap: var(--space-1);
 }
 
 .dock__leap,
 .dock__fold {
     display: flex;
     justify-content: center;
-    gap: 0.15rem;
+    gap: var(--space-1);
 }
 
 .dock__btn {
@@ -921,11 +1056,11 @@ mark.hit.current {
 .theme {
     display: flex;
     justify-content: center;
-    gap: 0.15rem;
+    gap: var(--space-1);
 }
 
 .theme button {
-    padding: 0.15rem 0.4rem;
+    padding: var(--space-1) var(--space-3);
     border: 1px solid transparent;
     border-radius: 999px;
     background: transparent;
@@ -947,11 +1082,158 @@ mark.hit.current {
     outline-offset: 1px;
 }
 
+/* --- Branching ---------------------------------------------------------- */
+
+/* Offered on a person's panel and nowhere else, because a turn boundary is the only place a
+   conversation has no half-finished exchange in it. Quiet until the panel is under the pointer:
+   it is an action on something you are already reading rather than a thing to scan for, and one
+   per message would otherwise be a column of them down the page. */
+/* The worktree a turn started on, which is what forking it would put back. Beside the fork link
+   because they are the same point, and in the same faint ink as the anchor because it is a fact
+   about the turn rather than something to read. */
+.panel__tree {
+    margin-left: auto;
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+}
+
+.panel__tree + .panel__fork {
+    margin-left: 0;
+}
+
+.panel__fork {
+    margin-left: auto;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    text-decoration: none;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+}
+
+.panel:hover .panel__fork,
+.panel:focus-within .panel__fork {
+    opacity: 1;
+}
+
+/* Never hidden from somebody navigating by keyboard: `opacity: 0` still takes focus, so without
+   this the tab order would stop somewhere invisible. */
+.panel__fork:focus-visible {
+    opacity: 1;
+    outline: 2px solid var(--mark);
+    outline-offset: 2px;
+}
+
+.panel__fork:hover {
+    color: var(--mark);
+}
+
+/* `main` is a grid whose middle row grows, because on a session page the middle child is the
+   transcript and the transcript is what should take the room. This page puts the card there
+   instead, so the rows are restated: the card is its own height and the conversation beneath it
+   grows. Stated as a rule on the page rather than a property on the card, because which row grows
+   is a fact about the layout and not about the thing that happens to sit in it. */
+main:has(> .forking) {
+    grid-template-rows: auto auto 1fr;
+}
+
+.forking {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    max-width: var(--measure);
+    padding: var(--space-6);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+}
+
+.forking h1 {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.forking textarea {
+    width: 100%;
+    padding: var(--space-4);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--ground);
+    color: var(--ink);
+    font: inherit;
+    resize: vertical;
+}
+
+/* Which worktree this console snapshots against. On the settled note rather than in the rail,
+   because it belongs with the other things a session cannot change about itself. */
+.picker .workspace {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+}
+
+.forking__kept {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+}
+
+.forking__act {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+}
+
+.forking__back {
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+}
+
+/* What the fork would carry, drawn as the conversation it is rather than as a summary of one.
+   Dimmed, because it is the past being shown for confirmation and not the thing being acted on. */
+.forking + .transcript {
+    opacity: 0.75;
+}
+
+/* A fork in the sidebar, stepped in under what it came from. The rule rather than a margin on
+   the anchor, so the whole row moves and the hit target does not shrink with depth. */
+.sessions li[data-depth="1"] {
+    padding-left: var(--space-4);
+}
+
+.sessions li[data-depth="2"] {
+    padding-left: var(--space-6);
+}
+
+.sessions li[data-depth="3"] {
+    padding-left: var(--space-8);
+}
+
+.sessions li[data-depth]:not([data-depth="0"]) > .session {
+    border-left: 2px solid var(--edge);
+    padding-left: var(--space-3);
+}
+
+.session .meta {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+}
+
+/* Which turn the fork left its parent at, which is the one fact that distinguishes two forks of
+   the same conversation from each other. */
+.session .from {
+    color: var(--mark);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+}
+
 /* --- A page nothing could answer --------------------------------------- */
 
 .refusal {
     max-width: var(--measure);
-    margin: 4rem auto;
+    margin: var(--space-9) auto;
     padding: 0 var(--gap);
 }
 

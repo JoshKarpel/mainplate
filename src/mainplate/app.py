@@ -66,6 +66,7 @@ from mainplate.profiles import read_config
 from mainplate.service import Service
 from mainplate.sessions import prepare
 from mainplate.settings import Settings
+from mainplate.snapshots import Worktrees
 
 ASSET_ROOT: Final = Path(__file__).parent / "assets"
 
@@ -105,7 +106,9 @@ def build_router() -> Router[Service]:
 
 
 @asynccontextmanager
-async def open_store(database: Path, lease: timedelta, catalogues: Catalogues) -> AsyncIterator[Service]:
+async def open_store(
+    database: Path, lease: timedelta, catalogues: Catalogues, worktrees: Worktrees | None = None
+) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
 
@@ -122,6 +125,7 @@ async def open_store(database: Path, lease: timedelta, catalogues: Catalogues) -
             durable=SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease)),
             checkpointer=checkpointer,
             catalogues=catalogues,
+            worktrees=worktrees,
         )
     finally:
         # Never `connection.close()`: the store's own `aclose` waits out any statement still
@@ -147,8 +151,19 @@ async def open_console(settings: Settings, config: Config, endpoints: Endpoints)
     """
     catalogues = Catalogues(current=await discover(endpoints, config))
     logger.info(f"models discovered: {summarise(catalogues.current)}")
-    async with open_store(settings.database, settings.lease, catalogues) as service:
-        answering = work(service.durable, conversing(endpoints, settings.instructions), limit=settings.passes)
+    worktrees = (
+        Worktrees(repo=settings.repository, root=settings.worktree_root) if settings.repository is not None else None
+    )
+    if worktrees is not None:
+        # Beside discovery, and for the same reason: this is a lifespan, so a path that is not a
+        # repository refuses the start rather than failing on whichever session first tried to
+        # plant a worktree. `confirm` raises `NotAWorkspace`, which reaches the CLI as `DidNotStart`.
+        await worktrees.confirm()
+        logger.info(f"sessions work in {settings.repository}, with worktrees under {settings.worktree_root}")
+    async with open_store(settings.database, settings.lease, catalogues, worktrees) as service:
+        answering = work(
+            service.durable, conversing(endpoints, settings.instructions, worktrees), limit=settings.passes
+        )
         keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
         async with background_task(answering), background_task(keeping_current):
             yield service

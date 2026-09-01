@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import parse_qs
 
+from pydantic_ai.settings import ThinkingLevel
 from without_asgi import Response
 from without_asgi import html_content
 from without_web import STR
@@ -23,7 +25,9 @@ from without_web import post
 from without_web import query_param
 
 from mainplate.agent import Choice
+from mainplate.conversation import THINKING_FIELD
 from mainplate.pages import Links
+from mainplate.pages import fork_page
 from mainplate.pages import fragment
 from mainplate.pages import model_select
 from mainplate.pages import refusal_page
@@ -32,6 +36,9 @@ from mainplate.pages import stalled_by
 from mainplate.pages import start_page
 from mainplate.pages import transcript_region
 from mainplate.service import Service
+from mainplate.thinking import DEFAULT_THINKING
+from mainplate.thinking import UnknownThinking
+from mainplate.thinking import thinking_named
 
 ASSETS = "/assets"
 
@@ -45,6 +52,8 @@ LONGEST_PROMPT = 100_000
 session_id = path_param("session", STR)
 # The profile whose models to render, which is the value of the select that asks for them.
 of_profile = query_param("profile", once(str), schema={"type": "string"})
+# Which turn a fork would start at, which is the first turn the branch does not inherit.
+at_turn = query_param("at", once(int), schema={"type": "integer"})
 
 
 class NotAMessage(ValueError):
@@ -79,6 +88,11 @@ def parse_form_start(raw: bytes) -> Started:
     on one condition: a form that names a profile without a message is not half a request, it is
     not a request. Whether the pair is *configured* is not asked here, because this layer has no
     configuration; the handler asks that of the `Service` and refuses with a status of its own.
+
+    The thinking level is the one field this layer can settle by itself, because unlike a profile
+    and a model it is a closed set rather than something discovered. An absent field is the
+    configured default rather than a refusal, so a form posted by something that predates the
+    control still names a session's whole choice.
     """
     said = parse_form_prompt(raw)
     fields = parse_qs(raw.decode("utf-8", errors="replace"))
@@ -86,7 +100,22 @@ def parse_form_start(raw: bytes) -> Started:
     model = fields.get("model", [""])[0].strip()
     if not profile or not model:
         raise NotAMessage("a message needs a profile and a model to be answered on")
-    return Started(said=said, chosen=Choice(profile=profile, model=model))
+    return Started(said=said, chosen=Choice(profile=profile, model=model, thinking=posted_thinking(fields)))
+
+
+def posted_thinking(fields: Mapping[str, list[str]]) -> ThinkingLevel | None:
+    """
+    The thinking level a form named, refused in this layer's own terms if it is not one.
+
+    `UnknownThinking` is turned into `NotAMessage` rather than propagating, because the two mean
+    the same thing here and only one of them is answered as a client error: a select is a
+    suggestion the page made, so a value outside it came from something that is not this page.
+    """
+    named = fields.get(THINKING_FIELD, [DEFAULT_THINKING])[0].strip() or DEFAULT_THINKING
+    try:
+        return thinking_named(named)
+    except UnknownThinking as unknown:
+        raise NotAMessage(str(unknown)) from unknown
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +127,47 @@ class Started:
 
 
 starting = body(parse_form_start, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
+
+
+@dataclass(frozen=True, slots=True)
+class Forking:
+    """A fork as the form describes it, before anything has decided it is possible."""
+
+    at: int
+    chosen: Choice
+    said: str | None
+
+
+def parse_form_fork(raw: bytes) -> Forking:
+    """
+    Where to fork, what to answer it with, and what to ask it first.
+
+    The message is optional, which is the difference from `parse_form_start`: forking the end of a
+    conversation has nothing to re-ask, where forking one of its turns carries that turn's own
+    message back for asking again. An empty box is the first of those rather than a refusal, so a
+    fork that is only meant to carry a past is a form somebody can submit.
+
+    The turn is refused rather than defaulted, because a fork that silently branched at turn zero
+    would throw away the conversation somebody meant to keep.
+    """
+    if len(raw) > LONGEST_PROMPT:
+        raise NotAMessage(f"a message may be at most {LONGEST_PROMPT} bytes")
+    fields = parse_qs(raw.decode("utf-8", errors="replace"))
+    profile = fields.get("profile", [""])[0].strip()
+    model = fields.get("model", [""])[0].strip()
+    at = fields.get("at", [""])[0].strip()
+    if not profile or not model:
+        raise NotAMessage("a fork needs a profile and a model to be answered on")
+    if not at.isdigit():
+        raise NotAMessage("a fork needs the turn it forks at")
+    return Forking(
+        at=int(at),
+        chosen=Choice(profile=profile, model=model, thinking=posted_thinking(fields)),
+        said=fields.get("prompt", [""])[0].strip() or None,
+    )
+
+
+forking = body(parse_form_fork, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
 
 
 def page_response(status: int, markup: str) -> Response:
@@ -164,6 +234,45 @@ async def start(service: Service, started: Started) -> Response:
         return page_response(422, refusal_page(LINKS, 422, f"no profile on offer serves {started.chosen.model}"))
     session = await service.start(started.said, started.chosen)
     return seeing(LINKS.to_session(session.id))
+
+
+@get(t"/sessions/{session_id}/forks/new", session_id, at_turn, summary="Where a fork would start")
+async def fork_form(service: Service, session: str, at: int) -> Response:
+    """
+    The page that asks what to answer a branch with, before anything is created.
+
+    A page of its own rather than a control inside the transcript, and the reason is what the
+    transcript is: a region replaced once a second while a turn is in flight. A picker rendered per
+    person panel would be rebuilt under the reader's hand on every poll, and there would be one per
+    turn. Here the question is asked once, on a page that is not swapping, and the answer arrives
+    as an ordinary form post that a browser with no script can make.
+    """
+    found = await service.read(session)
+    if found is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    if not 0 <= at <= found.said.turns:
+        return page_response(404, refusal_page(LINKS, 404, f"session {session} has no turn {at}"))
+    return page_response(200, fork_page(LINKS, await service.listed(), found, at, service.catalogues.current))
+
+
+@post(t"/sessions/{session_id}/forks", session_id, forking, summary="Fork a session at one of its turns")
+async def fork(service: Service, session: str, branch: Forking) -> Response:
+    """
+    Make the branch and go to it, which is the one moment a session's choice may differ.
+
+    The pair is checked exactly as `start` checks it, and for the same reason: a select is a
+    suggestion the page made rather than a constraint on what can be posted. A fork is the one
+    place the model may change, so it is also where that check has to happen a second time.
+
+    A `303` for the reason `start` returns one: this created something, and the browser must arrive
+    at it with a `GET` so a refresh does not branch again.
+    """
+    if not service.catalogues.current.offers(branch.chosen.profile, branch.chosen.model):
+        return page_response(422, refusal_page(LINKS, 422, f"no profile on offer serves {branch.chosen.model}"))
+    forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said)
+    if forked is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return seeing(LINKS.to_session(forked.id))
 
 
 @get("/fragments/models", of_profile, summary="One profile's model select")
@@ -234,6 +343,8 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     show_session,
     session_fragment,
     profile_models,
+    fork_form,
+    fork,
     say,
 )
 
@@ -244,5 +355,7 @@ LINKS = Links(
     say=say,
     session_fragment=session_fragment,
     profile_models=profile_models,
+    fork_form=fork_form,
+    fork=fork,
     assets=ASSETS,
 )

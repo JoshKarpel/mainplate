@@ -37,6 +37,8 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.settings import ThinkingLevel
 
 from mainplate.durability import StepwiseDurability
 from mainplate.profiles import Config
@@ -46,12 +48,17 @@ from mainplate.profiles import Profile
 @dataclass(frozen=True, slots=True)
 class Choice:
     """
-    Which endpoint and which model a session is on, recorded when it is created and fixed for life.
+    Which endpoint, which model, and how hard to think: recorded at creation and fixed for life.
 
     Fixed because a conversation that changed model halfway would replay its recorded responses
     from one and continue on another, so what the transcript shows and what the next turn is
-    reasoning from would have different authors. Starting a second session is how you change your
-    mind, which also keeps the first one readable.
+    reasoning from would have different authors. Forking is how you change your mind: it starts a
+    session from a point in this one's history, so the answer before the branch has one author and
+    the answer after it has another, and both remain readable.
+
+    That is also why `thinking` is here rather than beside a turn. It is not a property of a
+    question, it is a property of the thing answering, and a session whose effort moved mid-way
+    would replay recorded answers reasoned at one budget and continue at a different one.
 
     The profile is what carries the wire format, which is why it is recorded rather than looked up:
     a model id can appear behind two wires, and the two serialize a conversation differently, so a
@@ -60,6 +67,27 @@ class Choice:
 
     profile: str
     model: str
+
+    thinking: ThinkingLevel | None = None
+    """
+    How hard to think, or nothing at all to leave the setting off the request.
+
+    Absent is the meaning rather than an omission, exactly as `Profile.base_url` is: a request with
+    no thinking setting is answered however the model behaves by default, which for a reasoning
+    model is to reason and for the rest is not to. Defaulted here because most constructions are
+    ours; `parse_choice` supplies it explicitly, so a checkpoint written before this existed reads
+    back as the default rather than as a failure.
+    """
+
+    @property
+    def settings(self) -> ModelSettings | None:
+        """
+        What this choice asks of a model, which today is the thinking level and nothing else.
+
+        `None` rather than an empty mapping, so a choice that asks for nothing builds an agent
+        indistinguishable from one built before this field existed.
+        """
+        return None if self.thinking is None else ModelSettings(thinking=self.thinking)
 
 
 class UnknownChoice(LookupError):
@@ -262,10 +290,15 @@ def agent_for(endpoints: Endpoints, chosen: Choice, instructions: str) -> Agent[
     while this process runs, so a mapping built at startup would be a snapshot going stale. It
     costs a few tens of microseconds against a turn that costs seconds, and the connection pool -
     the part that is genuinely expensive to build - belongs to the endpoint and is not rebuilt.
+
+    The settings come off the choice rather than being passed in, because they are recorded with it
+    and are as fixed as it is: a pass that resumed a session at a different effort would continue a
+    conversation whose earlier answers were reasoned at another.
     """
     return Agent(
         endpoints.for_profile(chosen.profile).model(chosen.model),
         name="mainplate",
         instructions=instructions,
+        model_settings=chosen.settings,
         capabilities=[StepwiseDurability()],
     )

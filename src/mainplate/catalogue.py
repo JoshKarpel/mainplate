@@ -31,6 +31,7 @@ from mainplate.agent import Choice
 from mainplate.agent import Endpoints
 from mainplate.agent import Listed
 from mainplate.profiles import Config
+from mainplate.thinking import thinking_named
 
 logger = logging.getLogger(__name__)
 
@@ -119,14 +120,18 @@ def default_choice(offered: Mapping[str, tuple[Listed, ...]], config: Config) ->
     overnight would otherwise leave a picker whose selected option does not exist. Falling through
     to the first is a default and not a fallback - there is no second mechanism, only a value that
     was not supplied.
+
+    The thinking level needs none of that care and gets none: it is a closed set checked when the
+    file was parsed, so by here it is already a level rather than a name to be doubted.
     """
+    thinking = thinking_named(config.default_thinking)
     models = offered[config.default]
     named = config.default_model
     if named is not None and any(named == model.id for model in models):
-        return Choice(profile=config.default, model=named)
+        return Choice(profile=config.default, model=named, thinking=thinking)
     if named is not None:
         logger.warning(f"default_model {named!r} is not offered by profile {config.default!r}, using {models[0].id!r}")
-    return Choice(profile=config.default, model=models[0].id)
+    return Choice(profile=config.default, model=models[0].id, thinking=thinking)
 
 
 @dataclass(slots=True)

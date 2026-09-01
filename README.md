@@ -51,19 +51,25 @@ reaches models the other does not. It also decides what `base_url` has to be: th
 appends `/v1/messages` to what it is given, so it wants the host, and the OpenAI SDK appends
 `/chat/completions`, so it wants the host and `/v1`.
 
-A session records the profile *and* the model, at the moment it is created, and both are fixed for
-its life. The profile is what carries the wire, which is why it is recorded rather than looked up
-later: the same model id can sit behind two wires, and the two serialize a conversation
-differently. You pick both under the composer on the new-chat page, where the models are grouped by
-the vendor each comes from; after that the session says what it is on rather than offering a control
-that could not change it. A conversation that switched model halfway would replay its recorded
-answers from one and continue on another, so what the transcript shows and what the next turn
-reasons from would have different authors. Starting a second session is how you change your mind,
-and it keeps the first one readable.
+A session records the profile, the model *and* a thinking level, at the moment it is created, and
+all three are fixed for its life. The profile is what carries the wire, which is why it is recorded
+rather than looked up later: the same model id can sit behind two wires, and the two serialize a
+conversation differently. You pick all three under the composer on the new-chat page, where the
+models are grouped by the vendor each comes from; after that the session says what it is on rather
+than offering a control that could not change it. A conversation that switched model halfway would
+replay its recorded answers from one and continue on another, so what the transcript shows and what
+the next turn reasons from would have different authors.
+
+**Forking is how you change your mind**, and it keeps the original readable. Every message carries a
+`fork` link: following it makes a new session that inherits the turns before that one, on whatever
+profile, model and thinking level you pick, and asks that turn's own question again. The message
+comes across editable, so a fork is equally a way to rephrase. The sidebar draws the result as a
+tree, each fork nested under what it came from and labelled with the turn it left at.
 
 A new session starts on whichever model the default profile listed first, which for most gateways is
 their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
-since dropped falls back to the first rather than stopping the console.
+since dropped falls back to the first rather than stopping the console. `default_thinking` names the
+level, and defaults to saying nothing about thinking at all.
 
 The list is read once before the console takes traffic and refreshed on a timer after that
 (`MAINPLATE_REFRESH`, fifteen minutes by default), by a task that answers no requests. So rendering
@@ -217,9 +223,18 @@ Named plainly, because they are the next things rather than omissions nobody not
   between them cover most gateways. A third is one `Endpoint` class saying how to name a model over
   that wire and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.
 - **A session cannot be moved to another profile.** Removing a profile that sessions use leaves
-  them readable and stuck; the page names the profile so putting it back is obvious. A model
-  dropping out of the picker is *not* that case and does not stop a session, since an endpoint
-  routes more ids than it advertises.
+  them readable and stuck; the page names the profile so putting it back is obvious. Forking one
+  onto a profile that still exists is the way out. A model dropping out of the picker is *not* that
+  case and does not stop a session, since an endpoint routes more ids than it advertises.
+- **Snapshots are kept but not yet restored.** With a repository configured, each session works in
+  a worktree of its own and every turn records the tree it started on, and forking checks the new
+  worktree out at the tree the forked turn saw. What is missing is a rewind: putting an existing
+  session's files back to an earlier turn.
+- **The repository has to be a local checkout.** `MAINPLATE_REPOSITORY` names one on disk. Owning
+  its own clones, so a console works on repositories that were never checked out beside it, is the
+  direction: `forge.py` is the interface and `ExeDevGitHub` reads the GitHub integrations attached
+  to an exe.dev VM, which needs no credential because exe.dev injects one at its own edge. What is
+  missing is the picker that would let a new session choose among them.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.
