@@ -1,8 +1,11 @@
-# The file tools, which is the half of anchored editing that touches a disk.
+# The file tools: the half of anchored editing that touches a disk, and the listing that finds
+# something to edit in the first place.
 #
 # `anchors.py` is the pure core: it takes lines and operations and returns lines. This is the shell
-# around it, and it owns the three things that are not pure - where the file is, what encoding and
-# line endings it had, and how a refusal reaches the model.
+# around it, and it owns what is not pure - where the file is, what encoding and line endings it
+# had, what git says is in a directory, and how a refusal reaches the model. The rendering is pure
+# and lives here anyway, next to the call whose answer it shapes rather than off in the core, since
+# none of it is about anchors.
 #
 # **Every path is resolved inside one worktree and refused outside it.** A session's files are its
 # own linked worktree, so the root is a real boundary rather than a convention: `..`, an absolute
@@ -26,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
+from collections.abc import Iterator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,12 +38,12 @@ from typing import Final
 from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
-from mainplate.anchors import Anchored
-from mainplate.anchors import EditRefused
-from mainplate.anchors import Moved
-from mainplate.anchors import Operation
-from mainplate.anchors import Written
-from mainplate.anchors import written
+from mainplate.tools.files.anchors import Anchored
+from mainplate.tools.files.anchors import EditRefused
+from mainplate.tools.files.anchors import Moved
+from mainplate.tools.files.anchors import Operation
+from mainplate.tools.files.anchors import Written
+from mainplate.tools.files.anchors import written
 
 # The most a single read will show without being asked for more. A whole file is the common case and
 # the right default, so this is a bound on the pathological one rather than a page size: a generated
@@ -59,6 +63,21 @@ MAX_BYTES: Final = 2 * 1024 * 1024
 # guessed at: a smaller model got the operation shape wrong on its first call and the default limit
 # turned a correctable mistake into a failed turn.
 RETRIES: Final = 3
+
+# The most rows one listing will show. A bound on the pathological case rather than a page size, the
+# way `MAX_LINES` is: `depth` is the knob, and this is what stops a large `depth` on a large
+# repository from spending a context window before the model has asked its first real question.
+MAX_ROWS: Final = 400
+
+
+class ListingFailed(RuntimeError):
+    """
+    git could not say what is in a directory.
+
+    Not a `Refused`, because it is not something a model can retry its way out of: every workspace
+    these tools are built against is a linked worktree, so this is a broken environment rather than
+    a badly-aimed call.
+    """
 
 
 class Refused(ValueError):
@@ -113,7 +132,7 @@ class Text:
 @dataclass(frozen=True, slots=True)
 class Files:
     """
-    One session's worktree, as the three things a model may do to it.
+    One session's worktree, as the four things a model may do to it.
 
     Frozen and holding one path, so it is a value rather than a handle: every method is an effect
     against the filesystem, and two callers sharing one share no state.
@@ -159,6 +178,49 @@ class Files:
         stop = min(len(text.lines), start + max(1, limit))
         return "\n".join((reading(path, len(text.lines), start, stop), "", anchored.rendered(start, stop)))
 
+    async def tracked(self, here: Path) -> tuple[str, ...]:
+        """
+        What git says is under `here`, which is everything committed or new but nothing ignored.
+
+        Asked of git rather than walked, because the alternative is a hand-kept list of names to
+        skip that is wrong the moment a repository uses a build directory nobody thought of. A
+        worktree here has a `.venv` or a `node_modules` more often than not, and one of those walked
+        in full is tens of thousands of paths through a context window. `--cached --others` is the
+        pair that also shows a file the agent itself just created, which is untracked and is exactly
+        what it will want to look for.
+
+        What comes back is *flat*: one full path per line, relative to `here`. Git records files and
+        never directories, so there is no tree to ask it for and none to be had - an empty directory
+        does not exist as far as this is concerned. `catalogue` is what turns those paths into one.
+
+        A failure is a fault rather than a `Refused`: every workspace these tools are built against
+        is a linked worktree, so git failing here is not something a model can retry its way out of,
+        and returning nothing would be a silent wrong answer.
+        """
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            cwd=here,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await process.communicate()
+        if process.returncode:
+            raise ListingFailed(f"git ls-files failed ({process.returncode}): {err.decode().strip()}")
+        return tuple(sorted(found for found in out.decode().split("\0") if found))
+
+    async def listing(self, path: str, depth: int) -> str:
+        here = self.resolved(path)
+        if not here.exists():
+            raise Refused(f"there is no directory at {path!r}")
+        if not here.is_dir():
+            raise Refused(f"{path!r} is a file rather than a directory; `read` is what opens one")
+        return catalogued(path, await self.tracked(here), max(1, depth))
+
     async def edit(self, path: str, operations: Sequence[Operation]) -> str:
         found, text = await asyncio.to_thread(self.loaded, path)
         done = written(Anchored.over(text.lines), operations)
@@ -179,17 +241,55 @@ class Files:
 
         await asyncio.to_thread(write)
         anchored = Anchored.over(text.lines)
-        return "\n".join((f"created {path}, {counted(len(text.lines))}", "", anchored.rendered(0, MAX_LINES)))
+        return "\n".join((f"created {path}, {counted(len(text.lines), 'line')}", "", anchored.rendered(0, MAX_LINES)))
 
 
-def counted(lines: int) -> str:
-    return f"{lines} line" if lines == 1 else f"{lines} lines"
+def counted(many: int, noun: str) -> str:
+    return f"{many} {noun}" if many == 1 else f"{many} {noun}s"
+
+
+def catalogue(paths: Sequence[str], depth: int, level: int) -> Iterator[str]:
+    """
+    One row per file, and one per directory, indented by how deep it sits.
+
+    A directory at the depth asked for is summarised by a count rather than opened, which is what
+    makes `depth` a bound on the answer instead of a hint. Its own files come before its
+    subdirectories so that what is *here* stays next to the line naming here, rather than arriving
+    after everything nested below it.
+    """
+    indent = "  " * level
+    folders: dict[str, list[str]] = {}
+    for path in paths:
+        if "/" in path:
+            head, rest = path.split("/", 1)
+            folders.setdefault(head, []).append(rest)
+    for path in sorted(path for path in paths if "/" not in path):
+        yield f"{indent}{path}"
+    for name, inside in sorted(folders.items()):
+        if level + 1 >= depth:
+            yield f"{indent}{name}/ ({counted(len(inside), 'file')})"
+            continue
+        yield f"{indent}{name}/"
+        yield from catalogue(inside, depth, level + 1)
+
+
+def catalogued(path: str, found: Sequence[str], depth: int) -> str:
+    """What a listing hands back: what was asked, then the tree, bounded by `MAX_ROWS`."""
+    if not found:
+        return f"{path} holds no files git knows about"
+    rows = list(catalogue(found, depth, 0))
+    said = f"{path}, {counted(len(found), 'file')} within {counted(depth, 'level')}"
+    if len(rows) > MAX_ROWS:
+        return "\n".join(
+            (f"{said}; the first {MAX_ROWS} rows, so ask for a smaller `depth` to see less", "", *rows[:MAX_ROWS])
+        )
+    return "\n".join((said, "", *rows))
 
 
 def reading(path: str, total: int, start: int, stop: int) -> str:
     """What a read says about itself, which is where in the file it stopped and whether it did."""
     if start == 0 and stop >= total:
-        return f"{path}, {counted(total)}"
+        return f"{path}, {counted(total, 'line')}"
     return f"{path}, lines {start + 1}-{stop} of {total}; pass `offset` to read further"
 
 
@@ -207,7 +307,7 @@ def reported(path: str, done: Written) -> str:
     content is not unique, so an edit can rename an untouched line elsewhere in the file, and an
     anchor the model still believes in is worth one line here rather than a whole re-read later.
     """
-    parts = [f"edited {path}, now {counted(len(done.lines))}", ""]
+    parts = [f"edited {path}, now {counted(len(done.lines), 'line')}", ""]
     for start, stop in done.regions:
         parts.append(f"lines {start + 1}-{stop}:")
         parts.append(done.after.rendered(start, stop))
@@ -235,7 +335,7 @@ async def guarded[T](work: Awaitable[T]) -> T:
 
 def file_tools(files: Files) -> FunctionToolset[None]:
     """
-    The three tools, bound to one session's worktree.
+    The four tools, bound to one session's worktree.
 
     Built per session rather than declared once, because the root is what makes a path safe and
     every session has its own. A session with no repository gets no toolset at all, which is the
@@ -243,9 +343,67 @@ def file_tools(files: Files) -> FunctionToolset[None]:
     """
     toolset = FunctionToolset[None]()
 
-    async def read(path: str, offset: int = 1, limit: int = MAX_LINES) -> str:
+    async def listing(path: str = ".", depth: int = 2) -> str:
         """
+        See what files are in a directory, before guessing at a name.
+
+        Reach for this first, rather than trying `read` on a path you are hoping exists. At its
+        default `depth` one call usually orients you in a repository:
+
+        ```
+        ., 8 files within 2 levels
+
+        .gitignore
+        README.md
+        pyproject.toml
+        src/
+          demo/ (4 files)
+        tests/
+          test_app.py
+        ```
+
+        A name ending in `/` is a directory. One shown with a count, like `demo/ (4 files)`, sits at
+        the depth asked for and was summarised rather than opened; list it directly or ask for a
+        larger `depth` to see inside. A directory's own files come before its subdirectories, so
+        what is at a level stays next to the line naming that level.
+
+        Only what git tracks or would track is shown: anything matched by a `.gitignore` is left
+        out, so a build directory or an installed environment will not appear, and a file you have
+        just created will. A directory holding no files of its own is therefore not listed at all,
+        since git records files rather than directories. Nothing here is a promise that a path is
+        readable text; `read` says so.
+
+        Args:
+            path: Directory to list, relative to the session's workspace. Defaults to its root.
+            depth: How many levels of directory to open. A directory deeper than this is shown
+                with a count of what is inside it instead of its contents.
+
+        """
+        return await guarded(files.listing(path, depth))
+
+    async def read(path: str, offset: int = 1, limit: int = MAX_LINES) -> str:
+        r"""
         Read a file, with an anchor in front of every line that has one.
+
+        Each line comes back as its anchor, then a `│`, then the line itself:
+
+        ```
+        greet.py, 7 lines
+
+        idpf│import sys
+        ----│
+        ----│
+        cxec│def greet(name):
+        zcbk│    if not name:
+        uzsa│        return "hello, world"
+        pelr│    return f"hello, {name}"
+        ```
+
+        **Everything left of the `│` is this tool talking, and is not in the file.** That file's
+        first line is `import sys`, not `idpf│import sys`, and its `def` line is `def greet(name):`
+        with nothing before it. The `│` is what marks where the file starts, so read up to it and
+        no further. Never write an anchor or a `│` into `text`, `replace`, or `content`: it is not
+        part of the line, and putting it back corrupts the line and re-anchors everything after it.
 
         An **anchor** is the four-letter name a line answers to, derived from the line's own
         content. It is how `edit` says which lines to change, and it is not a line number: an edit
@@ -253,10 +411,11 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         after an edit elsewhere. A line that has changed since you read it will not resolve, and
         you will be told so rather than editing the wrong place.
 
-        Blank lines have no anchor, by design. To reach one, address the line above it with
-        `after`, or the line below it with `before`. A line shown with `----` instead of an anchor
-        is inside a run of identical lines and cannot be named directly; address the unique lines
-        around it.
+        `----` in place of an anchor means that line cannot be named, and there are two ways to be
+        unnameable. A blank line is one, as lines 2 and 3 above are: reach it by addressing the
+        line above with `after` or the line below with `before`. The other is a line inside a run
+        of identical lines, which shows as `----│    pass` with its content still there; address
+        the unique lines around the run.
 
         Args:
             path: Path to the file, relative to the session's workspace.
@@ -275,6 +434,13 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         shift each other, and a batch whose operations overlap is turned down rather than resolved
         in some order you did not choose. Batch freely: a rename and the call sites it affects
         belong in one call, and so do an import and the code that uses it.
+
+        **`text` and `replace` are file content, so no anchor and no `│` belongs in either.** An
+        anchor names a line in the arguments that address it (`from`, `to`, `after`, `before`,
+        `at`); it is never part of what gets written. Replacing `zcbk│    if not name:` is
+        `{"from": "zcbk", ..., "text": "    if not name:"}`, with the gutter dropped. Writing the
+        gutter back puts it in the file as if it were code, and the next read then shows a fresh
+        anchor in front of the one you wrote, which is a mess to unpick.
 
         Two shapes of operation, chosen with `op`:
 
@@ -328,4 +494,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
 
     for tool in (read, edit, create):
         toolset.add_function(tool, retries=RETRIES)
+    # Asked for as `list`, which is the word a model reaches for, and defined as `listing`, because
+    # `list` is a builtin and shadowing one inside this scope is a lint error rather than a style
+    # question. The name the model sees is the only one that matters, so it is set here explicitly.
+    toolset.add_function(listing, name="list", retries=RETRIES)
     return toolset

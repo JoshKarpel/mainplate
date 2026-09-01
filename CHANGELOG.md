@@ -83,13 +83,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   originally saw, so a branch re-asks its question against the files that question was asked about.
   Snapshots are gitignore-aware, so going back to a turn restores what is version-controlled and
   leaves the environment alone.
+- A `list` tool taking a directory and a depth, so finding a file is looking rather than guessing at
+  a name. A directory at the depth asked for is summarised with a count instead of opened, so the
+  depth bounds the answer. It asks git what is there rather than walking, which means a `.gitignore`
+  is obeyed and an installed environment or a build directory never reaches the model, while a file
+  the agent itself just wrote does.
 - File tools, on sessions that picked a repository: `read`, `edit`, and `create`, bound to that
   session's own worktree and refusing any path outside it. Lines are addressed by a four-letter
   anchor derived from the line's own content rather than by a line number, so an edit elsewhere in
   the file leaves other anchors valid and a line that has changed since it was read is a loud
   refusal instead of a silent edit in the wrong place. Nothing is stored between calls: the anchors
   are recomputed on every read, and where two lines would share one they take in the line above
-  until they differ.
+  until they differ. A read renders each line as its anchor, a box-drawing `│`, then the line, so
+  that no part of what the tool is saying can be mistaken for the file's own content, and the tool
+  descriptions carry a worked example of the format.
 - An `edit` that names a span by its ends, with the field name saying whether each end is inside it
   (`from`/`to`) or outside it (`after`/`before`). One end alone inserts there. Blank lines carry no
   anchor, so an exclusive end is how a span reaches them: deleting a function and the blank lines

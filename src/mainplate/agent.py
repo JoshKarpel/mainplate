@@ -27,7 +27,7 @@
 # The file tools hang off the agent as a toolset, and they hang off it *per session* rather than
 # once for the process, because what makes a path safe is the worktree it is resolved inside and
 # every session has its own. A session with no repository is built with no toolset at all: a console
-# used to talk rather than to edit is what this was before there were repositories, and three tools
+# used to talk rather than to edit is what this was before there were repositories, and four tools
 # that can only fail are worse than none. `StepwiseDurability` is what records the calls, on the
 # same capability that already records the model requests.
 
@@ -54,9 +54,9 @@ from pydantic_ai.settings import ThinkingLevel
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.durability import StepwiseDurability
-from mainplate.files import Files
-from mainplate.files import file_tools
 from mainplate.snapshots import Workspace
+from mainplate.tools import Files
+from mainplate.tools import file_tools
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,9 +406,9 @@ def working_note(workspace: Workspace) -> str:
     What the agent is told about the directory its tools reach, which is where it is and nothing more.
 
     How to *use* the tools is on the tools, because that is where it stays true: a description of
-    the anchor scheme written here would be a second copy of what `files.py` already says, kept in
-    step by hand. What cannot live there is which directory this session got, since a toolset is
-    built per session and its own description is not.
+    the anchor scheme written here would be a second copy of what each tool's own description
+    already says, kept in step by hand. What cannot live there is which directory this session got,
+    since a toolset is built per session and its own description is not.
     """
     return (
         f"You are working in a git worktree at {workspace.root}. The file tools take paths relative "
@@ -432,7 +432,7 @@ def agent_for(wires: Wires, chosen: Choice, instructions: str, workspace: Worksp
 
     **A session with no workspace gets no file tools at all**, rather than tools that refuse every
     call. A console being used to talk rather than to edit is what this was before there were any
-    repositories, and offering a model three tools that cannot work is worse than offering none:
+    repositories, and offering a model four tools that cannot work is worse than offering none:
     it spends the description on every request and invites a call that can only fail.
     """
     tools = [] if workspace is None else [file_tools(Files(root=workspace.root))]

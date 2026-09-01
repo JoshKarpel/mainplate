@@ -241,9 +241,30 @@ instance is simply in scope.
 
 ## How the agent edits files
 
-A session that picked a repository gets `read`, `edit` and `create`, bound to that session's own
-git worktree and refusing any path outside it. A session that picked no repository gets no tools at
-all, which is what this console was before there were repositories: a place to talk.
+A session that picked a repository gets `list`, `read`, `edit` and `create`, bound to that session's
+own git worktree and refusing any path outside it. A session that picked no repository gets no tools
+at all, which is what this console was before there were repositories: a place to talk.
+
+`list` takes a directory and a depth, and a directory at that depth is summarised by a count rather
+than opened, so the depth bounds the answer instead of hinting at it:
+
+```text
+., 8 files within 2 levels
+
+.gitignore
+README.md
+pyproject.toml
+src/
+  demo/ (4 files)
+tests/
+  test_app.py
+```
+
+It asks git what is there rather than walking the directory, so a `.gitignore` is obeyed and an
+installed environment or a build directory never reaches the model, while a file the agent itself
+just wrote does. The tree is assembled here: git records files and not directories, so what it
+answers with is a flat list of paths and an empty directory does not exist as far as this is
+concerned.
 
 **A line is addressed by a hash of its own content, not by its position.** A read puts a four-letter
 anchor in front of every line:
@@ -251,13 +272,17 @@ anchor in front of every line:
 ```text
 app.py, 6 lines
 
-cxec def greet(name):
-infr     return f"hello {name}"
-
-
-zafq def farewell(name):
-vhvn     return f"bye {name}"
+cxec│def greet(name):
+infr│    return f"hello {name}"
+----│
+----│
+vhvn│def farewell(name):
+kxpe│    return f"bye {name}"
 ```
+
+The `│` is what says where the tool stops talking and the file starts, and it is worth the token per
+line it costs over a space: with a space, `cxec def greet(name):` gives a model nothing to tell the
+name from the line, and one that guesses wrong writes the anchor back into the file as content.
 
 A line number is the one address that cannot fail: an edit above shifts everything below it and
 `47` still resolves, so a stale line number silently edits the wrong place. An anchor either
@@ -268,7 +293,9 @@ the expensive half of a search-and-replace edit.
 Nothing is stored between calls. Anchors are recomputed on every read, and where two lines would
 share one, each takes in the line above it until they differ. Blank lines get no anchor: they are
 17% of the lines in a typical file and none of them is unique on its own content, so they were the
-largest single source of both cost and instability.
+largest single source of both cost and instability. They keep the `----` marker and the bar anyway,
+so the gutter is a column that never breaks and no line of a read is parsed by a different rule than
+the one above it.
 
 An `edit` takes a **list** of operations, resolved against one reading of the file and applied
 together, so operations in one call cannot shift each other and a batch that contradicts itself is
@@ -276,7 +303,7 @@ refused entire rather than half-applied. Which lines a span covers is said by th
 than by a flag:
 
 ```json
-{"op": "splice", "from": "zafq", "before": "vhvn", "text": ""}
+{"op": "splice", "from": "vhvn", "before": "kxpe", "text": ""}
 ```
 
 `from` and `to` are inside the span; `after` and `before` are outside it. One of them alone inserts

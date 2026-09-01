@@ -440,10 +440,33 @@ what disk looked like, not something to go back to.
 
 ## How a model names a line
 
-`anchors.py` is pure and `files.py` is the shell around it, which is the split that lets the
-interesting half be tested with a list of strings. A session with a repository gets `read`, `edit`
-and `create` bound to its own worktree; a session with none gets **no toolset at all**, because
-three tools that can only fail are worse than none and cost a description on every request.
+Every tool lives under `tools/`, one package per tool, as `tools/{name}/{module}.py`. Only the
+constructor reaches the harness: `tools/__init__.py` exports `Files` and `file_tools` and nothing
+else, so `agent.py` asks for the tools a workspace affords without knowing that editing is anchored
+or that a worktree root has to be resolved against. A second tool is a new package beside `files/`
+and one more name in that list, rather than an edit to anything that already imports it.
+
+Within the one that exists, `tools/files/anchors.py` is pure and `tools/files/tools.py` is the shell
+around it, which is the split that lets the interesting half be tested with a list of strings. A
+session with a repository gets `list`, `read`, `edit` and `create` bound to its own worktree; a
+session with none gets **no toolset at all**, because four tools that can only fail are worse than
+none and cost a description on every request.
+
+**`list` asks git rather than walking**, so a `.gitignore` is obeyed and a `.venv` or a
+`node_modules` never reaches a context window. `git ls-files --cached --others --exclude-standard`
+is the exact call, and each flag earns its place: `--cached` is what is committed, `--others` is
+what the agent itself just wrote, and `--exclude-standard` is the ignoring. What comes back is
+*flat*, one path per entry, because git records files and never directories; `catalogue` builds the
+tree from those paths, which is also why an empty directory does not appear at all. `depth` bounds
+the answer rather than hinting at it: a directory at that depth is summarised with a count instead
+of opened, and `MAX_ROWS` is the backstop on a large depth over a large repository.
+
+`list` is the one tool here with no defence against a bash tool arriving later. Anchored `edit` has
+one - within the at-least-once window a re-run edit fails loudly on anchors its own first run
+invalidated, where an arbitrary shell command re-runs silently - but listing a directory is
+something `git ls-files` in a shell does exactly as well. It exists because there is no bash tool
+today and a session otherwise cannot discover a filename, and it is the first thing to delete when
+there is one.
 
 **A line is addressed by a hash of its own content.** A line number is the one address that cannot
 fail, so a stale one silently edits the wrong place; a content hash either resolves to exactly one
@@ -461,11 +484,23 @@ numbers are the reason not to "simplify" any of them:
 - **Letters, not digits.** OpenAI's tokenizer packs digit runs three to a token, so digits look
   ideal there; Qwen and StarCoder2 spend one token per digit, where a six-digit anchor costs three
   times as much. Four lowercase letters cost 2.4 to 3.1 extra tokens per line on every tokenizer
-  tested. A plain space separator costs a token per line less than a box-drawing character.
+  tested.
+- **A box-drawing `GUTTER` divides the anchor from the line, and it is worth the token per line it
+  costs over a space.** A space is what a line of code is already full of, so `xhkm # mainplate`
+  says nothing about where the name stops and the file starts. A model that guesses wrong writes the
+  anchor back as content on its next edit, and every read after that shows a *fresh* anchor in front
+  of the stale one, which confirms the guess and puts recovery out of reach. That is observed, not
+  hypothetical: a session burned fifteen model requests on a one-line README that way. No ASCII
+  character is safe here, since a plain `|` can legitimately open a line and costs the same 1.0
+  token per line on `o200k_base` (0.9 on `cl100k_base`) as the box character does.
 - **Blank lines get no anchor.** They are 17% of the lines here and *none* is unique on its own
   content, so they were the largest single source of both overhead and instability. Leaving them out
   takes the share of lines unique on their own content from 62.5% to 75.6% and cuts the lines
-  needing three or more lines of context by 41%.
+  needing three or more lines of context by 41%. They are still *rendered* with the gutter and the
+  `UNADDRESSABLE` marker, so the column never breaks and no line of a read is parsed by a different
+  rule than the one above it, which costs 2 tokens per blank line. Dashes rather than spaces there,
+  at identical token cost: a run of spaces before the bar is invisible, so a deliberate "no anchor"
+  would read the same as an anchor that went missing.
 - **A duplicate line and a hash collision are the same problem**, so one rule answers both: where
   two lines share an anchor, extend each with the line before it and hash again. About 24% of
   anchorable lines need one line of context and 5% need two, capped at `MAX_DEPTH`; past that a line
@@ -505,8 +540,8 @@ theoretical - a smaller model got an operation's shape wrong once and the defaul
 correctable mistake into a failed turn.
 
 `Text` carries the two things `splitlines` throws away, the line endings and the final newline, and
-`files.py` reads and writes with `newline=""` so universal-newline translation does not quietly
-normalise a CRLF file. Without both halves an edit to one line is a diff on every line of the file,
+`tools/files/tools.py` reads and writes with `newline=""` so universal-newline translation does not
+quietly normalise a CRLF file. Without both halves an edit to one line is a diff on every line,
 attributed to an edit that touched one. It splits on `\n` and not with `splitlines`, which also
 breaks on form feed - a page break some source files genuinely use.
 

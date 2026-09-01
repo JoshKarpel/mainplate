@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import subprocess
+from inspect import cleandoc
 from pathlib import Path
 
 import pytest
 from pydantic_ai import ModelRetry
 
-from mainplate.anchors import Anchored
-from mainplate.anchors import Splice
-from mainplate.anchors import Substitute
-from mainplate.files import MAX_BYTES
-from mainplate.files import Files
-from mainplate.files import Refused
-from mainplate.files import Text
-from mainplate.files import file_tools
-from mainplate.files import guarded
+from mainplate.tools.files.anchors import GUTTER
+from mainplate.tools.files.anchors import Anchored
+from mainplate.tools.files.anchors import Splice
+from mainplate.tools.files.anchors import Substitute
+from mainplate.tools.files.tools import MAX_BYTES
+from mainplate.tools.files.tools import MAX_ROWS
+from mainplate.tools.files.tools import Files
+from mainplate.tools.files.tools import Refused
+from mainplate.tools.files.tools import Text
+from mainplate.tools.files.tools import catalogue
+from mainplate.tools.files.tools import catalogued
+from mainplate.tools.files.tools import file_tools
+from mainplate.tools.files.tools import guarded
 
 SOURCE = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
 
@@ -106,11 +112,99 @@ class TestKeepingWhatSplittingLinesThrowsAway:
         assert (files.root / "crlf.py").read_bytes() == b"alpha\r\nmiddle\r\ngamma\r\n"
 
 
+class TestBuildingATreeFromFlatPaths:
+    """
+    `git ls-files` answers with one full path per entry and no structure at all, so the tree is
+    made here. Pure, so these need no repository and no disk.
+    """
+
+    FOUND = ("README.md", "src/demo/app.py", "src/demo/tools/read.py", "src/demo/tools/write.py", "tests/test_app.py")
+
+    def test_a_directory_at_the_asked_depth_is_counted_rather_than_opened(self) -> None:
+        assert list(catalogue(self.FOUND, depth=1, level=0)) == ["README.md", "src/ (3 files)", "tests/ (1 file)"]
+
+    def test_a_deeper_call_opens_one_more_level(self) -> None:
+        assert list(catalogue(self.FOUND, depth=2, level=0)) == [
+            "README.md",
+            "src/",
+            "  demo/ (3 files)",
+            "tests/",
+            "  test_app.py",
+        ]
+
+    def test_a_levels_own_files_come_before_its_subdirectories(self) -> None:
+        """
+        Otherwise a level's own files arrive after everything nested below it, so the files at the
+        root of a deep repository land at the very bottom of the answer, furthest from the line
+        that names where they are.
+        """
+        rows = list(catalogue(("z.py", "a/deep/one.py", "a/deep/two.py"), depth=3, level=0))
+        assert rows.index("z.py") < rows.index("a/")
+
+    def test_an_empty_listing_says_so_rather_than_showing_a_bare_header(self) -> None:
+        assert catalogued(".", (), depth=2) == ". holds no files git knows about"
+
+    def test_a_listing_past_the_row_cap_is_cut_and_says_what_to_do(self) -> None:
+        many = tuple(f"pkg/mod{at}.py" for at in range(MAX_ROWS + 50))
+        said = catalogued(".", many, depth=2)
+        assert f"the first {MAX_ROWS} rows" in said
+        assert "smaller `depth`" in said
+        assert len(said.splitlines()) == MAX_ROWS + 2
+
+
+class TestListingADirectory:
+    @pytest.fixture
+    def repository(self, files: Files) -> Files:
+        (files.root / ".gitignore").write_text("build/\n")
+        (files.root / "build").mkdir()
+        (files.root / "build" / "out.js").write_text("")
+        (files.root / "pkg").mkdir()
+        (files.root / "pkg" / "deep.py").write_text("")
+        subprocess.run(["git", "init", "-q"], cwd=files.root, check=True)
+        return files
+
+    async def test_it_shows_what_is_there(self, repository: Files) -> None:
+        said = await repository.listing(".", 2)
+        assert "app.py" in said
+        assert "pkg/" in said
+        assert "deep.py" in said
+
+    async def test_an_ignored_directory_is_left_out(self, repository: Files) -> None:
+        """
+        The reason this asks git rather than walking. A worktree usually carries an installed
+        environment or a build directory, and one of those listed in full is tens of thousands of
+        paths spent before the model has asked its first real question.
+        """
+        said = await repository.listing(".", 3)
+        assert "build" not in said
+        assert "out.js" not in said
+
+    async def test_a_file_created_but_never_committed_still_shows(self, repository: Files) -> None:
+        """`--others` is what covers this, and it is the case the agent hits most: its own work."""
+        (repository.root / "brand_new.py").write_text("")
+        assert "brand_new.py" in await repository.listing(".", 1)
+
+    async def test_a_subdirectory_is_listed_relative_to_itself(self, repository: Files) -> None:
+        assert await repository.listing("pkg", 1) == "pkg, 1 file within 1 level\n\ndeep.py"
+
+    async def test_a_file_is_not_a_directory(self, repository: Files) -> None:
+        with pytest.raises(Refused, match="`read` is what opens one"):
+            await repository.listing("app.py", 1)
+
+    async def test_a_missing_directory_says_so(self, repository: Files) -> None:
+        with pytest.raises(Refused, match="there is no directory at"):
+            await repository.listing("absent", 1)
+
+    async def test_a_path_leaving_the_worktree_is_refused(self, repository: Files) -> None:
+        with pytest.raises(Refused, match="outside this session's workspace"):
+            await repository.listing("..", 1)
+
+
 class TestReadingAFile:
     async def test_the_whole_file_comes_back_with_a_line_count(self, files: Files) -> None:
         shown = await files.read("app.py", 1, 100)
         assert shown.startswith("app.py, 6 lines")
-        assert f"{naming(files, 0)} def first():" in shown
+        assert f"{naming(files, 0)}{GUTTER}def first():" in shown
 
     async def test_a_partial_read_says_where_it_stopped(self, files: Files) -> None:
         shown = await files.read("app.py", 2, 2)
@@ -118,7 +212,7 @@ class TestReadingAFile:
         assert "def second():" not in shown
 
     async def test_offset_counts_from_one(self, files: Files) -> None:
-        assert f"{naming(files, 1)}     return 1" in await files.read("app.py", 2, 1)
+        assert f"{naming(files, 1)}{GUTTER}    return 1" in await files.read("app.py", 2, 1)
 
 
 class TestEditingAFile:
@@ -129,7 +223,7 @@ class TestEditingAFile:
     async def test_the_reply_shows_the_changed_region_with_fresh_anchors(self, files: Files) -> None:
         said = await files.edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
         assert said.startswith("edited app.py, now 6 lines")
-        assert f"{naming(files, 1)}     return 42" in said
+        assert f"{naming(files, 1)}{GUTTER}    return 42" in said
 
     async def test_a_refused_edit_writes_nothing(self, files: Files) -> None:
         with pytest.raises(ModelRetry):
@@ -178,15 +272,44 @@ class TestHowARefusalReachesTheModel:
 
 
 class TestWhatTheToolsetOffers:
-    def test_it_offers_exactly_read_edit_and_create(self, files: Files) -> None:
+    def test_it_offers_exactly_list_read_edit_and_create(self, files: Files) -> None:
         """No `write`: a tool that overwrites a whole file is the escape hatch from anchored editing."""
-        assert set(file_tools(files).tools) == {"read", "edit", "create"}
+        assert set(file_tools(files).tools) == {"list", "read", "edit", "create"}
+
+    def test_the_listing_tool_is_asked_for_as_list(self, files: Files) -> None:
+        """
+        The function is `listing` because `list` is a builtin and shadowing one here is a lint
+        error, but the name a model reaches for is the one that has to be right, so it is set
+        explicitly at registration rather than left to follow the function.
+        """
+        assert "listing" not in file_tools(files).tools
 
     def test_the_edit_schema_spells_from_under_its_own_name(self, files: Files) -> None:
         """`from_` is what Python allows; `from` is what the model has to write."""
         schema = file_tools(files).tools["edit"].function_schema.json_schema
         assert "from" in schema["$defs"]["Splice"]["properties"]
         assert "from_" not in schema["$defs"]["Splice"]["properties"]
+
+    async def test_the_worked_example_is_what_a_read_really_returns(self, files: Files) -> None:
+        """
+        The one place a description can be worse than none. `read` teaches the gutter by showing a
+        rendered file, so an example that drifted from the renderer would be teaching a format the
+        tool does not emit: the misreading the gutter exists to prevent, reintroduced by the text
+        meant to prevent it.
+
+        The file is recovered from the example by stripping its own gutter rather than kept here as
+        a second copy, so there is nothing to hold in step with anything: whatever the docstring
+        shows is written, read back, and compared against itself.
+        """
+        described = file_tools(files).tools["read"].function.__doc__
+        assert described is not None
+        example = cleandoc(described).split("```")[1].strip("\n")
+
+        header, body = example.split("\n\n", 1)
+        path = header.split(",")[0]
+        (files.root / path).write_text("\n".join(line.split(GUTTER, 1)[1] for line in body.split("\n")) + "\n")
+
+        assert await files.read(path, 1, 100) == example
 
     def test_the_two_shapes_of_operation_are_told_apart_by_op(self, files: Files) -> None:
         schema = file_tools(files).tools["edit"].function_schema.json_schema

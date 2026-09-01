@@ -1,7 +1,7 @@
 # How a model names a line it wants to change, and what a batch of changes does to a file.
 #
 # The whole of this module is pure: lines in, lines out, and a refusal where a name does not resolve.
-# Reading and writing files is `files.py`'s, which is the functional-core/imperative-shell split the
+# Reading and writing files is `tools.py`'s, which is the functional-core/imperative-shell split the
 # rest of this repo keeps, and it is what lets the interesting half be tested with a list of strings.
 #
 # **A line is addressed by a hash of its content, never by its position.** A line number is the one
@@ -72,10 +72,30 @@ WIDTH: Final = 4
 # around it instead. Measured over this repository, 99.9% of anchorable lines resolve within five.
 MAX_DEPTH: Final = 8
 
-# What stands where an anchor would be on a line that has none but is not blank. Aligned with a real
-# anchor so the column does not wander, and visibly not one so it is never mistaken for a name to
-# use. Blank lines get nothing at all, since a blank line with a marker on it is no longer blank.
+# What stands where an anchor would be on a line that has none. Aligned with a real anchor so the
+# column does not wander, and visibly not one so it is never mistaken for a name to use.
+#
+# It covers a blank line as well as a line inside a run nothing tells apart, which is the same
+# answer to the same question - this line cannot be named, address its neighbours - and the two stay
+# distinguishable in the rendering anyway, by whether anything follows the gutter. Marking a blank
+# line only reads as blank *because* of the gutter: with a space where the bar is, `---- ` would be
+# a line whose content appeared to be four dashes, which is why this used to be left off them.
 UNADDRESSABLE: Final = "-" * WIDTH
+
+# What divides the gutter from the line, and it is worth a token per line rather than a space.
+#
+# A space is what a line of prose or code is already full of, so with one there is nothing in
+# `xhkm # mainplate` that says where the name stops and the file starts. A model that guesses wrong
+# does not merely misread: it writes the anchor back as content on its next edit, and the read after
+# that shows a *fresh* anchor in front of the stale one, which confirms the guess and puts recovery
+# out of reach. Observed, on a one-line README, where there is not even a column of other lines to
+# infer the shape from.
+#
+# Measured over this repository's own source at 1.0 tokens per line on `o200k_base` and 0.9 on
+# `cl100k_base`, against a space. That buys a character that cannot begin a line of source, which no
+# ASCII one does: a plain `|` costs the same as this and is something a table or a shell pipeline
+# might legitimately open with.
+GUTTER: Final = "│"
 
 # How many lines either side of a change come back with it. Small deliberately: what makes a chained
 # edit safe is the remapping, which is exhaustive, so this is for a reader's orientation rather than
@@ -190,12 +210,21 @@ class Anchored:
         return found
 
     def rendered(self, start: int = 0, stop: int | None = None) -> str:
-        """The lines a read shows, each behind the name it answers to."""
+        """
+        The lines a read shows, each behind the name it answers to and the `GUTTER` that ends it.
+
+        Every line gets a gutter, including a blank one, so the column never breaks and there is no
+        row that has to be read by a different rule than the one above it. A blank line still gets
+        no *anchor*, which is the scheme and not the rendering: it gets `UNADDRESSABLE` like any
+        other line that cannot be named, and is told apart from a run nothing distinguishes by
+        having nothing after the bar. It also puts a whitespace-only line's whitespace on the file's
+        side of the bar, where a bare rendering left it looking like an indent nobody wrote.
+        """
         end = len(self.lines) if stop is None else stop
         shown = []
         for at in range(start, min(end, len(self.lines))):
             code, line = self.codes[at], self.lines[at]
-            shown.append(line if not line.strip() else f"{code or UNADDRESSABLE} {line}")
+            shown.append(f"{code or UNADDRESSABLE}{GUTTER}{line}")
         return "\n".join(shown)
 
 

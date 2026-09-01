@@ -3,15 +3,16 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mainplate.anchors import MAX_DEPTH
-from mainplate.anchors import UNADDRESSABLE
-from mainplate.anchors import WIDTH
-from mainplate.anchors import Anchored
-from mainplate.anchors import EditRefused
-from mainplate.anchors import Operation
-from mainplate.anchors import Splice
-from mainplate.anchors import Substitute
-from mainplate.anchors import written
+from mainplate.tools.files.anchors import GUTTER
+from mainplate.tools.files.anchors import MAX_DEPTH
+from mainplate.tools.files.anchors import UNADDRESSABLE
+from mainplate.tools.files.anchors import WIDTH
+from mainplate.tools.files.anchors import Anchored
+from mainplate.tools.files.anchors import EditRefused
+from mainplate.tools.files.anchors import Operation
+from mainplate.tools.files.anchors import Splice
+from mainplate.tools.files.anchors import Substitute
+from mainplate.tools.files.anchors import written
 
 # A small file with all three interesting shapes in it: unique lines, a pair of byte-identical lines
 # that context has to tell apart, and blank lines between the two functions.
@@ -87,14 +88,30 @@ class TestNamingALine:
 
 class TestShowingAFile:
     def test_each_named_line_is_shown_behind_its_name(self) -> None:
-        assert anchored().rendered(0, 2) == f"{code(0)} def first(value):\n{code(1)}     if value:"
+        assert anchored().rendered(0, 2) == f"{code(0)}{GUTTER}def first(value):\n{code(1)}{GUTTER}    if value:"
 
-    def test_a_blank_line_is_shown_as_a_blank_line(self) -> None:
-        assert anchored().rendered(4, 6) == "\n"
+    def test_a_blank_line_keeps_the_gutter_but_has_nothing_after_it(self) -> None:
+        """
+        The column never breaks, which is the whole of what the gutter buys: no line of a read is
+        parsed by a different rule than the one above it. A blank line still has no anchor, which
+        is the scheme rather than the rendering, so it carries the same marker as any other line
+        that cannot be named and is told apart by having nothing beyond the bar.
+        """
+        assert anchored().rendered(4, 6) == f"{UNADDRESSABLE}{GUTTER}\n{UNADDRESSABLE}{GUTTER}"
 
     def test_an_unnameable_line_is_marked_rather_than_left_bare(self) -> None:
         wall = Anchored.over(tuple("    pass" for _ in range(MAX_DEPTH + 4)))
-        assert UNADDRESSABLE in wall.rendered()
+        assert f"{UNADDRESSABLE}{GUTTER}    pass" in wall.rendered()
+
+    def test_the_gutter_divides_the_name_from_a_line_that_could_be_one(self) -> None:
+        """
+        The failure this exists to stop: with a space here, a model reading a one-line file took
+        the anchor for part of the line, wrote it back as content on its next edit, and every read
+        after that confirmed the mistake by showing a fresh anchor in front of the stale one.
+        """
+        shown = Anchored.over(("# mainplate",)).rendered()
+        assert shown.endswith(f"{GUTTER}# mainplate")
+        assert " # mainplate" not in shown
 
 
 class TestSplicingASpan:
