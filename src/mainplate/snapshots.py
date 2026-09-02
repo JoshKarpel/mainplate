@@ -11,20 +11,18 @@
 # (an unchanged tree is the same hash, so there is nothing to write) and what keeps a session's
 # checkpoint small enough to stay the whole of the conversation.
 #
-# Snapshots are gitignore-aware, and that is a decision rather than an inheritance. It means a
-# rewind restores what is version-controlled and leaves the environment alone, which is exactly
-# what makes the motivating case work: a tool fails for want of something installed, you install
-# it, you go back to before the call, and the install is still there. The cost is real and worth
-# stating - a build artifact or a local database the agent itself wrote goes stale while the source
-# around it moves back - and it is the same contract git already offers, so nobody has to learn a
-# second one.
+# Snapshots are gitignore-aware, and that is a decision rather than an inheritance. A tree holds
+# what is version-controlled and nothing else, so what a fork checks out is the source as that turn
+# saw it and never a `.venv`, a build directory, or an untracked file holding a secret. It is the
+# contract git already offers, so nobody has to learn a second one, and it is why going back is
+# always *forward* into a new session: a fork plants a clean worktree at a recorded tree rather than
+# putting an existing one back, which is a thing no reader of this module can do at all.
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
 from collections.abc import Mapping
-from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,18 +70,6 @@ class Ran:
     @property
     def ok(self) -> bool:
         return self.code == 0
-
-
-def deletions(holding: Sequence[str], wanted: Sequence[str]) -> tuple[str, ...]:
-    """
-    The paths a restore has to remove, which is everything the target tree does not have.
-
-    Pure, and separate, because it is the half of a restore that is easy to get wrong and needs no
-    repository to test. `git checkout-index` writes the files that are *in* a tree and will not
-    remove the ones that are not, so without this a restore leaves behind every file created after
-    the snapshot and calls itself finished.
-    """
-    return tuple(sorted(set(holding) - set(wanted)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,38 +172,6 @@ class Worktree:
 
     async def paths(self, tree: str) -> tuple[str, ...]:
         listed = await self.demand("ls-tree", "-r", "--name-only", tree)
-        return tuple(line for line in listed.splitlines() if line)
-
-    async def restore(self, tree: str) -> None:
-        """
-        Put the worktree back to `tree`, in the two steps a restore actually takes.
-
-        `checkout-index` writes what the tree holds and removes nothing, so the deletions are a
-        second pass. Through a shadow index again, so a restore no more disturbs the reader's
-        staging than a capture does.
-
-        What is *not* touched is anything git ignores, which is the same contract capture keeps:
-        going back to an earlier turn puts the source back and leaves the environment where it is.
-        """
-        living = await self.living()
-        async with self.staging() as index:
-            await self.demand("read-tree", tree, index=index)
-            await self.demand("checkout-index", "-a", "-f", index=index)
-        for gone in deletions(living, await self.paths(tree)):
-            (self.root / gone).unlink(missing_ok=True)
-
-    async def living(self) -> tuple[str, ...]:
-        """
-        Every path a snapshot of the worktree right now would hold.
-
-        Asked of git rather than walked here, so "what counts as a file in this workspace" has one
-        answer and it is the one `capture` uses: the same `.gitignore`, the same submodule rules,
-        the same everything. That is what keeps a restore from deleting an ignored file it was
-        never going to put back.
-        """
-        async with self.staging() as index:
-            await self.demand("add", "-A", index=index)
-            listed = await self.demand("ls-files", index=index)
         return tuple(line for line in listed.splitlines() if line)
 
 

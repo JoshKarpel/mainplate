@@ -35,7 +35,6 @@ from mainplate.settings import Settings
 from mainplate.snapshots import SNAPSHOT_REF
 from mainplate.snapshots import NotAWorktree
 from mainplate.snapshots import Worktree
-from mainplate.snapshots import deletions
 
 
 async def run(*arguments: str, cwd: Path) -> str:
@@ -161,20 +160,6 @@ async def planting(service: Service, workspaces: Workspaces) -> Service:
     return replace(service, workspaces=workspaces)
 
 
-class TestDecidingWhatToRemove:
-    """Pure, and the half of a restore most easily got wrong: `checkout-index` deletes nothing."""
-
-    def test_a_path_the_target_does_not_have_is_removed(self) -> None:
-        assert deletions(["a.py", "b.py"], ["a.py"]) == ("b.py",)
-
-    def test_a_path_both_have_is_left_alone(self) -> None:
-        assert deletions(["a.py", "b.py"], ["a.py", "b.py"]) == ()
-
-    def test_a_path_only_the_target_has_is_not_a_deletion(self) -> None:
-        """Writing it is `checkout-index`'s job; this is only about what to take away."""
-        assert deletions(["a.py"], ["a.py", "restored.py"]) == ()
-
-
 class TestCapturing:
     async def test_a_capture_is_a_tree_that_holds_the_tracked_files(self, worktree: Worktree) -> None:
         tree = await worktree.capture("first")
@@ -279,50 +264,16 @@ class TestCapturingAtOnce:
         for tree in trees:
             assert await worktree.paths(tree) == (".gitignore", "src/kept.txt")
 
-    async def test_a_capture_beside_a_listing_leaves_no_staging_files_behind(self, worktree: Worktree) -> None:
-        await asyncio.gather(worktree.capture("one"), worktree.living(), worktree.capture("two"))
+    async def test_concurrent_captures_leave_no_staging_files_behind(self, worktree: Worktree) -> None:
+        """
+        The shadow index is a temporary file per operation, so every one of them has to be cleaned
+        up. Asserted over a batch rather than a single capture, because what leaks one file leaks
+        six, and a worker answering several sessions over one worktree is the case that produces it.
+        """
+        await asyncio.gather(*(worktree.capture(f"at once {n}") for n in range(6)))
 
         left = sorted(path.name for path in (worktree.root / ".git").glob("mainplate-index-*"))
         assert left == []
-
-
-class TestRestoring:
-    async def test_a_changed_file_goes_back(self, worktree: Worktree) -> None:
-        tree = await worktree.capture("before")
-        (worktree.root / "src" / "kept.txt").write_text("edited\n")
-
-        await worktree.restore(tree)
-
-        assert (worktree.root / "src" / "kept.txt").read_text() == "original\n"
-
-    async def test_a_file_added_after_the_snapshot_is_removed(self, worktree: Worktree) -> None:
-        """`checkout-index` writes what a tree holds and removes nothing, so this is the second pass."""
-        tree = await worktree.capture("before")
-        (worktree.root / "src" / "added.txt").write_text("later\n")
-
-        await worktree.restore(tree)
-
-        assert not (worktree.root / "src" / "added.txt").exists()
-
-    async def test_an_ignored_file_written_after_the_snapshot_survives_the_restore(self, worktree: Worktree) -> None:
-        """
-        The motivating case, stated as a test: install the missing thing, go back to before the
-        call, and the install is still there.
-        """
-        tree = await worktree.capture("before")
-        (worktree.root / "built" / "installed.bin").write_text("the thing you installed\n")
-
-        await worktree.restore(tree)
-
-        assert (worktree.root / "built" / "installed.bin").exists()
-
-    async def test_restoring_stages_nothing_in_the_reader_s_index(self, worktree: Worktree) -> None:
-        tree = await worktree.capture("before")
-        (worktree.root / "src" / "kept.txt").write_text("edited\n")
-
-        await worktree.restore(tree)
-
-        assert await run("git", "diff", "--cached", "--name-only", cwd=worktree.root) == ""
 
 
 class TestAWorktreePerSession:

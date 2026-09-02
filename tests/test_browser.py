@@ -143,7 +143,7 @@ async def page(browser: Browser) -> AsyncIterator[Page]:
     A page in a context of its own, so what one test leaves in `localStorage` cannot reach another.
 
     The scoping matters here for the reason it matters in the console itself: every page is one
-    origin, so a shared context would let one test's folds, theme and set-aside kinds decide what
+    origin, so a shared context would let one test's folds, theme and muted kinds decide what
     the next test renders.
     """
     context = await browser.new_context(viewport=VIEWPORT)
@@ -660,6 +660,205 @@ class TestWatchingATurnArrive:
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
         await expect(page.locator(".panel[data-fresh]")).to_have_count(0)
+
+
+class TestWhereTheComposerSendsTo:
+    """
+    That pressing Fork lands the reader in a *different* session, driven by a real htmx.
+
+    Two things this rests on are htmx's rather than ours, and both were read out of a minified
+    bundle: that it appends the submit button's own `name`/`value` to the request, and that it
+    honours `HX-Redirect` by navigating. Either being wrong looks identical in the markup and in
+    every in-memory test, and shows up only as a button that quietly sends to the wrong place.
+    """
+
+    async def a_conversation(self, console: tuple[str, Service], page: Page) -> str:
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+        return session.id
+
+    async def test_forking_navigates_to_a_new_session(self, page: Page, console: tuple[str, Service]) -> None:
+        session = await self.a_conversation(console, page)
+        await page.fill(".composer textarea", "try it another way")
+        await page.click(".sender__caret")
+        await page.click('.sender__option[value="fork"]')
+
+        await page.wait_for_url(lambda url: session not in url)
+        assert "/sessions/" in page.url
+        await expect(page.locator("#transcript")).to_contain_text("try it another way")
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+
+    async def test_stepping_aside_and_coming_back_returns_to_where_it_started(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The whole round trip, which no single request shows: two navigations and a message that ends
+        up in the conversation the reader left rather than the one they were in.
+        """
+        session = await self.a_conversation(console, page)
+        await page.fill(".composer textarea", "let me check something")
+        await page.click(".sender__caret")
+        await page.click('.sender__option[value="aside"]')
+        await page.wait_for_url(lambda url: session not in url)
+
+        await page.fill(".composer textarea", "here is what I found")
+        await page.click(".sender__caret")
+        await page.click('.sender__option[value="parent"]')
+        await page.wait_for_url(lambda url: session in url)
+
+        await expect(page.locator("#transcript")).to_contain_text("here is what I found")
+        await expect(page.locator("#transcript")).not_to_contain_text("let me check something")
+
+    async def test_the_menu_shuts_when_the_reader_looks_elsewhere(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        A `<details>` closes only on its own summary, which is right for a fold and wrong for a menu:
+        left open it lies over the conversation until the reader finds the one press that works.
+        """
+        await self.a_conversation(console, page)
+        await page.click(".sender__caret")
+        await expect(page.locator(".sender__more")).to_have_attribute("open", "")
+        await page.click(".composer textarea")
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+
+    async def test_escape_shuts_the_menu(self, page: Page, console: tuple[str, Service]) -> None:
+        await self.a_conversation(console, page)
+        await page.click(".sender__caret")
+        await expect(page.locator(".sender__more")).to_have_attribute("open", "")
+        await page.keyboard.press("Escape")
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+
+    async def test_sending_stays_in_this_conversation(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The control beside it, on the same form, posting no disposition at all. Asserted here rather
+        than left to the in-memory tests because what makes the two differ is which button htmx
+        treats as the submitter, and that is a browser behaviour.
+        """
+        session = await self.a_conversation(console, page)
+        await page.fill(".composer textarea", "and another thing")
+        await page.click(".sender > button")
+
+        await expect(page.locator("#transcript")).to_contain_text("and another thing")
+        assert session in page.url, "sending swaps the conversation rather than leaving it"
+
+
+class TestTheShelf:
+    """
+    Text written and not sent, kept for one conversation.
+
+    None of it can be seen anywhere but a browser: what it holds lives in `localStorage`, the list is
+    rendered by the script, and the property that matters most - that a branch inherits its parent's
+    shelf - is a copy between two stores that only exist once a page has been opened on each.
+    """
+
+    async def opened(self, console: tuple[str, Service], page: Page) -> tuple[str, Service]:
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+        return session.id, service
+
+    async def keep(self, page: Page, said: str) -> None:
+        """Keeping is an answer in the send menu, so it is reached the way any of them is."""
+        await page.fill(".composer textarea", said)
+        await page.click(".sender__caret")
+        await page.click('[data-shelf="keep"]')
+
+    async def test_keeping_takes_the_text_out_of_the_box_and_names_it(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """Keeping clears the box, because the reason to shelve a paragraph is to write another."""
+        await self.opened(console, page)
+        await self.keep(page, "the first thing I noticed\nand more about it")
+
+        await expect(page.locator(".shelf__take")).to_have_count(1)
+        await expect(page.locator(".shelf__take")).to_have_text("the first thing I noticed")
+        assert await page.input_value(".composer textarea") == ""
+
+    async def test_taking_adds_to_the_box_rather_than_replacing_what_is_in_it(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The property that lets several kept notes be assembled into one message, and the one that
+        makes the control safe: taking can never lose something already typed.
+        """
+        await self.opened(console, page)
+        await self.keep(page, "the first point")
+        await self.keep(page, "the second point")
+        await page.fill(".composer textarea", "here is what I found")
+        await page.click(".shelf__take >> nth=0")
+        await page.click(".shelf__take >> nth=1")
+
+        assert await page.input_value(".composer textarea") == (
+            "here is what I found\n\nthe first point\n\nthe second point"
+        )
+
+    async def test_dropping_takes_one_off_and_leaves_the_rest(self, page: Page, console: tuple[str, Service]) -> None:
+        await self.opened(console, page)
+        await self.keep(page, "keep this one")
+        await self.keep(page, "drop this one")
+        await page.click(".shelf__drop >> nth=1")
+
+        await expect(page.locator(".shelf__take")).to_have_count(1)
+        await expect(page.locator(".shelf__take")).to_have_text("keep this one")
+
+    async def test_the_shelf_is_still_there_after_a_reload(self, page: Page, console: tuple[str, Service]) -> None:
+        """Unsent text surviving the tab being closed is the whole of what makes it worth keeping."""
+        await self.opened(console, page)
+        await self.keep(page, "something for later")
+        await page.reload(wait_until="load")
+
+        await expect(page.locator(".shelf__take")).to_have_text("something for later")
+
+    async def test_one_conversation_s_shelf_is_not_another_s(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        Scoped by session for the reason the muted kinds are: every session shares one origin, so
+        an unscoped store would be one conversation's drafts turning up in all of them.
+        """
+        url, service = console
+        await self.opened(console, page)
+        await self.keep(page, "meant for the first one")
+        other = await service.start("a different conversation", DEFAULT_CHOICE)
+        await page.goto(f"{url}/sessions/{other.id}", wait_until="load")
+
+        await expect(page.locator(".shelf__take")).to_have_count(0)
+
+    async def test_a_branch_inherits_what_its_parent_kept(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The copy `Service.fork` cannot make, because the server has never seen a draft. It says which
+        conversation this one came from and the page holding both stores does the rest.
+        """
+        url, service = console
+        session, _ = await self.opened(console, page)
+        await self.keep(page, "worth carrying across")
+        forked = await service.fork(session, at=1, chosen=DEFAULT_CHOICE, said="try again")
+        assert forked is not None
+        await page.goto(f"{url}/sessions/{forked.id}", wait_until="load")
+
+        await expect(page.locator(".shelf__take")).to_have_text("worth carrying across")
+
+    async def test_a_branch_that_clears_its_shelf_does_not_get_the_parent_s_back(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        An empty shelf is a decision and a missing one is not, so the inheritance has to tell them
+        apart. Read as "nothing here", a reader who cleared theirs would be handed it back on every
+        load with no way to refuse it.
+        """
+        url, service = console
+        session, _ = await self.opened(console, page)
+        await self.keep(page, "worth carrying across")
+        forked = await service.fork(session, at=1, chosen=DEFAULT_CHOICE, said="try again")
+        assert forked is not None
+        await page.goto(f"{url}/sessions/{forked.id}", wait_until="load")
+        await page.click(".shelf__drop >> nth=0")
+        await expect(page.locator(".shelf__take")).to_have_count(0)
+        await page.reload(wait_until="load")
+
+        await expect(page.locator(".shelf__take")).to_have_count(0)
 
 
 class TestFollowingTheEnd:

@@ -396,10 +396,27 @@ up to check, what you want to see now is the answer to what you just sent.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that steps whole turns, every panel, or only what the model said and folds
-every call at once, a follow-the-end toggle, and a light/dark/system theme. All of it is an
-enhancement. With JavaScript
+every call at once, a shelf for text you have written and not sent, a follow-the-end toggle, and a
+light/dark/system theme. All of it is an enhancement. With JavaScript
 off the console still renders, still posts messages, and every tool call is still a fold that
 opens; what goes is the rail and the keyboard send.
+
+The caret beside Send opens everything else you can do with what you typed.
+
+**Aside** steps out into a side conversation you mean to come back from, and **Fork** starts one you
+do not. Both carry the whole conversation and leave the original where it is; the only difference is
+what you meant, which is recorded so the sidebar can draw a digression as a digression. From either,
+**Back to where this came from** sends what is in the box into the conversation you left. That is a
+message rather than a merge, which is what makes it honest: the turns you took on the side were asked
+against a different history, and splicing them in would leave the original holding an exchange that
+never happened.
+
+**Keep** puts what is in the box on the shelf and clears it, so you can write the next thing. The
+shelf itself is in the rail; pressing a kept note adds it back to the box rather than replacing what
+is there, so several of them assemble into one message. That is also how a long aside comes home:
+keep the conclusions as you go, then send them back together. It is scoped to the conversation and a
+fork inherits its parent's. It lives in your browser, so it does not follow you to another machine
+yet.
 
 Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
 often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
@@ -432,10 +449,11 @@ Named plainly, because they are the next things rather than omissions nobody not
   them readable and stuck; the page names the endpoint so putting it back is obvious. Forking one
   onto an endpoint that still exists is the way out. A model dropping out of the picker is *not* that
   case and does not stop a session, since an endpoint routes more ids than it advertises.
-- **Snapshots are kept but not yet restored.** A session that picked a repository works in a
-  worktree of its own, the tree is recorded before every model request, and a fork is checked out
-  at the tree the forked turn saw. What is missing is a rewind: putting an *existing* session's
-  files back to an earlier point.
+- **Going back means forking, never rewinding.** A session that picked a repository works in a
+  worktree of its own, the tree is recorded before every model request, and a fork is checked out at
+  the tree the forked turn saw. There is deliberately no way to put an *existing* session's files
+  back: the branch gets the old files and the original stays readable beside it, where truncating a
+  session in place would destroy history that its own branches point into.
 - **One forge, and it is exe.dev's.** `ExeDevGitHub` reads the GitHub integrations attached to a
   VM. Anywhere else it reaches nothing, so the picker does not appear and the console is a place to
   talk. Reaching GitHub through an App, so this works off exe.dev, is another class behind the same

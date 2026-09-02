@@ -106,7 +106,7 @@
     //
     // The whole of the state this file keeps. Everything else is a function of it.
 
-    let aside = new Set(); // kinds the key has switched off
+    let muted = new Set(); // kinds the key has switched off
     let landed = null; // the panel the console last put the reader on
     let opened = new Set(); // tool calls the reader has unfolded
     let query = "";
@@ -122,12 +122,62 @@
     let following = true;
     let signatures = new Map(); // what each panel said, so a change can be told from a repaint
 
+    let shelf = []; // text kept and not sent, as {name, text}
+
     try {
-      const stored = JSON.parse(held(scoped("aside")) || "[]");
-      // What is stored is the kinds set *aside*, not the ones in play, so a kind added by a later
-      // build arrives in play rather than silently missing from a reader's stored list.
-      if (Array.isArray(stored)) aside = new Set(stored);
+      const stored = JSON.parse(held(scoped("muted")) || "[]");
+      // What is stored is the kinds *muted*, not the ones in play, so a kind added by a later build
+      // arrives in play rather than silently missing from a reader's stored list.
+      if (Array.isArray(stored)) muted = new Set(stored);
     } catch {}
+
+    // --- The shelf --------------------------------------------------------
+    //
+    // Unsent text, kept for this conversation. It is the reader's own and the server is never told
+    // any of it, which is what lets it live here at all: a page with this store wiped renders exactly
+    // what one without it does, because none of this is a word of the conversation until it is sent.
+
+    const SHELF = scoped("shelf");
+
+    const slots = (raw) => {
+      try {
+        const stored = JSON.parse(raw || "[]");
+        if (!Array.isArray(stored)) return [];
+        return stored.filter((slot) => slot && typeof slot.text === "string");
+      } catch {
+        return [];
+      }
+    };
+
+    // A branch inherits what its parent kept, which is the copy `Service.fork` cannot make:
+    // the server has never seen a draft, so it says which conversation this one came from and the
+    // page holding both does the rest.
+    //
+    // Only where this session has *no* shelf of its own yet, which is a different thing from an empty
+    // one: a reader who cleared theirs has a stored `[]` and must not have the parent's handed back
+    // on the next load. Copied rather than read through, so the two go their own ways exactly as the
+    // turns they were forked beside do.
+    const inherited = () => {
+      const parent = document.body.dataset.forkedFrom;
+      if (!parent) return [];
+      const taken = slots(held(`mainplate:shelf:${parent}`));
+      if (taken.length) hold(SHELF, JSON.stringify(taken));
+      return taken;
+    };
+
+    shelf = held(SHELF) === null ? inherited() : slots(held(SHELF));
+
+    const keepShelf = () => hold(SHELF, JSON.stringify(shelf));
+
+    // What a slot is called: its first line, the way a session is named after its first message. Cut
+    // short because this is a label in a seventeen-rem column and the whole text is one click away.
+    const labelled = (text) => {
+      const first = text.split("\n").find((line) => line.trim()) || "";
+      const cut = first.trim();
+      return cut.length > 42 ? `${cut.slice(0, 41)}…` : cut;
+    };
+
+    const composerBox = () => document.querySelector('.composer textarea[name="prompt"]');
 
     // --- Reading the conversation ---------------------------------------
 
@@ -136,7 +186,7 @@
       if (!box) return [];
       return Array.from(box.querySelectorAll(".panel")).filter(
         (panel) =>
-          !aside.has(panel.dataset.kind) &&
+          !muted.has(panel.dataset.kind) &&
           (!side || panel.dataset.side === side) &&
           panel.getClientRects().length > 0,
       );
@@ -196,16 +246,47 @@
     // at the start and again after every swap, and safe to call at any other time: it states the
     // whole of what the transcript should look like rather than the difference from anything.
 
-    const paintAside = () => {
+    const paintMuted = () => {
       const box = transcript();
       if (!box) return;
       box.querySelectorAll(".panel").forEach((panel) => {
-        if (aside.has(panel.dataset.kind)) panel.dataset.aside = "";
-        else delete panel.dataset.aside;
+        if (muted.has(panel.dataset.kind)) panel.dataset.muted = "";
+        else delete panel.dataset.muted;
       });
       document.querySelectorAll(".key__chip").forEach((chip) => {
-        chip.setAttribute("aria-pressed", String(!aside.has(chip.dataset.kind)));
+        chip.setAttribute("aria-pressed", String(!muted.has(chip.dataset.kind)));
       });
+    };
+
+    // The shelf as it stands, rebuilt whole rather than diffed. It is a handful of rows the reader
+    // is not interacting with mid-render, so the simplest correct thing is also the right one, and
+    // it means every path that changes the shelf ends the same way.
+    const paintShelf = () => {
+      const list = document.querySelector('[data-shelf="list"]');
+      const empty = document.querySelector('[data-shelf="empty"]');
+      if (!list) return;
+      if (empty) empty.hidden = shelf.length > 0;
+      list.replaceChildren(
+        ...shelf.map((slot, index) => {
+          const row = document.createElement("li");
+          row.className = "shelf__slot";
+          const take = document.createElement("button");
+          take.type = "button";
+          take.className = "shelf__take";
+          take.dataset.shelfTake = String(index);
+          take.title = "Add this to the box";
+          take.textContent = slot.name || "(blank)";
+          const drop = document.createElement("button");
+          drop.type = "button";
+          drop.className = "shelf__drop";
+          drop.dataset.shelfDrop = String(index);
+          drop.title = "Take this off the shelf";
+          drop.setAttribute("aria-label", `Take "${slot.name}" off the shelf`);
+          drop.textContent = "×";
+          row.append(take, drop);
+          return row;
+        }),
+      );
     };
 
     const paintLanded = () => {
@@ -298,7 +379,7 @@
         if (parent.closest(".panel__meta")) continue;
         // Only the kinds the reader left in play, so the count is of what they are looking at.
         const panel = parent.closest(".panel");
-        if (panel && aside.has(panel.dataset.kind)) continue;
+        if (panel && muted.has(panel.dataset.kind)) continue;
         nodes.push(node);
       }
       for (const node of nodes) {
@@ -368,7 +449,8 @@
     // everything, which is pointing at nothing.
     const repaint = (announce = true) => {
       paintFresh(announce);
-      paintAside();
+      paintMuted();
+      paintShelf();
       paintLanded();
       paintFolds();
       paintFollow();
@@ -426,12 +508,79 @@
       document.querySelectorAll(".key__chip").forEach((chip) => {
         chip.addEventListener("click", () => {
           const kind = chip.dataset.kind;
-          if (aside.has(kind)) aside.delete(kind);
-          else aside.add(kind);
-          hold(scoped("aside"), JSON.stringify([...aside]));
-          paintAside();
+          if (muted.has(kind)) muted.delete(kind);
+          else muted.add(kind);
+          hold(scoped("muted"), JSON.stringify([...muted]));
+          paintMuted();
           research(false);
         });
+      });
+    };
+
+    // Keeping clears the box, which is what makes this "keep that" rather than "copy that": the
+    // reason to shelve a paragraph is almost always to write a different one next.
+    //
+    // Taking *appends* to the box instead of replacing it, and never the other way round. It cannot
+    // lose what somebody has already typed, and it is what assembles several kept comments into one
+    // message, which is the case the shelf exists for.
+    const wireShelf = () => {
+      document.addEventListener("click", (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const control = pressed.closest("[data-shelf], [data-shelf-take], [data-shelf-drop]");
+        if (!(control instanceof HTMLElement)) return;
+        const box = composerBox();
+
+        if (control.dataset.shelf === "keep") {
+          if (!box || !box.value.trim()) return;
+          shelf = [...shelf, { name: labelled(box.value), text: box.value }];
+          box.value = "";
+          box.focus();
+        } else if (control.dataset.shelfTake !== undefined) {
+          const slot = shelf[Number(control.dataset.shelfTake)];
+          if (!box || !slot) return;
+          box.value = box.value.trim() ? `${box.value.replace(/\s+$/, "")}\n\n${slot.text}` : slot.text;
+          box.focus();
+          box.setSelectionRange(box.value.length, box.value.length);
+          return; // Nothing was shelved or dropped, so there is nothing to store or redraw.
+        } else if (control.dataset.shelfDrop !== undefined) {
+          const index = Number(control.dataset.shelfDrop);
+          shelf = shelf.filter((_, at) => at !== index);
+        } else {
+          return;
+        }
+
+        keepShelf();
+        paintShelf();
+      });
+    };
+
+    // A `<details>` closes only when its own summary is pressed again, which is right for a fold in
+    // the transcript and wrong for a menu: a menu left open lies over the conversation until the
+    // reader thinks to dismiss it the one way that works. Both of these are enhancements over a
+    // control that already opens, chooses and submits with the file absent.
+    const wireSender = () => {
+      const shut = (except) => {
+        document.querySelectorAll(".sender__more[open]").forEach((menu) => {
+          if (menu !== except) menu.open = false;
+        });
+      };
+      // Choosing an answer shuts the menu, whichever answer it was. The ones that send navigate or
+      // swap so it hardly shows; `Keep` stays on the page, and a menu left standing over the box it
+      // just emptied is the reader having to dismiss the thing they just used.
+      //
+      // Otherwise the summary's own press has already toggled by the time this runs, so the menu it
+      // belongs to is spared and every other one shuts. A press that closed one leaves nothing open.
+      document.addEventListener("click", (event) => {
+        const within = event.target instanceof Element ? event.target.closest(".sender__more") : null;
+        shut(event.target instanceof Element && event.target.closest(".sender__option") ? null : within);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        const open = document.querySelector(".sender__more[open]");
+        if (!open) return;
+        shut(null);
+        open.querySelector("summary")?.focus();
       });
     };
 
@@ -713,6 +862,8 @@
     };
 
     wireKey();
+    wireShelf();
+    wireSender();
     wireSearch();
     wireDock();
     wireScroll();

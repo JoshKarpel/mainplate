@@ -268,7 +268,9 @@ class Service:
         await self.say(session.id, turn=0, said=said)
         return session
 
-    async def fork(self, session: str, *, at: int, chosen: Choice, said: str | None = None) -> Session | None:
+    async def fork(
+        self, session: str, *, at: int, chosen: Choice, said: str | None = None, aside: bool = False
+    ) -> Session | None:
         """
         A new session carrying this one's turns before `at`, on `chosen`, and asking `said` next.
 
@@ -291,6 +293,11 @@ class Service:
 
         `said` of `None` leaves the fork waiting instead, which is the honest state when there is
         no message to re-ask - forking from the end of a conversation to carry on somewhere else.
+
+        `aside` records that this fork is meant to come back, and changes nothing else: the copy, the
+        worktree and the choice are the same either way, because what differs is only what somebody
+        intended. It is recorded because nothing else could recover it and because the sidebar cannot
+        draw the difference otherwise.
 
         The message goes last, after the choice, for the reason it does in `start`: a prompt is
         what *queues* a session, so a worker taking this one between the two would find no endpoint
@@ -324,7 +331,7 @@ class Service:
             # A fork's opening line is its parent's, because it literally carries it: the title is
             # what the first message says, and the first message came across with the rest.
             title=parent.title,
-            forked=Origin(session=session, turn=at),
+            forked=Origin(session=session, turn=at, aside=aside),
         )
         await enrol(self.database, forked)
         for key, value in carried.items():

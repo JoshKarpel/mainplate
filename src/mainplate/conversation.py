@@ -52,6 +52,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from decimal import Decimal
+from enum import Enum
 from itertools import groupby
 from typing import Final
 from typing import Literal
@@ -102,6 +103,66 @@ REPOSITORY_FIELD: Final = "repository"
 ISOLATION_FIELD: Final = "isolation"
 FILESYSTEM_FIELD: Final = "filesystem"
 NETWORK_FIELD: Final = "network"
+
+# Where the message in the box is going, which the composer posts and nothing ever records. It is
+# named here rather than in `console.py` because the page renders the control and the boundary parses
+# it, and `pages.py` cannot import the console without closing a ring.
+DISPOSITION_FIELD: Final = "disposition"
+
+
+class Disposition(Enum):
+    """
+    Which session's checkpoint the message in the box lands in.
+
+    A request-time instruction and never a recorded value, which is what separates it from
+    everything else posted by the composer: a session records what was *said*, and where it was said
+    is already answered by which checkpoint holds it.
+
+    One field rather than a control per destination, because every arm takes the same input and
+    differs only in where it goes. Each is a call this console already makes.
+    """
+
+    HERE = "here"
+    """`Service.say` at the next free turn. Queue-for-next-turn: a message typed while a reply is
+    still coming lands in the turn after the one in flight and is answered in order, rather than
+    reaching the turn being answered."""
+
+    FORK = "fork"
+    """`Service.fork` at the end, carrying the whole conversation, with this message asked there.
+    The turns are settled by definition, since the branch point is past all of them.
+
+    The same word the rule above every turn uses, because it is the same call with a different `at`.
+    A second name for it would be a synonym to keep in step, not a distinction."""
+
+    ASIDE = "aside"
+    """The same call, recorded as a step out that is meant to come back.
+
+    Nothing mechanical differs, and saying so is better than inventing a difference: what it buys is
+    that the sidebar can draw a digression as one, and that the session knows to offer a way back."""
+
+    PARENT = "parent"
+    """`Service.say` into the session this one was forked from, which is how an aside comes back.
+
+    A *message* and not a merge. Splicing an aside's turns into its parent would leave the parent
+    holding requests whose context never existed, since those turns were asked against the history at
+    the branch point; a message whose text happens to have been written elsewhere falsifies nothing.
+    Offered from any fork rather than only an aside, because `Origin.session` is what it needs and
+    every fork has one."""
+
+
+def parse_disposition(named: str) -> Disposition | None:
+    """
+    One posted value as the disposition it names, or nothing where it names none.
+
+    `None` rather than a default, so the caller decides whether an unreadable value is a refusal or
+    an omission. An absent field is `HERE` at the call site, because a form predating this control
+    posts a message and means the thing Send has always done.
+    """
+    try:
+        return Disposition(named)
+    except ValueError:
+        return None
+
 
 # A value no checkpoint can hold, so that "no such key" stays distinguishable from a step that
 # recorded `None`. The store keeps those apart deliberately - its `value` column is `NOT NULL` - and

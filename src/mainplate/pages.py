@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -76,9 +77,11 @@ from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import grouped
+from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
+from mainplate.conversation import Disposition
 from mainplate.conversation import Kind
 from mainplate.conversation import Panel
 from mainplate.conversation import Prose
@@ -312,15 +315,22 @@ def stream_element(links: Links, session: str) -> Element:
     )
 
 
-def document(links: Links, heading: str, children: Element, session: str | None = None) -> str:
+def document(
+    links: Links, heading: str, children: Element, session: str | None = None, forked_from: str | None = None
+) -> str:
     """
     The whole document, which every page is this with something different in the middle.
 
     `session` is on the body because what the reader has decided about a conversation, which is
-    which kinds they set aside, belongs to that conversation and to no other. Every session on this
-    console shares one origin, so a store not scoped by it would be one conversation's decisions
-    imposed on all of them. The theme is the exception and is deliberately unscoped: it is the
-    reader's rather than any conversation's.
+    which kinds they set aside and what they have kept unsent, belongs to that conversation and
+    to no other. Every session on this console shares one origin, so a store not scoped by it would
+    be one conversation's decisions imposed on all of them. The theme is the exception and is
+    deliberately unscoped: it is the reader's rather than any conversation's.
+
+    `forked_from` is what lets a branch inherit its parent's shelf, and it is here because the copy
+    is the *script's* to make. The server never sees a draft, so it cannot carry one across the way
+    `Service.fork` carries a turn; what it can do is say which conversation this one came from and
+    let the page holding both answer the rest.
 
     The stylesheet and htmx are served from this process rather than from a CDN. The reason that
     matters most here is the last one anybody thinks of: a coding agent is pointed at a
@@ -364,7 +374,7 @@ def document(links: Links, heading: str, children: Element, session: str | None 
                         ]
                     ),
                     body(
-                        attrs={"data-session": session},
+                        attrs={"data-session": session, "data-forked-from": forked_from},
                         children=[*((stream_element(links, session),) if session else ()), children],
                     ),
                 ],
@@ -445,8 +455,28 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
                                             attrs={"datetime": session.created_at.isoformat()},
                                             children=session.created_at.strftime("%b %d, %H:%M"),
                                         ),
+                                        # Where it left its parent, and whether it left meaning to
+                                        # come back. The glyph carries it rather than a word: a row
+                                        # this narrow has no room for one, and the two marks differ
+                                        # at a glance where "aside" and nothing would not.
                                         *(
-                                            (span(cls="from", children=f"\N{RIGHTWARDS ARROW}{session.forked.turn}"),)
+                                            (
+                                                span(
+                                                    cls=("from", "from--aside" if session.forked.aside else None),
+                                                    attrs={
+                                                        "title": (
+                                                            f"An aside from turn {session.forked.turn}"
+                                                            if session.forked.aside
+                                                            else f"Forked at turn {session.forked.turn}"
+                                                        )
+                                                    },
+                                                    children=(
+                                                        f"\N{LEFTWARDS ARROW WITH HOOK}{session.forked.turn}"
+                                                        if session.forked.aside
+                                                        else f"\N{RIGHTWARDS ARROW}{session.forked.turn}"
+                                                    ),
+                                                ),
+                                            )
                                             if session.forked
                                             else ()
                                         ),
@@ -1600,6 +1630,35 @@ def key_card() -> Element:
     )
 
 
+def shelf_card() -> Element:
+    """
+    Text written and not sent, kept for this conversation and pulled back into the box on demand.
+
+    What the shelf *holds* is here, in the rail, for the reason everything else there is: the rail is
+    outside the region that swaps, so a slot is never rebuilt under the reader's hand while a turn
+    records. What *fills* it is not here - `Keep` sits beside Send, because it acts on the box and a
+    control belongs next to the thing it acts on, which is the same reasoning that keeps a fork link
+    on the rule it forks at.
+
+    Its list is rendered by the script and by nothing else, because what it holds is a reader's own
+    decision and the server is never told any of it. That is the rail's standing bargain rather than
+    an exception - the search field does nothing without the script either - and the page still
+    renders, posts and folds with the file absent.
+
+    An empty state rather than a hidden card, so somewhere to put an unsent paragraph is discoverable
+    before there is one in it.
+    """
+    return div(
+        cls="shelf",
+        attrs={"aria-label": "Shelf"},
+        children=[
+            span(cls="shelf__title", children="shelf"),
+            ul(cls="shelf__list", attrs={"data-shelf": "list"}),
+            p(cls="shelf__empty", attrs={"data-shelf": "empty"}, children="Nothing kept yet."),
+        ],
+    )
+
+
 def dock_button(cls: str | None, label: str, glyph: str, attrs: dict[str, str]) -> Element:
     return button(
         cls=("dock__btn", cls),
@@ -1726,6 +1785,7 @@ def rail() -> Element:
             search_card(),
             key_card(),
             dock_card(),
+            shelf_card(),
             theme_card(),
         ],
     )
@@ -1759,12 +1819,138 @@ type Placed = Element | VoidElement | None
 """One thing a caller hands the composer to put above or below the box, or nothing at all."""
 
 
+def sending_option(name: str, saying: str, attrs: Mapping[str, str | int | bool | None]) -> Element:
+    """
+    One answer to what happens to what you typed, as a row in the menu.
+
+    What it does is written under its name rather than left to a `title`, because a control somebody
+    opened a menu to find is one they have not used before, and a tooltip is not where anybody looks
+    first.
+    """
+    return button(
+        cls="sender__option",
+        attrs=attrs,
+        children=[
+            span(cls="sender__option-name", children=name),
+            span(cls="sender__option-said", children=saying),
+        ],
+    )
+
+
+def sending_control(refusing: bool, continuing: bool, returning: bool = False) -> Element:
+    """
+    What happens to what you typed: send it, and everything else folded behind a caret beside it.
+
+    **One question, so one control.** Queueing it here, asking it in a new session, and setting it
+    aside unsent are answers to "what do I do with this", and answering one question in two places is
+    what this console removes wherever it finds it - which is exactly what a `Keep` button standing
+    beside `Send` had become. It is also the only shape that stays affordable: each further answer
+    costs a line in a menu nobody has to open, where each further button costs a slot in the row above
+    the message box, which is the row a phone has least of.
+
+    The menu is ordered by how far the text travels: an `Aside` is a step out you mean to come back
+    from, a `Fork` is a conversation of its own, going back reaches the one this came out of, and
+    `Keep` sends it nowhere at all and is under a rule for that reason. A `steer` lands at the top
+    when it exists, being the only one that reaches inside the turn already running.
+
+    `returning` is offered by any fork rather than only an aside, because what it needs is
+    `Origin.session` and every fork has one. An aside is the case it is *for*, and gating it on the
+    flag would be inventing a restriction to make the flag look load-bearing.
+
+    **Everything that *sends* works with no script.** The fold is a `<details>`, which is how
+    everything else here folds, and each destination posts its own `name`/`value` the way the browser
+    has always submitted a named button. `Keep` is the exception and is honestly the odd one out: the
+    shelf is `localStorage`, so that row does nothing with `mainplate.js` absent, exactly as the
+    shelf's own card in the rail shows nothing then.
+
+    It deliberately does *not* switch what the primary button does, which is where GitHub's version of
+    this control goes further. Remembering a choice would mean a button labelled `Send` that forks,
+    which is the one failure a control like this can have that nobody notices until after it has
+    happened; here what a button says is always what it does.
+
+    With no conversation yet there is no menu, only Send: nothing to fork from, and no session for a
+    shelf to belong to.
+    """
+    send = button(
+        # The key is named on the button because otherwise nothing on the page says it exists, and a
+        # shortcut nobody can find is one nobody uses.
+        attrs={"type": "submit", "disabled": refusing, "title": "Shift-Enter"},
+        children="Send",
+    )
+    if not continuing:
+        return send
+    return div(
+        cls="sender",
+        children=[
+            send,
+            details(
+                cls="sender__more",
+                children=[
+                    summary(
+                        cls="sender__caret",
+                        attrs={"aria-label": "What else to do with this", "title": "What else to do with this"},
+                        children="\N{BLACK DOWN-POINTING SMALL TRIANGLE}",
+                    ),
+                    div(
+                        cls="sender__menu",
+                        children=[
+                            sending_option(
+                                "Aside",
+                                "Step out into a side conversation you mean to come back from",
+                                {
+                                    "type": "submit",
+                                    "disabled": refusing,
+                                    "name": DISPOSITION_FIELD,
+                                    "value": Disposition.ASIDE.value,
+                                },
+                            ),
+                            sending_option(
+                                "Fork",
+                                "Ask it in a new session carrying this whole conversation",
+                                {
+                                    "type": "submit",
+                                    "disabled": refusing,
+                                    "name": DISPOSITION_FIELD,
+                                    "value": Disposition.FORK.value,
+                                },
+                            ),
+                            *(
+                                (
+                                    sending_option(
+                                        "Back to where this came from",
+                                        "Send it to the conversation this one was forked out of",
+                                        {
+                                            "type": "submit",
+                                            "disabled": refusing,
+                                            "name": DISPOSITION_FIELD,
+                                            "value": Disposition.PARENT.value,
+                                        },
+                                    ),
+                                )
+                                if returning
+                                else ()
+                            ),
+                            sending_option(
+                                "Keep",
+                                "Put it on the shelf, unsent, and clear the box",
+                                {"type": "button", "disabled": refusing, "data-shelf": "keep"},
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
 def composer(
     action: str,
     beneath: Placed,
     *,
     live: bool,
     refusing: bool = False,
+    continuing: bool = False,
+    returning: bool = False,
     above: Placed = None,
     identified: str | None = None,
 ) -> Element:
@@ -1796,6 +1982,12 @@ def composer(
     `identified` is what the picker's controls name to reach this form from outside it, and is given
     only on the page that has one: an id nothing points at would say there is something here to
     associate with.
+
+    `continuing` is whether this composer is in a conversation that already exists, which is what
+    decides the menu: there is nothing to fork from and no session for a shelf to belong to until
+    there is one. Its own argument rather than read off `live` even though the two coincide today,
+    because they mean different things - `live` is whether the answer swaps or navigates - so tying
+    them together would be one of the two silently deciding the other.
     """
     driving = (
         {
@@ -1833,12 +2025,7 @@ def composer(
                             "aria-label": "Message",
                         }
                     ),
-                    # The key is named on the button because otherwise nothing on the page says it
-                    # exists, and a shortcut nobody can find is one nobody uses.
-                    button(
-                        attrs={"type": "submit", "disabled": refusing, "title": "Shift-Enter"},
-                        children="Send",
-                    ),
+                    sending_control(refusing, continuing, returning),
                 ],
             ),
             div(
@@ -1955,6 +2142,12 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     chosen_note(showing.chosen, showing.repository, showing.worktree, showing.said.total),
                     live=True,
                     refusing=stalled is not None,
+                    # Only where there is something to act on. Forking an empty conversation makes a
+                    # session identical to starting one, so the offer would be a second way to do
+                    # what the sidebar's own button already does.
+                    continuing=showing.said.turns > 0,
+                    # Any fork can send back to what it came out of; an aside is the case it is for.
+                    returning=showing.session.forked is not None,
                 ),
             ],
             # Only where there is a conversation to navigate. On the page where a session does not
@@ -1963,6 +2156,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             aside_rail=[rail()],
         ),
         session=showing.session.id,
+        forked_from=showing.session.forked.session if showing.session.forked is not None else None,
     )
 
 
@@ -1996,6 +2190,25 @@ def inheriting(at: int, asking: bool) -> str:
     """
     carried = "Carries nothing" if at == 0 else "Carries turn 0" if at == 1 else f"Carries turns 0 to {at - 1}"
     return f"{carried}, then asks turn {at} again." if asking else f"{carried}, then waits for turn {at}."
+
+
+def branching_files(at: int, repository: str) -> str:
+    """
+    What a fork does to the files, said before somebody finds out afterwards.
+
+    The turns a fork carries are visible on the page below it; what happens to the working files is
+    not visible anywhere, and it is the half with work in it. A branch gets *its own* worktree
+    checked out at the tree the forked turn started on, so anything committed or edited after that
+    turn is simply not in it, and its scratch directory starts empty.
+
+    Nothing is destroyed and the sentence says so, because "restores the worktree" reads as an
+    action on the conversation you are looking at. The parent keeps its worktree and its scratch
+    exactly as they are: a fork is a new session beside this one, never this one moved backwards.
+    """
+    return (
+        f"Gets a fresh worktree of {repository} at the files turn {at} started on, and an empty "
+        f"scratch directory. This conversation's own files are left as they are."
+    )
 
 
 def fork_page(
@@ -2036,6 +2249,14 @@ def fork_page(
                     children=[
                         h1(children="Fork this conversation"),
                         p(cls="forking__kept", children=inheriting(at, asked is not None)),
+                        # Only where there is a repository to say it about. A session working in no
+                        # files has no worktree and no scratch, so the sentence would be describing
+                        # something that does not exist for it.
+                        *(
+                            (p(cls="forking__files", children=branching_files(at, showing.repository)),)
+                            if showing.repository is not None
+                            else ()
+                        ),
                         input_(attrs={"type": "hidden", "name": "at", "value": str(at)}),
                         # The turn's own message, back in a box you can edit. Without it a fork is
                         # a conversation that stops where you wanted it to continue, and seeing the

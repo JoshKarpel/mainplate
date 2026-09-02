@@ -123,12 +123,16 @@ asking a gateway. The test for a change here is the same one: does it keep a sec
 was *said*?
 
 The console's `localStorage` is the last thing that looks like an exception and is not. It holds
-only what a *reader* decided and would want to find again: the theme, and which kinds are set
-aside. Never a word of the conversation, so a browser with it wiped renders exactly what one
-without it does. The theme is the reader's across every session; what is set aside is a fact about
-one conversation, so it is keyed by session id, and that scoping is load-bearing rather than tidy:
-every session shares one origin, so an unscoped key would be one conversation's decisions imposed
-on all of them.
+only what a *reader* decided and would want to find again: the theme, which kinds are muted, and
+what they have written and not sent. Never a word of the conversation - an unsent draft is not one
+until it is sent - so a browser with it wiped renders exactly what one without it does. The theme is
+the reader's across every session; the other two are facts about one conversation, so they are keyed
+by session id, and that scoping is load-bearing rather than tidy: every session shares one origin, so
+an unscoped key would be one conversation's decisions imposed on all of them.
+
+**`muted` is what the key does, and the word matters because `aside` is taken.** A muted kind is
+still drawn, at two fifths opacity, so it is quieted rather than hidden or removed; an *aside* is a
+side conversation, which is a different thing entirely and the one that keeps the name.
 
 Two things the script holds are deliberately *not* stored, and the line between them is worth
 keeping. Which calls a reader has unfolded, and whether they are following the end, are modes
@@ -143,6 +147,38 @@ copies turns that are already settled and that nothing will ever rewrite, so the
 two values that happened to be equal rather than two views of one thing. It is also what keeps a
 fork readable on its own, since each session's checkpoint stays the whole of its own conversation
 with nothing to dereference.
+
+## The words
+
+**One name per thing, and the same name in the code and on the page.** A reader who learns a word
+from a control should find that word in the identifier behind it, and somebody reading the source
+should not have to work out that two names are one operation. This console keeps being tempted the
+other way, because a second word always feels like it is adding a distinction; usually it is adding a
+synonym, and a synonym is a thing to keep in step for ever.
+
+**The test is whether a second *thing* exists, not whether a second word reads well.** Two controls
+that call the same function with different arguments are one thing with two labels: the composer's
+fork and a rule's fork are both `Service.fork`, differing in `at`, so they are both called `fork`.
+Where the distinction is real the words stay apart, and `endpoint`, `wire` and `provider` are the
+worked example - one is a line in `config.yaml`, one is a built object that speaks an API format, and
+one is whoever made a model. Three things, three words, none of them interchangeable.
+
+**Say what it is, not what is comfortable.** A tool that will not do something `refuses`; a session
+nobody can answer is `stalled`; a model with no price says `no reference record`. None of those are
+softened into "unavailable", "issue" or "not supported", because the reader's next question is always
+*what happened*, and a euphemism makes them ask it. The same goes for what a control does: `keep`
+takes text off the page, `drop` deletes it, and neither is called "manage".
+
+**Prose may inflect where a control may not.** English makes a noun of an act, so a fork produces a
+branch and a session forked at turn three has a branch point. That is ordinary writing and not a
+second term. What must not vary is the label on a button, the name of an identifier, and the word a
+doc reaches for when it means the operation.
+
+**Choose the word before the value is durable.** A term that has only ever been in a label costs a
+rename; one that has been written into a checkpoint costs a migration, because the *value* is what is
+in the store - see `Filesystem.WORKTREE`, which was `WORKSPACE`, and took every session written until
+then with it. So a `Disposition` is free to be renamed and a `Choice` field is not, which is worth
+knowing at the moment the word is picked rather than afterwards.
 
 ## The key scheme
 
@@ -473,6 +509,158 @@ The confirm page is a page rather than a control in the transcript, because the 
 re-rendered every time a turn in flight records anything: a picker per person panel would be
 rebuilt under the reader's hand, and there would be one per turn.
 
+## Where a message goes, and what has not been sent yet
+
+The composer grows more than one way to act on what is in the box, and **those ways are not variants
+of one thing**. They are told apart by what each one writes, which is also the order of how much
+they can break:
+
+- **The shelf** writes nothing recorded at all. It is unsent text.
+- **A disposition** decides which session's checkpoint the message lands in. Nothing new is written
+  that was not already written by `say` or by `fork`.
+- **Steer** writes a step *inside* a turn already being answered, and is the only one that reaches
+  into the agent loop.
+
+Sorting them this way is what keeps the cheap ones cheap. Two of the three need no new mechanism.
+
+### The disposition
+
+**One field on the composer's form, not one button per endpoint**, because every disposition takes
+the same input and differs only in where it goes. Parsed at the boundary into an enum, the way
+`posted_workspace` turns one posted value into the two it records.
+
+- `here` is `Service.say` at the next free turn. It is what Send has always done, and it is
+  **queue-for-next-turn and not steer**: a message typed while a reply is coming lands in the turn
+  after the one in flight and is answered in order.
+- `fork` is `Service.fork(at=turns, said=...)`, which is pi's `/clone` and needed a control rather
+  than a mechanism: the fork route already accepts `at == said.turns`, so forking the end has always
+  been reachable by URL and offered by nothing. It is called `fork` and not `branch` because it is
+  the same call the rule above every turn makes, with a different `at`; see the words.
+- `aside` is the same call with `Origin.aside` set. **Nothing mechanical differs** - the copy, the
+  worktree and the choice are identical - so what it records is what somebody *meant*, which nothing
+  else could recover and which the sidebar cannot draw otherwise. Saying that plainly is better than
+  inventing a difference to justify the flag.
+- `parent` sends into the session this one was forked from, which is how an aside comes back. It is
+  offered from **any** fork rather than only an aside, because what it needs is `Origin.session` and
+  every fork has one; gating it on the flag would be a restriction invented to make the flag look
+  load-bearing. The destination is read off the row and never posted, so a form cannot put a message
+  in a conversation nobody was looking at.
+- `steer` is below, and is the one that is not a disposition over `say` and `fork`.
+
+**`Origin.aside` is the one column added for presentation**, and it earns that only because the
+sidebar draws the two marks differently: a fork gets `→2` in the mark ink and an aside gets `↩2` in
+the faint one, because what a reader scanning a tree wants to pick out is where the conversation
+actually went. It arrives through `ADDED` like the two columns before it, and `parse_origin`
+*defaults* it where the pair beside it is demanded: every fork written before asides existed has
+`NULL` there and was a plain fork, so reading it as one is ordinary parsing of an optional rather
+than a guess.
+
+**Send and everywhere else are one split control**, because a destination per button spends a slot in
+the row above the message box, which is the row a phone has least of. `sending_control` is Send plus
+a caret opening a `<details>` whose items are submit buttons, so the whole thing needs no script:
+the fold is how everything else here folds, and a named button has always posted its own pair.
+
+It deliberately does **not** switch what the primary button does, which is where GitHub's version of
+this control goes further. Remembering a choice means a button labelled `Send` that forks, and that
+is the one failure a control like this can have that nobody notices until after it has happened.
+What closing the menu on an outside click and on Escape adds is an enhancement over a control that
+already opens, chooses and submits with the file absent.
+
+**`Keep` is an answer in that menu and not a button beside it**, because "put this on the shelf" is
+one more answer to what happens to what you typed, and answering one question in two places is the
+thing this console removes wherever it finds it. It sits under a rule in the menu, since it is the
+only answer that sends the text nowhere. The shelf's *list* stays in the rail, where nothing rebuilds
+it mid-turn.
+
+That row is the one thing in the menu that needs the script, because the shelf is `localStorage`;
+everything that *sends* works without it. That is the shelf's standing bargain rather than a new
+exception - its card in the rail shows nothing without the script either.
+
+**It is posted as the submit button's own `name`/`value`**, which is the browser's mechanism rather
+than anything scripted, so it works with `mainplate.js` absent and htmx appends the submitter's pair
+like any other field. Shift-Enter deliberately reaches none of them: `requestSubmit()` with no
+submitter posts no disposition at all, which parses as `HERE`, so the keyboard shortcut keeps meaning
+the one thing it has always meant rather than whichever button was pressed last.
+
+An **absent** field is `HERE` and an unrecognised one is a **refusal**, which is the one place a
+default would be wrong: guessing puts a message in a conversation nobody addressed it to, and it is
+sent by the time anybody could notice.
+
+**A branch answers `HX-Redirect`, never a `303`.** htmx follows a redirect itself and swaps what
+comes back into the target, so a `303` would put the branch's transcript inside the parent's page and
+leave the address bar naming the parent. `elsewhere` in `console.py` is that, and
+`TestWhereTheComposerSendsTo` pins it in a real Chromium, because both halves - that htmx sends the
+submitter's value, and that it navigates on this header - are htmx's behaviour rather than ours and
+look identical in markup either way.
+
+### The shelf
+
+Named slots of unsent text, **per session, and copied when the session forks**. That copy does not
+offend the rule against a second copy of what changes, for the reason a fork does not: once copied
+the two are independent values that happened to be equal, and editing one never has to reach the
+other.
+
+Accumulative rather than save-and-replace, and the case that decides it is a review: reading a diff
+and building one comment up across several turns is the shape this is for, where a single
+overwriting draft would only ever hold the last thing typed.
+
+**It cannot live in the checkpoint while it is editable, and that is structural rather than a
+preference.** `without-durability-sqlite` writes steps with `ON CONFLICT (workflow, step) DO UPDATE
+SET value = workflow_checkpoint.value`, which is a no-op update: a key keeps the value it was first
+given, so a draft saved twice would keep its first text for ever. And `Service.token` counts rows, so
+even a rewrite that did land would not move the change token and no other tab would learn of it.
+
+So it starts in `localStorage`, keyed by session id exactly as the set-aside kinds are, and the fork
+copy is the script's rather than the server's. `document` puts `data-forked-from` on the body for
+exactly that: the server has never seen a draft so it cannot carry one the way `Service.fork` carries
+a turn, but it can say which conversation this one came from and let the page holding both stores do
+the rest.
+
+**An empty shelf and a missing one are different, and the inheritance turns on it.** The adoption
+runs only where `held(SHELF) === null`, because a reader who cleared theirs has a stored `[]` and
+must not be handed the parent's back on every load with no way to refuse it. `test_browser.py` pins
+that, and it is the one rule here a plausible simplification silently breaks.
+
+**Keeping clears the box and taking appends to it**, never the other way round. Clearing is what
+makes it "keep that" rather than "copy that", since the reason to shelve a paragraph is almost
+always to write a different one next; appending is what can never lose something already typed, and
+what assembles several kept notes into one message, which is the case an aside's merge and a diff
+review are both instances of.
+
+Moving it onto the session is the goal and not a regret, because a draft that does not reach another
+browser is a draft you have to be at one machine to finish. **What that move costs, decided before it is made rather than during it**: a table beside
+`sessions` rather than a checkpoint key, since the checkpoint cannot hold a mutable value; a second
+change signal, since `token` counts checkpoint rows and a drafts table is not one; and a story for
+two tabs editing one slot, which is a genuine conflict where everything else here is append-only and
+therefore has none.
+
+### Merging an aside is a disposition, not a merge
+
+Splicing an aside's turns into its parent is the appealing reading and the wrong one. Those turns
+were asked against the history at the branch point, so a parent that has advanced would end up
+holding request parts whose context never existed - durably, and invisibly, because `messages`
+records the request as well as the answer.
+
+What comes back is a **message** whose text happens to have been written elsewhere. Nothing is
+falsified, `Origin.session` already names where it goes, and there is no merge machinery to write.
+
+### Steer
+
+The only one that reaches inside a turn, and the only one that needs the agent loop to cooperate.
+
+It has to be a **recorded step**, `turn:{n}:steer:{i}`, numbered with the model request it lands
+before. Read live from the checkpoint instead, a resumed pass would splice it at a different index
+and the recorded `model:{i}` answers would stop corresponding to what was actually asked. That makes
+it the third thing riding the per-request counter beside `tree:{i}` and `model:{i}`, which is what
+that counter already means, and `turn_of` carries an unknown kind into a fork without being taught
+it.
+
+`CheckpointedModel.request` is where it splices, being the one place in the process standing at a
+quiescent boundary - the same reason the snapshot is taken there. Reading pending steers is the
+capability reaching into conversation state, so it arrives **injected**, symmetric with `Pricer` and
+for the same cycle: `reference.py` and whatever answers this both read `agent.py`, which builds the
+agent the capability is attached to.
+
 ## The workspace
 
 A session that picked a repository gets **a git worktree of its own**, under `MAINPLATE_WORKSPACES`
@@ -518,11 +706,10 @@ their staged changes, not `HEAD`, not a branch, not `git log`. Four things there
   nowhere else: it is the one place in the process that stands at that boundary. A replayed request
   replays its snapshot too, so a later pass runs no git at all and the pair cannot drift.
 
-Snapshots are **gitignore-aware**, deliberately. A rewind then restores what is version-controlled
-and leaves the environment alone, which is what makes the motivating case work: a tool fails for
-want of something installed, you install it, you go back to before the call, and the install is
-still there. The cost is that an ignored path the agent itself wrote goes stale while the source
-around it moves back, and it is the contract git already offers so nobody has to learn a second one.
+Snapshots are **gitignore-aware**, deliberately. A tree holds what is version-controlled and nothing
+else, so what a fork checks out is the source as that turn saw it and never a `.venv`, a build
+directory, or an untracked file holding a secret. It is the contract git already offers, so nobody
+has to learn a second one.
 
 **A fork's worktree is checked out at the tree the forked turn originally saw**, so a branch
 re-asks its question against the files that question was asked about. Planting at the repository's
@@ -544,8 +731,25 @@ picker. `Service.fork` decides that rather than trusting what the form posted, w
 a form with no repository field quietly moving a branch out of its repository - the bug that shape
 of trust actually produced.
 
-`Worktree.restore` is written and tested but nothing calls it yet: today a snapshot is a record of
-what disk looked like, not something to go back to.
+**There is no rewind, and that is settled rather than pending.** `Worktree.restore` existed for one
+and was deleted unused, because forking already delivers the whole of what a rewind was for: going
+back to before turn 3 with the files as they were is `fork(at=3)`, which plants a clean worktree at
+`turn:3:tree:0` and leaves the original readable beside it.
+
+Putting a session back *in place* would cost two things this console is built on. `Service.token`
+counts recorded rows and is sound only because the checkpoint is append-only - "the only way this
+moves is a record that did not exist before" - and truncation makes the count fall, so rewinding ten
+steps to five and then running five more returns it to ten and a live connection polling either side
+of that window sends nothing and silently stops updating. And a fork records `Origin(session, turn)`,
+so rewinding a parent past a turn some branch left from leaves the sidebar drawing a fork off a turn
+that no longer exists. A fork is a copy of an immutable prefix precisely so two sessions can never
+disagree; making the prefix mutable is what that rests on.
+
+pi.dev reaches the same place from a different design: its sessions are trees inside one file
+(`id`/`parentId`, the active leaf is the position), and even there `/tree` navigation branches rather
+than destructively editing a path. Its three operations map onto ours - `/fork` is `fork(at=turn)`,
+`/clone` is `fork(at=turns)`, and `/tree` is the sidebar, which already draws branches nested under
+their parent labelled with the turn they left at.
 
 ## How a model names a line
 
@@ -1023,7 +1227,7 @@ somewhere in particular.
 
 The rail (search, key, dock, theme) lives **outside** the region that swaps, so no control is
 rebuilt under a reader's finger. What it projects back *onto* the transcript — search marks, the
-panel landed on, which kinds are set aside, which calls are unfolded — cannot live in the markup
+panel landed on, which kinds are muted, which calls are unfolded — cannot live in the markup
 either, so `assets/mainplate.js` holds it as values and reapplies it after every swap. That
 projection is one idempotent `repaint()` serving the first render, every swap, and every press.
 Everything it drives is an enhancement: with the file absent the page still renders, posts, and

@@ -44,6 +44,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour legend, a dock that steps whole turns, every panel in play, or only what the model
   produced, and folds every tool call, a follow-the-end toggle, and a light/dark/system theme. All
   of it is an enhancement; with JavaScript off the console still renders, posts, and folds.
+- A **shelf**: text written and not sent, kept for one conversation and pulled back into the box on
+  demand. `Keep` sits beside Send because it acts on the box, and the list of what is kept is in the
+  rail where nothing rebuilds it mid-turn. Keeping clears the box and taking adds to it rather than
+  replacing what is there, so several kept notes assemble into one message. A fork inherits what its
+  parent kept, which the script copies because the server is never told a draft exists. It lives in
+  the browser, so it is per machine for now.
+- **Asides**: a fork recorded as a step out you mean to come back from, and a way back that sends a
+  message into the conversation it came out of. Nothing mechanical separates an aside from a fork, so
+  what is recorded is only what was meant, and what it buys is that the sidebar draws a digression as
+  one. Coming back is a *message* rather than a merge: splicing an aside's turns into its parent
+  would leave the parent holding requests whose context never existed. The way back is offered from
+  any fork, since every fork knows where it came from.
+- **Fork**, in a menu behind a caret beside Send: it asks the message in the box in a new session
+  carrying this whole conversation and leaves the original untouched, which is the same operation the
+  `fork` link on every rule performs, aimed at the end rather than at a turn. Where a message goes is
+  one field on the composer's form, posted as the submit button's own value, and the menu is a
+  `<details>` of submit buttons, so the whole control opens, chooses and sends with JavaScript off.
+  Shift-Enter still means Send. Forking the end of a conversation was always supported and reachable
+  by nothing.
 - A rule opening each turn, carrying everything true of the turn rather than of any panel inside it:
   which turn it is, where the session may be forked from, the worktree the turn started on, and what
   it spent in tokens and money. The counts and the cost are read from the same recorded responses the
@@ -120,8 +139,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   under `refs/mainplate/snapshots` so they survive `git gc`. An unchanged worktree writes no new
   object at all. Forking checks the new session's worktree out at the tree the forked turn
   originally saw, so a branch re-asks its question against the files that question was asked about.
-  Snapshots are gitignore-aware, so going back to a turn restores what is version-controlled and
-  leaves the environment alone.
+  Snapshots are gitignore-aware, so what a branch checks out is the source as that turn saw it and
+  never a `.venv`, a build directory, or an untracked file holding a secret.
 - Two isolation settings on a session, picked when it is created and fixed for its life like the
   endpoint and the model, with forking the way to change them. **What files it has** is a repository
   it works in, no files at all, or this whole machine. **Network** is on or off, and off rather than

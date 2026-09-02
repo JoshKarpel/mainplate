@@ -338,7 +338,7 @@ main > * {
 
 /* A kind the key has switched off. Still drawn, and drawn as struck out rather than removed: a
    conversation with panels silently missing is one a reader cannot trust the shape of. */
-.panel[data-aside] {
+.panel[data-muted] {
     opacity: 0.4;
 }
 
@@ -907,6 +907,108 @@ main > * {
     font: inherit;
     font-weight: 600;
     cursor: pointer;
+}
+
+/* --- Send, and everything else to do with what you typed ------------- */
+
+/* One control: the button, and a caret opening onto everywhere else. Joined rather than spaced, so
+   the pair reads as one thing with a second half rather than as two buttons that happen to touch. */
+.sender {
+    display: flex;
+    align-self: stretch;
+}
+
+.composer .sender > button {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.sender__more {
+    position: relative;
+    display: flex;
+}
+
+/* The fold is a `<details>`, so the menu opens with no script at all. The marker goes because the
+   caret *is* the marker. */
+.sender__caret {
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    border: 1px solid transparent;
+    border-left: 1px solid color-mix(in srgb, var(--ground) 35%, transparent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    background: var(--person-edge);
+    color: var(--ground);
+    font-size: 0.7rem;
+    list-style: none;
+    cursor: pointer;
+}
+
+.sender__caret::-webkit-details-marker {
+    display: none;
+}
+
+.sender__caret:hover,
+.sender__more[open] .sender__caret {
+    background: color-mix(in srgb, var(--person-edge), var(--ink) 20%);
+}
+
+/* Above the box rather than below it, because the composer sits at the bottom of the page and a menu
+   opening downward would be off the screen. Right-aligned to the control it hangs from. */
+.sender__menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--space-2));
+    z-index: 5;
+    display: flex;
+    width: max-content;
+    max-width: min(22rem, 80vw);
+    flex-direction: column;
+    padding: var(--space-2);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    box-shadow: 0 6px 20px light-dark(rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.5));
+}
+
+.composer .sender__option {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    color: inherit;
+    font-weight: 500;
+    text-align: left;
+}
+
+.composer .sender__option:hover:not(:disabled),
+.composer .sender__option:focus-visible {
+    background: var(--sunk);
+}
+
+/* The rule separates what *sends* the text from what does not. `Keep` is last because it is the only
+   answer that leaves the message where it is, and a line says that without a heading. */
+.composer .sender__option[data-shelf] {
+    margin-top: var(--space-2);
+    border-top: 1px solid var(--edge-soft);
+    border-radius: 0 0 var(--radius) var(--radius);
+    padding-top: var(--space-3);
+}
+
+.sender__option-name {
+    font-weight: 600;
+}
+
+/* What the destination does, in the menu rather than in a `title`: a control a reader opens a menu
+   to find is one they have not used before, and a tooltip is not where somebody looks first. */
+.sender__option-said {
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+    font-weight: 400;
+    white-space: normal;
 }
 
 .composer button:disabled,
@@ -1651,6 +1753,81 @@ mark.hit.current {
     gap: var(--space-2);
 }
 
+/* --- The shelf: what is written and not sent -------------------------- */
+
+.shelf {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.shelf__title {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.shelf__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.shelf__slot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+/* The label takes the room and the text is cut with an ellipsis rather than wrapped: a slot is a
+   line to recognise, and the whole of it is one press away. `min-width: 0` is what actually lets it
+   shrink, since a flex item's floor is its content. */
+.shelf__take {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.1rem 0.3rem;
+    border: 0;
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.shelf__take:hover,
+.shelf__take:focus-visible {
+    background: var(--sunk);
+    color: var(--mark);
+}
+
+.shelf__drop {
+    flex: none;
+    padding: 0 0.25rem;
+    border: 0;
+    background: transparent;
+    color: var(--ink-faint);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.shelf__drop:hover,
+.shelf__drop:focus-visible {
+    color: var(--tool-edge);
+}
+
+.shelf__empty {
+    margin: 0;
+    color: var(--ink-faint);
+}
+
 .key__chip {
     padding: 0.1rem 0.35rem;
     border: 1px solid color-mix(in srgb, var(--kind-hue) 45%, transparent);
@@ -1933,6 +2110,15 @@ main:has(> .forking) {
     font-size: 0.85rem;
 }
 
+/* What the branch does to the files, under what it does to the turns. Fainter than the turns line
+   because it is a reassurance rather than the answer somebody came here for: nothing is destroyed,
+   and the sentence exists so that is known before the button rather than after it. */
+.forking__files {
+    margin: 0;
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+}
+
 .forking__act {
     display: flex;
     align-items: center;
@@ -2000,6 +2186,12 @@ main:has(> .forking) {
     color: var(--mark);
     font-size: 0.68rem;
     font-family: var(--mono);
+}
+
+/* An aside is a digression rather than a direction, so it is marked in the quieter ink: what a
+   reader scanning the tree wants to pick out is where the conversation actually went. */
+.session .from--aside {
+    color: var(--ink-faint);
 }
 
 /* --- A page nothing could answer --------------------------------------- */
@@ -2161,6 +2353,19 @@ main:has(> .forking) {
 
     .composer {
         padding: var(--space-4) 0;
+    }
+
+    /* Two destinations beside the box leave it about a hundred and seventy pixels wide, which is not
+       a box you can write a paragraph in, and writing a paragraph is what Shift-Enter exists for. So
+       the box takes the width and the buttons drop under it, right-aligned where a thumb already is.
+       One row of buttons costs less than a box nobody can compose in. */
+    .composer .row {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .composer textarea {
+        flex: 1 0 100%;
     }
 
     .composer button,

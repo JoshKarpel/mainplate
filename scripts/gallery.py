@@ -161,7 +161,9 @@ LISTED = (
         id="cc" * 16,
         created_at=WHEN + timedelta(minutes=9),
         title=PARENT.title,
-        forked=Origin(session="bb" * 16, turn=2),
+        # An aside rather than a plain fork, so the sidebar's two marks are both on the page and a
+        # styling change can be seen against the pair rather than against one of them.
+        forked=Origin(session="bb" * 16, turn=2, aside=True),
         repository=WORKING_IN,
     ),
     Session(id="dd" * 16, created_at=WHEN, title="Add a thinking control to the picker"),

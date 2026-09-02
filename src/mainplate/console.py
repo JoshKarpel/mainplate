@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import assert_never
 from urllib.parse import parse_qs
 
 from pydantic_ai.settings import ThinkingLevel
@@ -29,8 +30,11 @@ from without_web import post
 from without_web import query_param
 
 from mainplate.agent import Choice
+from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
+from mainplate.conversation import Disposition
+from mainplate.conversation import parse_disposition
 from mainplate.pages import WORKSPACE_FIELD
 from mainplate.pages import Links
 from mainplate.pages import fork_page
@@ -100,6 +104,38 @@ def parse_form_prompt(raw: bytes) -> str:
 
 
 prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
+
+
+@dataclass(frozen=True, slots=True)
+class Sending:
+    """What the composer posted: a message, and where it is going."""
+
+    said: str
+    where: Disposition
+
+
+def parse_form_send(raw: bytes) -> Sending:
+    """
+    The message the composer carried and the disposition it was sent under.
+
+    Parsed together for the reason `parse_form_start` parses its fields together: they arrive in one
+    body and mean nothing apart. An **absent** field is `HERE`, because a form predating the control
+    posts a message and means what Send has always meant; a field naming something this console does
+    not offer is a refusal, because guessing which destination somebody meant is the one thing that
+    could silently put a message in the wrong conversation.
+    """
+    said = parse_form_prompt(raw)
+    fields = parse_qs(raw.decode("utf-8", errors="replace"))
+    named = fields.get(DISPOSITION_FIELD, [""])[0].strip()
+    if not named:
+        return Sending(said=said, where=Disposition.HERE)
+    where = parse_disposition(named)
+    if where is None:
+        raise NotAMessage(f"{named!r} is not somewhere a message can be sent")
+    return Sending(said=said, where=where)
+
+
+sending = body(parse_form_send, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
 
 
 def parse_form_start(raw: bytes) -> Started:
@@ -293,6 +329,26 @@ def seeing(where: str) -> Response:
     return Response(status=303, headers=((LOCATION, where.encode()),))
 
 
+def navigating(where: str) -> Response:
+    """
+    Where to look now, for a request htmx is driving that made somewhere new to look.
+
+    Named for what it does rather than for where it points, so it reads against `seeing` above: both
+    say "look here now" and what separates them is *who* is asked to go, the browser following a
+    `303` or htmx performing a navigation.
+
+    `HX-Redirect` and not a `303`, and the difference is what the browser ends up showing. htmx
+    follows a redirect itself and swaps whatever comes back into the target, so a `303` here would
+    put the new session's transcript inside the old session's page and leave the reader at the
+    parent's URL with the branch's conversation in it. This is read before any swap is considered
+    and sets `location.href`, so the branch is arrived at properly and can be reloaded and linked.
+
+    A `200` with no body, because htmx never renders one for a navigation and a status saying
+    "created, go here" is not something the fetch layer would act on.
+    """
+    return Response(status=200, headers=((b"hx-redirect", where.encode()),))
+
+
 @get("/", summary="Start a session")
 async def start_here(service: Service) -> Response:
     return page_response(
@@ -469,27 +525,66 @@ async def panel_record(service: Service, session: str, turn: int, at: int) -> Re
     return page_response(200, fragment(record_json(held)))
 
 
-@post(t"/sessions/{session_id}/messages", session_id, prompt, summary="Say something to a session")
-async def say(service: Service, session: str, said: str) -> Response:
+@post(t"/sessions/{session_id}/messages", session_id, sending, summary="Say something to a session")
+async def say(service: Service, session: str, sending: Sending) -> Response:
     """
-    Put a message into a session's checkpoint and answer with the transcript that now holds it.
+    Send the message the composer posted wherever it was addressed.
 
-    A `200` carrying the transcript rather than a redirect, because htmx is driving this one and
-    the address bar does not change: the swap shows the message as pending straight away.
+    Both arms are calls this console already made; what the disposition adds is which one, chosen by
+    the person rather than by which form they happened to be looking at.
 
-    It renders what the page's live connection would send a moment later, and that is deliberate
-    rather than duplicated work: this is the one request somebody is actually waiting on, so it
-    answers rather than leaving a message to appear whenever the stream next looks. The connection
-    then sends the same thing, which morphs to nothing.
+    `HERE` answers with a `200` carrying the transcript rather than a redirect, because htmx is
+    driving it and the address bar does not change: the swap shows the message as pending straight
+    away. It renders what the page's live connection would send a moment later, which is deliberate
+    rather than duplicated work - this is the one request somebody is actually waiting on, so it
+    answers rather than leaving a message to appear whenever the stream next looks, and the
+    connection then sends the same thing, which morphs to nothing.
+
+    `FORK` cannot do that, because what it makes is a *different* session and the reader has to
+    end up there. A `303` would be followed by htmx and swapped into the transcript, which would
+    leave somebody reading the branch at the parent's URL, so this answers `HX-Redirect` and the
+    browser navigates for real.
     """
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    await service.say(session, turn=found.said.turns, said=said)
-    asked = await service.read(session)
-    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
+    match sending.where:
+        case Disposition.HERE:
+            await service.say(session, turn=found.said.turns, said=sending.said)
+            asked = await service.read(session)
+            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
+        case Disposition.FORK | Disposition.ASIDE:
+            # The parent's own choice, not a posted one: a fork from the composer offers no picker,
+            # and `Service.fork` is what decides the repository either way. Forking the *end* carries
+            # every turn, so nothing is left behind and nothing is re-asked.
+            if found.chosen is None:
+                return page_response(422, refusal_page(LINKS, 422, f"session {session} records no endpoint"))
+            forked = await service.fork(
+                session,
+                at=found.said.turns,
+                chosen=found.chosen,
+                said=sending.said,
+                aside=sending.where is Disposition.ASIDE,
+            )
+            if forked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+            return navigating(LINKS.to_session(forked.id))
+        case Disposition.PARENT:
+            # Where this session came from, which is the only session a message may be sent to that
+            # is not the one it was typed in. Read off the row rather than posted, so a form cannot
+            # name a conversation somebody is not looking at.
+            origin = found.session.forked
+            if origin is None:
+                return page_response(422, refusal_page(LINKS, 422, f"session {session} was not forked from anything"))
+            came_from = await service.read(origin.session)
+            if came_from is None:
+                return page_response(404, refusal_page(LINKS, 404, f"no session {origin.session}"))
+            await service.say(origin.session, turn=came_from.said.turns, said=sending.said)
+            return navigating(LINKS.to_session(origin.session))
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (

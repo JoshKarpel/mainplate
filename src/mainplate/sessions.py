@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at  TEXT NOT NULL,
     title       TEXT NOT NULL,
     forked_from TEXT,
-    forked_at   INTEGER
+    forked_at   INTEGER,
+    forked_aside INTEGER
 ) STRICT;
 """
 
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 ADDED = (
     ("forked_from", "ALTER TABLE sessions ADD COLUMN forked_from TEXT"),
     ("forked_at", "ALTER TABLE sessions ADD COLUMN forked_at INTEGER"),
+    ("forked_aside", "ALTER TABLE sessions ADD COLUMN forked_aside INTEGER"),
 )
 
 # Long enough that an id is not guessable, which matters because a session id *is* its URL: this
@@ -93,10 +95,18 @@ class Origin:
     `turn` is the first turn this session does *not* share with its parent. So a fork at turn 3
     carries turns 0 to 2 and is waiting to be told turn 3, which is exactly the point somebody
     picked when they said "go back to here and try again".
+
+    `aside` is whether the fork was made as a step out that is meant to come back, rather than as a
+    way of going somewhere else. Nothing about the two differs mechanically - both are `Service.fork`
+    and both copy the same prefix - so this is a fact about what somebody *meant*, recorded because
+    only they know it and because the sidebar cannot draw the difference otherwise. It sits here
+    rather than in the checkpoint for the reason the rest of `Origin` does: it relates two sessions
+    and is a fact about neither on its own.
     """
 
     session: str
     turn: int
+    aside: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +166,7 @@ async def prepare(database: Database) -> None:
 
 
 # This table's own columns, which are the ones `enrol` writes.
-COLUMNS = "id, created_at, title, forked_from, forked_at"
+COLUMNS = "id, created_at, title, forked_from, forked_at, forked_aside"
 
 # What every read selects, spelled once so the column order and `parse_session` cannot drift.
 #
@@ -175,6 +185,7 @@ SELECT sessions.id,
        sessions.title,
        sessions.forked_from,
        sessions.forked_at,
+       sessions.forked_aside,
        json_extract(choice.value, :repository_path)
   FROM sessions
   LEFT JOIN workflow_checkpoint AS choice
@@ -199,13 +210,14 @@ async def enrol(database: Database, session: Session) -> None:
     """
     await database.run(
         lambda connection: connection.execute(
-            f"INSERT OR IGNORE INTO sessions ({COLUMNS}) VALUES (?, ?, ?, ?, ?)",
+            f"INSERT OR IGNORE INTO sessions ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 session.id,
                 session.created_at.isoformat(),
                 session.title,
                 session.forked.session if session.forked else None,
                 session.forked.turn if session.forked else None,
+                int(session.forked.aside) if session.forked else None,
             ),
         )
     )
@@ -222,7 +234,7 @@ async def read_session(database: Database, session: str) -> Session | None:
     return parse_session(rows[0]) if rows else None
 
 
-type Row = tuple[str, str, str, str | None, int | None, str | None]
+type Row = tuple[str, str, str, str | None, int | None, int | None, str | None]
 
 
 async def selecting(database: Database, statement: str, parameters: Mapping[str, str]) -> list[Row]:
@@ -241,9 +253,10 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 str(title),
                 None if forked_from is None else str(forked_from),
                 None if forked_at is None else int(forked_at),
+                None if forked_aside is None else int(forked_aside),
                 None if repository is None else str(repository),
             )
-            for identifier, created_at, title, forked_from, forked_at, repository in connection.execute(
+            for identifier, created_at, title, forked_from, forked_at, forked_aside, repository in connection.execute(
                 statement, parameters
             )
         ]
@@ -252,7 +265,7 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
 
 
 def parse_session(row: Row) -> Session:
-    identifier, created_at, title, forked_from, forked_at, repository = row
+    identifier, created_at, title, forked_from, forked_at, forked_aside, repository = row
     return Session(
         id=identifier,
         created_at=datetime.fromisoformat(created_at),
@@ -260,17 +273,25 @@ def parse_session(row: Row) -> Session:
         # Both or neither, which is what `Origin` exists to make true. A row holding one without
         # the other is a database somebody edited by hand, and reading it as "not a fork" is the
         # quieter wrong answer; this says so instead.
-        forked=parse_origin(identifier, forked_from, forked_at),
+        forked=parse_origin(identifier, forked_from, forked_at, forked_aside),
         repository=repository,
     )
 
 
-def parse_origin(session: str, forked_from: str | None, forked_at: int | None) -> Origin | None:
+def parse_origin(session: str, forked_from: str | None, forked_at: int | None, aside: int | None) -> Origin | None:
+    """
+    Where a session came from, or nothing where it came from nowhere.
+
+    `aside` is defaulted rather than demanded, unlike the pair above it: every fork written before
+    asides existed has `NULL` there and was a plain fork, so reading it as one is ordinary parsing of
+    an optional and not a guess. The other two are demanded because half an origin is a state nothing
+    here can produce.
+    """
     if forked_from is None and forked_at is None:
         return None
     if forked_from is None or forked_at is None:
         raise ValueError(f"session {session!r} names half an origin: {forked_from!r} at {forked_at!r}")
-    return Origin(session=forked_from, turn=forked_at)
+    return Origin(session=forked_from, turn=forked_at, aside=bool(aside))
 
 
 def now_utc() -> datetime:

@@ -18,9 +18,12 @@ from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
 from mainplate.console import LONGEST_PROMPT
 from mainplate.console import NotAMessage
+from mainplate.console import Sending
 from mainplate.console import parse_form_prompt
+from mainplate.console import parse_form_send
 from mainplate.console import posted_isolation
 from mainplate.console import posted_workspace
+from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
 from mainplate.conversation import messages_key
 from mainplate.conversation import prompt_key
@@ -106,6 +109,34 @@ class TestReadingAForm:
     def test_a_body_too_large_to_be_a_message_is_refused_before_it_is_parsed(self) -> None:
         with pytest.raises(NotAMessage):
             parse_form_prompt(b"prompt=" + b"x" * LONGEST_PROMPT)
+
+
+class TestReadingWhereAMessageIsGoing:
+    def test_a_message_with_no_disposition_is_sent_here(self) -> None:
+        """
+        What Send has always done, and what a form predating the control still means.
+
+        It is also what Shift-Enter posts: `requestSubmit()` with no submitter carries no button's
+        name at all, so the keyboard shortcut arrives here rather than at whichever destination was
+        pressed last.
+        """
+        assert parse_form_send(b"prompt=go") == Sending(said="go", where=Disposition.HERE)
+
+    def test_the_submit_button_s_own_value_is_where_it_goes(self) -> None:
+        assert parse_form_send(b"prompt=go&disposition=fork") == Sending(said="go", where=Disposition.FORK)
+
+    def test_a_destination_this_console_does_not_offer_is_refused(self) -> None:
+        """
+        Refused rather than defaulted to `HERE`, which is the one place a default would be wrong:
+        guessing puts somebody's message in a conversation they did not address it to, and the
+        message is already sent by the time anybody could notice.
+        """
+        with pytest.raises(NotAMessage):
+            parse_form_send(b"prompt=go&disposition=steer")
+
+    def test_a_message_is_still_required_whatever_it_is_addressed_to(self) -> None:
+        with pytest.raises(NotAMessage):
+            parse_form_send(b"disposition=fork")
 
 
 class TestTheConsole:
@@ -478,6 +509,209 @@ ANSWERED = [
         "usage": {"input_tokens": 5_300, "cache_read_tokens": 4_100, "output_tokens": 640, "cost": "0.0123"},
     }
 ]
+
+
+class TestBranchingFromTheComposer:
+    """
+    Sending a message into a *new* session carrying this one whole, which is pi's `/clone`.
+
+    The mechanism already existed - `Service.fork` at the end, which the fork route has always
+    accepted - so what these pin is the disposition reaching it and the answer getting the reader to
+    the branch rather than leaving them at the parent showing somebody else's conversation.
+    """
+
+    async def branched(self, app: ASGIApp, service: Service, session: str) -> str:
+        async with calling(app) as caller:
+            answered = await caller.post(
+                f"/sessions/{session}/messages", {"prompt": "try that again", "disposition": "fork"}
+            )
+        assert answered.status == 200
+        return dict(answered.headers)["hx-redirect"].rsplit("/", 1)[-1]
+
+    async def test_branching_makes_a_new_session_and_leaves_this_one_alone(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app)
+        branch = await self.branched(app, service, session)
+
+        assert branch != session
+        held = await service.checkpointer.load(session)
+        assert prompt_key(1) not in held, "the parent was not sent anything"
+
+    async def test_the_branch_carries_the_whole_conversation_and_asks_the_new_message(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        Forking the *end*, so nothing is left behind and nothing is re-asked: every turn of the
+        parent comes across settled and the message goes into the turn after them.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        branch = await self.branched(app, service, session)
+
+        held = await service.checkpointer.load(branch)
+        assert held[prompt_key(0)] == "what is a mainplate", "the parent's turn came across"
+        assert messages_key(0) in held, "and came across answered"
+        assert held[prompt_key(1)] == "try that again", "the new message is the next turn"
+
+    async def test_the_answer_navigates_rather_than_swapping_the_parent(self, app: ASGIApp, service: Service) -> None:
+        """
+        `HX-Redirect` and not a `303`, and the difference is where the reader ends up.
+
+        htmx follows a redirect itself and swaps what comes back into the target, so a `303` would
+        put the branch's transcript inside the parent's page and leave the address bar naming the
+        parent. Pinned as the header rather than as a status, because a `200` with the wrong header
+        would swap an empty body over the conversation.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller:
+            answered = await caller.post(
+                f"/sessions/{session}/messages", {"prompt": "elsewhere", "disposition": "fork"}
+            )
+        headers = dict(answered.headers)
+        assert "hx-redirect" in headers
+        assert headers["hx-redirect"].startswith("/sessions/")
+        assert answered.text == "", "nothing to swap over the conversation being left"
+
+    async def test_the_branch_is_recorded_as_a_fork_of_its_parent(self, app: ASGIApp, service: Service) -> None:
+        """So the sidebar draws it under what it came from, exactly as a fork from a turn is."""
+        session = await a_session(app)
+        branch = await self.branched(app, service, session)
+
+        listed = {each.id: each for each in await service.listed()}
+        origin = listed[branch].forked
+        assert origin is not None
+        assert origin.session == session
+
+    async def test_the_branch_is_answered_on_the_parent_s_own_choice(self, app: ASGIApp, service: Service) -> None:
+        """
+        The composer offers no picker, so there is nothing posted to take a choice from.
+
+        Inherited rather than defaulted, because a branch of a session on one model that quietly
+        started on the configured default would be answering a different question.
+        """
+        session = await a_session(app)
+        branch = await self.branched(app, service, session)
+
+        assert choice_of(await service.checkpointer.load(branch)) == choice_of(await service.checkpointer.load(session))
+
+    async def test_a_conversation_with_nothing_in_it_offers_no_branch(self, app: ASGIApp) -> None:
+        """Branching an empty session makes a session identical to starting one, so it is not offered."""
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert "sender__option" not in answered.text
+
+    async def test_a_conversation_with_a_turn_in_it_does(self, app: ASGIApp) -> None:
+        session = await a_session(app)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session}")
+        assert "sender__option" in answered.text
+        assert 'value="fork"' in answered.text
+
+
+class TestSteppingOutAndComingBack:
+    """
+    An aside, and the way back from one.
+
+    Nothing mechanical separates an aside from a fork - both are `Service.fork` at the end - so what
+    these pin is the half that is not mechanical: that what somebody meant is recorded, and that a
+    fork of any kind can send a message back to what it came out of.
+    """
+
+    async def sent(self, app: ASGIApp, session: str, said: str, where: str) -> dict[str, str]:
+        async with calling(app) as caller:
+            answered = await caller.post(f"/sessions/{session}/messages", {"prompt": said, "disposition": where})
+        assert answered.status == 200
+        return dict(answered.headers)
+
+    async def test_an_aside_is_recorded_as_one(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app)
+        headers = await self.sent(app, session, "just checking something", "aside")
+        stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
+
+        listed = {each.id: each for each in await service.listed()}
+        origin = listed[stepped].forked
+        assert origin is not None
+        assert origin.session == session
+        assert origin.aside
+
+    async def test_a_plain_fork_is_not_an_aside(self, app: ASGIApp, service: Service) -> None:
+        """The flag is what somebody meant, so it has to be off unless they said so."""
+        session = await a_session(app)
+        headers = await self.sent(app, session, "going another way", "fork")
+        forked = headers["hx-redirect"].rsplit("/", 1)[-1]
+
+        listed = {each.id: each for each in await service.listed()}
+        origin = listed[forked].forked
+        assert origin is not None
+        assert not origin.aside
+
+    async def test_an_aside_carries_the_conversation_exactly_as_a_fork_does(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """Nothing about the copy differs, which is the claim that keeps this one call and not two."""
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        headers = await self.sent(app, session, "just checking something", "aside")
+        stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
+
+        held = await service.checkpointer.load(stepped)
+        assert held[prompt_key(0)] == "what is a mainplate"
+        assert held[prompt_key(1)] == "just checking something"
+
+    async def test_going_back_puts_a_message_in_the_session_this_one_came_from(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        A message and not a merge. Splicing the aside's turns in would leave the parent holding
+        requests whose context never existed, since they were asked against the history at the
+        branch point.
+        """
+        session = await a_session(app)
+        headers = await self.sent(app, session, "just checking something", "aside")
+        stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
+
+        back = await self.sent(app, stepped, "here is what I found", "parent")
+
+        held = await service.checkpointer.load(session)
+        assert held[prompt_key(1)] == "here is what I found"
+        assert back["hx-redirect"].endswith(session), "and the reader is taken back there"
+
+    async def test_the_aside_itself_is_not_sent_the_message_it_sent_back(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app)
+        headers = await self.sent(app, session, "just checking", "aside")
+        stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
+        await self.sent(app, stepped, "here is what I found", "parent")
+
+        held = await service.checkpointer.load(stepped)
+        # Turn 1 is the aside's *own* opening message, carried in when it was made. What must not be
+        # here is a turn 2: going back sends to the parent instead of to both.
+        assert held[prompt_key(1)] == "just checking"
+        assert prompt_key(2) not in held
+
+    async def test_a_session_that_came_from_nowhere_cannot_send_back(self, app: ASGIApp) -> None:
+        """
+        Refused rather than dropped, and read off the row rather than posted: a form naming a
+        destination is how a message reaches a conversation nobody was looking at.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller:
+            answered = await caller.post(
+                f"/sessions/{session}/messages", {"prompt": "back to what", "disposition": "parent"}
+            )
+        assert answered.status == 422
+
+    async def test_the_way_back_is_offered_only_where_there_is_one(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app)
+        async with calling(app) as caller:
+            plain = await caller.get(f"/sessions/{session}")
+        assert 'value="parent"' not in plain.text
+
+        headers = await self.sent(app, session, "just checking", "aside")
+        stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
+        async with calling(app) as caller:
+            branched = await caller.get(f"/sessions/{stepped}")
+        assert 'value="parent"' in branched.text
 
 
 class TestWhatARuleSays:
