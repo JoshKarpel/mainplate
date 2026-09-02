@@ -43,6 +43,8 @@ from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
+from mainplate.conversation import heard_key
+from mainplate.conversation import late_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import panelled
@@ -56,6 +58,7 @@ from mainplate.conversation import recorded_choice
 from mainplate.conversation import requested_at
 from mainplate.conversation import so_far
 from mainplate.conversation import spent_on
+from mainplate.conversation import steer_key
 from mainplate.conversation import steers_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
@@ -150,9 +153,9 @@ class TestReadingACheckpoint:
         assert transcript(recorded) == Transcript(
             panels=(
                 Panel(turn=0, at=0, kind="person", blocks=(Prose(text="what is it"),)),
-                # The answer is where the turn's one model request opened, which is what puts a tag
-                # in its margin.
-                Panel(turn=0, at=1, kind="assistant", blocks=(Prose(text="a mainplate"),), opens=(0,)),
+                # The answer came out of the turn's one model request, which is what the rule above
+                # it stands at.
+                Panel(turn=0, at=1, kind="assistant", blocks=(Prose(text="a mainplate"),), asked=0),
             ),
             awaiting=False,
             turns=1,
@@ -171,7 +174,7 @@ class TestReadingACheckpoint:
             ModelResponse(parts=[TextPart("it says hello")]),
         ]
         assert tuple(panelled(3, parted(turn))) == (
-            Panel(turn=3, at=1, kind="thinking", blocks=(Reasoning(text="have a look"),), opens=(0,)),
+            Panel(turn=3, at=1, kind="thinking", blocks=(Reasoning(text="have a look"),), asked=0),
             Panel(
                 turn=3,
                 at=2,
@@ -183,9 +186,34 @@ class TestReadingACheckpoint:
                         returned=Returned(outcome="success", content="the body"),
                     ),
                 ),
+                asked=0,
             ),
-            Panel(turn=3, at=3, kind="assistant", blocks=(Prose(text="it says hello"),), opens=(1,)),
+            Panel(turn=3, at=3, kind="assistant", blocks=(Prose(text="it says hello"),), asked=1),
         )
+
+    def test_a_steer_is_drawn_below_the_results_it_travelled_with_and_above_the_answer_it_shaped(
+        self,
+    ) -> None:
+        """
+        Where a steer belongs, which is what the capability appending it to the request buys.
+
+        A person types while a batch of tool calls runs, so their message travels up with those
+        results and the answer *after* it is the first one that could have been shaped by it. Drawn
+        below that answer instead, the transcript would say the model had already replied when it
+        arrived, which is the opposite of what happened.
+        """
+        turn: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="go")]),
+            ModelResponse(parts=[ToolCallPart("read", {"path": "x"}, "c1")]),
+            ModelRequest(parts=[ToolReturnPart("read", "the body", "c1")]),
+            ModelRequest(parts=[UserPromptPart(content="be brief")]),
+            ModelResponse(parts=[TextPart("hello")]),
+        ]
+        assert [(panel.kind, panel.asked) for panel in panelled(0, parted(turn))] == [
+            ("tool", 0),
+            ("steering", None),
+            ("assistant", 1),
+        ]
 
     def test_a_call_with_no_result_recorded_is_still_out(self) -> None:
         """The run ended between the call and its return, which is what a reader has to be able to see."""
@@ -246,11 +274,11 @@ FOUR_PANELS: dict[str, object] = {
 
 class TestWhereARequestBeganAndWhatItHeld:
     """
-    The tags in the margin: which panel each round trip opened in, and what it came back with.
+    Which round trip each panel came out of, and what that round trip came back with.
 
     A request is the unit the checkpoint has keys for, where a panel is a reading. That is the whole
-    point of hanging the record here rather than under a panel - it is a lookup rather than a slice
-    of a stored value reached by indices one walk had to hand to another.
+    point of hanging the record on the rule at a request's boundary rather than under a panel - it is
+    a lookup rather than a slice of a stored value reached by indices one walk had to hand to another.
     """
 
     def test_a_request_is_the_step_the_checkpoint_holds_for_it(self) -> None:
@@ -262,19 +290,19 @@ class TestWhereARequestBeganAndWhatItHeld:
         assert requested_at(FOUR_PANELS, 0, 0) is None
         assert requested_at(FOUR_PANELS, 7, 0) is None
 
-    def test_each_panel_says_which_requests_opened_in_it(self) -> None:
+    def test_each_panel_says_which_request_it_came_out_of(self) -> None:
         """
-        Two responses here, and four panels: the first opens in the reasoning panel and the second in
-        the answer. The tool panel opens nothing, because it is the middle of the first response.
+        Two responses here, and three panels of them: the reasoning and the call are the first
+        response, and the answer is the second.
         """
         drawn = [panel for panel in transcript(FOUR_PANELS).panels if panel.kind != "person"]
-        assert [panel.opens for panel in drawn] == [(0,), (), (1,)]
+        assert [panel.asked for panel in drawn] == [0, 0, 1]
 
-    def test_two_requests_that_land_in_one_panel_both_mark_it(self) -> None:
+    def test_two_requests_never_share_a_panel_even_answering_the_same_way(self) -> None:
         """
-        A response ending in prose and the next beginning in prose merge into one panel, so there is
-        no gap between panels for a boundary to sit in. Both tags go in the margin of the one panel,
-        which is why `opens` is several rather than one.
+        A response ending in prose and the next beginning in prose would merge into one run of one
+        kind, and did. Cut by the request as well, they are two panels, which is what leaves a gap
+        between them for the second request's rule to stand in.
         """
         recorded: dict[str, object] = {
             prompt_key(0): "go",
@@ -284,8 +312,8 @@ class TestWhereARequestBeganAndWhatItHeld:
             ],
         }
         drawn = [panel for panel in transcript(recorded).panels if panel.kind == "assistant"]
-        assert len(drawn) == 1, "the two runs of prose merged"
-        assert drawn[0].opens == (0, 1)
+        assert [panel.asked for panel in drawn] == [0, 1]
+        assert [panel.blocks for panel in drawn] == [(Prose(text="first"),), (Prose(text="second"),)]
 
 
 # The same exchange `FOUR_PANELS` holds, as the steps written while it was still running: the two
@@ -379,6 +407,29 @@ class TestWatchingATurnHappen:
         """
         assert model_key(3, 1) == "turn:3:model:1"
         assert tool_key(3, "toolu_017") == "turn:3:tool:toolu_017"
+        assert heard_key(3, 1) == "turn:3:heard:1"
+        assert late_key(3, 0) == "turn:3:late:0"
+
+    def test_a_steer_nothing_has_been_told_yet_is_drawn_at_the_end_of_what_there_is(self) -> None:
+        """
+        A message must not disappear between being sent and being answered, which is what Send
+        deciding to steer would otherwise do: it lands in `turn:{n}:messages` only when the turn ends.
+        """
+        waiting = {**REASONED, steer_key(0, 0): "be brief"}
+        assert so_far(waiting, 0)[-1] == Steering(text="be brief")
+
+    def test_a_steer_already_told_is_drawn_above_the_response_it_was_appended_to(self) -> None:
+        """
+        `heard:{i}` is what says which request took it, so a running turn puts it where the settled
+        reading will rather than at the end of what there happens to be.
+        """
+        told = {**REASONED, steer_key(0, 0): "be brief", heard_key(0, 0): ["be brief"]}
+        assert so_far(told, 0)[0] == Steering(text="be brief")
+
+    def test_a_steer_is_drawn_once_whether_it_has_been_told_or_not(self) -> None:
+        """The two halves of the walk cannot both claim it, or the page shows one message twice."""
+        told = {**REASONED, steer_key(0, 0): "be brief", heard_key(0, 0): ["be brief"]}
+        assert [block for block in so_far(told, 0) if isinstance(block, Steering)] == [Steering(text="be brief")]
 
     def test_a_turn_nothing_has_been_recorded_for_yet_has_produced_nothing(self) -> None:
         assert so_far(ASKED, 0) == ()
@@ -458,14 +509,15 @@ class TestWatchingATurnHappen:
         ]
         assert said.awaiting is True
 
-    def test_a_running_turn_marks_where_its_requests_began(self) -> None:
+    def test_a_running_turn_says_which_request_each_panel_came_out_of(self) -> None:
         """
-        A tag is offered mid-turn, unlike the panel record it replaced. A step's key is written once
-        and never rewritten, so the response behind a tag is settled the moment it exists - where a
-        panel's record came out of `turn:{n}:messages`, which is not written until the turn ends.
+        A rule and its record are offered mid-turn, unlike the panel record they replaced. A step's
+        key is written once and never rewritten, so the response behind a rule is settled the moment
+        it exists - where a panel's record came out of `turn:{n}:messages`, which is not written
+        until the turn ends.
         """
         drawn = [panel for panel in transcript(READ).panels if panel.kind != "person"]
-        assert [panel.opens for panel in drawn] == [(0,), ()]
+        assert [panel.asked for panel in drawn] == [0, 0]
 
 
 class TestChoosingATurn:
@@ -635,8 +687,8 @@ class TestAnsweringASession:
         self, service: Service, provider: Provider
     ) -> None:
         """
-        The whole of steering, end to end: written from outside the pass, delivered by `enqueue`, and
-        read back out of the turn's own messages as a panel of its own.
+        The whole of steering, end to end: written from outside the pass, appended to the request
+        being made, and read back out of the turn's own messages as a panel of its own.
 
         Written before the pass here rather than during one, because what a test can control is the
         store and not the instant a model is asked. What it proves is the same either way: the queue
@@ -674,6 +726,54 @@ class TestAnsweringASession:
         assert await service.steer(SESSION, turn=0, said="first") == 0
         assert await service.steer(SESSION, turn=0, said="second") == 1
         assert steers_in(await service.checkpointer.load(SESSION), 0) == ("first", "second")
+
+    async def test_a_steer_into_a_turn_that_has_stopped_listening_is_refused_rather_than_written(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The race this is built to remove, played out in the order that used to lose the message.
+
+        Somebody reads a checkpoint that says turn 0 is being answered, the pass finishes while they
+        are typing, and the write lands afterwards. It used to be accepted into a key nothing would
+        ever read again: the steer was in the store, no `heard` or `late` record named it, and no
+        panel drew it. The pass claiming the slot on its way out is what turns that into a refusal.
+        """
+        await started(service, said="hello")
+        answering = transcript(await service.checkpointer.load(SESSION)).answering
+        await pass_at(service, provider.body())
+
+        assert await service.steer(SESSION, turn=answering or 0, said="actually, be brief") is None
+        assert steers_in(await service.checkpointer.load(SESSION), 0) == ()
+
+    async def test_a_message_that_lost_that_race_becomes_a_turn_of_its_own(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        What the refusal is *for*: `Service.send` re-decides on the true answer rather than dropping
+        it. Nothing about the wording changes, only which turn it lands in.
+        """
+        await started(service, said="hello")
+        await pass_at(service, provider.body())
+
+        assert await service.send(SESSION, "actually, be brief") is None
+        assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
+            ("person", "hello"),
+            ("assistant", "answer 1"),
+            ("person", "actually, be brief"),
+        ]
+
+    async def test_a_steer_that_won_the_race_is_carried_by_the_pass_rather_than_refused(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The other side of the same claim. Whoever gets the slot first wins it, and where that is the
+        person the pass is handed their text instead of its own marker and asks once more to carry it.
+        """
+        await started(service, said="hello")
+        assert await service.steer(SESSION, turn=0, said="actually, be brief") == 0
+        await pass_at(service, provider.body())
+
+        assert ("steering", "actually, be brief") in spoken(transcript(await service.checkpointer.load(SESSION)))
 
     async def test_two_sessions_do_not_see_each_other(self, service: Service, provider: Provider) -> None:
         body = provider.body()

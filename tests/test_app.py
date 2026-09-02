@@ -69,7 +69,10 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
             async with asyncio.timeout(PATIENCE):
                 await answered.acquire()
 
-            said = await caller.post(f"/sessions/{session}/messages", {"prompt": "and again"})
+            # `next` rather than a plain Send, which now decides for itself: the first turn may not
+            # have recorded its messages by the time the model has answered, and a message that
+            # steered it would reach the pass already running rather than starting a second one.
+            said = await caller.post(f"/sessions/{session}/messages", {"prompt": "and again", "disposition": "next"})
             assert said.status == 200
             async with asyncio.timeout(PATIENCE):
                 await answered.acquire()

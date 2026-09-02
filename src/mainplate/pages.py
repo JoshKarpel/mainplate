@@ -86,7 +86,6 @@ from mainplate.conversation import Kind
 from mainplate.conversation import Panel
 from mainplate.conversation import Prose
 from mainplate.conversation import Reasoning
-from mainplate.conversation import Request
 from mainplate.conversation import Spent
 from mainplate.conversation import Steering
 from mainplate.conversation import ToolUse
@@ -564,93 +563,40 @@ def charged(cost: Decimal) -> str:
     return f"${cost.quantize(Decimal('0.0001')):f}".rstrip("0").rstrip(".")
 
 
-def spend_element(spent: Spent) -> tuple[Element, ...]:
+def spend_element(spent: Spent, whose: str) -> tuple[Element, ...]:
     """
-    What a turn cost, as counts and money, or nothing at all where it has not answered yet.
+    What something cost, as counts and money, or nothing at all where it has not answered yet.
 
     The counts are always drawn and the money only where something priced it, because they fail
     independently: the tokens are on the response itself and are known for every turn on every wire,
     where the price needs a record in a database this console may not have been asked to read. A
     turn showing counts and no money is one whose model nobody published a price for, which is the
     same blank its card shows and is why the two are separate elements rather than one sentence.
+
+    `whose` names what the figures are of, because a turn rule stands at a request boundary too and
+    carries the **turn's** total beside that request's own marker. Identical where a turn took one
+    round trip and visibly different where it took several, so the title is what settles which is
+    being read rather than the reader inferring it from the size of the number.
     """
     if not spent.asked and not spent.answered:
         return ()
     return (
         span(
             cls="rule__tokens",
-            attrs={"title": f"{spent.asked:,} tokens in, {spent.answered:,} out"},
+            attrs={"title": f"{whose}: {spent.asked:,} tokens in, {spent.answered:,} out"},
             children=f"{tokens(spent.asked)} in \N{MIDDLE DOT} {tokens(spent.answered)} out",
         ),
         *(
             (
                 span(
                     cls="rule__cost",
-                    attrs={"title": f"Estimated from published rates, not billed: ${spent.cost:f}"},
+                    attrs={"title": f"{whose}, estimated from published rates and not billed: ${spent.cost:f}"},
                     children=f"\N{MIDDLE DOT} {charged(spent.cost)}",
                 ),
             )
             if spent.cost is not None
             else ()
         ),
-    )
-
-
-def turn_rule(links: Links, session: str, turn: int, tree: str | None, spent: Spent | None) -> Element:
-    """
-    The line between one turn and the next, and everything true of the turn it opens.
-
-    A rule rather than a row on a panel, because all four things on it are facts about the *turn*
-    and a turn is several panels. Hung on one panel they had to be hung on a chosen one - the
-    person's - which made the tree and the fork read as facts about the message rather than about
-    the exchange, and left a turn's cost with nowhere to go at all: usage belongs to a model
-    response, and one response becomes as many panels as it has kinds of part.
-
-    It is the fork's own place for a reason beyond tidiness. The branch point is *before* the forked
-    turn's message, which is exactly where this sits, so the link now names the position it acts on
-    instead of sitting inside the first thing that comes after it. That also retires the hover: a
-    control revealed by pointing at a panel does not exist on a touch screen, and forking is the
-    only way a session changes its mind.
-
-    It **names its turn**, and that is what makes it readable rather than decorative. A rule sits
-    directly under the last panel of the turn before it, so a bare row of figures there reads as a
-    footer summarising what is above it, which is the opposite of what it says: these are the counts
-    for the turn that starts below. `#1` against the `#1.0` and `#1.1` on the panels under it settles
-    the direction, and it doubles as the permalink to the boundary the fork acts on.
-    """
-    return div(
-        cls="rule",
-        attrs={"id": f"rule-{turn}", "data-turn": str(turn)},
-        children=[
-            a(cls="rule__at", attrs={"href": f"#rule-{turn}", "title": f"Turn {turn}"}, children=f"#{turn}"),
-            *(
-                (
-                    a(
-                        cls="rule__fork",
-                        attrs={"href": links.to_fork_form(session, turn), "title": f"Fork from turn {turn}"},
-                        children="fork",
-                    ),
-                )
-                if session
-                else ()
-            ),
-            *(
-                (
-                    span(
-                        cls="rule__tree",
-                        # Short here and whole in the title: a hash is read to tell two apart and to
-                        # be typed at git, and the first several characters do the first job in a
-                        # tenth of the width. The second is what a reader copies, so it stays intact.
-                        attrs={"title": f"The worktree this turn started on: {tree}"},
-                        children=tree[:SHORT_HASH],
-                    ),
-                )
-                if tree is not None
-                else ()
-            ),
-            span(cls="rule__span"),
-            *(spend_element(spent) if spent is not None else ()),
-        ],
     )
 
 
@@ -1442,31 +1388,26 @@ def missing_record(turn: int, at: int) -> Element:
     return p(cls="record__missing", children=f"Nothing is recorded for request {turn}.{at}.")
 
 
-def request_tag(links: Links, session: str, turn: int, asked: Request) -> Element:
+def record_fold(links: Links, session: str, turn: int, at: int) -> Element:
     """
-    A marker in the margin where one round trip to the model began, and what it came back with.
+    The `r{at}` marker on a rule, and the raw record of that request behind it.
 
-    Replaces a `recorded` disclosure under every panel, and is a simplification rather than a move.
-    A panel is a run of blocks of one kind and a request is a round trip, and the two cross-cut, so a
-    panel's record was a *slice* of a stored value reached by indices one walk had to hand another. A
-    request has a key of its own, so this is a lookup and `Source` is gone.
+    Fetched only when opened, because the transcript is re-rendered whenever a running turn records
+    anything and the raw record is several times the size of the reading of it. `hx-preserve` is what
+    keeps it open through those swaps, since the server renders it closed and a morph would otherwise
+    shut it under the reader's hand. htmx reads that attribute off the *incoming* markup, so taking
+    it off the live node proves nothing.
 
-    It carries the three things that are true of a request and were previously homeless or hung on a
-    panel that only approximately owned them: the tree taken before the ask, what the answer cost,
-    and the answer itself.
-
-    Fetched only when opened, for the reason the disclosure was: the transcript is re-rendered
-    whenever a running turn records anything, and the raw record is several times the size of the
-    reading of it. `hx-preserve` is what keeps it open through those swaps, since the server renders
-    it closed and a morph would otherwise shut it under the reader's hand. htmx reads that attribute
-    off the *incoming* markup, so taking it off the live node proves nothing.
+    `once` is safe here in a way it never was under a panel: a step's key is written once and never
+    rewritten, so a request's record is settled the moment it exists, where a panel's record came out
+    of `turn:{n}:messages` and did not exist until the turn ended.
     """
     return details(
         cls="tag",
         attrs={
-            "id": f"tag-{turn}-{asked.at}",
+            "id": f"tag-{turn}-{at}",
             "hx-preserve": True,
-            "hx-get": links.to_request_record(session, turn, asked.at),
+            "hx-get": links.to_request_record(session, turn, at),
             "hx-trigger": "toggle once",
             "hx-target": "find .record__json",
             "hx-swap": "outerHTML",
@@ -1474,21 +1415,8 @@ def request_tag(links: Links, session: str, turn: int, asked: Request) -> Elemen
         children=[
             summary(
                 cls="tag__summary",
-                attrs={"title": f"The {ordinal(asked.at)} model request of turn {turn}"},
-                children=[
-                    span(cls="tag__at", children=f"r{asked.at}"),
-                    *((span(cls="tag__tree", children=asked.tree[:SHORT_HASH]),) if asked.tree is not None else ()),
-                    *(
-                        (
-                            span(
-                                cls="tag__spent",
-                                children=f"{tokens(asked.spent.asked)}/{tokens(asked.spent.answered)}",
-                            ),
-                        )
-                        if asked.spent.asked or asked.spent.answered
-                        else ()
-                    ),
-                ],
+                attrs={"title": f"The {ordinal(at)} model request of turn {turn}"},
+                children=span(cls="tag__at", children=f"r{at}"),
             ),
             pre(cls="record__json", children=code(children="\N{HORIZONTAL ELLIPSIS}")),
         ],
@@ -1501,7 +1429,102 @@ def ordinal(at: int) -> str:
     return names[at] if at < len(names) else f"{at + 1}th"
 
 
-def panel_element(links: Links, session: str, panel: Panel, asking: Sequence[Request] = ()) -> Element:
+def rule_element(
+    links: Links,
+    session: str,
+    turn: int,
+    asked: int | None = None,
+    tree: str | None = None,
+    spent: Spent | None = None,
+    opens: bool = False,
+) -> Element:
+    """
+    A line across the conversation where one round trip to the model began.
+
+    A rule rather than a row on a panel, because everything on it is true of a *request* or of the
+    turn around it, and a panel is neither. A request is a round trip and a panel is a run of one
+    kind, so one response becomes as many panels as it has kinds of part: a marker hung on one of
+    them attributed a round trip to a fraction of itself, and a turn's cost had nowhere to go at all.
+
+    A rule per request, with the **turn rule** being the first one, which costs no new concept: every
+    rule this transcript has ever drawn already stood at a request boundary, because a turn opens
+    with its first request. What the first one carries besides is the turn's own facts - which turn
+    it is, where the session may be forked from, and what the whole turn spent - and the later ones
+    carry only their own request's.
+
+    It is the fork's own place for a reason beyond tidiness. The branch point is *before* the forked
+    turn's message, which is exactly where a turn rule sits, so the link names the position it acts
+    on instead of sitting inside the first thing that comes after it. That also retires the hover: a
+    control revealed by pointing at a panel does not exist on a touch screen, and forking is the
+    only way a session changes its mind.
+
+    A turn rule **names its turn**, and that is what makes it readable rather than decorative. It
+    sits directly under the last panel of the turn before it, so a bare row of figures there reads as
+    a footer summarising what is above it, which is the opposite of what it says: these are the
+    counts for the turn that starts below. `#1` against the `#1.0` and `#1.1` on the panels under it
+    settles the direction, and it doubles as the permalink to the boundary the fork acts on.
+
+    `rule--turn` is what the dock's turn arrows step, so that column keeps stepping turns now that
+    there are rules between them as well as before them.
+    """
+    return div(
+        cls=("rule", "rule--turn" if opens else None),
+        attrs={
+            "id": f"rule-{turn}" if opens else f"rule-{turn}-{asked}",
+            "data-turn": str(turn),
+        },
+        children=[
+            *(
+                (a(cls="rule__at", attrs={"href": f"#rule-{turn}", "title": f"Turn {turn}"}, children=f"#{turn}"),)
+                if opens
+                else ()
+            ),
+            *(
+                (
+                    a(
+                        cls="rule__fork",
+                        attrs={"href": links.to_fork_form(session, turn), "title": f"Fork from turn {turn}"},
+                        children="fork",
+                    ),
+                )
+                if opens and session
+                else ()
+            ),
+            # Only where there is a session to ask, which the gallery's pages are rendered without: a
+            # control pointed at no conversation is a dead button rather than an offer, the same
+            # reason the fork link is conditional.
+            *((record_fold(links, session, turn, asked),) if session and asked is not None else ()),
+            *(
+                (
+                    span(
+                        cls="rule__tree",
+                        # Short here and whole in the title: a hash is read to tell two apart and to
+                        # be typed at git, and the first several characters do the first job in a
+                        # tenth of the width. The second is what a reader copies, so it stays intact.
+                        attrs={
+                            "title": (
+                                f"The worktree this turn started on: {tree}"
+                                if opens
+                                else f"The worktree this request was made against: {tree}"
+                            )
+                        },
+                        children=tree[:SHORT_HASH],
+                    ),
+                )
+                if tree is not None
+                else ()
+            ),
+            span(cls="rule__span"),
+            *(
+                spend_element(spent, f"Turn {turn}" if opens else f"Request {turn}.{asked}")
+                if spent is not None
+                else ()
+            ),
+        ],
+    )
+
+
+def panel_element(links: Links, session: str, panel: Panel) -> Element:
     """
     One run of one kind of thing, with the facts about it above it.
 
@@ -1509,14 +1532,9 @@ def panel_element(links: Links, session: str, panel: Panel, asking: Sequence[Req
     kind, the dock's flanking arrows step by side, and the stylesheet draws the edge from the same
     attribute. Nothing has to keep a list of selectors in step with a list of kinds.
 
-    What a panel says is what is *in* it, and nothing about the turn around it. The worktree, the
-    fork and what the turn cost are all facts about the exchange rather than about any one run of
-    blocks, so they are on the rule that opens the turn. See `turn_rule`.
-
-    `asking` is the requests that *began* in this panel, drawn as tags in the margin beside it. They
-    are not facts about the panel either, which is why they are drawn beside rather than inside: a
-    request is a round trip and a panel is a run of one kind, and there is frequently no gap between
-    panels to put a boundary in.
+    What a panel says is what is *in* it, and nothing about the turn or the request around it. The
+    worktree, the fork, what was spent and the raw record are all facts about the exchange rather
+    than about any one run of blocks, so they are on the rules between them. See `rule_element`.
     """
     return article(
         cls="panel",
@@ -1531,24 +1549,6 @@ def panel_element(links: Links, session: str, panel: Panel, asking: Sequence[Req
                 cls="panel__meta",
                 children=[
                     span(cls="panel__role", children=dict(NAMES)[panel.kind]),
-                    # In the panel's own header row rather than in the margin beside it, which was
-                    # tried and clipped: the transcript is a scroll container, so anything placed
-                    # outside a panel is either cut off or pushes the document sideways, which is the
-                    # one thing a conversation must never do. In flow it can do neither.
-                    #
-                    # Only where there is a session to ask, which the gallery's pages are rendered
-                    # without: a control pointed at no conversation is a dead button rather than an
-                    # offer, the same reason the fork link is conditional on the rule.
-                    *(
-                        (
-                            div(
-                                cls="panel__tags",
-                                children=[request_tag(links, session, panel.turn, one) for one in asking],
-                            ),
-                        )
-                        if session and asking
-                        else ()
-                    ),
                     a(
                         cls="panel__anchor",
                         attrs={"href": f"#{panel.anchor}"},
@@ -1591,20 +1591,38 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
     wrong.
 
     The rules are drawn from the panels rather than carried beside them, which is what keeps them
-    from disagreeing: a turn is a run of consecutive panels sharing a `turn`, so grouping is the one
-    place that decides where a turn begins and the rule falls out of it. The tree comes off the
-    turn's first panel, which is always the person's, because that is where the checkpoint's own
-    opening tree is already read to.
+    from disagreeing: a turn is a run of consecutive panels sharing a `turn` and a request is a run
+    of consecutive panels sharing an `asked`, so the one walk that groups the panels is the one place
+    that decides where either begins.
+
+    A turn's own rule takes its tree from the turn's first panel rather than from request 0, which
+    holds the same key. The panel has it a request earlier: `turn:{n}:tree:0` is written *before* the
+    model is asked, so a turn whose first answer has not landed yet still says what it started on.
     """
     drawn: list[Element] = []
     for turn, panels in groupby(said.panels, key=lambda panel: panel.turn):
-        opening = tuple(panels)
-        drawn.append(turn_rule(links, session, turn, opening[0].tree, said.spent.get(turn)))
+        within = tuple(panels)
         asking = said.requests.get(turn, ())
-        drawn.extend(
-            panel_element(links, session, panel, [asking[at] for at in panel.opens if at < len(asking)])
-            for panel in opening
+        drawn.append(
+            rule_element(
+                links,
+                session,
+                turn,
+                asked=0 if asking else None,
+                tree=within[0].tree,
+                spent=said.spent.get(turn),
+                opens=True,
+            )
         )
+        at = 0
+        for panel in within:
+            if panel.asked is not None and panel.asked != at:
+                at = panel.asked
+                if at < len(asking):
+                    drawn.append(
+                        rule_element(links, session, turn, asked=at, tree=asking[at].tree, spent=asking[at].spent)
+                    )
+            drawn.append(panel_element(links, session, panel))
     if said.awaiting and stalled is None:
         drawn.append(waiting_panel())
     if stalled is not None:
@@ -1885,21 +1903,31 @@ def sending_option(name: str, saying: str, attrs: Mapping[str, str | int | bool 
     )
 
 
-def sending_control(refusing: bool, continuing: bool, returning: bool = False, steering: bool = False) -> Element:
+def sending_control(refusing: bool, continuing: bool, returning: bool = False, answering: bool = False) -> Element:
     """
     What happens to what you typed: send it, and everything else folded behind a caret beside it.
 
-    **One question, so one control.** Queueing it here, asking it in a new session, and setting it
+    **One question, so one control.** Sending it here, asking it in a new session, and setting it
     aside unsent are answers to "what do I do with this", and answering one question in two places is
     what this console removes wherever it finds it - which is exactly what a `Keep` button standing
     beside `Send` had become. It is also the only shape that stays affordable: each further answer
     costs a line in a menu nobody has to open, where each further button costs a slot in the row above
     the message box, which is the row a phone has least of.
 
-    The menu is ordered by how far the text travels: an `Aside` is a step out you mean to come back
-    from, a `Fork` is a conversation of its own, going back reaches the one this came out of, and
-    `Keep` sends it nowhere at all and is under a rule for that reason. A `steer` lands at the top
-    when it exists, being the only one that reaches inside the turn already running.
+    **`Send` does not say whether it steers, because it cannot know and neither can the reader.** This
+    page was rendered from a checkpoint that has moved since, so a `Steer` button beside `Send` asked
+    somebody to choose between two moments against a state that no longer held, and the server then
+    honoured a decision about the wrong turn. `Service.send` decides instead, reading the record and
+    writing to it in one breath.
+
+    What is left for the menu is the one thing the record cannot settle: wanting to be answered
+    *after* the reply that is coming. It is offered only while something is being answered, since
+    with nothing running it is what `Send` already does.
+
+    The menu is ordered by how far the text travels: waiting for the next turn keeps it here and
+    merely later, an `Aside` is a step out you mean to come back from, a `Fork` is a conversation of
+    its own, going back reaches the one this came out of, and `Keep` sends it nowhere at all and is
+    under a rule for that reason.
 
     `returning` is offered by any fork rather than only an aside, because what it needs is
     `Origin.session` and every fork has one. An aside is the case it is *for*, and gating it on the
@@ -1945,17 +1973,18 @@ def sending_control(refusing: bool, continuing: bool, returning: bool = False, s
                             *(
                                 (
                                     sending_option(
-                                        "Steer",
-                                        "Put it to the model in the turn it is answering now",
+                                        "Wait for the next turn",
+                                        "Queue it behind the reply that is coming instead of putting"
+                                        " it to the model now",
                                         {
                                             "type": "submit",
                                             "disabled": refusing,
                                             "name": DISPOSITION_FIELD,
-                                            "value": Disposition.STEER.value,
+                                            "value": Disposition.NEXT.value,
                                         },
                                     ),
                                 )
-                                if steering
+                                if answering
                                 else ()
                             ),
                             sending_option(
@@ -2015,7 +2044,7 @@ def composer(
     refusing: bool = False,
     continuing: bool = False,
     returning: bool = False,
-    steering: bool = False,
+    answering: bool = False,
     above: Placed = None,
     identified: str | None = None,
 ) -> Element:
@@ -2090,7 +2119,7 @@ def composer(
                             "aria-label": "Message",
                         }
                     ),
-                    sending_control(refusing, continuing, returning, steering),
+                    sending_control(refusing, continuing, returning, answering),
                 ],
             ),
             div(
@@ -2215,7 +2244,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     returning=showing.session.forked is not None,
                     # Only while something is actually being answered: a steer into a turn nobody is
                     # running would sit in the store unread, which is a message on the floor.
-                    steering=showing.said.answering is not None,
+                    answering=showing.said.answering is not None,
                 ),
             ],
             # Only where there is a conversation to navigate. On the page where a session does not

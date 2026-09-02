@@ -52,16 +52,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the browser, so it is per machine for now.
 - **Steering**: a message put to the model in the turn it is answering now, rather than queued for
   the next one. It is written into the checkpoint from outside the pass, because the worker may be
-  another process, and delivered by Pydantic AI's own `enqueue` from a capability hook - which also
-  means a steer arriving after a turn's last request redirects the run into one more rather than
-  being stranded. What each request was told is a recorded step, so a resumed pass asks the same
-  question rather than whatever is queued by then. It reads back as a `you (steering)` panel below
-  the tool results it travelled with.
-- The raw record moved from a fold under every panel to a **tag marking each model request**, which
-  is the unit the checkpoint actually has a key for: a panel is a run of blocks of one kind and a
-  request is a round trip, so a panel's record was a slice of a stored value reached by indices one
-  walk had to hand another. The tag carries the worktree taken before the request and what the answer
-  cost, and can be opened while the turn is still running.
+  another process, and appended to the request the agent is about to make, so it travels up with
+  whatever tool results are going the same way and shapes the very next answer rather than the one
+  after it. A steer arriving as the turn would end has no request left to carry it, so it redirects
+  the run into one more instead of being stranded. Both are recorded steps, so a resumed pass asks
+  the same questions rather than whatever is queued by then. It reads back as a `you (steering)`
+  panel below the tool results it travelled with and above the answer it shaped, and it is on the
+  page the instant it is sent rather than when the turn ends.
+- **`Send` decides for itself whether a message steers**, because neither the button nor the reader
+  can know: the page was rendered from a checkpoint that has moved by the time a paragraph has been
+  typed into it, so choosing between two moments on the page is choosing against a state that no
+  longer holds. The server reads the record and writes to it in one place instead, steering a turn
+  that is being answered and starting one where none is. `Wait for the next turn` stays in the menu
+  as the one answer the record cannot settle. A turn stops listening by *claiming* the next steer
+  slot rather than by reading it, so the pass and whoever is typing contend for one key that the
+  store settles: whoever loses is told what the winner put there, and a message sent as a turn ends
+  becomes a turn of its own instead of going somewhere nothing would ever read.
+- **A rule at every model request**, carrying the worktree taken before it, what its answer cost, and
+  the raw record behind it, which is the unit the checkpoint actually has a key for: a panel is a run
+  of blocks of one kind and a request is a round trip, so a panel's record was a slice of a stored
+  value reached by indices one walk had to hand another. It adds no concept, because every rule the
+  transcript draws already stood at a request boundary - a turn opens with its first request - and
+  the rule that opens a turn carries the turn's own facts besides. A record can be opened while the
+  turn is still running.
 - **Asides**: a fork recorded as a step out you mean to come back from, and a way back that sends a
   message into the conversation it came out of. Nothing mechanical separates an aside from a fork, so
   what is recorded is only what was meant, and what it buys is that the sidebar draws a digression as

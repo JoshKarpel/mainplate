@@ -549,6 +549,15 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     match sending.where:
         case Disposition.HERE:
+            # The service decides between a steer and a turn of its own, because only it can read the
+            # checkpoint and write to it in one breath. The page this was posted from was rendered
+            # from a state that has since moved.
+            await service.send(session, sending.said)
+            asked = await service.read(session)
+            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
+        case Disposition.NEXT:
             await service.say(session, turn=found.said.turns, said=sending.said)
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
@@ -570,17 +579,6 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             if forked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
             return navigating(LINKS.to_session(forked.id))
-        case Disposition.STEER:
-            # Into the turn being answered, which is the one before the next free slot. Refused where
-            # nothing is running: a steer nobody would ever read is a message on the floor, and
-            # queueing it instead would answer a different question than the one that was asked.
-            if found.said.answering is None:
-                return page_response(422, refusal_page(LINKS, 422, f"session {session} is not answering anything"))
-            await service.steer(session, turn=found.said.answering, said=sending.said)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot

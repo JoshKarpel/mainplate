@@ -733,30 +733,11 @@ main > * {
     overflow-wrap: anywhere;
 }
 
-/* --- Tags: where a model request began, and what it held --------------- */
+/* --- Tags: the record behind a rule ------------------------------------ */
 
-/* In the margin beside the panel a request opened in, rather than between panels: a request is a
-   round trip and a panel is a run of one kind, so there is frequently no gap between panels for a
-   boundary to sit in. Absolutely placed so a tag takes no room in the reading column at all. */
-/* Pushed to the right of the panel's own header row, where the anchor already sits. In flow rather
-   than in the margin, because the transcript is a scroll container: anything outside a panel is
-   either clipped or scrolls the document sideways, and neither is acceptable. */
-.panel__tags {
-    display: flex;
-    margin-left: auto;
-    gap: var(--space-3);
-}
-
-/* Opened, it lays its JSON over what is below rather than growing the header, so a panel does not
-   jump when somebody looks at a record. */
-.tag {
-    position: relative;
-}
-
-.tag[open] {
-    z-index: 4;
-}
-
+/* On the rule that stands at the request's own boundary, which is what it is about. In flow there
+   rather than in a margin beside a panel, because the transcript is a scroll container: anything
+   placed outside is either clipped or scrolls the document sideways, and neither is acceptable. */
 .tag > summary {
     display: flex;
     align-items: baseline;
@@ -783,13 +764,16 @@ main > * {
     font-weight: 600;
 }
 
-/* Opened, it lays its JSON back over the reading column rather than growing the margin, which is a
-   few characters wide. Anchored to the right so a long record runs back across the page it came
-   from instead of off the edge of the window. */
-.tag .record__json {
+/* Opened, it lays its JSON over the panels below rather than growing the rule, so a conversation
+   does not jump when somebody looks at a record. Positioned against the *rule* and anchored to its
+   right edge, which is the reading column's: a record grows leftward across the page it came from
+   instead of off the edge of a scroll container that must never scroll sideways. */
+.tag .record__json,
+.tag .record__missing {
     position: absolute;
-    top: 1.2rem;
+    top: 1.4rem;
     right: 0;
+    z-index: 4;
     width: max-content;
     max-width: min(40rem, 55vw);
     /* Its own ground, because it is laid over the prose below rather than boxed above it. */
@@ -824,6 +808,8 @@ main > * {
 
 .record__missing {
     margin: var(--space-2) 0 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
     color: var(--ink-faint);
     font-size: 0.72rem;
 }
@@ -2003,21 +1989,31 @@ mark.hit.current {
 
 /* --- The rule between turns ------------------------------------------- */
 
-/* The line that opens a turn, carrying everything true of the turn rather than of any panel in it:
-   where it may be forked from, the worktree it started on, and what it cost. Always drawn, never
-   revealed by hover: these are facts to scan down a conversation for, and the fork is the only way
-   a session changes its mind, so a pointer-only control would take the feature off every phone. */
+/* The line at a round trip's boundary, carrying everything true of the request rather than of any
+   panel in it: the worktree it was made against, what it cost, and the record behind it. The first
+   rule of a turn carries the turn's own facts too, which is where the fork link lives. Always drawn,
+   never revealed by hover: these are facts to scan down a conversation for, and the fork is the only
+   way a session changes its mind, so a pointer-only control would take it off every phone.
+
+   Positioned so an open record inside it has something to be laid over the conversation against. */
 .rule {
+    position: relative;
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
-    margin: var(--space-5) 0 var(--space-3);
+    margin: var(--space-4) 0 var(--space-3);
     padding-top: var(--space-2);
     border-top: 1px solid var(--edge);
     font-family: var(--mono);
     font-size: 0.68rem;
     letter-spacing: 0.03em;
     color: var(--ink-faint);
+}
+
+/* More air above a turn than above a request within one, because the two are boundaries of
+   different sizes and a run of evenly spaced hairlines says they are the same. */
+.rule--turn {
+    margin-top: var(--space-5);
 }
 
 /* The gap that pushes what a turn spent to the far end, so the counts line up down the page

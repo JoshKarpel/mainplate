@@ -182,7 +182,7 @@ knowing at the moment the word is picked rather than afterwards.
 
 ## The key scheme
 
-One key for the session and seven per turn, written by several different places and read by several:
+One key for the session and eight per turn, written by several different places and read by several:
 
 ```text
 choice               the endpoint, model, repository, isolation and thinking level; written by
@@ -190,24 +190,32 @@ choice               the endpoint, model, repository, isolation and thinking lev
                      and by `Service.fork`, before the prompt
 turn:{n}:prompt      the person's message; written from outside a pass, by `Service.say`
 turn:{n}:steer:{k}   what the person said *into* a running turn; written from outside a pass, by
-                     `Service.steer`
+                     `Service.steer`, and claimed with `CLOSED` by the pass on its way out
 turn:{n}:tree:{i}    the worktree before the i-th model request; written by `StepwiseDurability`
-turn:{n}:heard:{i}   which steers were put to the model at that request; written by
-                     `StepwiseDurability`
+turn:{n}:heard:{i}   which steers were appended to that request; written by `StepwiseDurability`
+turn:{n}:late:{k}    which steers were found where the run would have ended, and so redirected it
+                     into one more request; written by `StepwiseDurability`
 turn:{n}:model:{i}   the i-th model response of that turn; written by `StepwiseDurability`
 turn:{n}:tool:{id}   what one tool call returned; written by `StepwiseDurability`
 turn:{n}:messages    what the agent run produced; written by the conversation body
 ```
 
-**Two of them are written from outside a pass**, `prompt` and `steer`, and they are the only two: a
-person acts on a turn somebody else is running, so their words cannot be a step of it. `steer` is
-also the only key whose number is claimed by *trying*, since two writers racing for one number would
-otherwise lose the loser's message to the store's keep-the-first rule.
+**Two of them hold what a person said**, `prompt` and `steer`, and both are written from outside a
+pass: somebody acting on a turn that is already running cannot be a step of it. `steer` is also the
+only key whose number is claimed by *trying*, since two writers racing for one number would otherwise
+lose the loser's message to the store's keep-the-first rule.
+
+**And `steer` is the only key both halves of this console write**, which is why its slots are
+contended rather than merely numbered: the pass claims the next free one with `CLOSED` as it stops
+listening. See the steer section below for what that settles.
 
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model
 requests happen in a fixed order, so counting them names a step the same way on every pass, and the
-tree captured before each one and the steers put to it ride the same counter, so `tree:{i}`,
-`heard:{i}` and `model:{i}` are three parts of one request. A *batch* of tool calls runs concurrently, so counting those would name a
+tree captured before each one and the steers appended to it ride the same counter, so `tree:{i}`,
+`heard:{i}` and `model:{i}` are three parts of one request. `late:{k}` is deliberately *not* on that
+counter, and that is what keeps the other three on it: it is written at a boundary that is not a
+request, so sharing the counter would drift `heard` off the two keys it names a request alongside.
+A *batch* of tool calls runs concurrently, so counting those would name a
 record by whichever won a race and hand a later pass somebody else's result. A call already carries
 an id, and that id is part of the model response the conversation recorded, so a replay is handed
 the same one for free. `Stepping.key` is the positional form and `Stepping.identified` is the other.
@@ -527,8 +535,9 @@ they can break:
 - **The shelf** writes nothing recorded at all. It is unsent text.
 - **A disposition** decides which session's checkpoint the message lands in. Nothing new is written
   that was not already written by `say` or by `fork`.
-- **Steer** writes a step *inside* a turn already being answered, and is the only one that reaches
-  into the agent loop.
+- **A steer** writes a step *inside* a turn already being answered, and is the only one that reaches
+  into the agent loop. It is not a disposition any more: it is what the default one resolves to when
+  the record says a turn is running.
 
 Sorting them this way is what keeps the cheap ones cheap. Two of the three need no new mechanism.
 
@@ -538,9 +547,19 @@ Sorting them this way is what keeps the cheap ones cheap. Two of the three need 
 the same input and differs only in where it goes. Parsed at the boundary into an enum, the way
 `posted_workspace` turns one posted value into the two it records.
 
-- `here` is `Service.say` at the next free turn. It is what Send has always done, and it is
-  **queue-for-next-turn and not steer**: a message typed while a reply is coming lands in the turn
-  after the one in flight and is answered in order.
+- `here` is `Service.send`, and it is **the one the server decides rather than the person**: a steer
+  where a turn is being answered, and `Service.say` at the next free turn where none is. It has to be
+  decided there. A page is rendered from a checkpoint that has moved by the time somebody has typed a
+  paragraph into it, so a `Steer` button beside `Send` asked a reader to choose between two moments
+  against a state that no longer held, and the server then honoured a decision about the wrong turn.
+  **What the read decides is which to *try*, and the store decides which happens**: a steer that comes
+  back `None` is one the pass shut the door on, and the message becomes a turn of its own. That is a
+  compare-and-swap re-decided on the true answer rather than a fallback, since there is no second
+  mechanism, only the same two calls chosen with what the failed attempt reported. See `CLOSED`.
+- `next` is `Service.say` at the next free turn whatever is running, which is what `here` used to
+  mean. It is kept as an explicit answer rather than deleted, because wanting to be taken up *after*
+  the reply that is coming is an intent no record carries and so nothing can decide it for you. It is
+  offered only while something is being answered, since otherwise it is what Send already does.
 - `fork` is `Service.fork(at=turns, said=...)`, which is pi's `/clone` and needed a control rather
   than a mechanism: the fork route already accepts `at == said.turns`, so forking the end has always
   been reachable by URL and offered by nothing. It is called `fork` and not `branch` because it is
@@ -554,7 +573,8 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   every fork has one; gating it on the flag would be a restriction invented to make the flag look
   load-bearing. The destination is read off the row and never posted, so a form cannot put a message
   in a conversation nobody was looking at.
-- `steer` is below, and is the one that is not a disposition over `say` and `fork`.
+- A **steer** is below. It is not one of these, because it is not a choice a form makes any more: it
+  is what `here` resolves to when a turn is in flight, and the only one that writes inside a turn.
 
 **`Origin.aside` is the one column added for presentation**, and it earns that only because the
 sidebar draws the two marks differently: a fork gets `→2` in the mark ink and an aside gets `↩2` in
@@ -574,6 +594,12 @@ this control goes further. Remembering a choice means a button labelled `Send` t
 is the one failure a control like this can have that nobody notices until after it has happened.
 What closing the menu on an outside click and on Escape adds is an enhancement over a control that
 already opens, chooses and submits with the file absent.
+
+**Send not saying whether it steers is not an exception to that.** What a button says is still what
+it does: `Send` means "into this conversation, now", and steering is *how* that is carried out when a
+turn is running rather than a second thing the button might secretly be. The failure the rule guards
+against is a control whose meaning depends on something the reader cannot see; here the reader could
+not see it either way, which is the whole reason the decision moved off the page.
 
 **`Keep` is an answer in that menu and not a button beside it**, because "put this on the shelf" is
 one more answer to what happens to what you typed, and answering one question in two places is the
@@ -655,41 +681,89 @@ falsified, `Origin.session` already names where it goes, and there is no merge m
 
 ### Steer
 
-The only one that reaches inside a turn, and the only one that needs the agent loop to cooperate.
+The only one that reaches inside a turn, the only one that needs the agent loop to cooperate, and the
+only one nobody asks for by name: `Service.send` resolves `here` to this whenever the record says a
+turn is being answered.
 
-**Two keys, because the transport and the delivery are different problems.** `turn:{n}:steer:{k}` is
-what the person said, written from *outside* the pass like `turn:{n}:prompt`, because the worker may
-be in another process and the store is the only channel between them. `turn:{n}:heard:{i}` is a
-recorded step saying which of those were put to the model at request `i`.
+**Three keys, because the transport and the two moments of delivery are different problems.**
+`turn:{n}:steer:{k}` is what the person said, written from *outside* the pass like `turn:{n}:prompt`,
+because the worker may be in another process and the store is the only channel between them.
+`turn:{n}:heard:{i}` is a recorded step saying which of those were appended to request `i`, and
+`turn:{n}:late:{k}` is what was found at a boundary where the run would otherwise have ended.
 
-**`ctx.enqueue` delivers it, and it is Pydantic AI's own mechanism rather than ours.** It is
-documented as callable from a capability hook, and using it rather than splicing the messages by hand
-buys two things that would otherwise have to be built: an `'asap'` message is drained at the *end of
-a run* as well as before each request, so a steer arriving after the turn's last request still
-reaches the model instead of being stranded; and the message becomes part of the run's real history,
-so it lands in `turn:{n}:messages` and the transcript draws it with nothing else taught about it.
+**`turn:{n}:steer:{k}` is the one key both halves of this console write, and that is what makes a
+message impossible to lose at the end of a turn.** `supply` is a compare-and-set - it keeps the value
+a key was first given and hands the loser the winner's - so the pass claiming the next free slot with
+`CLOSED` and whoever is typing claiming it with their text are one contended write that the store
+settles. The pass wins and nothing can be written there afterwards, so `Service.steer` gets the
+marker back and answers `None`; the person wins and the pass is handed their text instead of its own
+marker, so it redirects the run into one more request to carry it.
 
-**It is `before_model_request` and emphatically not `CheckpointedModel.request`**, which an earlier
-draft of this file said. `_agent_graph` builds the request context with `messages=ctx.state.
-message_history[:]`, a *copy*, so anything added at the model reaches that one request and never the
-recorded history; what `before_model_request` returns is adopted wholesale
-(`ctx.state.message_history[:] = messages`). The docs are also explicit that a message already in a
-history must not be mutated in place.
+Read rather than claimed, the two decisions are separate and there is a window at the end of every
+turn where the store still says a turn is being answered and the pass has already stopped listening:
+it shuts at the boundary where its run would end, and `turn:{n}:messages` lands after that. A message
+sent inside that window went to a key nothing would ever read, rendered nowhere, and was gone.
+`test_conversation.py` plays that order out and `test_durability.py` pins the claim.
 
-**The step is what makes it replayable, because `enqueue` is in-memory.** A resumed pass finds an
-empty queue, so without the record it would ask a question the first pass never asked - and
+`CLOSED` is `None` and not a string, so nothing anybody could type is mistakable for it: a steer is
+always text, so `steers_in` tells them apart by shape and stops there. That is `turn_of`'s trick one
+level down, and it means nothing downstream has to be taught the marker exists.
+
+**It is appended to `request_context.messages` in `before_model_request`, and emphatically not
+`ctx.enqueue`, which was tried and delivered every steer one round trip late.** Pydantic AI's own
+drain capability is ordered `outermost`, so it empties the queue in *its* `before_model_request`
+before this one runs: a message enqueued there misses the request it was read for and lands in the
+next one. That cost a round trip nobody asked for, drew the steer's panel below the answer it was
+meant to shape, and made `heard:{i}` a claim about a request that never heard it.
+
+Appending is sound for the two reasons the enqueue was reached for. `_agent_graph` builds the request
+context with `messages=ctx.state.message_history[:]`, a *copy*, and what `before_model_request`
+returns is adopted wholesale (`ctx.state.message_history[:] = messages`), so the steer lands in
+`turn:{n}:messages` and the transcript draws it with nothing else taught about it. And a *new*
+message is added rather than an existing one mutated, which is the thing the docs actually forbid.
+Pydantic AI merges consecutive trailing requests for the wire with the tool parts first, so a steer
+travelling beside a batch of results arrives after them in one request and is recorded as its own
+message. It is emphatically not `CheckpointedModel.request` either, which an earlier draft of this
+file said: anything added at the model reaches that one request and never the recorded history.
+
+**`after_node_run` is the other boundary, and `ctx.enqueue` is right there where it was wrong above.**
+`before_model_request` reaches every request the agent was going to make anyway, which is every steer
+but one: a person typing while the *last* response is written has nothing left to be appended to, and
+a message recorded and never answered is worse than a slow one. The drain's own `after_node_run` runs
+after every other one, so a message put in the queue at the instant the run would end is what
+redirects it into one more request. That request's `before_model_request` reads again, finds it
+already told, and appends nothing, so each steer is delivered exactly once.
+
+It **claims** where `before_model_request` reads, which is the slot contention above:
+`steers_closing` writes `CLOSED` and acts on what comes back. The two are injected separately for
+that reason and are otherwise the same shape, so one `steering` step records either.
+
+**That is why `late` is its own kind rather than another `heard`.** `tree:{i}`, `heard:{i}` and
+`model:{i}` are three parts of one request, so a second writer sharing the `heard` counter would
+drift it off the two keys it names a request alongside.
+
+**The step is what makes both replayable, because the queue is in-memory and the store keeps
+filling.** A resumed pass reading live would ask a question the first pass never asked - and
 `turn:{n}:model:{i}` is the *answer* to a question, so a replay that asked a different one would be
-pairing an answer with a prompt nobody gave. The record holds the texts rather than a count, so a
-replay reads nothing else. Reading the pending queue is the capability reaching into conversation
-state, so it arrives **injected** as `Pending`, symmetric with `Pricer` and for the same cycle.
-
-**A steer redirects a run that was about to stop into one more request**, which is `enqueue`'s
-documented behaviour and means a steered turn asks more times than it otherwise would. That is not a
-bug to design around; `test_durability.py` states it so the next reader does not mistake it for one.
+pairing an answer with a prompt nobody gave. It also keeps the *shape* of the run the same: a live
+read that found something at the end where the first pass found nothing would redirect a run that had
+ended, and every `model:{i}` after that would be a key the first pass never wrote. The record holds
+the texts rather than a count, so a replay reads nothing else. Reading the pending queue is the
+capability reaching into conversation state, so it arrives **injected** as `Pending`, symmetric with
+`Pricer` and for the same cycle.
 
 `Steering` is its own block type and `steering` its own `Kind`, because `panelled` reads a panel's
 kind off its blocks: a steer arriving as `Prose` would be drawn as the model answering itself. It
 takes the person's hue, since the axis is who produced the text.
+
+**`heard:{i}` has a reader now, and that is what stops a steered message vanishing.** A steer reaches
+`turn:{n}:messages` only when the turn *ends*, so a running turn read from its model steps alone
+would take somebody's message and show nothing at all until the reply finished - which is fine while
+steering is a button somebody presses deliberately and not fine at all once `Send` resolves to it.
+So `blocks_from` walks the steers too: one named in `heard:{i}` is drawn above response `i`, exactly
+where the settled reading will put it, and anything no record accounts for goes at the end, which is
+where a pending one belongs since nothing has been said since. A `late` one moves above its answer
+when that answer lands, and is the one reorder this reading performs.
 
 ### The record hangs off a request, not a panel
 
@@ -699,12 +773,24 @@ reached by indices one walk had to hand another. A request has a key of its own,
 a lookup, and it answers while the turn is still running - a step is written once and never
 rewritten, where `turn:{n}:messages` does not exist until the turn ends.
 
-**Where the marker goes is not settled.** It currently sits in the panel's own header row, which is
-wrong in a way worth fixing: one request can produce several panels, so a marker attached to one of
-them attributes a round trip to a fraction of itself. The right shape is a **rule per request**, with
-the turn rule being the first one - every existing rule already stands at a request boundary, since a
-turn opens with its first request. That needs `panelled` to group by request *and* kind rather than
-kind alone, so a panel never spans two requests and a rule always has a gap to sit in.
+**A rule per request, with the turn rule being the first one.** That adds no concept: every rule the
+transcript has ever drawn already stood at a request boundary, because a turn opens with its first
+request. A marker in the panel's own header row was wrong in a way this fixes - one request becomes
+as many panels as it has kinds of part, so a marker on one of them attributed a round trip to a
+fraction of itself.
+
+It is what `Panel.asked` is for, and why `panelled` cuts by the request *and* the kind rather than by
+the kind alone. The cost is a merge: two responses that both answer in prose used to be one panel and
+are now two. That is the point rather than a regression, because a merged panel left no gap between
+requests for a rule to stand in, and it is also the more accurate reading.
+
+A turn's first rule carries the turn's own facts as well - which turn it is, where it may be forked
+from, the tree it started on, and what the **whole turn** spent - and the later ones carry only their
+own request's. The tree there comes off the turn's first panel rather than out of request 0, which is
+the same key read a request earlier: `turn:{n}:tree:0` is written *before* the model is asked, so a
+turn whose first answer has not landed yet still says what it started on. Where the figures on one
+rule are a turn's and on the next a request's, the title says which; only `rule--turn` is what the
+dock's turn arrows step, or a turn with four round trips in it would give that column four stops.
 
 ## The workspace
 
@@ -1259,8 +1345,8 @@ moved. Two things there are decided:
   before htmx has decided whether the node differs. So `mainplate.js` keeps a signature per panel.
 - **The signature is the *text* of a panel's blocks.** A reader unfolding a call, a search mark laid
   over a word, a kind switched off in the key: all change a panel's markup and none is news. It is
-  blocks rather than the whole panel because a request's tag is `hx-preserve`d, so the record a
-  reader fetched into it survives every swap and would otherwise read as the panel having changed.
+  blocks rather than the whole panel because the header row - a role and an anchor - is the same on
+  every render, so nothing there is ever news either.
   The first render marks nothing, since every panel is new to the script then and a conversation
   flashing top to bottom points at everything.
 
@@ -1415,37 +1501,40 @@ in, which reads worse than no colour. The palette is the console's own hues in `
 an imported Pygments theme with its own opinion about light and dark.
 
 A turn is read out of the checkpoint as **panels of blocks**, not as a question-and-answer pair.
-A block is prose, reasoning, or a call with its result; a panel is a run of blocks of one kind, and
-it is what the page draws a coloured edge down. The palette runs on one axis and every kind takes
+A block is prose, reasoning, or a call with its result; a panel is a run of blocks of one kind within
+one model request, and it is what the page draws a coloured edge down. The palette runs on one axis and every kind takes
 its side from it: cool is what reached the model (the person), warm is what the model produced (its
 answer, its reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue
 decided by that rather than chosen for it. A part kind `parted` has no rendering for is passed
 over rather than refused, because the provider and Pydantic AI are both free to add one.
 
-**A panel says what is in it; a rule says what is true of the turn around it.** Which turn it is,
-where the session may be forked from, the worktree the turn started on, and what it spent all belong
-to the exchange rather than to any one run of blocks, and hung on a panel they had to be hung on a
-chosen one. Usage settles it: it belongs to a `ModelResponse`, and one response becomes as many
-panels as it has kinds of part while two responses can merge into one panel, so there is no
-attribution rule from a response to a panel that is not invented. `transcript_region` groups the
-panels by `turn` and draws the rule from that, so nothing keeps a second list of where turns begin,
-and the tree comes off the turn's first panel, which is always the person's.
+**A panel says what is in it; a rule says what is true of the request or the turn around it.** Which
+turn it is, where the session may be forked from, the worktree a request was made against, and what
+it spent all belong to the exchange rather than to any one run of blocks, and hung on a panel they
+had to be hung on a chosen one. Usage settles it: it belongs to a `ModelResponse`, and one response
+becomes as many panels as it has kinds of part, so there is no attribution rule from a response to a
+panel that is not invented. `transcript_region` groups the panels by `turn` and then watches `asked`
+change within one, so nothing keeps a second list of where a turn or a request begins.
 
-**A rule names its turn, and that is legibility rather than decoration.** It sits directly under the
-last panel of the turn before it, so a bare row of figures there reads as a footer summarising what
-is *above* it, which is the opposite of what it says. The `#1` against the `#1.0` on the panels below
-settles the direction, and doubles as the permalink to the boundary the fork acts on.
+**A rule names its turn, and that is legibility rather than decoration.** A turn rule sits directly
+under the last panel of the turn before it, so a bare row of figures there reads as a footer
+summarising what is *above* it, which is the opposite of what it says. The `#1` against the `#1.0` on
+the panels below settles the direction, and doubles as the permalink to the boundary the fork acts
+on. A rule inside a turn names its request the same way, as `r1`, which is also what opens the
+record.
 
-The dock's left column steps rules rather than the person's panels, and that is a removal. There is
-exactly one message per turn, so a "previous message of yours" column and a "previous turn" column
-visit the same positions and differ only in where they stop: two controls answering one question,
-which is the thing this console removes wherever it finds it. Every arrow now declares what it steps
-over (`data-stop`) rather than being told apart by what it lacks, because a button identified as
-"the one with no side" stops being identifiable the instant a second kind of stop exists.
+The dock's left column steps `rule--turn` rather than the person's panels, and that is a removal.
+There is exactly one message per turn, so a "previous message of yours" column and a "previous turn"
+column visit the same positions and differ only in where they stop: two controls answering one
+question, which is the thing this console removes wherever it finds it. Every arrow now declares what
+it steps over (`data-stop`) rather than being told apart by what it lacks, because a button
+identified as "the one with no side" stops being identifiable the instant a second kind of stop
+exists. The modifier and not every rule, because a rule now stands at every model request and a turn
+with four round trips in it would otherwise give that column four stops.
 
-The raw record hangs off a **model request** rather than a panel; see "The record hangs off a
-request, not a panel" above for why, and for the part of its placement that is still wrong. Two
-things about how it is fetched are decided rather than incidental:
+The raw record hangs off a **model request** rather than a panel, on the rule at that request's own
+boundary; see "The record hangs off a request, not a panel" above for why. Two things about how it is
+fetched are decided rather than incidental:
 
 - **On demand and `hx-preserve`d.** A running turn re-renders the transcript repeatedly, so the raw
   record of every request is not something to carry in it; and because the server renders the

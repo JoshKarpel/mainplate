@@ -25,9 +25,11 @@ from mainplate.console import posted_isolation
 from mainplate.console import posted_workspace
 from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
+from mainplate.conversation import heard_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import prompt_key
+from mainplate.conversation import steer_key
 from mainplate.conversation import tree_key
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.sandbox import Filesystem
@@ -252,18 +254,83 @@ class TestTheConsole:
         assert "<html" not in answered.text
         assert "and another thing" in answered.text
 
-    async def test_a_second_message_takes_the_next_turn(self, app: ASGIApp, service: Service) -> None:
+    async def test_a_second_message_steers_the_turn_still_being_answered(self, app: ASGIApp, service: Service) -> None:
+        """
+        Send does not ask which moment it is; the server reads the record and answers that.
+
+        The page it was typed on was rendered from a checkpoint that has moved since, so a reader
+        choosing between steering and queueing would have been choosing against a state that no longer
+        held. Here turn 0 has not been answered, so this reaches the turn rather than the one after it.
+        """
         session = await a_session(app)
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})
+        recorded = await service.checkpointer.load(session)
+        assert recorded[steer_key(0, 0)] == "and another thing"
+        assert prompt_key(1) not in recorded
+
+    async def test_a_second_message_takes_the_next_turn_once_the_first_is_answered(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """With nothing being answered there is nothing to steer, so the same Send queues a turn."""
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
         async with calling(app) as caller:
             await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})
         recorded = await service.checkpointer.load(session)
         assert recorded[prompt_key(1)] == "and another thing"
 
+    async def test_a_steered_message_is_on_the_page_before_any_model_has_seen_it(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The property that makes Send safe to let steer, and the one a plausible reading breaks.
+
+        A steer lands in `turn:{n}:messages` only when the turn *ends*, so a transcript reading a
+        running turn from its steps alone would take somebody's message and show nothing at all until
+        the reply finished. It is drawn from `turn:{n}:steer:{k}` instead, which exists the instant it
+        is written.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller:
+            answered = await caller.post(f"/sessions/{session}/messages", {"prompt": "actually, be brief"})
+        assert "actually, be brief" in answered.text
+        assert 'data-kind="steering"' in answered.text
+
+    async def test_a_steer_already_put_to_the_model_is_drawn_above_the_answer_it_shaped(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        `turn:{n}:heard:{i}` is what says where it went, so a running turn puts it where the settled
+        reading will: above the response it was appended to rather than at the end of what there is.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/messages", {"prompt": "actually, be brief"})
+        await service.checkpointer.supply(session, heard_key(0, 0), ["actually, be brief"])
+        await service.checkpointer.supply(session, model_key(0, 0), ANSWERED[0])
+        region = await watched(app, session)
+        assert region.index("actually, be brief") < region.index("it is a plate")
+
+    async def test_waiting_for_the_next_turn_queues_rather_than_steering(self, app: ASGIApp, service: Service) -> None:
+        """
+        The one answer the checkpoint cannot settle, which is why it stays an explicit control.
+
+        Wanting to be taken up *after* the reply that is coming is an intent no record carries, so
+        this is the override and everything else about Send is the server's to decide.
+        """
+        session = await a_session(app)
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing", "disposition": "next"})
+        recorded = await service.checkpointer.load(session)
+        assert recorded[prompt_key(1)] == "and another thing"
+        assert steer_key(0, 0) not in recorded
+
     async def test_a_message_queued_behind_an_unanswered_one_is_still_shown(self, app: ASGIApp) -> None:
         """It is recorded and it will be answered, so a page that hid it would be lying about it."""
         session = await a_session(app, "the first thing")
         async with calling(app) as caller:
-            await caller.post(f"/sessions/{session}/messages", {"prompt": "the second thing"})
+            await caller.post(f"/sessions/{session}/messages", {"prompt": "the second thing", "disposition": "next"})
             answered = await caller.get(f"/sessions/{session}")
         assert "the first thing" in answered.text
         assert "the second thing" in answered.text
@@ -728,7 +795,7 @@ class TestWhatARuleSays:
         session = await a_session(app)
         await service.checkpointer.supply(session, messages_key(0), ANSWERED)
         region = await watched(app, session)
-        assert 'class="rule"' in region
+        assert 'class="rule rule--turn"' in region
         assert "5K in" in region
         assert "640 out" in region
         assert "$0.0123" in region
@@ -770,7 +837,7 @@ class TestWhatARuleSays:
 
 class TestShowingWhatWasRecorded:
     """
-    The tag in the margin where a model request began, and the fragment behind it.
+    The rule at each model request's boundary, and the fragment behind it.
 
     A request is a thing the checkpoint has a key for, unlike a panel, so what these pin is a lookup
     rather than an agreement between two walks.
@@ -782,12 +849,30 @@ class TestShowingWhatWasRecorded:
         await service.checkpointer.supply(session, model_key(0, 0), ANSWERED[0])
         return session
 
-    async def test_a_tag_is_pointed_at_the_request_it_marks(self, app: ASGIApp, service: Service) -> None:
+    async def test_a_rule_is_pointed_at_the_request_it_stands_at(self, app: ASGIApp, service: Service) -> None:
         session = await self.answered_session(app, service)
         region = await watched(app, session)
         assert f'hx-get="/fragments/sessions/{session}/requests/0/0"' in region
 
-    async def test_a_tag_carries_what_the_request_cost_and_the_tree_it_saw(
+    async def test_every_request_of_a_turn_gets_its_own_rule_and_the_turn_gets_one(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        Two round trips, so two rules: the turn's own, and one where the second request began.
+
+        The `rule--turn` count is what keeps the dock's turn arrows stepping turns rather than
+        requests, and it is why the modifier exists rather than the selector being every rule.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(session, tree_key(0, 1), "b" * 40)
+        await service.checkpointer.supply(session, messages_key(0), [*ANSWERED, *ANSWERED])
+        region = await watched(app, session)
+        assert region.count('class="rule rule--turn"') == 1
+        assert region.count('class="rule"') == 1, "the second request, which opens no turn"
+        assert '/requests/0/1"' in region
+        assert "bbbbbbbb" in region, "the tree the second request was made against"
+
+    async def test_a_rule_carries_what_the_request_cost_and_the_tree_it_saw(
         self, app: ASGIApp, service: Service
     ) -> None:
         """The three things that are true of a request, which were previously homeless or on a panel."""
@@ -796,7 +881,8 @@ class TestShowingWhatWasRecorded:
         await service.checkpointer.supply(session, messages_key(0), ANSWERED)
         region = await watched(app, session)
         assert "aaaaaaaa" in region, "the tree taken before the ask"
-        assert "5K/640" in region, "and what the answer cost"
+        assert "5K in" in region, "and what the answer cost"
+        assert 'class="tag__at">r0<' in region, "and the record behind it"
 
     async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
         """

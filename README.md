@@ -359,30 +359,32 @@ survives an update arriving.
 **A turn is drawn as it happens.** The responses and tool results behind a running turn are already
 in the checkpoint, recorded step by step so that a resumed pass does not pay for them twice, so the
 page reads those rather than waiting for the turn to write its messages: reasoning appears, then a
-call with its arguments, then its result, then the next request. A call still out is drawn working.
-Nothing is stored to make this work and nothing is streamed from the provider; it is the same
+call with its arguments, then its result, then the next request. A call still out is drawn working,
+and a message you steered into the turn is drawn the instant you send it rather than when the turn
+ends. Nothing is stored to make this work and nothing is streamed from the provider; it is the same
 checkpoint, read sooner.
 
-A turn is drawn as panels: a coloured edge per run of one kind, with the person's message, the
-model's reasoning, its calls, and its answer each in their own. The palette runs on one axis, cool
+A turn is drawn as panels: a coloured edge per run of one kind within one request, with the person's
+message, the model's reasoning, its calls, and its answer each in their own. The palette runs on one axis, cool
 for what reached the model and warm for what it produced, so a reader scrolling can tell the sides
 apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
 page.
 
-Each turn opens with a **rule** carrying what is true of the turn rather than of any panel in it:
-which turn it is, the `fork` link, the worktree the turn started on, and what it spent in tokens and
-money. The spend fills in as the turn runs, because each response is priced as it is recorded rather
-than when the page is drawn: what a turn cost is settled the moment it is answered, where pricing it
-again later from a database that has since moved would change what an old session appears to have
-cost. It is an estimate from published rates and not a bill, since no gateway reports what it
-actually charged; a model nobody publishes a price for shows its token counts and no money. The
-session's own total sits under the message box.
+A **rule** stands at every round trip to the model, carrying what is true of that request rather than
+of any panel in it: the worktree it was made against, what it spent in tokens and money, and an `r0`
+fold showing the JSON the checkpoint actually holds for it. Since the checkpoint *is* the
+conversation, that is the state itself rather than a debug view of it, and it is fetched only when
+you open it so the transcript never carries it. A request is recorded the moment the provider
+answers, so a record can be opened while the turn is still running.
 
-Beside the panels are small **tags** marking where each round trip to the model began, carrying the
-worktree it saw, what it cost in tokens, and a fold showing the JSON the checkpoint actually holds
-for it. Since the checkpoint *is* the conversation, that is the state itself rather than a debug
-view of it, and it is fetched only when you open it so the transcript never carries it. A request is
-recorded the moment the provider answers, so a tag can be opened while the turn is still running.
+The rule that opens a turn carries the turn's own facts besides: which turn it is, the `fork` link,
+and what the whole turn spent. That costs no new idea, because every rule already stood at a request
+boundary - a turn opens with its first request. The spend fills in as the turn runs, because each
+response is priced as it is recorded rather than when the page is drawn: what a turn cost is settled
+the moment it is answered, where pricing it again later from a database that has since moved would
+change what an old session appears to have cost. It is an estimate from published rates and not a
+bill, since no gateway reports what it actually charged; a model nobody publishes a price for shows
+its token counts and no money. The session's own total sits under the message box.
 
 A panel that arrives, or whose blocks say something different, is **marked for a beat** in its own
 kind's hue. A turn fills in over several renders, and a reader watching one needs to be told which
@@ -401,13 +403,25 @@ light/dark/system theme. All of it is an enhancement. With JavaScript
 off the console still renders, still posts messages, and every tool call is still a fold that
 opens; what goes is the rail and the keyboard send.
 
-The caret beside Send opens everything else you can do with what you typed.
+**Send** puts what is in the box into the conversation now. If a reply is already coming, that means
+**steering**: the message is put to the model in the turn it is answering, appended to the next
+request it makes, so it travels up with whatever tool results are going the same way and shapes that
+answer rather than the one after it. It shows in the transcript as a `you (steering)` panel the
+instant you send it, and sits below the results it travelled with and above the answer it shaped.
 
-**Steer** puts what is in the box to the model in the turn it is answering *now*, rather than
-queueing it for the next one. It appears in the transcript as a `you (steering)` panel below the
-tool results it travelled with. Offered only while something is actually being answered, because a
-steer nobody would read is a message on the floor. Plain **Send** is the other behaviour and is
-unchanged: it waits its turn.
+You are not asked which of those it is, because you could not answer: the page you typed on was drawn
+from a checkpoint that has moved since, so the server reads the record and writes to it in one place
+instead of honouring a choice made about a turn that has already ended.
+
+Sending as a turn finishes cannot lose the message either. A turn stops listening by *claiming* the
+next steer slot rather than by reading it, so the reply ending and your message arriving are one
+contended write that the store settles: whichever gets there first wins, and the loser is told what
+the winner put there. Win it and the reply asks the model once more to carry your message; lose it
+and your message becomes the next turn instead.
+
+The caret beside Send opens everything else you can do with what you typed. **Wait for the next
+turn** is the one thing the record cannot decide for you: it queues the message behind the reply that
+is coming instead of putting it to the model now.
 
 **Aside** steps out into a side conversation you mean to come back from, and **Fork** starts one you
 do not. Both carry the whole conversation and leave the original where it is; the only difference is

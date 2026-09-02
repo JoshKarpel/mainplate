@@ -195,11 +195,14 @@
     // What one arrow steps over, which the button says rather than this inferring. Panels are
     // narrowed by the key and by side; the rules that open each turn are not, because a turn is not
     // one of the kinds the key switches off - it is the thing those kinds are inside of.
+    //
+    // `.rule--turn` and not every rule: a rule now stands at every model request, so a turn with
+    // four round trips in it would otherwise give the turn arrows four stops and stop meaning turns.
     const stopsFor = (button) => {
       const box = transcript();
       if (!box) return [];
       if (button.dataset.stop !== "turn") return panelsIn(button.dataset.side);
-      return Array.from(box.querySelectorAll(".rule")).filter((rule) => rule.getClientRects().length > 0);
+      return Array.from(box.querySelectorAll(".rule--turn")).filter((rule) => rule.getClientRects().length > 0);
     };
 
     const atEnd = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 8;
@@ -316,9 +319,8 @@
     // made, and when a result comes back, which while a turn is being answered is exactly what a
     // reader is watching for.
     //
-    // Blocks rather than the whole panel, which excludes the `recorded` disclosure: it is
-    // `hx-preserve`d, so whatever a reader fetched into it survives every swap and would otherwise
-    // read as the panel having just changed.
+    // Blocks rather than the whole panel, which leaves out the header row: an anchor and a role are
+    // the same on every render, so nothing there is ever news.
     // Encoded rather than joined, so two blocks cannot be split differently and read the same: the
     // separator that would need is a character rendered text is not allowed to contain, and there
     // is no such character.

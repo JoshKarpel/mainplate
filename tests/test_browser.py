@@ -27,6 +27,7 @@ from mainplate.catalogue import Catalogues
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
+from mainplate.conversation import steers_in
 from mainplate.conversation import tool_key
 from mainplate.service import Service
 from scripts.gallery import pages
@@ -264,6 +265,22 @@ class TestWhereTheReaderIs:
         await page.click('button[data-step="1"][data-stop="turn"]')
         await expect(page.locator(".rule[data-landed]")).to_have_count(1)
         await expect(page.locator(LANDED)).to_have_count(0)
+
+    async def test_stepping_by_turn_steps_turns_and_not_the_requests_within_one(self, page: Page, gallery: str) -> None:
+        # A rule stands at every model request now, so the selector this column steps has to be
+        # `rule--turn` rather than every rule, or a turn with several round trips in it gives the
+        # coarse column several stops and stops being the coarse column. The fixture's first turn
+        # took two requests, which is what makes this asked here rather than assumed.
+        #
+        # From the *start*, because the page opens following the end and one step from there lands on
+        # the last stop whichever selector is in force, so the assertion would hold with the bug in.
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        assert await page.locator(".rule").count() > await page.locator(".rule--turn").count()
+        await page.click('button[data-leap="start"]')
+        await page.click('button[data-step="1"][data-stop="turn"]')
+        landed = page.locator(".rule[data-landed]")
+        await expect(landed).to_have_count(1)
+        await expect(landed).to_have_attribute("id", "rule-1")
 
     async def test_a_permalink_followed_after_stepping_moves_the_landing(self, page: Page, gallery: str) -> None:
         # The other half of the same disagreement, arrived at the other way round: the dock marks a
@@ -743,6 +760,48 @@ class TestWhereTheComposerSendsTo:
 
         await expect(page.locator("#transcript")).to_contain_text("and another thing")
         assert session in page.url, "sending swaps the conversation rather than leaving it"
+
+    async def test_sending_into_a_turn_being_answered_steers_it_and_shows_the_message_at_once(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The whole of what letting Send decide has to be true for, driven rather than argued about.
+
+        The button says nothing about steering and neither does the reader, so the two things that
+        must hold are that the record shows a steer and that the page shows the message straight away.
+        The second is the one a plausible implementation loses: a steer reaches `turn:{n}:messages`
+        only when the turn *ends*, so drawn from those alone it would be a message that vanished for
+        as long as the reply took.
+        """
+        _, service = console
+        session = await self.a_conversation(console, page)
+        await page.fill(".composer textarea", "actually, be brief")
+        await page.click(".sender > button")
+
+        await expect(page.locator('.panel[data-kind="steering"]')).to_have_count(1)
+        await expect(page.locator('.panel[data-kind="steering"]')).to_contain_text("actually, be brief")
+        assert steers_in(await service.checkpointer.load(session), 0) == ("actually, be brief",)
+
+    async def test_the_menu_offers_the_wait_only_while_something_is_being_answered(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one answer the record cannot settle, offered exactly where it differs from Send.
+
+        With nothing running, waiting for the next turn *is* what Send does, so a control for it would
+        be a second way to ask one question - which is what this console removes wherever it finds it.
+        """
+        _, service = console
+        session = await self.a_conversation(console, page)
+        await page.click(".sender__caret")
+        await expect(page.locator('.sender__option[value="next"]')).to_have_count(1)
+
+        await service.checkpointer.supply(
+            session, messages_key(0), [{"kind": "response", "parts": [{"part_kind": "text", "content": "a plate"}]}]
+        )
+        await page.reload(wait_until="load")
+        await page.click(".sender__caret")
+        await expect(page.locator('.sender__option[value="next"]')).to_have_count(0)
 
 
 class TestTheShelf:

@@ -42,10 +42,11 @@ from mainplate.catalogue import Offering
 from mainplate.console import LINKS
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
-from mainplate.conversation import opening_tree_key
 from mainplate.conversation import prompt_key
+from mainplate.conversation import steer_key
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
+from mainplate.conversation import tree_key
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
@@ -298,11 +299,19 @@ def opening(messages: Sequence[ModelMessage]) -> str:
 
 
 def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
-    """A checkpoint holding these turns, in exactly the shape a pass would have written."""
+    """
+    A checkpoint holding these turns, in exactly the shape a pass would have written.
+
+    Each response is written twice over, as part of the turn's `messages` and as the step that
+    recorded it, because a pass writes both: the step is what the rule at that request's boundary
+    opens, so a fixture with only the messages renders a fold that answers 404 for every request.
+    """
     written: dict[str, object] = {}
     for turn, messages in enumerate(turns):
         written[prompt_key(turn)] = opening(messages)
         written[messages_key(turn)] = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
+        for at, response in enumerate(message for message in messages if isinstance(message, ModelResponse)):
+            written[model_key(turn, at)] = ModelResponseTypeAdapter.dump_python(response, mode="json")
     return written
 
 
@@ -324,12 +333,22 @@ REACHABLE = Reachable(
     )
 )
 
-TREES = ("9e75602b2554519c9f620dfdb2010586fde7e076", "3de66468884176acb6dc1a522aa8cfa5ace6f0e0")
+# A tree per model request rather than per turn, which is what a console with a worktree writes: a
+# snapshot is taken before every request, so the second request of a turn stands on whatever the
+# first one's tool calls left behind. The rules within a turn are the only place that shows, so a
+# fixture with one hash per turn would draw the design as it was before there were any.
+TREES = (
+    ("9e75602b2554519c9f620dfdb2010586fde7e076", "c41d7a08b8e6cf2f4a90b3d5eec1120b7f5a3e91"),
+    ("3de66468884176acb6dc1a522aa8cfa5ace6f0e0",),
+)
 
 
 def snapshotted(written: dict[str, object]) -> dict[str, object]:
-    """The same checkpoint with a tree recorded per turn, as a console with a worktree writes."""
-    return {**written, **{opening_tree_key(turn): tree for turn, tree in enumerate(TREES)}}
+    """The same checkpoint with a tree recorded before each of a turn's model requests."""
+    return {
+        **written,
+        **{tree_key(turn, at): tree for turn, taken in enumerate(TREES) for at, tree in enumerate(taken)},
+    }
 
 
 def showing(
@@ -360,6 +379,11 @@ def pages() -> dict[str, str]:
     answering = dict(waiting)
     answering[model_key(2, 0)] = ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
     answering[tool_key(2, "call-7")] = "# The one connection a page holds open, and what goes down it."
+    # A steer sent into that turn and not yet put to any model, which is the state Send now reaches
+    # every time somebody types while a reply is coming. It is drawn from `turn:{n}:steer:{k}` rather
+    # than from messages that do not exist yet, so a screenshot is where you find out whether a
+    # message that has been sent and not yet heard reads as one.
+    answering[steer_key(2, 0)] = "and while you are there, check the phone width"
 
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
 

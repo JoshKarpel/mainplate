@@ -354,9 +354,10 @@ class Service:
             await self.say(forked.id, turn=at, said=said)
         return forked
 
-    async def steer(self, session: str, *, turn: int, said: str) -> int:
+    async def steer(self, session: str, *, turn: int, said: str) -> int | None:
         """
-        Put a message into a turn that is already being answered, and say which number it took.
+        Put a message into a turn that is already being answered, and say which number it took, or
+        nothing at all where the turn had already stopped listening.
 
         Written straight into the checkpoint rather than handed to the pass, because the pass may be
         in another process: the two halves of this console are joined only by the store, so the store
@@ -372,11 +373,19 @@ class Service:
         would otherwise leave the loser's message in the store under a key nobody reads, which is a
         message silently on the floor. Bounded by how many are already there, since each attempt that
         loses has found one more.
+
+        **The pass competes for the same slots, and losing to it is `None` rather than the next
+        number up.** It writes `CLOSED` into the next free one when it is about to stop listening, so
+        getting that back is the store saying this turn will never be read again - and stepping past
+        it to write at the number above would put the message exactly where it could not be seen. The
+        caller answers by saying it into a turn of its own; see `CLOSED` and `Service.send`.
         """
         for said_at in count(len(steers_in(await self.checkpointer.load(session), turn))):
             stored = await self.checkpointer.supply(session, steer_key(turn, said_at), said)
             if stored == said:
                 return said_at
+            if not isinstance(stored, str):
+                return None
         raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
 
     async def say(self, session: str, *, turn: int, said: str) -> None:
@@ -389,3 +398,39 @@ class Service:
         and this returns without waiting for any of that.
         """
         await self.durable.arrive(session, prompt_key(turn), said)
+
+    async def send(self, session: str, said: str) -> int | None:
+        """
+        Put a message into a session at whichever moment its checkpoint is actually in, and say which
+        turn it was steered into, or nothing at all where it was queued as a turn of its own.
+
+        **The decision belongs here rather than in the composer**, and that is what makes it
+        consistent. A page is rendered from a checkpoint, and by the time somebody has typed a
+        paragraph into it that checkpoint has moved: a reader choosing between `Steer` and `Send` is
+        choosing against a state that no longer holds, and two controls meant the server honoured a
+        decision about the wrong turn. Read and write in one place and the answer is whatever the
+        record says at the instant of writing.
+
+        `answering` and not `turns - 1`, because a person can type again while a reply is coming: the
+        turns behind the one in flight are queued rather than running, so a message steered into one
+        of those would reach a model that has not been asked anything yet.
+
+        **What the read decides is which to *try*, and the store decides which happens.** A read alone
+        cannot settle it: the pass stops listening at the boundary where its run would end, which is
+        some milliseconds before the turn's messages land, so a checkpoint saying a turn is being
+        answered is not the same as a turn that will still hear you. So a steer that comes back
+        `None` is one the pass shut the door on, and this says it into a turn of its own instead.
+
+        That is a compare-and-swap re-decided on the true answer rather than a fallback: there is no
+        second mechanism here, only the same two calls this always had, chosen with what the failed
+        attempt reported. See `CLOSED`.
+        """
+        said_in = transcript(await self.checkpointer.load(session))
+        if said_in.answering is not None:
+            steered = await self.steer(session, turn=said_in.answering, said=said)
+            if steered is not None:
+                return said_in.answering
+        # Re-read rather than trusting the count from before the attempt: losing the slot means the
+        # turn ended while this was deciding, so what the next free turn is may have moved with it.
+        await self.say(session, turn=transcript(await self.checkpointer.load(session)).turns, said=said)
+        return None

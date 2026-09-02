@@ -42,11 +42,15 @@ from pydantic import TypeAdapter
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.capabilities import CapabilityOrdering
 from pydantic_ai.capabilities import WrapModelRequestHandler
+from pydantic_ai.capabilities.abstract import AgentNode
+from pydantic_ai.capabilities.abstract import NodeResult
 from pydantic_ai.capabilities.abstract import ValidatedToolArgs
 from pydantic_ai.capabilities.abstract import WrapToolExecuteHandler
 from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.models import ModelRequestParameters
@@ -58,6 +62,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_jsonable_python
+from pydantic_graph import End
 from without_durability.stepwise import Parse
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
@@ -81,7 +86,7 @@ def parse_tree(recorded: object) -> str | None:
 
 def parse_steers(recorded: object) -> tuple[str, ...]:
     """
-    What one `heard` step holds, which is the messages it put to the model and nothing else.
+    What one `heard` or `late` step holds, which is the messages it put to the model and nothing else.
 
     A list even when empty, because a request that was told nothing is a request that ran: the
     distinction this keeps is the one `parse_tree` keeps between `None` and a hash, and the store
@@ -147,6 +152,12 @@ A function for the reason `Pricer` is one: what answers it reads the conversatio
 `conversation.py` reads `agent.py`, which builds the agent this capability is attached to. Taking
 the count rather than returning everything keeps the caller from having to know which were already
 delivered, which the scope knows and the checkpoint would have to be re-read to work out.
+
+Two of these are injected and the difference is what they do rather than what they return. `pending`
+merely *reads*, and is asked before each model request. `closing` **claims** the next slot before
+reading, so a turn that is about to stop listening says so in the same operation that finds out
+whether anybody got in first; see `CLOSED` in `conversation.py`. Both hand back what still has to be
+put to the model, so one `steering` step records either.
 """
 
 
@@ -193,6 +204,7 @@ class Stepping:
     worktree: Worktree | None = None
     pricer: Pricer | None = None
     pending: Pending | None = None
+    closing: Pending | None = None
     taken: Counter[str] = field(default_factory=Counter)
     told: list[tuple[str, ...]] = field(default_factory=list)
     """
@@ -232,27 +244,35 @@ class Stepping:
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
 
-    async def steering(self, pending: Pending) -> tuple[str, ...]:
+    async def steering(self, pending: Pending, kind: str = "heard") -> tuple[str, ...]:
         """
-        The steers to put to the model at this request, recorded so a later pass says the same thing.
+        The steers to put to the model now, recorded so a later pass says the same thing.
 
         `pending` is asked how many have been delivered already and answers with what is left, which
         is a live read of the checkpoint and therefore an *effect*: two passes at the same turn would
         see different queues, because a person goes on typing between them. Wrapping it in a step is
         what makes it replayable, and that is not a nicety - `turn:{n}:model:{i}` is the answer to a
         question, and a replay that asked a different question would be pairing an answer with a
-        prompt nobody ever gave.
+        prompt nobody ever gave. It is also what keeps the *shape* of the run the same, since a read
+        that found something where the first pass found nothing would redirect a run that ended.
 
         The texts and not a count, so a resumed pass needs nothing but this record to reproduce the
-        request. Recorded even when empty, like the tree beside it, so a request that was told nothing
-        is distinguishable from one nobody has reached.
+        request. Recorded even when empty, like the tree beside it, so a read that found nothing is
+        distinguishable from one that never happened.
+
+        Two kinds, because there are two moments a steer can be put to the model and only one of them
+        is a request. `heard:{i}` is what was appended to the *i*th request, so it stays one per
+        request and in step with `tree:{i}` and `model:{i}`; `late:{k}` is what was found at a
+        boundary where the run would otherwise have ended, which no request was left to carry. Kept
+        apart rather than sharing one counter, because sharing it would drift `heard` off the two
+        keys it is supposed to name one request alongside.
         """
         already = sum(len(said) for said in self.told)
 
         async def take() -> object:
             return list(await pending(already))
 
-        said = await self.step(self.key("heard"), take, parse_steers)
+        said = await self.step(self.key(kind), take, parse_steers)
         self.told.append(said)
         return said
 
@@ -292,6 +312,7 @@ def stepping(
     worktree: Worktree | None = None,
     pricer: Pricer | None = None,
     pending: Pending | None = None,
+    closing: Pending | None = None,
 ) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
@@ -302,7 +323,7 @@ def stepping(
     through. It is the same place DBOS reads its workflow id from, and the same place Pydantic AI
     keeps its own ambient run context.
     """
-    scope = Stepping(run=run, prefix=prefix, worktree=worktree, pricer=pricer, pending=pending)
+    scope = Stepping(run=run, prefix=prefix, worktree=worktree, pricer=pricer, pending=pending, closing=closing)
     token = current_stepping.set(scope)
     try:
         yield scope
@@ -417,29 +438,69 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         self, ctx: RunContext[AgentDepsT], request_context: ModelRequestContext
     ) -> ModelRequestContext:
         """
-        Put anything the person has said mid-turn to the model, before it is asked anything else.
+        Put anything the person has said mid-turn to the model, in *this* request.
 
-        `ctx.enqueue` rather than editing `request_context.messages`, which is Pydantic AI's own way
-        of adding to a run in flight and is documented as callable from a capability hook. Two things
-        come with using it rather than splicing by hand: an `'asap'` message is drained at the
-        *end of a run* as well as before each request, so a steer that arrives after the turn's last
-        request still reaches the model instead of being stranded; and the message becomes part of
-        the run's real history, so it lands in `turn:{n}:messages` and the transcript draws it with
-        nothing else taught about it.
+        Appended to `request_context.messages`, and emphatically not `ctx.enqueue`, which was tried
+        and delivered every steer one round trip late. Pydantic AI's own drain capability is ordered
+        **outermost**, so it empties the queue in its `before_model_request` before this one runs: a
+        message enqueued here misses the request it was read for and reaches the next one, which
+        costs a round trip nobody asked for, puts the steer's panel below the answer it was meant to
+        shape, and makes `turn:{n}:heard:{i}` a claim about a request that never heard it.
 
-        Editing the messages here would have done neither. `request_context.messages` is a *copy* of
-        the run's history, and the docs are explicit that a message already in a history must not be
-        mutated in place.
+        Appending is sound for the two reasons the enqueue was reached for. The list is a *copy* of
+        the run's history and what this returns is adopted whole (`ctx.state.message_history[:] =
+        messages`), so the steer lands in `turn:{n}:messages` and the transcript draws it with
+        nothing taught about it; and a new message is added rather than an existing one mutated,
+        which is the thing the docs actually forbid. Pydantic AI merges consecutive trailing requests
+        for the wire with the tool parts first, so a steer travelling beside a batch of results
+        arrives after them in one request and is recorded as its own message.
 
-        What it is *told* comes from a recorded step, because `enqueue` is in-memory and a resumed
-        pass would find the queue empty. See `Stepping.steering`.
+        What it is *told* comes from a recorded step, because a live read of the queue is an effect
+        and a resumed pass would see a different one. See `Stepping.steering`.
         """
         scope = current_stepping.get()
         if scope is None or scope.pending is None:
             return request_context
-        for said in await scope.steering(scope.pending):
-            ctx.enqueue(said)
+        said = await scope.steering(scope.pending)
+        if said:
+            request_context.messages.append(ModelRequest(parts=[UserPromptPart(content=text) for text in said]))
         return request_context
+
+    async def after_node_run(
+        self, ctx: RunContext[AgentDepsT], *, node: AgentNode[AgentDepsT], result: NodeResult[AgentDepsT]
+    ) -> NodeResult[AgentDepsT]:
+        """
+        Stop listening, and carry away whatever arrived in the instant before that took effect.
+
+        `before_model_request` reaches every request the agent was going to make anyway, which is
+        every steer but one: the person typing *during* the final response has nowhere left to be
+        heard, and a message recorded and never answered is the one outcome worse than a slow one.
+
+        So this is the other boundary, and it **claims** rather than reads. `closing` writes `CLOSED`
+        into the next free steer slot, which the store settles atomically: winning it means nothing
+        can be written there afterwards, so a message sent from now on is told the turn is closed and
+        becomes a turn of its own. Losing it means somebody got in first, and what comes back is their
+        text rather than the marker. A read would leave a window between "the pass stopped listening"
+        and "the store says so", and every message sent inside it on the floor.
+
+        `ctx.enqueue` is right here where it was wrong in `before_model_request`. The drain's own
+        `after_node_run` runs *after* every other one, so a message put in the queue at the moment the
+        run would end is what redirects it into one more request. That request's
+        `before_model_request` reads the queue again, finds these already told, and appends nothing,
+        so each steer is delivered exactly once.
+
+        The cost is the extra round trip, which here is the point rather than an accident: there is
+        no request left to carry the message, so asking again is the only way to answer it at all.
+
+        Recorded as `late:{k}` and not as `heard:{i}`, so the per-request keys stay one per request.
+        See `Stepping.steering`.
+        """
+        scope = current_stepping.get()
+        if scope is None or scope.closing is None or not isinstance(result, End):
+            return result
+        for said in await scope.steering(scope.closing, kind="late"):
+            ctx.enqueue(said)
+        return result
 
     async def wrap_model_request(
         self,

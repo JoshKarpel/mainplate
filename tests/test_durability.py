@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field
 from decimal import Decimal
@@ -22,6 +25,11 @@ from without_durability.interfaces import claimed
 from without_durability.memory import MemoryCheckpointer
 from without_durability.stepwise import Run
 
+from mainplate.conversation import CLOSED
+from mainplate.conversation import steer_key
+from mainplate.conversation import steers_closing
+from mainplate.conversation import steers_in
+from mainplate.conversation import steers_waiting
 from mainplate.conversation import turn_of
 from mainplate.durability import CheckpointedModel
 from mainplate.durability import Stepping
@@ -48,6 +56,38 @@ async def a_pass(checkpointer: MemoryCheckpointer) -> AsyncIterator[Run]:
         yield Run(holder=holder, checkpointer=checkpointer, recorded=await checkpointer.load(WORKFLOW))
     finally:
         await checkpointer.release(holder)
+
+
+@contextmanager
+def steered(run: Run, *, when: Callable[[], bool], said: str = "one more thing") -> Iterator[None]:
+    """
+    A scope whose steers arrive the moment `when` first says so, through the real readers.
+
+    `steers_waiting` and `steers_closing` rather than stand-ins, because the second of them is the
+    whole mechanism: it *claims* the next slot rather than reading it, and a fake that merely
+    answered would leave the thing under test untested. So the steer is written into the store, the
+    way `Service.steer` writes one, and the pass finds it however it finds one.
+    """
+    sent: list[str] = []
+
+    async def arriving(already: int) -> Sequence[str]:
+        if when() and not sent:
+            sent.append(said)
+            await run.checkpointer.supply(
+                run.workflow, steer_key(0, len(steers_in(await run.checkpointer.load(run.workflow), 0))), said
+            )
+        return ()
+
+    async def waiting(already: int) -> Sequence[str]:
+        await arriving(already)
+        return await steers_waiting(run.checkpointer, run.workflow, 0)(already)
+
+    async def closing(already: int) -> Sequence[str]:
+        await arriving(already)
+        return await steers_closing(run.checkpointer, run.workflow, 0)(already)
+
+    with stepping(run, "turn:0", pending=waiting, closing=closing):
+        yield
 
 
 class TestNamingASteppingScope:
@@ -226,6 +266,107 @@ class TestPuttingAMessageIntoARunningTurn:
             with stepping(run, "turn:0", pending=waiting):
                 await provider.agent().run("hello")
         assert (await checkpointer.load(WORKFLOW))["turn:0:heard:0"] == ["actually, check the tests too"]
+
+    async def test_a_steer_reaches_the_request_it_was_read_for(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        The whole of why this appends rather than enqueues, asked of the messages the run produced.
+
+        Pydantic AI's drain capability is ordered outermost, so it empties the queue *before* this
+        capability's `before_model_request` runs: a steer put in the queue there misses the request it
+        was read for and lands in the next one. That cost a round trip nobody asked for and drew the
+        steer's panel below the answer it was meant to shape rather than above it.
+
+        Typed while the first batch of tool calls ran, which is the shape a person actually produces:
+        the request that carries it is the one made once those calls come back.
+        """
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        agent = calling(scripted, Noting())
+        said: list[str] = []
+
+        async def waiting(already: int) -> Sequence[str]:
+            if scripted.asked >= 1 and not said:
+                said.append("be brief")
+                return ("be brief",)
+            return ()
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pending=waiting):
+                answered = await agent.run("hello")
+
+        assert scripted.asked == 2, "a steer read at a request must not cost an extra one"
+        recorded = await checkpointer.load(WORKFLOW)
+        assert recorded["turn:0:heard:1"] == ["be brief"], "the request it was read for is the one that heard it"
+        assert [type(message).__name__ for message in answered.new_messages()] == [
+            "ModelRequest",
+            "ModelResponse",
+            "ModelRequest",
+            "ModelRequest",
+            "ModelResponse",
+        ], "the steer follows the tool results it travelled with and precedes the answer it shaped"
+
+    async def test_a_steer_arriving_as_the_turn_would_end_redirects_it_into_one_more_request(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """
+        The one steer no request is left to carry, which is the case `after_node_run` exists for.
+
+        A person typing while the *last* response is being written has nowhere to be appended, and a
+        message recorded and never answered is worse than a slow one. Recorded as `late:{k}`, so the
+        per-request keys stay one per request.
+        """
+        agent = provider.agent()
+        async with a_pass(checkpointer) as run:
+            with steered(run, when=lambda: provider.asked >= 1):
+                answered = await agent.run("hello")
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert recorded["turn:0:heard:0"] == [], "nothing had been said when the only request was made"
+        assert recorded["turn:0:late:0"] == ["one more thing"]
+        assert provider.asked == 2, "the run was redirected into one more request to carry it"
+        assert [type(message).__name__ for message in answered.new_messages()] == [
+            "ModelRequest",
+            "ModelResponse",
+            "ModelRequest",
+            "ModelResponse",
+        ]
+
+    async def test_a_turn_that_has_stopped_listening_says_so_in_the_slot_a_steer_would_take(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """
+        The whole of how a message cannot be lost at the end of a turn.
+
+        The pass claims the next steer slot rather than reading it, so `CLOSED` sitting there is the
+        store telling whoever types next that this turn will never be read again. Read instead, the
+        pass would stop listening some milliseconds before anything said so, and a message sent inside
+        that window would go to a key nothing looks at.
+        """
+        async with a_pass(checkpointer) as run:
+            with steered(run, when=lambda: False):
+                await provider.agent().run("hello")
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert steer_key(0, 0) in recorded, "the slot is claimed rather than left free"
+        assert recorded[steer_key(0, 0)] is CLOSED
+        assert steers_in(recorded, 0) == (), "and it is not something anybody said"
+
+    async def test_the_two_kinds_of_record_stay_one_per_request_and_one_per_ending(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """
+        Why `late` is its own kind rather than another `heard`.
+
+        `tree:{i}`, `heard:{i}` and `model:{i}` are three parts of one request, so a second writer
+        sharing the `heard` counter would drift it off the two keys it names a request alongside.
+        """
+        async with a_pass(checkpointer) as run:
+            with steered(run, when=lambda: False):
+                await provider.agent().run("hello")
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert sorted(key for key in recorded if ":heard:" in key) == ["turn:0:heard:0"]
+        assert sorted(key for key in recorded if ":model:" in key) == ["turn:0:model:0"]
+        assert sorted(key for key in recorded if ":late:" in key) == ["turn:0:late:0"]
 
     async def test_a_request_told_nothing_records_an_empty_list(
         self, checkpointer: MemoryCheckpointer, provider: Provider
