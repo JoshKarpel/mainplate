@@ -35,8 +35,10 @@ from mainplate.conversation import Panel
 from mainplate.conversation import Prose
 from mainplate.conversation import Reached
 from mainplate.conversation import Reasoning
+from mainplate.conversation import Request
 from mainplate.conversation import Returned
 from mainplate.conversation import Spent
+from mainplate.conversation import Steering
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
@@ -47,12 +49,14 @@ from mainplate.conversation import panelled
 from mainplate.conversation import parse_choice
 from mainplate.conversation import parse_messages
 from mainplate.conversation import parse_prompt
+from mainplate.conversation import parted
 from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
+from mainplate.conversation import requested_at
 from mainplate.conversation import so_far
-from mainplate.conversation import sourced_at
 from mainplate.conversation import spent_on
+from mainplate.conversation import steers_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
@@ -74,7 +78,7 @@ def spoken(said: Transcript) -> list[tuple[str, str]]:
         (panel.kind, block.text)
         for panel in said.panels
         for block in panel.blocks
-        if isinstance(block, Prose | Reasoning)
+        if isinstance(block, Prose | Reasoning | Steering)
     ]
 
 
@@ -131,6 +135,8 @@ class TestReadingACheckpoint:
             panels=(Panel(turn=0, at=0, kind="person", blocks=(Prose(text="what is it"),)),),
             awaiting=True,
             turns=1,
+            # The turn a steer would reach: the first one unanswered, which here is the only one.
+            answering=0,
         )
 
     def test_an_answered_turn_is_the_question_and_the_answer_as_two_panels(self) -> None:
@@ -144,13 +150,16 @@ class TestReadingACheckpoint:
         assert transcript(recorded) == Transcript(
             panels=(
                 Panel(turn=0, at=0, kind="person", blocks=(Prose(text="what is it"),)),
-                Panel(turn=0, at=1, kind="assistant", blocks=(Prose(text="a mainplate"),)),
+                # The answer is where the turn's one model request opened, which is what puts a tag
+                # in its margin.
+                Panel(turn=0, at=1, kind="assistant", blocks=(Prose(text="a mainplate"),), opens=(0,)),
             ),
             awaiting=False,
             turns=1,
             # An answered turn always has a spend, even where every count on it is zero: what makes
             # it absent is a turn that has recorded no response at all, not one that cost nothing.
             spent={0: Spent(asked=0, answered=0, cost=None)},
+            requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None)),)},
         )
 
     def test_a_panel_is_a_run_of_one_kind_in_the_order_the_model_worked(self) -> None:
@@ -161,8 +170,8 @@ class TestReadingACheckpoint:
             ModelRequest(parts=[ToolReturnPart("read", "the body", "c1")]),
             ModelResponse(parts=[TextPart("it says hello")]),
         ]
-        assert tuple(panelled(3, blocks_of(turn))) == (
-            Panel(turn=3, at=1, kind="thinking", blocks=(Reasoning(text="have a look"),)),
+        assert tuple(panelled(3, parted(turn))) == (
+            Panel(turn=3, at=1, kind="thinking", blocks=(Reasoning(text="have a look"),), opens=(0,)),
             Panel(
                 turn=3,
                 at=2,
@@ -175,7 +184,7 @@ class TestReadingACheckpoint:
                     ),
                 ),
             ),
-            Panel(turn=3, at=3, kind="assistant", blocks=(Prose(text="it says hello"),)),
+            Panel(turn=3, at=3, kind="assistant", blocks=(Prose(text="it says hello"),), opens=(1,)),
         )
 
     def test_a_call_with_no_result_recorded_is_still_out(self) -> None:
@@ -235,67 +244,48 @@ FOUR_PANELS: dict[str, object] = {
 }
 
 
-class TestWhatAPanelWasReadOutOf:
+class TestWhereARequestBeganAndWhatItHeld:
     """
-    The record behind a panel, which is the checkpoint's own JSON and not a re-serialization of it.
+    The tags in the margin: which panel each round trip opened in, and what it came back with.
 
-    The whole risk here is disagreement: a panel is a run of parts and nothing stores one, so the
-    walk that cuts panels and the walk that finds their parts have to be the same walk.
+    A request is the unit the checkpoint has keys for, where a panel is a reading. That is the whole
+    point of hanging the record here rather than under a panel - it is a lookup rather than a slice
+    of a stored value reached by indices one walk had to hand to another.
     """
 
-    def test_a_persons_panel_is_the_prompt_key_and_nothing_else(self) -> None:
-        assert sourced_at(FOUR_PANELS, 0, 0) == "go"
+    def test_a_request_is_the_step_the_checkpoint_holds_for_it(self) -> None:
+        recorded = {**FOUR_PANELS, model_key(0, 0): THINKING_AND_CALL, model_key(0, 1): THE_ANSWER}
+        assert requested_at(recorded, 0, 0) == THINKING_AND_CALL
+        assert requested_at(recorded, 0, 1) == THE_ANSWER
 
-    def test_a_reasoning_panel_is_the_stored_part_it_was_read_from(self) -> None:
-        assert sourced_at(FOUR_PANELS, 0, 1) == [{"part_kind": "thinking", "content": "have a look"}]
+    def test_a_request_nobody_made_is_nothing(self) -> None:
+        assert requested_at(FOUR_PANELS, 0, 0) is None
+        assert requested_at(FOUR_PANELS, 7, 0) is None
 
-    def test_a_call_panel_carries_the_call_and_not_its_return(self) -> None:
+    def test_each_panel_says_which_requests_opened_in_it(self) -> None:
         """
-        A return arrives in the *request* after the response that asked for it, so it is not a part
-        of the panel. What the panel is a reading of is the call, which is what this hands back.
+        Two responses here, and four panels: the first opens in the reasoning panel and the second in
+        the answer. The tool panel opens nothing, because it is the middle of the first response.
         """
-        assert sourced_at(FOUR_PANELS, 0, 2) == [
-            {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"}
-        ]
+        drawn = [panel for panel in transcript(FOUR_PANELS).panels if panel.kind != "person"]
+        assert [panel.opens for panel in drawn] == [(0,), (), (1,)]
 
-    def test_the_last_panel_is_the_answer(self) -> None:
-        assert sourced_at(FOUR_PANELS, 0, 3) == [{"part_kind": "text", "content": "it says hello"}]
-
-    def test_every_panel_the_transcript_draws_has_a_record_behind_it(self) -> None:
+    def test_two_requests_that_land_in_one_panel_both_mark_it(self) -> None:
         """
-        The pairing itself, asked of the two functions together rather than of either alone. A
-        panel the page draws and nothing can answer for is the failure this exists to catch.
-        """
-        drawn = transcript(FOUR_PANELS).panels
-        assert len(drawn) == 4
-        assert all(sourced_at(FOUR_PANELS, panel.turn, panel.at) is not None for panel in drawn)
-
-    def test_a_panel_past_the_end_is_nothing(self) -> None:
-        assert sourced_at(FOUR_PANELS, 0, 4) is None
-
-    def test_a_turn_nobody_reached_is_nothing(self) -> None:
-        assert sourced_at(FOUR_PANELS, 7, 0) is None
-        assert sourced_at(FOUR_PANELS, 7, 1) is None
-
-    def test_a_part_the_console_passes_over_is_not_counted_into_a_panel(self) -> None:
-        """
-        The indices come from the walk that decides which parts become blocks, because that walk
-        skips. Recovered by counting parts afterwards they would be off by one from the first
-        unrenderable part onwards, and every panel after it would show somebody else's record.
+        A response ending in prose and the next beginning in prose merge into one panel, so there is
+        no gap between panels for a boundary to sit in. Both tags go in the margin of the one panel,
+        which is why `opens` is several rather than one.
         """
         recorded: dict[str, object] = {
             prompt_key(0): "go",
             messages_key(0): [
-                {
-                    "kind": "response",
-                    "parts": [
-                        {"part_kind": "text", "content": "   "},
-                        {"part_kind": "text", "content": "the real one"},
-                    ],
-                }
+                {"kind": "response", "parts": [{"part_kind": "text", "content": "first"}]},
+                {"kind": "response", "parts": [{"part_kind": "text", "content": "second"}]},
             ],
         }
-        assert sourced_at(recorded, 0, 1) == [{"part_kind": "text", "content": "the real one"}]
+        drawn = [panel for panel in transcript(recorded).panels if panel.kind == "assistant"]
+        assert len(drawn) == 1, "the two runs of prose merged"
+        assert drawn[0].opens == (0, 1)
 
 
 # The same exchange `FOUR_PANELS` holds, as the steps written while it was still running: the two
@@ -468,21 +458,14 @@ class TestWatchingATurnHappen:
         ]
         assert said.awaiting is True
 
-    def test_only_what_was_read_from_steps_is_unsettled(self) -> None:
+    def test_a_running_turn_marks_where_its_requests_began(self) -> None:
         """
-        A prompt is written before the turn runs and nothing rewrites one, so the person's panel
-        offers its record even mid-turn. The panels read from steps do not, because what is behind
-        them is still being written.
+        A tag is offered mid-turn, unlike the panel record it replaced. A step's key is written once
+        and never rewritten, so the response behind a tag is settled the moment it exists - where a
+        panel's record came out of `turn:{n}:messages`, which is not written until the turn ends.
         """
-        drawn = transcript(READ).panels
-        assert [(panel.kind, panel.settled) for panel in drawn] == [
-            ("person", True),
-            ("thinking", False),
-            ("tool", False),
-        ]
-
-    def test_an_answered_turn_is_settled_throughout(self) -> None:
-        assert all(panel.settled for panel in transcript(FOUR_PANELS).panels)
+        drawn = [panel for panel in transcript(READ).panels if panel.kind != "person"]
+        assert [panel.opens for panel in drawn] == [(0,), ()]
 
 
 class TestChoosingATurn:
@@ -647,6 +630,50 @@ class TestAnsweringASession:
         await service.say(SESSION, turn=1, said="again")
         await pass_at(service, body)
         assert provider.carried == [1, 3]
+
+    async def test_a_steer_written_before_the_pass_reaches_the_model_and_the_transcript(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The whole of steering, end to end: written from outside the pass, delivered by `enqueue`, and
+        read back out of the turn's own messages as a panel of its own.
+
+        Written before the pass here rather than during one, because what a test can control is the
+        store and not the instant a model is asked. What it proves is the same either way: the queue
+        is read at the request rather than when the turn started.
+        """
+        await started(service, said="hello")
+        await service.steer(SESSION, turn=0, said="actually, be brief")
+        await pass_at(service, provider.body())
+
+        said = spoken(transcript(await service.checkpointer.load(SESSION)))
+        assert ("steering", "actually, be brief") in said
+
+    async def test_a_steer_is_drawn_as_the_person_and_not_as_the_model(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        `Steering` is its own block for exactly this: a panel's kind is read off its blocks, so a
+        steer arriving as `Prose` would be drawn as the model answering itself.
+        """
+        await started(service, said="hello")
+        await service.steer(SESSION, turn=0, said="one more thing")
+        await pass_at(service, provider.body())
+
+        drawn = transcript(await service.checkpointer.load(SESSION)).panels
+        steering = [panel for panel in drawn if panel.kind == "steering"]
+        assert len(steering) == 1
+        assert steering[0].blocks == (Steering(text="one more thing"),)
+
+    async def test_two_steers_keep_their_order_and_neither_is_lost(self, service: Service) -> None:
+        """
+        The clash check, which is what stops the second overwriting the first: the store keeps the
+        value a key was first given, so a number claimed by counting alone would drop a message.
+        """
+        await started(service, said="hello")
+        assert await service.steer(SESSION, turn=0, said="first") == 0
+        assert await service.steer(SESSION, turn=0, said="second") == 1
+        assert steers_in(await service.checkpointer.load(SESSION), 0) == ("first", "second")
 
     async def test_two_sessions_do_not_see_each_other(self, service: Service, provider: Provider) -> None:
         body = provider.body()

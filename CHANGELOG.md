@@ -50,6 +50,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   replacing what is there, so several kept notes assemble into one message. A fork inherits what its
   parent kept, which the script copies because the server is never told a draft exists. It lives in
   the browser, so it is per machine for now.
+- **Steering**: a message put to the model in the turn it is answering now, rather than queued for
+  the next one. It is written into the checkpoint from outside the pass, because the worker may be
+  another process, and delivered by Pydantic AI's own `enqueue` from a capability hook - which also
+  means a steer arriving after a turn's last request redirects the run into one more rather than
+  being stranded. What each request was told is a recorded step, so a resumed pass asks the same
+  question rather than whatever is queued by then. It reads back as a `you (steering)` panel below
+  the tool results it travelled with.
+- The raw record moved from a fold under every panel to a **tag marking each model request**, which
+  is the unit the checkpoint actually has a key for: a panel is a run of blocks of one kind and a
+  request is a round trip, so a panel's record was a slice of a stored value reached by indices one
+  walk had to hand another. The tag carries the worktree taken before the request and what the answer
+  cost, and can be opened while the turn is still running.
 - **Asides**: a fork recorded as a step out you mean to come back from, and a way back that sends a
   message into the conversation it came out of. Nothing mechanical separates an aside from a fork, so
   what is recorded is only what was meant, and what it buys is that the sidebar draws a digression as

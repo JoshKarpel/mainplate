@@ -26,7 +26,9 @@ from mainplate.console import posted_workspace
 from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
 from mainplate.conversation import messages_key
+from mainplate.conversation import model_key
 from mainplate.conversation import prompt_key
+from mainplate.conversation import tree_key
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
@@ -132,7 +134,7 @@ class TestReadingWhereAMessageIsGoing:
         message is already sent by the time anybody could notice.
         """
         with pytest.raises(NotAMessage):
-            parse_form_send(b"prompt=go&disposition=steer")
+            parse_form_send(b"prompt=go&disposition=sideways")
 
     def test_a_message_is_still_required_whatever_it_is_addressed_to(self) -> None:
         with pytest.raises(NotAMessage):
@@ -768,22 +770,33 @@ class TestWhatARuleSays:
 
 class TestShowingWhatWasRecorded:
     """
-    The disclosure under a panel, and the fragment behind it.
+    The tag in the margin where a model request began, and the fragment behind it.
 
-    A panel is a *reading* of the checkpoint rather than a row in it, so what these pin is that the
-    two agree about which stored parts a given panel was read out of.
+    A request is a thing the checkpoint has a key for, unlike a panel, so what these pin is a lookup
+    rather than an agreement between two walks.
     """
 
     async def answered_session(self, app: ASGIApp, service: Service) -> str:
         session = await a_session(app)
         await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        await service.checkpointer.supply(session, model_key(0, 0), ANSWERED[0])
         return session
 
-    async def test_a_panel_carries_a_disclosure_pointed_at_its_own_record(self, app: ASGIApp, service: Service) -> None:
+    async def test_a_tag_is_pointed_at_the_request_it_marks(self, app: ASGIApp, service: Service) -> None:
         session = await self.answered_session(app, service)
         region = await watched(app, session)
-        assert f'hx-get="/fragments/sessions/{session}/panels/0/1"' in region
-        assert f'hx-get="/fragments/sessions/{session}/panels/0/2"' in region
+        assert f'hx-get="/fragments/sessions/{session}/requests/0/0"' in region
+
+    async def test_a_tag_carries_what_the_request_cost_and_the_tree_it_saw(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The three things that are true of a request, which were previously homeless or on a panel."""
+        session = await a_session(app)
+        await service.checkpointer.supply(session, tree_key(0, 0), "a" * 40)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        region = await watched(app, session)
+        assert "aaaaaaaa" in region, "the tree taken before the ask"
+        assert "5K/640" in region, "and what the answer cost"
 
     async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
         """
@@ -793,7 +806,7 @@ class TestShowingWhatWasRecorded:
         """
         session = await self.answered_session(app, service)
         region = await watched(app, session)
-        assert "the trigger fires once" in region, "the reading of the part is on the page"
+        assert "the trigger fires once" in region, "the reading of the response is on the page"
         assert '"part_kind"' not in region, "the record behind it is not"
 
     async def test_the_disclosure_survives_the_poll_that_replaces_the_conversation(
@@ -812,39 +825,33 @@ class TestShowingWhatWasRecorded:
         assert "hx-preserve" in region
         assert 'hx-trigger="toggle once"' in region, "settled for good, so asked for once"
 
-    async def test_a_model_panel_answers_with_the_parts_it_was_read_out_of(
+    async def test_a_request_answers_with_the_whole_response_the_step_holds(
         self, app: ASGIApp, service: Service
     ) -> None:
+        """
+        The step and not a slice of the turn's messages, which is the simplification the tag bought:
+        `turn:{n}:model:{i}` is what the provider answered, and a request has a key of its own.
+        """
         session = await self.answered_session(app, service)
         async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/1")
+            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
         assert answered.status == 200
         assert '"part_kind": "thinking"' in answered.text
         assert '"the trigger fires once"' in answered.text
-        assert "it is a plate" not in answered.text, "the prose panel is a panel of its own"
+        assert "it is a plate" in answered.text, "the whole response, not one panel's worth of it"
 
-    async def test_a_person_panel_answers_with_the_one_key_that_is_that_panel(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        """The exception, and the only panel the checkpoint has a key for on its own."""
-        session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/0")
-        assert answered.status == 200
-        assert '"what is a mainplate"' in answered.text
-
-    async def test_a_panel_nobody_recorded_is_refused_rather_than_rendered_empty(
+    async def test_a_request_nobody_made_is_refused_rather_than_rendered_empty(
         self, app: ASGIApp, service: Service
     ) -> None:
         session = await self.answered_session(app, service)
         async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/9")
+            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/9")
         assert answered.status == 404
         assert "Nothing is recorded" in answered.text
 
     async def test_a_session_nobody_started_is_refused(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            answered = await caller.get("/fragments/sessions/deadbeef/panels/0/0")
+            answered = await caller.get("/fragments/sessions/deadbeef/requests/0/0")
         assert answered.status == 404
 
     async def test_markup_inside_a_record_does_not_become_markup(self, app: ASGIApp, service: Service) -> None:
@@ -857,11 +864,11 @@ class TestShowingWhatWasRecorded:
         session = await a_session(app)
         await service.checkpointer.supply(
             session,
-            messages_key(0),
-            [{"kind": "response", "parts": [{"part_kind": "text", "content": "<script>alert(1)</script>"}]}],
+            model_key(0, 0),
+            {"kind": "response", "parts": [{"part_kind": "text", "content": "<script>alert(1)</script>"}]},
         )
         async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/panels/0/1")
+            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
         assert answered.status == 200
         assert "<script" not in answered.text
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in answered.text

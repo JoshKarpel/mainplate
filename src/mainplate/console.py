@@ -500,26 +500,25 @@ async def stream(service: Service, session: str) -> Reply:
 
 
 @get(
-    t"/fragments/sessions/{session_id}/panels/{of_turn}/{at_panel}",
+    t"/fragments/sessions/{session_id}/requests/{of_turn}/{at_panel}",
     session_id,
     of_turn,
     at_panel,
-    summary="What the checkpoint holds behind one panel",
+    summary="What the checkpoint holds for one model request",
 )
-async def panel_record(service: Service, session: str, turn: int, at: int) -> Response:
+async def request_record(service: Service, session: str, turn: int, at: int) -> Response:
     """
-    The stored JSON a panel was read out of, fetched only when somebody opens the disclosure.
+    What one model request of a turn came back with, fetched only when somebody opens its tag.
 
-    On demand rather than rendered into the transcript, because the transcript is swapped once a
-    second while a turn is in flight: the raw record of every panel is several times the size of
-    the reading of it, and it would be carried by every poll for something almost always closed.
+    On demand rather than rendered into the transcript, because the transcript is swapped whenever a
+    running turn records anything: the raw record of every request is several times the size of the
+    reading of it, and it would be carried by every message for something almost always closed.
 
-    Whatever it answers is settled for good, which is what lets the page fetch it once and keep it.
-    A turn's messages are recorded when the turn ends, so a panel exists only once what is behind
-    it has stopped changing, and the one panel that exists before then - the person's, waiting to
-    be answered - is a prompt, which nothing ever rewrites.
+    Settled for good the moment it exists, which is what lets the page fetch it once and keep it. A
+    step's key is written once and never rewritten, so unlike a panel's record this is answerable
+    while the turn is still running - the response is there as soon as the provider gave it.
     """
-    held = await service.recorded_at(session, turn, at)
+    held = await service.requested_at(session, turn, at)
     if held is None:
         return page_response(404, fragment(missing_record(turn, at)))
     return page_response(200, fragment(record_json(held)))
@@ -571,6 +570,17 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             if forked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
             return navigating(LINKS.to_session(forked.id))
+        case Disposition.STEER:
+            # Into the turn being answered, which is the one before the next free slot. Refused where
+            # nothing is running: a steer nobody would ever read is a message on the floor, and
+            # queueing it instead would answer a different question than the one that was asked.
+            if found.said.answering is None:
+                return page_response(422, refusal_page(LINKS, 422, f"session {session} is not answering anything"))
+            await service.steer(session, turn=found.said.answering, said=sending.said)
+            asked = await service.read(session)
+            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot
@@ -596,7 +606,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     fork_form,
     fork,
     say,
-    panel_record,
+    request_record,
 )
 
 LINKS = Links(
@@ -605,7 +615,7 @@ LINKS = Links(
     session=show_session,
     say=say,
     stream=stream,
-    panel_record=panel_record,
+    request_record=request_record,
     endpoint_models=endpoint_models,
     fork_form=fork_form,
     fork=fork,

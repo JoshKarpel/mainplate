@@ -378,11 +378,11 @@ cost. It is an estimate from published rates and not a bill, since no gateway re
 actually charged; a model nobody publishes a price for shows its token counts and no money. The
 session's own total sits under the message box.
 
-Under each settled panel is a `recorded` fold, which shows the JSON the checkpoint actually holds
-behind it: the prompt for a person's message, and the stored model parts for everything else. Since
-the checkpoint *is* the conversation, this is the state itself rather than a debug view of it, and
-it is fetched only when you open it so the transcript never carries it. A panel of the turn in
-flight offers none, because what is behind it has not stopped changing.
+Beside the panels are small **tags** marking where each round trip to the model began, carrying the
+worktree it saw, what it cost in tokens, and a fold showing the JSON the checkpoint actually holds
+for it. Since the checkpoint *is* the conversation, that is the state itself rather than a debug
+view of it, and it is fetched only when you open it so the transcript never carries it. A request is
+recorded the moment the provider answers, so a tag can be opened while the turn is still running.
 
 A panel that arrives, or whose blocks say something different, is **marked for a beat** in its own
 kind's hue. A turn fills in over several renders, and a reader watching one needs to be told which
@@ -402,6 +402,12 @@ off the console still renders, still posts messages, and every tool call is stil
 opens; what goes is the rail and the keyboard send.
 
 The caret beside Send opens everything else you can do with what you typed.
+
+**Steer** puts what is in the box to the model in the turn it is answering *now*, rather than
+queueing it for the next one. It appears in the transcript as a `you (steering)` panel below the
+tool results it travelled with. Offered only while something is actually being answered, because a
+steer nobody would read is a message on the floor. Plain **Send** is the other behaviour and is
+unchanged: it waits its turn.
 
 **Aside** steps out into a side conversation you mean to come back from, and **Fork** starts one you
 do not. Both carry the whole conversation and leave the original where it is; the only difference is

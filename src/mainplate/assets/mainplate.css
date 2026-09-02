@@ -266,7 +266,10 @@ main > * {
 /* Each kind's own hue, bound to one name on the panel so anything drawing a panel can reach for it
    without a rule per kind of its own. The edge is what it is for; the arrival flash below is the
    second reader of it, and a third would be a third `var(--kind)` rather than four more rules. */
-.panel[data-kind="person"] {
+/* A steer takes the person's hue, because the axis is who produced the text and that is the same
+   person. What tells it apart is the label and the key's own chip, not a colour of its own. */
+.panel[data-kind="person"],
+.panel[data-kind="steering"] {
     --kind: var(--person-edge);
 }
 
@@ -363,7 +366,8 @@ main > * {
 
 /* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
    tell the kinds apart without reading the word. */
-.panel[data-kind="person"] .panel__role {
+.panel[data-kind="person"] .panel__role,
+.panel[data-kind="steering"] .panel__role {
     color: var(--person-edge);
 }
 
@@ -729,48 +733,73 @@ main > * {
     overflow-wrap: anywhere;
 }
 
-/* --- What the checkpoint holds behind a panel -------------------------- */
+/* --- Tags: where a model request began, and what it held --------------- */
 
-/* Quieter than a tool call and for the opposite reason: a call's arguments are part of reading the
-   conversation, where this is the machinery under it. So the summary is a faint word at the end of
-   the panel rather than a box across it, and nothing about a closed one competes with the prose
-   above. */
-.record {
-    margin-top: var(--space-3);
+/* In the margin beside the panel a request opened in, rather than between panels: a request is a
+   round trip and a panel is a run of one kind, so there is frequently no gap between panels for a
+   boundary to sit in. Absolutely placed so a tag takes no room in the reading column at all. */
+/* Pushed to the right of the panel's own header row, where the anchor already sits. In flow rather
+   than in the margin, because the transcript is a scroll container: anything outside a panel is
+   either clipped or scrolls the document sideways, and neither is acceptable. */
+.panel__tags {
+    display: flex;
+    margin-left: auto;
+    gap: var(--space-3);
 }
 
-.record > summary {
-    display: inline-flex;
+/* Opened, it lays its JSON over what is below rather than growing the header, so a panel does not
+   jump when somebody looks at a record. */
+.tag {
+    position: relative;
+}
+
+.tag[open] {
+    z-index: 4;
+}
+
+.tag > summary {
+    display: flex;
     align-items: baseline;
     gap: var(--space-2);
+    white-space: nowrap;
     color: var(--ink-faint);
     font-family: var(--mono);
-    font-size: 0.68rem;
-    letter-spacing: 0.04em;
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
     cursor: pointer;
     list-style: none;
 }
 
-.record > summary::-webkit-details-marker {
+.tag > summary::-webkit-details-marker {
     display: none;
 }
 
-.record > summary::before {
-    content: "\25B8";
-    transition: transform 0.12s ease;
+.tag > summary:hover,
+.tag[open] > summary {
+    color: var(--mark);
 }
 
-.record[open] > summary::before {
-    transform: rotate(90deg);
+.tag__at {
+    font-weight: 600;
 }
 
-.record > summary:hover {
-    color: var(--ink-soft);
+/* Opened, it lays its JSON back over the reading column rather than growing the margin, which is a
+   few characters wide. Anchored to the right so a long record runs back across the page it came
+   from instead of off the edge of the window. */
+.tag .record__json {
+    position: absolute;
+    top: 1.2rem;
+    right: 0;
+    width: max-content;
+    max-width: min(40rem, 55vw);
+    /* Its own ground, because it is laid over the prose below rather than boxed above it. */
+    border: 1px solid var(--edge);
+    background: var(--raised);
 }
 
 /* Hidden rather than absent while closed, because htmx swaps into this element and a target that
    does not exist yet is a swap with nowhere to go. */
-.record:not([open]) .record__json {
+.tag:not([open]) .record__json {
     display: none;
 }
 
@@ -1843,7 +1872,8 @@ mark.hit.current {
     --kind-hue: var(--ink-soft);
 }
 
-.key__chip[data-kind="person"] {
+.key__chip[data-kind="person"],
+.key__chip[data-kind="steering"] {
     --kind-hue: var(--person-edge);
 }
 

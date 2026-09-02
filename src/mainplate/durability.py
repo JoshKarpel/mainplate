@@ -29,6 +29,7 @@ from collections.abc import AsyncGenerator
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -78,6 +79,19 @@ def parse_tree(recorded: object) -> str | None:
     raise TypeError(f"a tree must be a hash or nothing, not {recorded!r}")
 
 
+def parse_steers(recorded: object) -> tuple[str, ...]:
+    """
+    What one `heard` step holds, which is the messages it put to the model and nothing else.
+
+    A list even when empty, because a request that was told nothing is a request that ran: the
+    distinction this keeps is the one `parse_tree` keeps between `None` and a hash, and the store
+    already tells a recorded `[]` from a key nobody wrote.
+    """
+    if not isinstance(recorded, list):
+        raise TypeError(f"what a request was told must be a list, not {recorded!r}")
+    return tuple(said if isinstance(said, str) else str(said) for said in recorded)
+
+
 def parse_returned(recorded: object) -> object:
     """
     What a tool call came back with, which is whatever the codec held onto.
@@ -125,6 +139,17 @@ class StreamingNotRecorded(NotImplementedError):
     """
 
 
+type Pending = Callable[[int], Awaitable[Sequence[str]]]
+"""
+What the person has said into this turn past the first `n`, asked at each model request.
+
+A function for the reason `Pricer` is one: what answers it reads the conversation's own keys, and
+`conversation.py` reads `agent.py`, which builds the agent this capability is attached to. Taking
+the count rather than returning everything keeps the caller from having to know which were already
+delivered, which the scope knows and the checkpoint would have to be re-read to work out.
+"""
+
+
 type Pricer = Callable[[RequestUsage], Decimal | None]
 """
 What one model request came to, in US dollars, asked of whatever knows the rates.
@@ -167,7 +192,16 @@ class Stepping:
     prefix: str
     worktree: Worktree | None = None
     pricer: Pricer | None = None
+    pending: Pending | None = None
     taken: Counter[str] = field(default_factory=Counter)
+    told: list[tuple[str, ...]] = field(default_factory=list)
+    """
+    What each request of this turn was told, so the next one knows how far down the queue it is.
+
+    Held on the scope rather than counted out of the store on every request, because it is the same
+    kind of state `taken` is: a position that advances as the pass runs. A resumed pass rebuilds it
+    by replaying the same steps, which is what keeps the two passes asking identical questions.
+    """
 
     def key(self, kind: str) -> StepKey:
         """The next key of this kind, numbered by position within the turn."""
@@ -197,6 +231,30 @@ class Stepping:
         """
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
+
+    async def steering(self, pending: Pending) -> tuple[str, ...]:
+        """
+        The steers to put to the model at this request, recorded so a later pass says the same thing.
+
+        `pending` is asked how many have been delivered already and answers with what is left, which
+        is a live read of the checkpoint and therefore an *effect*: two passes at the same turn would
+        see different queues, because a person goes on typing between them. Wrapping it in a step is
+        what makes it replayable, and that is not a nicety - `turn:{n}:model:{i}` is the answer to a
+        question, and a replay that asked a different question would be pairing an answer with a
+        prompt nobody ever gave.
+
+        The texts and not a count, so a resumed pass needs nothing but this record to reproduce the
+        request. Recorded even when empty, like the tree beside it, so a request that was told nothing
+        is distinguishable from one nobody has reached.
+        """
+        already = sum(len(said) for said in self.told)
+
+        async def take() -> object:
+            return list(await pending(already))
+
+        said = await self.step(self.key("heard"), take, parse_steers)
+        self.told.append(said)
+        return said
 
     def price(self, answered: ModelResponse) -> None:
         """
@@ -229,7 +287,11 @@ current_stepping: ContextVar[Stepping | None] = ContextVar("mainplate_stepping",
 
 @contextmanager
 def stepping(
-    run: Run, prefix: str, worktree: Worktree | None = None, pricer: Pricer | None = None
+    run: Run,
+    prefix: str,
+    worktree: Worktree | None = None,
+    pricer: Pricer | None = None,
+    pending: Pending | None = None,
 ) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
@@ -240,7 +302,7 @@ def stepping(
     through. It is the same place DBOS reads its workflow id from, and the same place Pydantic AI
     keeps its own ambient run context.
     """
-    scope = Stepping(run=run, prefix=prefix, worktree=worktree, pricer=pricer)
+    scope = Stepping(run=run, prefix=prefix, worktree=worktree, pricer=pricer, pending=pending)
     token = current_stepping.set(scope)
     try:
         yield scope
@@ -350,6 +412,34 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         agent built from a spec with this attached would look durable and record nothing.
         """
         return None
+
+    async def before_model_request(
+        self, ctx: RunContext[AgentDepsT], request_context: ModelRequestContext
+    ) -> ModelRequestContext:
+        """
+        Put anything the person has said mid-turn to the model, before it is asked anything else.
+
+        `ctx.enqueue` rather than editing `request_context.messages`, which is Pydantic AI's own way
+        of adding to a run in flight and is documented as callable from a capability hook. Two things
+        come with using it rather than splicing by hand: an `'asap'` message is drained at the
+        *end of a run* as well as before each request, so a steer that arrives after the turn's last
+        request still reaches the model instead of being stranded; and the message becomes part of
+        the run's real history, so it lands in `turn:{n}:messages` and the transcript draws it with
+        nothing else taught about it.
+
+        Editing the messages here would have done neither. `request_context.messages` is a *copy* of
+        the run's history, and the docs are explicit that a message already in a history must not be
+        mutated in place.
+
+        What it is *told* comes from a recorded step, because `enqueue` is in-memory and a resumed
+        pass would find the queue empty. See `Stepping.steering`.
+        """
+        scope = current_stepping.get()
+        if scope is None or scope.pending is None:
+            return request_context
+        for said in await scope.steering(scope.pending):
+            ctx.enqueue(said)
+        return request_context
 
     async def wrap_model_request(
         self,

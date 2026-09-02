@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from dataclasses import field
@@ -204,6 +205,80 @@ class TestPricingARecordedRequest:
         async with a_pass(checkpointer) as run:
             Stepping(run=run, prefix="turn:0").price(answered)
         assert answered.usage.cost is None
+
+
+class TestPuttingAMessageIntoARunningTurn:
+    """
+    Steering: what a person says into a turn that is already being answered.
+
+    Pydantic AI's `enqueue` is what delivers it and is in-memory, so the whole risk is a resumed pass
+    finding an empty queue and asking a different question than the one recorded. What these pin is
+    that the step, and not the queue, is what decides.
+    """
+
+    async def test_what_a_request_was_told_is_recorded(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        async def waiting(already: int) -> Sequence[str]:
+            return ("actually, check the tests too",)[already:]
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pending=waiting):
+                await provider.agent().run("hello")
+        assert (await checkpointer.load(WORKFLOW))["turn:0:heard:0"] == ["actually, check the tests too"]
+
+    async def test_a_request_told_nothing_records_an_empty_list(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """
+        Recorded even when empty, like the tree beside it: a request nobody steered is a request that
+        ran, and the store already tells a recorded `[]` from a key nobody wrote.
+        """
+
+        async def waiting(already: int) -> Sequence[str]:
+            return ()
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pending=waiting):
+                await provider.agent().run("hello")
+        assert (await checkpointer.load(WORKFLOW))["turn:0:heard:0"] == []
+
+    async def test_a_resumed_pass_says_what_the_first_one_said_and_not_what_is_queued_now(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """
+        The reason this is a step at all. Between two passes a person goes on typing, so a live read
+        would hand the second pass a different queue - and `turn:0:model:0` is the answer to a
+        question, so a replay that asked a different one would be pairing an answer with a prompt
+        nobody ever gave.
+        """
+        queued = ["the first thing"]
+        asked: list[list[str]] = []
+
+        async def waiting(already: int) -> Sequence[str]:
+            asked.append(list(queued))
+            return queued[already:]
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pending=waiting):
+                await provider.agent().run("hello")
+        # A steer the agent was about to stop without hearing redirects it into one more request, so
+        # a turn asks more times than it otherwise would. That is Pydantic AI's own behaviour and the
+        # reason `enqueue` is used rather than the messages being spliced by hand.
+        first = len(asked)
+        queued.append("typed while it was thinking")
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pending=waiting):
+                await provider.agent().run("hello")
+
+        assert (await checkpointer.load(WORKFLOW))["turn:0:heard:0"] == ["the first thing"]
+        assert len(asked) == first, "the second pass replayed the record rather than reading the queue"
+
+    async def test_outside_a_scope_nothing_is_steered(self, provider: Provider) -> None:
+        """A steer needs a checkpoint to have been written to, so an agent run bare has none."""
+        answered = await provider.agent().run("hello")
+        assert answered.output == "answer 1"
 
 
 @dataclass(slots=True)

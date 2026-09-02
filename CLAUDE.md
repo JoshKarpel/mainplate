@@ -182,23 +182,32 @@ knowing at the moment the word is picked rather than afterwards.
 
 ## The key scheme
 
-One key for the session and five per turn, written by five different places and read by five:
+One key for the session and seven per turn, written by several different places and read by several:
 
 ```text
 choice               the endpoint, model, repository, isolation and thinking level; written by
                      `Service.start`
                      and by `Service.fork`, before the prompt
 turn:{n}:prompt      the person's message; written from outside a pass, by `Service.say`
+turn:{n}:steer:{k}   what the person said *into* a running turn; written from outside a pass, by
+                     `Service.steer`
 turn:{n}:tree:{i}    the worktree before the i-th model request; written by `StepwiseDurability`
+turn:{n}:heard:{i}   which steers were put to the model at that request; written by
+                     `StepwiseDurability`
 turn:{n}:model:{i}   the i-th model response of that turn; written by `StepwiseDurability`
 turn:{n}:tool:{id}   what one tool call returned; written by `StepwiseDurability`
 turn:{n}:messages    what the agent run produced; written by the conversation body
 ```
 
-**The two indexed kinds are numbered by position and the tool key deliberately is not.** Model
+**Two of them are written from outside a pass**, `prompt` and `steer`, and they are the only two: a
+person acts on a turn somebody else is running, so their words cannot be a step of it. `steer` is
+also the only key whose number is claimed by *trying*, since two writers racing for one number would
+otherwise lose the loser's message to the store's keep-the-first rule.
+
+**The indexed kinds are numbered by position and the tool key deliberately is not.** Model
 requests happen in a fixed order, so counting them names a step the same way on every pass, and the
-tree captured before each one rides the same counter so `tree:{i}` and `model:{i}` are the two
-halves of one request. A *batch* of tool calls runs concurrently, so counting those would name a
+tree captured before each one and the steers put to it ride the same counter, so `tree:{i}`,
+`heard:{i}` and `model:{i}` are three parts of one request. A *batch* of tool calls runs concurrently, so counting those would name a
 record by whichever won a race and hand a later pass somebody else's result. A call already carries
 an id, and that id is part of the model response the conversation recorded, so a replay is handed
 the same one for free. `Stepping.key` is the positional form and `Stepping.identified` is the other.
@@ -648,18 +657,54 @@ falsified, `Origin.session` already names where it goes, and there is no merge m
 
 The only one that reaches inside a turn, and the only one that needs the agent loop to cooperate.
 
-It has to be a **recorded step**, `turn:{n}:steer:{i}`, numbered with the model request it lands
-before. Read live from the checkpoint instead, a resumed pass would splice it at a different index
-and the recorded `model:{i}` answers would stop corresponding to what was actually asked. That makes
-it the third thing riding the per-request counter beside `tree:{i}` and `model:{i}`, which is what
-that counter already means, and `turn_of` carries an unknown kind into a fork without being taught
-it.
+**Two keys, because the transport and the delivery are different problems.** `turn:{n}:steer:{k}` is
+what the person said, written from *outside* the pass like `turn:{n}:prompt`, because the worker may
+be in another process and the store is the only channel between them. `turn:{n}:heard:{i}` is a
+recorded step saying which of those were put to the model at request `i`.
 
-`CheckpointedModel.request` is where it splices, being the one place in the process standing at a
-quiescent boundary - the same reason the snapshot is taken there. Reading pending steers is the
-capability reaching into conversation state, so it arrives **injected**, symmetric with `Pricer` and
-for the same cycle: `reference.py` and whatever answers this both read `agent.py`, which builds the
-agent the capability is attached to.
+**`ctx.enqueue` delivers it, and it is Pydantic AI's own mechanism rather than ours.** It is
+documented as callable from a capability hook, and using it rather than splicing the messages by hand
+buys two things that would otherwise have to be built: an `'asap'` message is drained at the *end of
+a run* as well as before each request, so a steer arriving after the turn's last request still
+reaches the model instead of being stranded; and the message becomes part of the run's real history,
+so it lands in `turn:{n}:messages` and the transcript draws it with nothing else taught about it.
+
+**It is `before_model_request` and emphatically not `CheckpointedModel.request`**, which an earlier
+draft of this file said. `_agent_graph` builds the request context with `messages=ctx.state.
+message_history[:]`, a *copy*, so anything added at the model reaches that one request and never the
+recorded history; what `before_model_request` returns is adopted wholesale
+(`ctx.state.message_history[:] = messages`). The docs are also explicit that a message already in a
+history must not be mutated in place.
+
+**The step is what makes it replayable, because `enqueue` is in-memory.** A resumed pass finds an
+empty queue, so without the record it would ask a question the first pass never asked - and
+`turn:{n}:model:{i}` is the *answer* to a question, so a replay that asked a different one would be
+pairing an answer with a prompt nobody gave. The record holds the texts rather than a count, so a
+replay reads nothing else. Reading the pending queue is the capability reaching into conversation
+state, so it arrives **injected** as `Pending`, symmetric with `Pricer` and for the same cycle.
+
+**A steer redirects a run that was about to stop into one more request**, which is `enqueue`'s
+documented behaviour and means a steered turn asks more times than it otherwise would. That is not a
+bug to design around; `test_durability.py` states it so the next reader does not mistake it for one.
+
+`Steering` is its own block type and `steering` its own `Kind`, because `panelled` reads a panel's
+kind off its blocks: a steer arriving as `Prose` would be drawn as the model answering itself. It
+takes the person's hue, since the axis is who produced the text.
+
+### The record hangs off a request, not a panel
+
+`Source`, `sourced_at` and the per-panel `recorded` disclosure are gone. A panel is a run of blocks
+of one kind and a request is a round trip, so a panel's record was a *slice* of a stored value
+reached by indices one walk had to hand another. A request has a key of its own, so `requested_at` is
+a lookup, and it answers while the turn is still running - a step is written once and never
+rewritten, where `turn:{n}:messages` does not exist until the turn ends.
+
+**Where the marker goes is not settled.** It currently sits in the panel's own header row, which is
+wrong in a way worth fixing: one request can produce several panels, so a marker attached to one of
+them attributes a round trip to a fraction of itself. The right shape is a **rule per request**, with
+the turn rule being the first one - every existing rule already stands at a request boundary, since a
+turn opens with its first request. That needs `panelled` to group by request *and* kind rather than
+kind alone, so a panel never spans two requests and a rule always has a gap to sit in.
 
 ## The workspace
 
@@ -1214,7 +1259,7 @@ moved. Two things there are decided:
   before htmx has decided whether the node differs. So `mainplate.js` keeps a signature per panel.
 - **The signature is the *text* of a panel's blocks.** A reader unfolding a call, a search mark laid
   over a word, a kind switched off in the key: all change a panel's markup and none is news. It is
-  blocks rather than the whole panel because the `recorded` disclosure is `hx-preserve`d, so what a
+  blocks rather than the whole panel because a request's tag is `hx-preserve`d, so the record a
   reader fetched into it survives every swap and would otherwise read as the panel having changed.
   The first render marks nothing, since every panel is new to the script then and a conversation
   flashing top to bottom points at everything.
@@ -1398,26 +1443,18 @@ which is the thing this console removes wherever it finds it. Every arrow now de
 over (`data-stop`) rather than being told apart by what it lacks, because a button identified as
 "the one with no side" stops being identifiable the instant a second kind of stop exists.
 
-Every **settled** panel carries a `recorded` disclosure showing the JSON the checkpoint holds behind
-it, and four things there are decided rather than incidental:
+The raw record hangs off a **model request** rather than a panel; see "The record hangs off a
+request, not a panel" above for why, and for the part of its placement that is still wrong. Two
+things about how it is fetched are decided rather than incidental:
 
-- **Nothing is stored per panel**, so the panel and its record have to come out of one walk.
-  `parted` is that walk and hands out `Source` indices as it goes; `runs` is the one grouping rule
-  `panelled` and `sourced_at` both use. Recovered by a second pass the indices would be a guess at
-  what the first did, and the skipping in `parted` is exactly what makes that guess wrong from the
-  first unrenderable part onwards - every panel after it would show somebody else's record.
-- **Indices into the stored value, never the parsed part dumped again.** A round trip states what
-  today's Pydantic AI would write, which agrees with the record right up until a release renames a
-  field and then disagrees silently. A person's panel is the exception and is one whole key,
-  `turn:{n}:prompt`.
-- **Fetched on demand and `hx-preserve`d.** A running turn re-renders the transcript repeatedly, so
-  the raw record of every panel is not something to carry in it; and because the server renders the
+- **On demand and `hx-preserve`d.** A running turn re-renders the transcript repeatedly, so the raw
+  record of every request is not something to carry in it; and because the server renders the
   disclosure closed, a morph takes the `open` attribute back off unless the element is preserved.
   htmx reads `hx-preserve` off the *incoming* markup, so taking it off the live node proves nothing.
-- **`Panel.settled` is what decides a panel offers one at all**, and `once` is what makes it cheap.
-  A panel of the turn in flight is read from that turn's *steps*, where `sourced_at` answers out of
-  its messages, which are not written until the turn ends: offering the disclosure there would
-  fetch nothing, once, and keep the nothing. It appears when the turn lands.
+- **`once` is safe here in a way it never was under a panel.** A step's key is written once and never
+  rewritten, so a request's record is settled the moment it exists - where a panel's record came out
+  of `turn:{n}:messages`, which does not exist until the turn ends. So a tag can be opened mid-turn
+  and the panel disclosure could not.
 
 Tests drive the app through `without-http`'s in-memory loopback client (`tests/calling.py`), so
 nothing binds a port and the suite parallelizes; `Caller.watching` consumes a real event stream

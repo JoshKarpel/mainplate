@@ -22,6 +22,7 @@ from dataclasses import field
 from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
+from itertools import count
 from pathlib import Path
 
 from without_durability_sqlite import Database
@@ -37,7 +38,9 @@ from mainplate.conversation import choice_of
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
-from mainplate.conversation import sourced_at
+from mainplate.conversation import requested_at
+from mainplate.conversation import steer_key
+from mainplate.conversation import steers_in
 from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
@@ -214,22 +217,20 @@ class Service:
         counted = await self.database.run(lambda connection: connection.execute(RECORDED, (session,)).fetchone())
         return int(counted[0])
 
-    async def recorded_at(self, session: str, turn: int, at: int) -> object | None:
+    async def requested_at(self, session: str, turn: int, at: int) -> object | None:
         """
-        What the checkpoint holds behind one panel, or nothing at all where there is no such panel.
+        What one model request came back with, or nothing at all where there is no such request.
 
-        One answer for "no session" and "no panel", because they are the same answer to the reader:
-        the address names nothing. Nothing recorded can itself be `None`, so this is unambiguous - a
-        prompt is refused before it is written and a panel is a run of at least one part.
+        One answer for "no session" and "no request", because they are the same answer to the reader:
+        the address names nothing. Nothing recorded can itself be `None`, so this is unambiguous.
 
         The whole checkpoint is loaded to answer it, which is what every read here does and what the
-        one idea costs: there is no second index of what a turn holds, and a panel is a reading of
-        the record rather than a row in it.
+        one idea costs: there is no second index of what a turn holds.
         """
         found = await read_session(self.database, session)
         if found is None:
             return None
-        return sourced_at(await self.checkpointer.load(session), turn, at)
+        return requested_at(await self.checkpointer.load(session), turn, at)
 
     async def start(self, said: str, chosen: Choice, title: str | None = None) -> Session:
         """
@@ -352,6 +353,31 @@ class Service:
         if said:
             await self.say(forked.id, turn=at, said=said)
         return forked
+
+    async def steer(self, session: str, *, turn: int, said: str) -> int:
+        """
+        Put a message into a turn that is already being answered, and say which number it took.
+
+        Written straight into the checkpoint rather than handed to the pass, because the pass may be
+        in another process: the two halves of this console are joined only by the store, so the store
+        is the only channel a steer can travel down. Pydantic AI's own `enqueue` is what *delivers*
+        it once a pass picks it up, and is in-memory, so it could never be the transport.
+
+        Nothing is queued, unlike `say`. The workflow is already running by definition - that is what
+        makes this a steer - and queueing it again would ask a second worker to take a session the
+        first one holds a lease on.
+
+        The number is claimed by trying and checking rather than by counting, because `supply` keeps
+        the value a key was first given and hands back the winner. Two steers racing for one number
+        would otherwise leave the loser's message in the store under a key nobody reads, which is a
+        message silently on the floor. Bounded by how many are already there, since each attempt that
+        loses has found one more.
+        """
+        for said_at in count(len(steers_in(await self.checkpointer.load(session), turn))):
+            stored = await self.checkpointer.supply(session, steer_key(turn, said_at), said)
+            if stored == said:
+                return said_at
+        raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
 
     async def say(self, session: str, *, turn: int, said: str) -> None:
         """
