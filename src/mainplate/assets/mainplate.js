@@ -674,6 +674,10 @@
     // The mark comes off when the animation it drives has run, so a panel that changes again is
     // marked again. Named, because it is not the only animation on the page: the working dots run
     // forever, and clearing on any animation at all would take the mark off before it was seen.
+    //
+    // The animation is on the panel's `::after` and the event still arrives with the panel as its
+    // target: an animation on a pseudo-element reports the element that originated it, and names
+    // the pseudo separately.
     const wireFresh = () => {
       document.addEventListener(
         "animationend",

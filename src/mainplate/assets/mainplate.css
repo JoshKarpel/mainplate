@@ -286,45 +286,44 @@ main > * {
     border-left-color: var(--kind);
 }
 
-/* A panel that has just arrived, or whose blocks have just said something different: outlined and
-   tinted in its own kind's hue for a beat, then back. While a turn is being answered the transcript
-   is re-rendered whenever anything is recorded, and a reader watching one fill in needs to be told
+/* A panel that has just arrived, or whose blocks have just said something different: washed over in
+   its own kind's hue for a beat, then back. While a turn is being answered the transcript is
+   re-rendered whenever anything is recorded, and a reader watching one fill in needs to be told
    *which* part of it moved - reasoning appearing, a call being made, a result coming back - rather
    than left to spot it.
 
-   The outline is what actually carries it, and the tint alone did not: a panel's own background is
-   almost entirely covered by the blocks inside it, which have backgrounds of their own, so a tint
-   on the panel shows only in the padding around them. The outline is drawn at the panel's edge, in
-   that same padding, and nothing covers it.
+   A layer *over* the panel rather than a tint behind it, and that is what makes one rule enough: a
+   panel's own background is almost entirely covered by the blocks inside it, which have backgrounds
+   of their own, so a tint underneath shows only in the padding around them. Drawn on top, the wash
+   reaches everything the panel holds without a rule per kind of block that paints itself.
 
-   `outline-offset` is *negative*, so the outline is drawn inside the panel's box rather than around
-   it. That is not cosmetic: an outline outside the box is outside the container the transcript
-   scrolls, which is exactly how something acquires a horizontal scrollbar it never asked for.
+   `inset: 0` resolves against the padding box, so the kind's edge down the left is the one thing
+   the wash does not cover, which is right: the edge is what says whose panel this is, and the flash
+   is what says it moved. Inside the box for a second reason as well - anything drawn outside it is
+   outside the container the transcript scrolls, which is how a page acquires a horizontal scrollbar
+   nobody asked for.
 
    A colour fade and nothing else: no transform, no movement, no repeat, so there is nothing here
-   for `prefers-reduced-motion` to be reducing. `background-image` rather than `background-color`,
-   which is a layer above it, so a panel that is also where the reader is keeps its landed tint
-   underneath rather than losing it for the length of the animation. */
-.panel[data-fresh] {
+   for `prefers-reduced-motion` to be reducing. Opacity and not a border, because a border has a
+   radius to fade out along with it, and the moment the animation ends is the moment that radius
+   snaps back to the square corners underneath. */
+.panel[data-fresh]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--kind);
+    opacity: 0;
+    pointer-events: none;
     animation: panel-arriving 1.4s ease-out;
 }
 
 @keyframes panel-arriving {
     from {
-        outline: 2px solid color-mix(in srgb, var(--kind) 85%, transparent);
-        outline-offset: -2px;
-        border-radius: var(--radius);
-        background-image: linear-gradient(
-            color-mix(in srgb, var(--kind) 16%, transparent),
-            color-mix(in srgb, var(--kind) 16%, transparent)
-        );
+        opacity: 0.16;
     }
 
     to {
-        outline: 2px solid transparent;
-        outline-offset: -2px;
-        border-radius: var(--radius);
-        background-image: linear-gradient(transparent, transparent);
+        opacity: 0;
     }
 }
 
