@@ -2,21 +2,29 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic_ai.usage import RequestUsage
 
+from mainplate.agent import Choice
 from mainplate.agent import Listed
+from mainplate.catalogue import Catalogue
+from mainplate.catalogue import Catalogues
+from mainplate.catalogue import Offering
 from mainplate.config import ModelReference
 from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import NotAReference
+from mainplate.reference import Prices
 from mainplate.reference import Reference
 from mainplate.reference import References
 from mainplate.reference import describe
 from mainplate.reference import is_url
 from mainplate.reference import load_reference
 from mainplate.reference import parse_reference
+from mainplate.reference import priced
 from mainplate.reference import refreshed
 from mainplate.reference import said
 
@@ -312,3 +320,136 @@ class TestWhereTheDatabaseComesFrom:
         holder = References()
         await refreshed(holder, ModelReference(source=str(at)))
         assert holder.current is None
+
+
+class TestPricingOneRequest:
+    """
+    The arithmetic a recorded cost is made of, against a rate table and four integers.
+
+    Pure, so none of this needs a gateway, a database or a conversation, which is the point of
+    `priced` being separable from everything that finds a rate for it.
+    """
+
+    RATES = Cost(input=3, output=15, cache_read=0.3, cache_write=3.75)
+
+    def test_input_and_output_are_charged_at_their_own_rates(self) -> None:
+        spent = priced(self.RATES, RequestUsage(input_tokens=1_000, output_tokens=500))
+        # 1000 * $3/M + 500 * $15/M.
+        assert spent == Decimal("0.0105")
+
+    def test_cached_tokens_are_taken_out_of_the_input_rather_than_added_to_it(self) -> None:
+        """
+        The counts nest: `input_tokens` already includes both cache figures.
+
+        This is the sign error worth a test of its own, because adding them charges the cached
+        tokens twice at the full rate and a long conversation is mostly cached tokens. Here the
+        wrong reading gives $0.0111 against the right one's $0.0084, and both look plausible.
+        """
+        spent = priced(
+            self.RATES,
+            RequestUsage(input_tokens=1_000, output_tokens=500, cache_read_tokens=800, cache_write_tokens=100),
+        )
+        # 100 fresh at $3/M, 800 read at $0.30/M, 100 written at $3.75/M, 500 out at $15/M.
+        assert spent == Decimal("0.008415")
+
+    def test_a_record_pricing_no_cache_charges_cached_tokens_as_input(self) -> None:
+        """
+        The conservative reading, and deliberately not a discount nobody published.
+
+        Calling the request unpriceable instead would blank exactly the models that cache the most,
+        which is the population a person most wants a number for.
+        """
+        plain = Cost(input=3, output=15)
+        spent = priced(plain, RequestUsage(input_tokens=1_000, output_tokens=500, cache_read_tokens=800))
+        assert spent == priced(plain, RequestUsage(input_tokens=1_000, output_tokens=500))
+
+    def test_counts_that_cannot_be_true_of_one_request_are_priced_at_nothing(self) -> None:
+        """
+        More cached tokens than input is a wire contradicting itself, so there is no honest figure.
+
+        `None` rather than a clamp, because a clamped total reads as a real one; and never an
+        exception, because this runs inside the model request and must not be able to fail a turn.
+        """
+        assert priced(self.RATES, RequestUsage(input_tokens=10, cache_read_tokens=50)) is None
+
+    def test_a_request_that_cost_nothing_is_priced_at_nothing_rather_than_left_unpriced(self) -> None:
+        """Zero and unknown are different answers, and only one of them may be drawn as `free`."""
+        assert priced(Cost(input=0, output=0), RequestUsage(input_tokens=99, output_tokens=99)) == Decimal(0)
+
+    def test_a_published_rate_carries_no_binary_noise_into_a_recorded_figure(self) -> None:
+        """
+        `Decimal(0.3)` is `0.29999999999999998889776975374843...`, and this figure is *recorded*.
+
+        A float rate would put that tail into the checkpoint of every turn priced at it, where it
+        would stay: the point of recording a cost is that nothing later re-derives it.
+        """
+        spent = priced(Cost(input=0.3, output=0), RequestUsage(input_tokens=1_000_000))
+        assert spent == Decimal("0.3")
+
+
+class TestFindingTheRateForASession:
+    """
+    Which rate a session's requests are priced at, and the three ways there is no answer.
+
+    Every one of them is an ordinary `None`, because a card shows the same blank for the same
+    reasons: a turn goes unpriced exactly where the model it ran on does.
+    """
+
+    CHOICE = Choice(endpoint="gateway", model="p/known")
+
+    def catalogue(self, *models: Listed) -> Catalogues:
+        offering = Offering(endpoint="gateway", format="anthropic", url=None, models=models)
+        return Catalogues(current=Catalogue(offered={"gateway": offering}, default=self.CHOICE))
+
+    def test_a_listed_model_with_a_record_is_priced_by_it(self) -> None:
+        prices = Prices(
+            catalogues=self.catalogue(listing("p/known")),
+            references=References(
+                current=Reference(qualified={"p/known": Facts(cost=Cost(input=3, output=15))}, upstream={})
+            ),
+        )
+        assert prices.pricer(self.CHOICE)(RequestUsage(input_tokens=1_000)) == Decimal("0.003")
+
+    def test_a_resold_model_is_priced_through_the_upstream_name_its_listing_carries(self) -> None:
+        """
+        The name the serving service uses is the second key a record is found under, and for most of
+        what a gateway routes it is the only one that finds anything.
+        """
+        prices = Prices(
+            catalogues=self.catalogue(listing("gw/rebadged", upstream="accounts/fireworks/models/real")),
+            references=References(
+                current=Reference(
+                    qualified={},
+                    upstream={"accounts/fireworks/models/real": Facts(cost=Cost(input=1, output=2))},
+                )
+            ),
+        )
+        priced_at = prices.pricer(Choice(endpoint="gateway", model="gw/rebadged"))
+        assert priced_at(RequestUsage(input_tokens=1_000_000)) == Decimal(1)
+
+    def test_with_no_database_configured_nothing_is_priced(self) -> None:
+        prices = Prices(catalogues=self.catalogue(listing("p/known")), references=References())
+        assert prices.pricer(self.CHOICE)(RequestUsage(input_tokens=1_000)) is None
+
+    def test_a_model_the_endpoint_no_longer_lists_is_not_priced(self) -> None:
+        """
+        A gateway routes more ids than it advertises, so a session can outlive its own listing.
+
+        Unpriced and emphatically not unanswerable: this is the same distinction `Catalogue.offers`
+        keeps, and getting it wrong here would be a session that cannot be continued because nobody
+        could say what it cost.
+        """
+        prices = Prices(
+            catalogues=self.catalogue(listing("p/something-else")),
+            references=References(
+                current=Reference(qualified={"p/known": Facts(cost=Cost(input=3, output=15))}, upstream={})
+            ),
+        )
+        assert prices.pricer(self.CHOICE)(RequestUsage(input_tokens=1_000)) is None
+
+    def test_a_record_that_prices_nothing_leaves_the_turn_unpriced(self) -> None:
+        prices = Prices(
+            catalogues=self.catalogue(listing("p/known")),
+            references=References(current=Reference(qualified={"p/known": Facts(context=100)}, upstream={})),
+        )
+        assert prices.pricer(self.CHOICE)(RequestUsage(input_tokens=1_000)) is None

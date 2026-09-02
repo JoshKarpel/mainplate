@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from decimal import Decimal
 from itertools import pairwise
 from typing import Never
 
@@ -19,6 +20,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.usage import RequestUsage
 from without_durability.interfaces import claimed
 from without_durability.stepwise import Completed
 from without_durability.stepwise import Run
@@ -34,8 +36,10 @@ from mainplate.conversation import Prose
 from mainplate.conversation import Reached
 from mainplate.conversation import Reasoning
 from mainplate.conversation import Returned
+from mainplate.conversation import Spent
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
+from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
@@ -48,6 +52,7 @@ from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import so_far
 from mainplate.conversation import sourced_at
+from mainplate.conversation import spent_on
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
@@ -143,6 +148,9 @@ class TestReadingACheckpoint:
             ),
             awaiting=False,
             turns=1,
+            # An answered turn always has a spend, even where every count on it is zero: what makes
+            # it absent is a turn that has recorded no response at all, not one that cost nothing.
+            spent={0: Spent(asked=0, answered=0, cost=None)},
         )
 
     def test_a_panel_is_a_run_of_one_kind_in_the_order_the_model_worked(self) -> None:
@@ -303,12 +311,64 @@ THINKING_AND_CALL: dict[str, object] = {
 }
 THE_ANSWER: dict[str, object] = {"kind": "response", "parts": [{"part_kind": "text", "content": "it says hello"}]}
 
+# Usage as the store holds it, which is where the cost is a *string*: a `Decimal` dumped through
+# `mode="json"` is written that way, and reading it back as one is what keeps a recorded price exact.
+SPENDING: dict[str, object] = {"input_tokens": 1_200, "output_tokens": 64, "cost": "0.004"}
+
 # What the turn looked like at each moment, from nothing recorded to every step in. The person's
 # message is in every one of them, because it is what queues the turn in the first place.
 ASKED: dict[str, object] = {prompt_key(0): "go"}
 REASONED: dict[str, object] = {**ASKED, model_key(0, 0): THINKING_AND_CALL}
 READ: dict[str, object] = {**REASONED, tool_key(0, "c1"): "b"}
 ANSWERED: dict[str, object] = {**READ, model_key(0, 1): THE_ANSWER}
+
+
+def answering(asked: int, answered: int, cost: str | None) -> ModelResponse:
+    """One response with the usage a wire reported for it, as the two summing rules are fed."""
+    return ModelResponse(
+        parts=[TextPart("said")],
+        usage=RequestUsage(input_tokens=asked, output_tokens=answered, cost=None if cost is None else Decimal(cost)),
+    )
+
+
+class TestWhatATurnSpent:
+    """
+    Summing a turn's requests, and a session's turns, under one rule about not knowing.
+
+    A turn is several requests and a session is several turns, so the same question is asked twice
+    at two scales, and the interesting half of it is what happens when one part is unpriced.
+    """
+
+    def test_a_turn_is_the_sum_of_the_requests_it_took(self) -> None:
+        """One exchange to a reader is one request per batch of tool calls to a provider."""
+        spent = spent_on([answering(100, 20, "0.001"), answering(300, 40, "0.002")])
+        assert spent == Spent(asked=400, answered=60, cost=Decimal("0.003"))
+
+    def test_a_turn_with_no_responses_yet_has_spent_nothing(self) -> None:
+        assert spent_on([]) == Spent(asked=0, answered=0, cost=None)
+
+    def test_one_unpriced_request_leaves_the_whole_turn_unpriced(self) -> None:
+        """
+        Not the sum of the ones that were priced, which is the failure worth a test.
+
+        A partial total reads as the whole of what a turn cost and understates it, and nothing on
+        the page could say it was doing that. The counts still add up, because those are on every
+        response whatever the database knows.
+        """
+        spent = spent_on([answering(100, 20, "0.001"), answering(300, 40, None)])
+        assert spent == Spent(asked=400, answered=60, cost=None)
+
+    def test_a_session_is_the_sum_of_its_turns(self) -> None:
+        total = altogether([Spent(asked=100, answered=20, cost=Decimal("0.5")), Spent(1, 2, Decimal("0.25"))])
+        assert total == Spent(asked=101, answered=22, cost=Decimal("0.75"))
+
+    def test_one_unpriced_turn_leaves_the_session_total_unknown(self) -> None:
+        """The same rule one scale up: a total quietly missing a turn is worse than no total."""
+        total = altogether([Spent(asked=100, answered=20, cost=Decimal("0.5")), Spent(1, 2, None)])
+        assert total == Spent(asked=101, answered=22, cost=None)
+
+    def test_a_conversation_with_nothing_in_it_has_no_total(self) -> None:
+        assert altogether([]) == Spent(asked=0, answered=0, cost=None)
 
 
 class TestWatchingATurnHappen:
@@ -381,6 +441,18 @@ class TestWatchingATurnHappen:
         for earlier, later in pairwise(stages):
             settled = max(len(earlier) - 1, 0)
             assert earlier[:settled] == later[:settled]
+
+    def test_a_turn_is_priced_while_it_is_still_being_answered(self) -> None:
+        """
+        The half of the pricing decision that is visible on the page rather than in the store.
+
+        A response is priced before the step records it, so what a turn has spent is readable from
+        the same steps its blocks are, and a rule fills in as the turn runs instead of appearing
+        whole at the end. Priced afterwards - which is where Pydantic AI does it - this would be
+        nothing until `turn:0:messages` landed.
+        """
+        priced = {**ASKED, model_key(0, 0): {**THINKING_AND_CALL, "usage": SPENDING}}
+        assert transcript(priced).spent == {0: Spent(asked=1_200, answered=64, cost=Decimal("0.004"))}
 
     def test_the_turn_in_flight_is_drawn_and_the_ones_queued_behind_it_are_not(self) -> None:
         """

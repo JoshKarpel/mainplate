@@ -1702,8 +1702,8 @@ mark.hit.current {
     gap: var(--space-2);
 }
 
-/* Three columns of up/down arrows: a person column and an assistant column each seeking one side
-   of the exchange, flanking a middle column that steps every panel in play. */
+/* Three columns of up/down arrows: a turn column stepping whole exchanges and an assistant column
+   seeking one side of them, flanking a middle column that steps every panel in play. */
 .dock__nav {
     display: grid;
     grid-template-columns: repeat(3, 2.1rem);
@@ -1733,7 +1733,9 @@ mark.hit.current {
 }
 
 /* Each arrow takes the hue of the side it seeks. */
-.dock__btn--person {
+/* A turn opens with what the person said, so the coarse column keeps that hue: what it steps is the
+   boundary above each message rather than the message, and the two read as the same move. */
+.dock__btn--turn {
     --dock-hue: var(--person-edge);
 }
 
@@ -1792,61 +1794,69 @@ mark.hit.current {
 
 /* --- Branching ---------------------------------------------------------- */
 
-/* Offered on a person's panel and nowhere else, because a turn boundary is the only place a
-   conversation has no half-finished exchange in it. Quiet until the panel is under the pointer:
-   it is an action on something you are already reading rather than a thing to scan for, and one
-   per message would otherwise be a column of them down the page. */
-/* The worktree a turn started on, which is what forking it would put back. Beside the fork link
-   because they are the same point, and in the same faint ink as the anchor because it is a fact
-   about the turn rather than something to read. */
-.panel__tree {
-    margin-left: auto;
-    color: var(--ink-faint);
+/* --- The rule between turns ------------------------------------------- */
+
+/* The line that opens a turn, carrying everything true of the turn rather than of any panel in it:
+   where it may be forked from, the worktree it started on, and what it cost. Always drawn, never
+   revealed by hover: these are facts to scan down a conversation for, and the fork is the only way
+   a session changes its mind, so a pointer-only control would take the feature off every phone. */
+.rule {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    margin: var(--space-5) 0 var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--edge);
     font-family: var(--mono);
     font-size: 0.68rem;
-}
-
-.panel__tree + .panel__fork {
-    margin-left: 0;
-}
-
-.panel__fork {
-    margin-left: auto;
+    letter-spacing: 0.03em;
     color: var(--ink-faint);
-    font-size: 0.68rem;
+}
+
+/* The gap that pushes what a turn spent to the far end, so the counts line up down the page
+   whatever is on the left of them. */
+.rule__span {
+    flex: 1;
+}
+
+/* Which turn this opens, against the `#1.0` on the panels below it. Muted like the panel anchors it
+   answers to, because it is chrome to navigate by rather than something to read. */
+.rule__at,
+.rule__fork {
+    color: var(--ink-faint);
     text-decoration: none;
     letter-spacing: 0.04em;
+}
+
+.rule__fork {
     text-transform: uppercase;
-    opacity: 0;
-    transition: opacity 120ms ease-out;
 }
 
-.panel:hover .panel__fork,
-.panel:focus-within .panel__fork {
-    opacity: 1;
-}
-
-/* Never hidden from somebody navigating by keyboard: `opacity: 0` still takes focus, so without
-   this the tab order would stop somewhere invisible. */
-.panel__fork:focus-visible {
-    opacity: 1;
-    outline: 2px solid var(--mark);
-    outline-offset: 2px;
-}
-
-.panel__fork:hover {
+.rule__at:hover,
+.rule__at:focus-visible,
+.rule__fork:hover,
+.rule__fork:focus-visible {
     color: var(--mark);
+    text-decoration: underline;
 }
 
-/* On a touch screen there is no hover to come out of, so a link revealed by one is a link that
-   does not exist. Forking is the only way a session changes its mind, and it is offered on a
-   person's panel and nowhere else, so hiding it there hides the feature entirely. Shown always
-   where nothing can hover, which is the pointer's question and not the window's: a touch laptop
-   at full width has the same problem a phone does. */
-@media (hover: none) {
-    .panel__fork {
-        opacity: 1;
-    }
+.rule__tree {
+    color: var(--ink-faint);
+}
+
+/* An estimate rather than a bill, so it is drawn as quietly as the counts beside it: a figure in
+   the ink of something authoritative would claim more than this console can know. */
+.rule__cost {
+    color: var(--ink-soft);
+}
+
+/* Marked the same way a panel is, because a rule is landed on by the same arrows and the same
+   permalink machinery. Drawn on the line rather than as a filled block: a rule is a hairline and a
+   background wash over one reads as a gap rather than as a place. */
+.rule:target,
+.rule[data-landed] {
+    border-top-color: var(--mark);
+    color: var(--ink-soft);
 }
 
 /* `main` is a grid whose first row grows, because on a session page that child is the transcript

@@ -473,8 +473,63 @@ ANSWERED = [
             {"part_kind": "thinking", "content": "the trigger fires once"},
             {"part_kind": "text", "content": "it is a plate"},
         ],
+        # As the store holds one: the counts nest, so the fresh input here is 1,200, and the cost is
+        # a string because that is what a `Decimal` dumped through `mode="json"` becomes.
+        "usage": {"input_tokens": 5_300, "cache_read_tokens": 4_100, "output_tokens": 640, "cost": "0.0123"},
     }
 ]
+
+
+class TestWhatARuleSays:
+    """
+    The line that opens a turn, which is where everything true of the turn rather than of a panel is.
+
+    Rendered from the same checkpoint the panels are, so what this pins is that a turn's boundary
+    reaches the page carrying its fork link, its tree and what it spent.
+    """
+
+    async def test_a_turn_opens_with_a_rule_carrying_what_it_spent(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        region = await watched(app, session)
+        assert 'class="rule"' in region
+        assert "5K in" in region
+        assert "640 out" in region
+        assert "$0.0123" in region
+
+    async def test_the_fork_link_is_on_the_rule_rather_than_inside_the_turn(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The branch point is *before* a turn's message, which is exactly where the rule is.
+
+        On a panel the link was revealed by hover, so it did not exist on a touch screen at all, and
+        forking is the only way a session changes its mind.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        region = await watched(app, session)
+        assert 'class="rule__fork"' in region
+        assert "panel__fork" not in region
+
+    async def test_a_turn_nobody_has_priced_shows_its_counts_and_no_money(self, app: ASGIApp, service: Service) -> None:
+        """
+        The two fail independently: the counts are on every response, the price needs a record.
+
+        A turn drawn as `free` here would be a claim nobody made, which is the one way to be wrong
+        about money that a reader cannot catch.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            [{"kind": "response", "parts": [], "usage": {"input_tokens": 300, "output_tokens": 12}}],
+        )
+        region = await watched(app, session)
+        assert "300 in" in region
+        assert "12 out" in region
+        assert "rule__cost" not in region
+        assert "free" not in region
 
 
 class TestShowingWhatWasRecorded:

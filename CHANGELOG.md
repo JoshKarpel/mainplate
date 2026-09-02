@@ -17,7 +17,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dies does not pay for that answer twice, and a tool that has already read a file or written one
   is not run again against a directory that has moved since. Model requests are numbered by
   position within the turn; tool calls are keyed by the call's own id instead, because a batch of
-  them runs concurrently and a counter would name a record by whichever won the race. It is
+  them runs concurrently and a counter would name a record by whichever won the race. Each response
+  is *priced* on the way past, before the step records it, so what a turn cost is in the checkpoint
+  beside what it said: settled the moment the request is answered, where re-deriving it later from a
+  reference database that has since moved would quietly change what an old session cost. It is
   transparent outside a session, so the same agent stays usable in a script or a test.
 - `mainplate serve`, which runs the console and the worker that answers its sessions over one
   SQLite file.
@@ -38,9 +41,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by counting a session's recorded steps, which decodes none of them, so a quiet console sends no
   bytes at all.
 - A rail beside the conversation: find-and-step search, a key that filters and doubles as the
-  colour legend, a dock that jumps between the two sides of the exchange and folds every tool call,
-  a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement; with
-  JavaScript off the console still renders, posts, and folds.
+  colour legend, a dock that steps whole turns, every panel in play, or only what the model
+  produced, and folds every tool call, a follow-the-end toggle, and a light/dark/system theme. All
+  of it is an enhancement; with JavaScript off the console still renders, posts, and folds.
+- A rule opening each turn, carrying everything true of the turn rather than of any panel inside it:
+  which turn it is, where the session may be forked from, the worktree the turn started on, and what
+  it spent in tokens and money. The counts and the cost are read from the same recorded responses the
+  panels are, so a turn being answered fills its rule in as it runs rather than showing nothing until
+  it lands. A model nobody publishes a price for shows counts and no money, which is the same blank
+  its card shows; the session's own total sits under the message box. Forking moved here from a link
+  revealed by hovering a message, which is where a touch screen could not reach it at all.
 - A panel marked for a beat when it arrives or when what it says changes, tinted in its own kind's
   hue, so a reader watching a turn fill in is told which part of it moved rather than left to spot
   it. Worked out from what a panel *says*, so unfolding a call or laying a search mark over one is

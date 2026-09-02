@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
+from decimal import Decimal
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -54,6 +55,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.tools import RunContext
 from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_jsonable_python
 from without_durability.stepwise import Parse
 from without_durability.stepwise import Run
@@ -123,6 +125,20 @@ class StreamingNotRecorded(NotImplementedError):
     """
 
 
+type Pricer = Callable[[RequestUsage], Decimal | None]
+"""
+What one model request came to, in US dollars, asked of whatever knows the rates.
+
+A function rather than the thing that answers it, and that is a ring rather than a preference: what
+prices a model is `reference.py`, which reads `agent.py`, which builds the agent this capability is
+attached to. Injecting the one question this module actually has keeps it ignorant of endpoints,
+catalogues and databases, which is the same ignorance that lets one capability serve every session.
+
+`None` is "nothing here knows", never a free request, so an unpriced model records no cost rather
+than a zero somebody would read as having been given something for nothing.
+"""
+
+
 @dataclass(slots=True)
 class Stepping:
     """
@@ -150,6 +166,7 @@ class Stepping:
     run: Run
     prefix: str
     worktree: Worktree | None = None
+    pricer: Pricer | None = None
     taken: Counter[str] = field(default_factory=Counter)
 
     def key(self, kind: str) -> StepKey:
@@ -181,12 +198,39 @@ class Stepping:
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
 
+    def price(self, answered: ModelResponse) -> None:
+        """
+        Fill in what this request cost, **before** it is recorded rather than after.
+
+        Pydantic AI fills `usage.cost` too, from `genai-prices`, but it does so in the agent graph,
+        which is outside the step that records the response. So the cost of a turn lands in
+        `turn:{n}:messages` and never in `turn:{n}:model:{i}`, and a turn being watched has no cost
+        at all until the instant it ends. Written here it is in both, and the reading of a turn in
+        flight stays the prefix of the settled reading that the console depends on it being.
+
+        Recorded rather than looked up when a page is drawn, because what a turn cost is settled the
+        moment the request is answered and nothing will ever rewrite it, where the rates behind it
+        are configuration that moves. Priced again next month the same turn would show a different
+        number, and two sessions would stop being comparable. It is the fork's bargain rather than
+        the catalogue's: a value that happens to have been true, not a view of something that changes.
+
+        What it is not is authoritative. Nothing on either wire reports what was actually charged, so
+        this is an estimate made immutable rather than a bill. Never overwriting an existing cost is
+        what leaves room for that to improve: a wire that one day says what it took wins over any
+        estimate of it, exactly as Pydantic AI's own filling is written to allow.
+        """
+        if self.pricer is None or answered.usage.cost is not None:
+            return
+        answered.usage.cost = self.pricer(answered.usage)
+
 
 current_stepping: ContextVar[Stepping | None] = ContextVar("mainplate_stepping", default=None)
 
 
 @contextmanager
-def stepping(run: Run, prefix: str, worktree: Worktree | None = None) -> Iterator[Stepping]:
+def stepping(
+    run: Run, prefix: str, worktree: Worktree | None = None, pricer: Pricer | None = None
+) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
 
@@ -196,7 +240,7 @@ def stepping(run: Run, prefix: str, worktree: Worktree | None = None) -> Iterato
     through. It is the same place DBOS reads its workflow id from, and the same place Pydantic AI
     keeps its own ambient run context.
     """
-    scope = Stepping(run=run, prefix=prefix, worktree=worktree)
+    scope = Stepping(run=run, prefix=prefix, worktree=worktree, pricer=pricer)
     token = current_stepping.set(scope)
     try:
         yield scope
@@ -232,6 +276,9 @@ class CheckpointedModel(WrapperModel):
         store is an `object` on the pass that ran the request as much as on the one that
         resumed it.
 
+        It is priced on the way past for the same reason it is recorded at all: see `Stepping.price`,
+        which has to run here because everything further out happens after the record is written.
+
         The worktree is snapshotted first, because this is the moment it is worth snapshotting:
         no tool is running, so the tree is a coherent thing to read, and what is recorded is the
         state the model is about to be asked to reason about. A pass that replays this request
@@ -242,6 +289,7 @@ class CheckpointedModel(WrapperModel):
 
         async def ask() -> object:
             answered = await self.wrapped.request(messages, model_settings, model_request_parameters)
+            self.scope.price(answered)
             return ModelResponseTypeAdapter.dump_python(answered, mode="json")
 
         return await self.scope.step(self.scope.key("model"), ask, parse_model_response)

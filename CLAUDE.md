@@ -168,7 +168,7 @@ an id, and that id is part of the model response the conversation recorded, so a
 the same one for free. `Stepping.key` is the positional form and `Stepping.identified` is the other.
 
 `opening_tree_key(n)` is `turn:{n}:tree:0`, and it is what two things mean by "this turn's tree": a
-fork plants its worktree at it, and the person's panel shows it. Both want the state before the turn
+fork plants its worktree at it, and the rule opening the turn shows it. Both want the state before the turn
 did anything.
 
 `choice` goes in before the first prompt and never again *within a session*. The order is
@@ -184,8 +184,8 @@ is turn 3 already, and `turn:3:tool:toolu_017` was too before anything read tool
 
 **The names are built in two places and have to agree.** `conversation.py` names them for the
 readers (`prompt_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`, read
-by `choice_of` and `reached` for the body, `transcript` and `so_far` for the page, `before` for a
-fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them for the writers,
+by `choice_of` and `reached` for the body, `transcript`, `so_far` and `responded` for the page,
+`before` for a fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them for the writers,
 from a turn prefix and a kind, which is what lets one capability name a step without importing the
 conversation. `tree_key(n, i)` and `Stepping.key("tree")` therefore produce the same string from
 opposite ends, and nothing enforces that: change one and change the other. The tests in
@@ -193,11 +193,16 @@ opposite ends, and nothing enforces that: change one and change the other. The t
 through the writer, which is what turns a drift into a failure rather than a silently unfindable
 record.
 
-**The two indexed kinds have a reader now, and that is what draws a turn as it happens.** `so_far`
-walks `model:{i}` from zero and looks each call's result up under `tool:{id}`, so the turn being
-answered renders from the steps behind it rather than waiting for its `messages`. It is not a second
-copy of anything: those records exist so that a resumed pass does not pay for the same request
+**The two indexed kinds have a reader now, and that is what draws a turn as it happens.** `responded`
+walks `model:{i}` from zero and `so_far` looks each call's result up under `tool:{id}`, so the turn
+being answered renders from the steps behind it rather than waiting for its `messages`. It is not a
+second copy of anything: those records exist so that a resumed pass does not pay for the same request
 twice, and this reads them.
+
+The walk is its own function because a running turn is read *twice*, for what it has said and for
+what it has spent, and `transcript` calls `responded` once and hands the result to both. Walked
+separately the two would eventually disagree about how much of a turn there is, which on a page that
+draws a turn as it fills in is a rule reporting one number against a conversation showing another.
 
 What holds the two readings together is that **`so_far` produces a prefix of what `blocks_of` will
 produce once the turn lands**: the same responses, in the same order, cut by `blocks_in`, with the
@@ -392,6 +397,56 @@ report the absence of a feature nobody turned on.
 `format` in the config table exists so a second database is one more `ReferenceFormat` member and
 one more arm in `parse_reference`, which `assert_never` makes the type checker demand. It stays a
 value rather than becoming a plugin point.
+
+## What a turn cost, and why it is recorded rather than looked up
+
+**A response is priced before the step records it**, in `Stepping.price`, called from
+`CheckpointedModel.request`. That is not where Pydantic AI does it: `fill_response_cost` runs in the
+agent graph, which is *outside* the step, so left to it the cost reaches `turn:{n}:messages` and
+never `turn:{n}:model:{i}`, and a turn being watched has no cost until the instant it ends. Priced
+here it is in both, and `so_far` stays the prefix of `blocks_of` that the console depends on.
+
+**Recorded rather than re-derived, and that does not contradict the one idea.** The rule is against
+a copy kept in step with something that changes; what a turn cost is settled the moment the request
+is answered and nothing will ever rewrite it. It is the fork's bargain rather than the catalogue's.
+Re-priced on each render from a reference that has since moved, the same turn would show a different
+number next month and two sessions would stop being comparable.
+
+What it is **not** is authoritative. No wire reports what it actually charged, so this is an
+estimate made immutable rather than a bill, and the page says so in a title attribute. `Stepping.price`
+never overwrites an existing cost, which is how Pydantic AI's own filling is written too: the day a
+provider reports what it took, its answer wins over any estimate of it.
+
+**The reference and not `genai-prices`, and the coverage gap is why.** Pydantic AI's pricing knows
+`claude-sonnet-4-6` and returns nothing for `accounts/fireworks/models/glm-5p3`, which is exactly
+the resold population `Reference.upstream` exists to price. Live, that gap is a blank that fixes
+itself when the database improves; *recorded*, it would be a permanent null. So recording is what
+makes the coverage worth the threading.
+
+`Prices` holds both holders rather than either's current value, because a pass lasts as long as a
+session is being answered and both are reloadable configuration underneath it. `Prices.pricer(chosen)`
+closes over the choice, since the only thing that varies request to request is the usage.
+
+**`Pricer` is a function because the alternative is an import cycle.** `reference.py` reads
+`agent.py`, which builds the agent `durability.py`'s capability is attached to, so `durability.py`
+cannot import what prices a model. Injecting the one question it has keeps the capability ignorant
+of endpoints, catalogues and databases, which is the same ignorance that lets one instance serve
+every session.
+
+**`priced` is pure, and the token counts nest rather than partition.** Pydantic AI normalises every
+wire so `input_tokens` *includes* the cache reads and writes, which Anthropic's own numbers exclude,
+so the fresh input is what is left after taking both out. Adding them instead charges cached tokens
+twice at the full rate, which on a long conversation is most of the bill; `test_reference.py` pins
+that sign. A record pricing no cache charges cached tokens at its input rate, which is conservative
+rather than a guess at an unpublished discount. Counts that cannot be true of one request price at
+`None` rather than clamping, and nothing here raises: this runs inside the model request and must
+not be able to fail a turn.
+
+**Unknown is not free.** `None` means nothing could price it and is drawn as no figure at all; a
+`Cost` of zero is drawn as `free`. `Spent.cost` is `None` where *any* response in a turn went
+unpriced rather than the sum of the ones that were, and `altogether` applies the same rule to a
+session, because a total quietly missing a turn is the one way to be wrong about money that a reader
+cannot catch.
 
 ## Forking, and where a session may change its mind
 
@@ -999,9 +1054,11 @@ inside the page, which is what keeps the endpoints and the settings put beside a
 and on a phone it bought a list thirty pixels tall. So the models stop scrolling *and* nothing in
 the picker shrinks - the `flex: none` is the half that is easy to miss, since every `min-height: 0`
 above exists to let a part give way, and with nothing left to scroll that permission just squashes
-the list and draws the rest of it over what follows. **And a control revealed by hover does not
-exist**, which is `@media (hover: none)` rather than a width: the branch link is offered on a
-person's panel and nowhere else, so hiding it there hides forking entirely.
+the list and draws the rest of it over what follows. **And nothing on the transcript is revealed by
+hover any more**, which is the same lesson taken one step further than a `@media (hover: none)`
+override: the branch link used to appear on a person's panel under the pointer, so on a touch
+screen forking did not exist until a media query put it back. On the rule it is simply always
+drawn, and there is no pointer question left to answer.
 
 **The picker is ordered widest-first: workspace, network, endpoint, model, thinking**, and then the
 name and the message box, which are the composer's rather than the picker's. What files a session
@@ -1115,6 +1172,27 @@ its side from it: cool is what reached the model (the person), warm is what the 
 answer, its reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue
 decided by that rather than chosen for it. A part kind `parted` has no rendering for is passed
 over rather than refused, because the provider and Pydantic AI are both free to add one.
+
+**A panel says what is in it; a rule says what is true of the turn around it.** Which turn it is,
+where the session may be forked from, the worktree the turn started on, and what it spent all belong
+to the exchange rather than to any one run of blocks, and hung on a panel they had to be hung on a
+chosen one. Usage settles it: it belongs to a `ModelResponse`, and one response becomes as many
+panels as it has kinds of part while two responses can merge into one panel, so there is no
+attribution rule from a response to a panel that is not invented. `transcript_region` groups the
+panels by `turn` and draws the rule from that, so nothing keeps a second list of where turns begin,
+and the tree comes off the turn's first panel, which is always the person's.
+
+**A rule names its turn, and that is legibility rather than decoration.** It sits directly under the
+last panel of the turn before it, so a bare row of figures there reads as a footer summarising what
+is *above* it, which is the opposite of what it says. The `#1` against the `#1.0` on the panels below
+settles the direction, and doubles as the permalink to the boundary the fork acts on.
+
+The dock's left column steps rules rather than the person's panels, and that is a removal. There is
+exactly one message per turn, so a "previous message of yours" column and a "previous turn" column
+visit the same positions and differ only in where they stop: two controls answering one question,
+which is the thing this console removes wherever it finds it. Every arrow now declares what it steps
+over (`data-stop`) rather than being told apart by what it lacks, because a button identified as
+"the one with no side" stops being identifiable the instant a second kind of stop exists.
 
 Every **settled** panel carries a `recorded` disclosure showing the JSON the checkpoint holds behind
 it, and four things there are decided rather than incidental:

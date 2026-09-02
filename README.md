@@ -86,11 +86,11 @@ authors.
 You can name a session there too, in the field above the box. Left empty it is named after its first
 message, which is what every session was named after before the field existed.
 
-**Forking is how you change your mind**, and it keeps the original readable. Every message carries a
-`fork` link: following it makes a new session that inherits the turns before that one, on whatever
-endpoint, model and thinking level you pick, and asks that turn's own question again. The message
-comes across editable, so a fork is equally a way to rephrase. The sidebar draws the result as a
-tree, each fork nested under what it came from and labelled with the turn it left at.
+**Forking is how you change your mind**, and it keeps the original readable. Every turn opens with a
+rule carrying a `fork` link: following it makes a new session that inherits the turns before that
+one, on whatever endpoint, model and thinking level you pick, and asks that turn's own question
+again. The message comes across editable, so a fork is equally a way to rephrase. The sidebar draws
+the result as a tree, each fork nested under what it came from and labelled with the turn it left at.
 
 The repository is the one part a fork will not change. It inherits its parent's, because re-asking
 a turn against different files is a different question wearing the same words. A session working in
@@ -369,6 +369,15 @@ for what reached the model and warm for what it produced, so a reader scrolling 
 apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
 page.
 
+Each turn opens with a **rule** carrying what is true of the turn rather than of any panel in it:
+which turn it is, the `fork` link, the worktree the turn started on, and what it spent in tokens and
+money. The spend fills in as the turn runs, because each response is priced as it is recorded rather
+than when the page is drawn: what a turn cost is settled the moment it is answered, where pricing it
+again later from a database that has since moved would change what an old session appears to have
+cost. It is an estimate from published rates and not a bill, since no gateway reports what it
+actually charged; a model nobody publishes a price for shows its token counts and no money. The
+session's own total sits under the message box.
+
 Under each settled panel is a `recorded` fold, which shows the JSON the checkpoint actually holds
 behind it: the prompt for a person's message, and the stored model parts for everything else. Since
 the checkpoint *is* the conversation, this is the state itself rather than a debug view of it, and
@@ -386,8 +395,9 @@ scrolling back to the bottom re-enters it, and so does sending a message: whatev
 up to check, what you want to see now is the answer to what you just sent.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
-the colour legend, a dock that jumps between the two sides and folds every call at once, a
-follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
+the colour legend, a dock that steps whole turns, every panel, or only what the model said and folds
+every call at once, a follow-the-end toggle, and a light/dark/system theme. All of it is an
+enhancement. With JavaScript
 off the console still renders, still posts messages, and every tool call is still a fold that
 opens; what goes is the rail and the keyboard send.
 

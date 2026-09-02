@@ -110,6 +110,24 @@ class Catalogue:
         found = self.offered.get(endpoint)
         return found.models if found is not None else None
 
+    def listed_as(self, endpoint: str, model: str) -> Listed | None:
+        """
+        One model as its endpoint listed it, or nothing where the endpoint or the id is not offered.
+
+        The whole `Listed` rather than a fact off it, because what a reference is looked up under is
+        *both* names a model has: the id it is routed by, and the `upstream` name the service
+        actually serving it uses. The second is only ever known from a listing, and it is the one
+        that finds the resold models, so a price cannot be asked for without this.
+
+        A session recorded on an id discovery no longer returns therefore goes unpriced, which is the
+        same blank a card with no record shows and is deliberately not the same question as whether
+        the session can be answered. `offers` keeps those two apart and so does this.
+        """
+        found = self.models_of(endpoint)
+        if found is None:
+            return None
+        return next((offered for offered in found if offered.id == model), None)
+
     def offers(self, endpoint: str, model: str) -> bool:
         """
         Whether this pair is one the picker put in front of somebody.

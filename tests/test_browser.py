@@ -252,14 +252,24 @@ class TestWhereTheReaderIs:
         # The dock lands without navigating, so `:target` never follows it. Which panel it reaches
         # is the dock's business; that it reaches exactly one is this invariant.
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.click('button[data-step="1"]:not([data-side])')
+        await page.click('button[data-step="1"][data-stop="panel"]:not([data-side])')
         await expect(page.locator(LANDED)).to_have_count(1)
+
+    async def test_stepping_by_turn_lands_on_a_rule_and_not_on_a_panel(self, page: Page, gallery: str) -> None:
+        # The coarse column steps the boundaries rather than the messages, which is the whole of
+        # what it is for: a reader stepping turns wants the line carrying the fork and what the turn
+        # cost, not the first few words under it. Both halves are asserted, because landing on the
+        # rule *and* on a panel would be the two-highlight bug in a new place.
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.click('button[data-step="1"][data-stop="turn"]')
+        await expect(page.locator(".rule[data-landed]")).to_have_count(1)
+        await expect(page.locator(LANDED)).to_have_count(0)
 
     async def test_a_permalink_followed_after_stepping_moves_the_landing(self, page: Page, gallery: str) -> None:
         # The other half of the same disagreement, arrived at the other way round: the dock marks a
         # panel the URL does not name, and then the URL names a different one.
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.click('button[data-step="1"]:not([data-side])')
+        await page.click('button[data-step="1"][data-stop="panel"]:not([data-side])')
         await expect(page.locator(LANDED)).to_have_count(1)
         await page.click('a.panel__anchor[href="#panel-0-2"]')
         await lands_on(page, "panel-0-2")

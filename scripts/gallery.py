@@ -21,6 +21,7 @@ from datetime import UTC
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic_ai.messages import ModelMessage
@@ -32,6 +33,7 @@ from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
+from pydantic_ai.usage import RequestUsage
 
 from mainplate.agent import Choice
 from mainplate.agent import Listed
@@ -172,6 +174,28 @@ LISTED = (
 # sideways.
 LONG_LINE = "    return Response.from_content(status, html_content(render(transcript_region(links, session, said))))"
 
+
+def spending(asked: int, answered: int, cached: int = 0, cost: str = "0") -> RequestUsage:
+    """
+    What one fixture response cost, as the wire would have reported it and the step recorded it.
+
+    Fixtures carry this because a rule with no numbers on it is a rule nobody can look at, and the
+    shots exist to be looked at. The counts nest the way a real one does - `input_tokens` includes
+    the cached reads - so the fixtures exercise the same arithmetic a live turn does rather than a
+    tidier version of it that would hide a sign error.
+
+    The cost is on the response because that is where this console now records it, before the
+    response is written rather than after. A fixture that left it off would draw the one state the
+    live path no longer produces: a settled turn with counts and no price.
+    """
+    return RequestUsage(
+        input_tokens=asked,
+        output_tokens=answered,
+        cache_read_tokens=cached,
+        cost=Decimal(cost),
+    )
+
+
 CONVERSATION: list[ModelMessage] = [
     ModelRequest(parts=[UserPromptPart(content="Why does the poll stop after one answer?")]),
     ModelResponse(
@@ -188,7 +212,8 @@ CONVERSATION: list[ModelMessage] = [
                 args={"path": "src/mainplate/pages.py", "pattern": "hx-trigger"},
                 tool_call_id="call-1",
             ),
-        ]
+        ],
+        usage=spending(asked=4_182, answered=196, cost="0.0156"),
     ),
     ModelRequest(
         parts=[
@@ -221,7 +246,8 @@ CONVERSATION: list[ModelMessage] = [
                     "| `every 1s` | on a timer | yes |\n"
                 )
             )
-        ]
+        ],
+        usage=spending(asked=4_610, answered=832, cached=3_968, cost="0.0219"),
     ),
 ]
 
@@ -231,7 +257,8 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
         parts=[
             TextPart(content="Checking."),
             ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-2"),
-        ]
+        ],
+        usage=spending(asked=5_604, answered=88, cached=4_608, cost="0.0041"),
     ),
 ]
 
@@ -243,7 +270,11 @@ PARTWAY = ModelResponse(
         ThinkingPart(content="Two files to look at. I can read them at the same time."),
         ToolCallPart(tool_name="read", args={"path": "src/mainplate/streaming.py"}, tool_call_id="call-7"),
         ToolCallPart(tool_name="read", args={"path": "src/mainplate/pages.py", "depth": 2}, tool_call_id="call-8"),
-    ]
+    ],
+    # A turn in flight has a cost too, which is the point of pricing a response before the step
+    # records it rather than after the run ends. Left off, this fixture would draw the state the
+    # console used to have and no longer does.
+    usage=spending(asked=6_120, answered=142, cached=5_120, cost="0.0067"),
 )
 
 

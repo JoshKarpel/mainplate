@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from dataclasses import field
+from decimal import Decimal
 
 import pytest
 from conftest import INSTRUCTIONS
@@ -15,6 +16,7 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.toolsets import FunctionToolset
+from pydantic_ai.usage import RequestUsage
 from without_durability.interfaces import claimed
 from without_durability.memory import MemoryCheckpointer
 from without_durability.stepwise import Run
@@ -125,6 +127,83 @@ class TestRecordingAModelRequest:
             with pytest.raises(StreamingNotRecorded):
                 async with model.request_stream([], None, ModelRequestParameters()):
                     pass  # pragma: no cover - the refusal happens on the way in
+
+
+class TestPricingARecordedRequest:
+    """
+    That a turn's cost is in the checkpoint, and in the record a turn being *watched* is read from.
+
+    Pydantic AI prices a response too, in the agent graph, which runs after the step has already
+    written. So without this the cost reaches `turn:{n}:messages` and never `turn:{n}:model:{i}`,
+    and a turn has no cost until the instant it ends.
+    """
+
+    async def test_the_recorded_response_carries_what_it_cost(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pricer=lambda usage: Decimal("0.25")):
+                await provider.agent().run("hello")
+        recorded = (await checkpointer.load(WORKFLOW))["turn:0:model:0"]
+        assert isinstance(recorded, dict)
+        assert parse_model_response(recorded).usage.cost == Decimal("0.25")
+
+    async def test_the_price_is_asked_of_the_usage_the_provider_reported(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """
+        The whole usage rather than a total, because what a rate is applied to is four counts: a
+        pricer handed only a sum could not charge cached tokens differently from fresh ones.
+
+        Asserted against what the *record* ended up holding rather than against a figure written
+        here, so the test says the two are the same usage instead of restating what a stand-in model
+        happens to report.
+        """
+        seen: list[RequestUsage] = []
+
+        def note(usage: RequestUsage) -> Decimal | None:
+            seen.append(usage)
+            return Decimal(1)
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pricer=note):
+                await provider.agent().run("hello")
+        recorded = (await checkpointer.load(WORKFLOW))["turn:0:model:0"]
+        assert isinstance(recorded, dict)
+        assert len(seen) == 1
+        assert seen[0].output_tokens == parse_model_response(recorded).usage.output_tokens
+
+    async def test_a_model_nothing_can_price_records_no_cost_rather_than_a_zero(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """`free` and `nobody published a price` are different claims, and only one may be drawn."""
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", pricer=lambda usage: None):
+                await provider.agent().run("hello")
+        recorded = (await checkpointer.load(WORKFLOW))["turn:0:model:0"]
+        assert isinstance(recorded, dict)
+        assert parse_model_response(recorded).usage.cost is None
+
+    async def test_a_cost_the_wire_itself_reported_is_never_overwritten(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        No provider says what it charged today, and the day one does its answer is the true one.
+
+        Pydantic AI's own filling is written to leave an existing cost alone for exactly this, so
+        this console must not be the layer that clobbers it with an estimate.
+        """
+        billed = ModelResponse(parts=[TextPart("answered")], usage=RequestUsage(cost=Decimal("9.99")))
+        async with a_pass(checkpointer) as run:
+            Stepping(run=run, prefix="turn:0", pricer=lambda usage: Decimal("0.01")).price(billed)
+        assert billed.usage.cost == Decimal("9.99")
+
+    async def test_with_no_pricer_a_response_is_left_exactly_as_it_arrived(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """A console with no reference configured records what it always did, which is no cost."""
+        answered = ModelResponse(parts=[TextPart("answered")])
+        async with a_pass(checkpointer) as run:
+            Stepping(run=run, prefix="turn:0").price(answered)
+        assert answered.usage.cost is None
 
 
 @dataclass(slots=True)

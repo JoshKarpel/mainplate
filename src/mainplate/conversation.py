@@ -45,10 +45,13 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field
+from decimal import Decimal
 from itertools import groupby
 from typing import Final
 from typing import Literal
@@ -78,6 +81,7 @@ from mainplate.durability import parse_model_response
 from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
+from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.snapshots import Worktree
@@ -434,10 +438,13 @@ class Panel:
     """
     The worktree this turn started on, for the panel that opens one, and nothing for the rest.
 
-    On the person's panel because that is where the snapshot is taken and where the fork link
-    already is: the two are the same point, so a reader deciding to go back to a turn can see what
-    going back would put on disk. Absent everywhere else, and absent altogether where no worktree
-    is configured, since a hash for a directory nobody chose would be a fact about nothing.
+    Carried on the turn's first panel, which is the person's, and read from there by the rule that
+    opens the turn: this is a fact about the turn rather than about the message, and the rule is
+    where the fork link that would go back to it lives. Kept here rather than moved onto the rule so
+    that where a turn begins is decided once, by the panels, instead of by a second list beside them.
+
+    Absent on every other panel, and absent altogether where no worktree is configured, since a hash
+    for a directory nobody chose would be a fact about nothing.
     """
 
     settled: bool = True
@@ -459,11 +466,6 @@ class Panel:
         return f"panel-{self.turn}-{self.at}"
 
     @property
-    def short_tree(self) -> str | None:
-        """The hash as a person reads one, which is the first several characters and no more."""
-        return None if self.tree is None else self.tree[:8]
-
-    @property
     def label(self) -> str:
         """
         What a panel is called where somebody reads it, which is its whole position and not half.
@@ -474,6 +476,61 @@ class Panel:
         the same pair, said out loud.
         """
         return f"{self.turn}.{self.at}"
+
+
+@dataclass(frozen=True, slots=True)
+class Spent:
+    """
+    What a turn was charged for, as the rule above it reports.
+
+    Tokens and money are both here because they answer different questions and neither substitutes
+    for the other: the counts say how much of the window a conversation is using, which is what
+    decides when it stops fitting, and the cost says what that came to.
+
+    `cost` is `None` where *any* response in the turn went unpriced, rather than the sum of the ones
+    that were. A partial total reads as the whole of what a turn cost and understates it silently,
+    which is the one way to be wrong about money that nobody looking at the page can catch.
+    """
+
+    asked: int
+    answered: int
+    cost: Decimal | None
+
+
+def spent_on(responses: Sequence[ModelResponse]) -> Spent:
+    """
+    What a turn's model requests came to, summed over however many of them it took.
+
+    A turn is one exchange to a reader and several requests to a provider, one before each batch of
+    tool calls, so the figure worth showing is the turn's own. The same sum serves both readings of
+    a turn, because a response carries its usage whether it was read back from `turn:{n}:messages`
+    or from the `turn:{n}:model:{i}` step that recorded it.
+    """
+    charged = [response.usage.cost for response in responses]
+    settled = [one for one in charged if one is not None]
+    return Spent(
+        asked=sum(response.usage.input_tokens for response in responses),
+        answered=sum(response.usage.output_tokens for response in responses),
+        cost=sum(settled, Decimal(0)) if settled and len(settled) == len(charged) else None,
+    )
+
+
+def altogether(spent: Iterable[Spent]) -> Spent:
+    """
+    Every turn's spend as the session's, under the rule one turn's already follows.
+
+    Unknown anywhere is unknown for the whole, so a session with one unpriced turn reports no total
+    rather than the sum of the rest: what a person reads off a total is what the session has cost
+    them, and a figure quietly missing a turn is worse than no figure.
+    """
+    counted = tuple(spent)
+    charged = [one.cost for one in counted]
+    settled = [one for one in charged if one is not None]
+    return Spent(
+        asked=sum(one.asked for one in counted),
+        answered=sum(one.answered for one in counted),
+        cost=sum(settled, Decimal(0)) if settled and len(settled) == len(charged) else None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,6 +553,21 @@ class Transcript:
     panels: tuple[Panel, ...]
     awaiting: bool
     turns: int
+
+    spent: Mapping[int, Spent] = field(default_factory=dict)
+    """
+    What each turn that has produced a response cost, by turn.
+
+    A mapping rather than a field on `Panel`, because what it describes is the turn and a turn is
+    several panels: hung on one of them it would have to be hung on a chosen one, and every reader
+    would have to know which. A turn is absent until it has recorded something, which is why the
+    rule above a turn nobody has started yet reports nothing rather than zero.
+    """
+
+    @property
+    def total(self) -> Spent:
+        """What the whole conversation has cost, which is every turn's spend under one rule."""
+        return altogether(self.spent.values())
 
     def asked_at(self, turn: int) -> str | None:
         """
@@ -637,6 +709,29 @@ def returned_step(recorded: object) -> Returned:
     return Returned(outcome="success", content=said)
 
 
+def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse, ...]:
+    """
+    Every model response the turn being answered has recorded, in the order they were made.
+
+    Consecutive from zero, so the scan stops at the first response not yet made rather than
+    searching for the highest key, exactly as `reached` walks turns. A pass numbers its requests
+    from zero within the turn, so this cannot be fooled by how many turns came before.
+
+    Its own function because two readings of a running turn want the same walk: what it has said so
+    far, and what it has spent so far. Done twice, the second would eventually disagree with the
+    first about how much of a turn there is.
+    """
+    responses: list[ModelResponse] = []
+    while (answered := recorded.get(model_key(turn, len(responses)))) is not None:
+        responses.append(parse_model_response(answered))
+    return tuple(responses)
+
+
+def responses_in(messages: Sequence[ModelMessage]) -> tuple[ModelResponse, ...]:
+    """The model's own turns within a settled turn, which is what carries what the turn cost."""
+    return tuple(message for message in messages if isinstance(message, ModelResponse))
+
+
 def so_far(recorded: Mapping[str, object], turn: int) -> tuple[Block, ...]:
     """
     What the turn being answered has produced up to now, read from its steps rather than its
@@ -648,17 +743,15 @@ def so_far(recorded: Mapping[str, object], turn: int) -> tuple[Block, ...]:
     anything - these are the records the durability capability already keeps so that a resumed pass
     does not pay for the same request twice.
 
-    Consecutive from zero, so the scan stops at the first response not yet made rather than
-    searching for the highest key, exactly as `reached` walks turns. A pass numbers its requests
-    from zero within the turn, so this cannot be fooled by how many turns came before.
-
     What comes out is a *prefix* of what `blocks_of` will produce once the turn is answered: the
     same responses, in the same order, cut by the same rule, with the results that have not arrived
     yet still out. That is what lets the page morph one into the other without a panel ever moving.
     """
-    responses: list[ModelResponse] = []
-    while (answered := recorded.get(model_key(turn, len(responses)))) is not None:
-        responses.append(parse_model_response(answered))
+    return blocks_from(recorded, turn, responded(recorded, turn))
+
+
+def blocks_from(recorded: Mapping[str, object], turn: int, responses: Sequence[ModelResponse]) -> tuple[Block, ...]:
+    """One running turn's recorded responses as blocks, with each call's result where it has landed."""
     returned = {
         part.tool_call_id: returned_step(held)
         for response in responses
@@ -724,13 +817,16 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     said and not yet started.
     """
     panels: list[Panel] = []
+    spent: dict[int, Spent] = {}
     turn = 0
     while (asked := recorded.get(prompt_key(turn))) is not None:
         answered = recorded.get(messages_key(turn))
         if answered is None:
             break
+        said = parse_messages(answered)
         panels.append(said_by(turn, parse_prompt(asked), parse_tree(recorded.get(opening_tree_key(turn)))))
-        panels.extend(panelled(turn, blocks_of(parse_messages(answered))))
+        panels.extend(panelled(turn, blocks_of(said)))
+        spent[turn] = spent_on(responses_in(said))
         turn += 1
     # Several, because a person can type again while a reply is still coming. Those messages are
     # recorded in the turns after the one in flight and are answered in order, so a transcript
@@ -739,10 +835,17 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     while (waiting := recorded.get(prompt_key(turn))) is not None:
         panels.append(said_by(turn, parse_prompt(waiting), parse_tree(recorded.get(opening_tree_key(turn)))))
         if not awaiting:
-            panels.extend(panelled(turn, so_far(recorded, turn), settled=False))
+            # One walk of the turn's recorded responses, read twice: what it has said, and what it
+            # has spent saying it. A turn in flight has a cost at all because the step that records
+            # each response prices it on the way past, so this is the same reading the settled half
+            # above does rather than a second, poorer one.
+            answering = responded(recorded, turn)
+            panels.extend(panelled(turn, blocks_from(recorded, turn, answering), settled=False))
+            if answering:
+                spent[turn] = spent_on(answering)
         awaiting = True
         turn += 1
-    return Transcript(panels=tuple(panels), awaiting=awaiting, turns=turn)
+    return Transcript(panels=tuple(panels), awaiting=awaiting, turns=turn, spent=spent)
 
 
 def stored_part(answered: object, source: Source) -> object:
@@ -850,7 +953,11 @@ def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> W
 
 
 def conversing(
-    endpoints: Wires, instructions: str, workspaces: Workspaces | None = None, bwrap: str | None = None
+    endpoints: Wires,
+    instructions: str,
+    workspaces: Workspaces | None = None,
+    bwrap: str | None = None,
+    prices: Prices | None = None,
 ) -> Callable[[Run], Awaitable[Never]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -886,6 +993,12 @@ def conversing(
         # the scratch would be scratch *for*, and gets no tool that could reach it either.
         scratch = None if workspaces is None or worktree is None else workspaces.scratch_at(run.workflow)
         agent = agent_for(endpoints, chosen, instructions, worktree=worktree, scratch=scratch, bwrap=bwrap)
+        # Built once per pass beside the agent and for the same reason: what it needs from the
+        # session is the choice, and a choice cannot change. What it reads *through* is two holders,
+        # so a rate that moves under a long-running pass still reaches the turn being priced.
+        # Without one a turn records no cost, which is what a console with no reference configured
+        # has always shown - a card with no numbers on it.
+        pricer = None if prices is None else prices.pricer(chosen)
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
@@ -909,7 +1022,7 @@ def conversing(
             # can write: the first is taken before the model is asked anything, which is the state
             # a rewind to this turn puts back, and each later one records what the previous batch
             # of calls left behind.
-            with stepping(run, turn_prefix(at.turn), worktree):
+            with stepping(run, turn_prefix(at.turn), worktree, pricer):
                 answered = await agent.run(prompt, message_history=list(at.history))
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             at = Reached(turn=at.turn + 1, history=(*at.history, *said))

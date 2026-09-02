@@ -34,6 +34,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Final
 from typing import Literal
@@ -41,15 +42,19 @@ from typing import assert_never
 from urllib.parse import urlsplit
 
 import h11
+from pydantic_ai.usage import RequestUsage
 from without_async import timeout
 from without_http import ConnectionPool
 from without_http import follow_redirects
 from without_http import request
 from without_http import stack
 
+from mainplate.agent import Choice
 from mainplate.agent import Listed
+from mainplate.catalogue import Catalogues
 from mainplate.config import ModelReference
 from mainplate.config import ReferenceFormat
+from mainplate.durability import Pricer
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,11 @@ MODELS_DEV: Final = "https://models.dev/api.json"
 # Long enough for a four-megabyte document over a slow link, and short enough that a refresh which
 # will never finish does not sit in the background holding a connection until the next one starts.
 PATIENCE: Final = timedelta(seconds=30)
+
+# The unit every rate in the database is written in, and the one a person compares in. Kept as the
+# divisor rather than folded into each rate so that `priced` multiplies whole token counts by whole
+# published figures and divides once, which is exact where a per-token rate is a repeating decimal.
+MILLION: Final = Decimal(1_000_000)
 
 
 type Trait = Literal["thinking", "tools", "vision", "pdf", "structured"]
@@ -471,3 +481,92 @@ def describe(listed: Listed, reference: Reference | None) -> Described:
         facts=reference.look_up(listed) if reference is not None else None,
         consulted=reference is not None,
     )
+
+
+def rate(per_million: float) -> Decimal:
+    """
+    One published price as an exact decimal.
+
+    Through `str` rather than `Decimal(float)`, which would carry the binary approximation of a
+    figure written in decimal into a number this console then *records*: `$0.30` per million becomes
+    `0.29999999999999998889776975374843...` and every turn priced at it says so forever.
+    """
+    return Decimal(str(per_million))
+
+
+def priced(cost: Cost, usage: RequestUsage) -> Decimal | None:
+    """
+    What one model request came to in US dollars, at the rates a record currently publishes.
+
+    Pure, and the whole of the arithmetic, so what a turn cost is testable against a `Cost` and four
+    integers with no gateway, no database and no conversation anywhere near it.
+
+    **The token counts nest rather than partition.** Pydantic AI normalises every wire so that
+    `input_tokens` *includes* the cache reads and writes, which Anthropic's own numbers exclude, so
+    the freshly-read input is what is left once both are taken back out. Adding them on instead
+    charges the cached tokens twice at the full rate, which on a long conversation is most of the
+    bill and in the direction that flatters nobody.
+
+    A record that prices no cache has its cached tokens charged at its input rate. That is the
+    conservative reading rather than a guess at a discount nobody published, and the alternative -
+    calling the whole request unpriceable - would blank exactly the models that cache the most.
+
+    `None` where the counts cannot be true of one request, which is a wire claiming more cached
+    tokens than input. A number to say nothing about rather than one to clamp into looking sound,
+    and never an exception: pricing runs inside the model request and must not be able to fail a turn.
+    """
+    fresh = usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens
+    if fresh < 0:
+        return None
+    reading = cost.input if cost.cache_read is None else cost.cache_read
+    writing = cost.input if cost.cache_write is None else cost.cache_write
+    charged = (
+        Decimal(fresh) * rate(cost.input)
+        + Decimal(usage.cache_read_tokens) * rate(reading)
+        + Decimal(usage.cache_write_tokens) * rate(writing)
+        + Decimal(usage.output_tokens) * rate(cost.output)
+    )
+    return charged / MILLION
+
+
+@dataclass(frozen=True, slots=True)
+class Prices:
+    """
+    Where a session's model is priced: what its endpoint lists, and what the database says of it.
+
+    Both holders rather than either's current value, because this is read at the moment a request is
+    made and not when the pass around it started. A pass lasts as long as a session is being
+    answered, and both of these are reloadable configuration underneath it, so a value taken at the
+    top would price every turn of a long conversation at whatever happened to be true for its first.
+    """
+
+    catalogues: Catalogues
+    references: References
+
+    def pricer(self, chosen: Choice) -> Pricer:
+        """
+        What one session's requests are priced by, which is as fixed as the choice it is built from.
+
+        A closure over the choice because the only thing that varies from one request to the next is
+        the usage: a session records its endpoint and its model once and is bound to both for life,
+        so every other half of the question is already answered here.
+
+        Each of the three ways to know nothing is an ordinary `None`: no database was configured, the
+        endpoint no longer lists the id this session was recorded on, or the record carries no price.
+        A card shows the same blank for the same reasons, so a turn is unpriced exactly where the
+        model it ran on was.
+        """
+
+        def price(usage: RequestUsage) -> Decimal | None:
+            reference = self.references.current
+            if reference is None:
+                return None
+            listed = self.catalogues.current.listed_as(chosen.endpoint, chosen.model)
+            if listed is None:
+                return None
+            facts = reference.look_up(listed)
+            if facts is None or facts.cost is None:
+                return None
+            return priced(facts.cost, usage)
+
+        return price

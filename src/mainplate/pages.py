@@ -22,6 +22,8 @@ import json
 from collections.abc import Iterable
 from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
+from itertools import groupby
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -81,6 +83,7 @@ from mainplate.conversation import Kind
 from mainplate.conversation import Panel
 from mainplate.conversation import Prose
 from mainplate.conversation import Reasoning
+from mainplate.conversation import Spent
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
@@ -189,6 +192,10 @@ NEW_SESSION: Final = "New session"
 # Kept as the answer to a row that has somehow lost its title, which is a database somebody edited
 # rather than a state this console produces.
 UNTITLED: Final = "Untitled"
+
+# How much of a tree hash a rule prints. Git's own abbreviation length for a repository of any size,
+# which is the number a reader is used to seeing and long enough to tell two snapshots apart.
+SHORT_HASH: Final = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +506,118 @@ def dollars(rate: float) -> str:
     where `$5/$25` reads as the ratio it is.
     """
     return "free" if rate == 0 else f"${rate:g}"
+
+
+def charged(cost: Decimal) -> str:
+    """
+    What a turn or a session came to, at the precision a person actually reads.
+
+    Four decimal places is the floor rather than the format, because these figures span from a
+    fraction of a cent to tens of dollars and no single width serves both: a fixed two decimals
+    writes most single turns as `$0.00`, and full precision writes a long session as fourteen
+    digits of a number nobody is going to check to the picogram. Below the floor the figure is
+    named as being under it, which is a true thing to say where `$0.00` is not.
+
+    Zero is `free` and not `$0`, matching what a card says about a model that charges nothing: the
+    two are the same claim and reading them differently on one page would suggest they are not.
+    """
+    if cost == 0:
+        return "free"
+    if cost >= 1:
+        return f"${cost:.2f}"
+    if cost < Decimal("0.0001"):
+        return "<$0.0001"
+    return f"${cost.quantize(Decimal('0.0001')):f}".rstrip("0").rstrip(".")
+
+
+def spend_element(spent: Spent) -> tuple[Element, ...]:
+    """
+    What a turn cost, as counts and money, or nothing at all where it has not answered yet.
+
+    The counts are always drawn and the money only where something priced it, because they fail
+    independently: the tokens are on the response itself and are known for every turn on every wire,
+    where the price needs a record in a database this console may not have been asked to read. A
+    turn showing counts and no money is one whose model nobody published a price for, which is the
+    same blank its card shows and is why the two are separate elements rather than one sentence.
+    """
+    if not spent.asked and not spent.answered:
+        return ()
+    return (
+        span(
+            cls="rule__tokens",
+            attrs={"title": f"{spent.asked:,} tokens in, {spent.answered:,} out"},
+            children=f"{tokens(spent.asked)} in \N{MIDDLE DOT} {tokens(spent.answered)} out",
+        ),
+        *(
+            (
+                span(
+                    cls="rule__cost",
+                    attrs={"title": f"Estimated from published rates, not billed: ${spent.cost:f}"},
+                    children=f"\N{MIDDLE DOT} {charged(spent.cost)}",
+                ),
+            )
+            if spent.cost is not None
+            else ()
+        ),
+    )
+
+
+def turn_rule(links: Links, session: str, turn: int, tree: str | None, spent: Spent | None) -> Element:
+    """
+    The line between one turn and the next, and everything true of the turn it opens.
+
+    A rule rather than a row on a panel, because all four things on it are facts about the *turn*
+    and a turn is several panels. Hung on one panel they had to be hung on a chosen one - the
+    person's - which made the tree and the fork read as facts about the message rather than about
+    the exchange, and left a turn's cost with nowhere to go at all: usage belongs to a model
+    response, and one response becomes as many panels as it has kinds of part.
+
+    It is the fork's own place for a reason beyond tidiness. The branch point is *before* the forked
+    turn's message, which is exactly where this sits, so the link now names the position it acts on
+    instead of sitting inside the first thing that comes after it. That also retires the hover: a
+    control revealed by pointing at a panel does not exist on a touch screen, and forking is the
+    only way a session changes its mind.
+
+    It **names its turn**, and that is what makes it readable rather than decorative. A rule sits
+    directly under the last panel of the turn before it, so a bare row of figures there reads as a
+    footer summarising what is above it, which is the opposite of what it says: these are the counts
+    for the turn that starts below. `#1` against the `#1.0` and `#1.1` on the panels under it settles
+    the direction, and it doubles as the permalink to the boundary the fork acts on.
+    """
+    return div(
+        cls="rule",
+        attrs={"id": f"rule-{turn}", "data-turn": str(turn)},
+        children=[
+            a(cls="rule__at", attrs={"href": f"#rule-{turn}", "title": f"Turn {turn}"}, children=f"#{turn}"),
+            *(
+                (
+                    a(
+                        cls="rule__fork",
+                        attrs={"href": links.to_fork_form(session, turn), "title": f"Fork from turn {turn}"},
+                        children="fork",
+                    ),
+                )
+                if session
+                else ()
+            ),
+            *(
+                (
+                    span(
+                        cls="rule__tree",
+                        # Short here and whole in the title: a hash is read to tell two apart and to
+                        # be typed at git, and the first several characters do the first job in a
+                        # tenth of the width. The second is what a reader copies, so it stays intact.
+                        attrs={"title": f"The worktree this turn started on: {tree}"},
+                        children=tree[:SHORT_HASH],
+                    ),
+                )
+                if tree is not None
+                else ()
+            ),
+            span(cls="rule__span"),
+            *(spend_element(spent) if spent is not None else ()),
+        ],
+    )
 
 
 def model_card(described: Described, chosen: bool) -> Element:
@@ -1081,7 +1200,12 @@ def picker(
     )
 
 
-def chosen_note(chosen: Choice | None, repository: str | None = None, worktree: Path | None = None) -> Element:
+def chosen_note(
+    chosen: Choice | None,
+    repository: str | None = None,
+    worktree: Path | None = None,
+    spent: Spent | None = None,
+) -> Element:
     """
     What an existing session is on, as a fact rather than a control: it cannot be changed.
 
@@ -1095,6 +1219,11 @@ def chosen_note(chosen: Choice | None, repository: str | None = None, worktree: 
     question, and printing a word for that would invent a setting nobody chose. The worktree is
     named on the same terms, and its absence means the same thing: no snapshots are being kept, so
     there is nothing a later fork could put back on disk.
+
+    The session's total is here rather than on a rule because it is a fact about the whole
+    conversation and the rules each speak for one turn. It is drawn only once something has been
+    priced: a session whose models nobody publishes a price for says nothing about money, which is
+    the same silence its cards keep, where `free` would be a claim nobody made.
     """
     if chosen is None:
         return span(cls="chosen")
@@ -1122,6 +1251,22 @@ def chosen_note(chosen: Choice | None, repository: str | None = None, worktree: 
                     ),
                 )
                 if repository is not None
+                else ()
+            ),
+            *(
+                (
+                    span(
+                        cls="spent",
+                        attrs={
+                            "title": (
+                                f"{spent.asked:,} tokens in and {spent.answered:,} out over this "
+                                f"session, estimated from published rates rather than billed"
+                            )
+                        },
+                        children=f"\N{MIDDLE DOT} {charged(spent.cost)}",
+                    ),
+                )
+                if spent is not None and spent.cost is not None
                 else ()
             ),
         ],
@@ -1304,11 +1449,9 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
     kind, the dock's flanking arrows step by side, and the stylesheet draws the edge from the same
     attribute. Nothing has to keep a list of selectors in step with a list of kinds.
 
-    Only a person's panel offers a branch, and that is the whole of where a session may be forked.
-    It is not a simplification: what a fork has to hand the next model is a conversation with no
-    half-finished exchange in it, and the boundary between one turn and the next is the only place
-    a conversation is in that state. Inside a turn there is a call awaiting its result, or
-    reasoning signed by the model that produced it, and neither survives being handed to another.
+    What a panel says is what is *in* it, and nothing about the turn around it. The worktree, the
+    fork and what the turn cost are all facts about the exchange rather than about any one run of
+    blocks, so they are on the rule that opens the turn. See `turn_rule`.
     """
     return article(
         cls="panel",
@@ -1323,31 +1466,6 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 cls="panel__meta",
                 children=[
                     span(cls="panel__role", children=dict(NAMES)[panel.kind]),
-                    *(
-                        (
-                            span(
-                                cls="panel__tree",
-                                attrs={"title": f"The worktree this turn started on: {panel.tree}"},
-                                children=panel.short_tree,
-                            ),
-                        )
-                        if panel.short_tree is not None
-                        else ()
-                    ),
-                    *(
-                        (
-                            a(
-                                cls="panel__fork",
-                                attrs={
-                                    "href": links.to_fork_form(session, panel.turn),
-                                    "title": f"Fork from turn {panel.turn}",
-                                },
-                                children="fork",
-                            ),
-                        )
-                        if panel.kind == "person" and session
-                        else ()
-                    ),
                     a(
                         cls="panel__anchor",
                         attrs={"href": f"#{panel.anchor}"},
@@ -1397,8 +1515,18 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
     has to be got exactly right (`every` and not `load`, since morphing keeps the element and a
     `load` poll would fire once and wait forever); a region with no trigger has nothing to get
     wrong.
+
+    The rules are drawn from the panels rather than carried beside them, which is what keeps them
+    from disagreeing: a turn is a run of consecutive panels sharing a `turn`, so grouping is the one
+    place that decides where a turn begins and the rule falls out of it. The tree comes off the
+    turn's first panel, which is always the person's, because that is where the checkpoint's own
+    opening tree is already read to.
     """
-    drawn: list[Element] = [panel_element(links, session, panel) for panel in said.panels]
+    drawn: list[Element] = []
+    for turn, panels in groupby(said.panels, key=lambda panel: panel.turn):
+        opening = tuple(panels)
+        drawn.append(turn_rule(links, session, turn, opening[0].tree, said.spent.get(turn)))
+        drawn.extend(panel_element(links, session, panel) for panel in opening)
     if said.awaiting and stalled is None:
         drawn.append(waiting_panel())
     if stalled is not None:
@@ -1484,9 +1612,19 @@ def dock_card() -> Element:
     """
     Stepping, leaping, folding, and following: everything that moves a reader through a session.
 
-    Three columns of arrows, because the conversation has two sides and a reader usually wants one
-    of them: the flanking columns step what a person said and what the model produced, in each
-    one's own hue, and the middle column steps every panel the key leaves in play.
+    Three columns of arrows, at the two granularities a reader moves in: the left one steps whole
+    turns, landing on the rule that opens each, the middle one steps every panel the key leaves in
+    play, and the right one steps only what the model produced.
+
+    Every arrow says what it steps over rather than being told apart by what it lacks. A button
+    identified as "the one with no side" stops being identifiable the instant a second kind of stop
+    exists, which is markup becoming ambiguous with nothing failing to say so.
+
+    The left column used to seek the person's own panels, and stepping turns is what that *was*:
+    there is exactly one message per turn, so the two columns would visit the same positions and
+    differ only in where they stopped. Two controls answering one question is the thing this console
+    removes wherever it finds it, so the coarse move now lands on the boundary, where the fork link
+    and what the turn cost are, rather than a few lines below it.
     """
     return div(
         cls="dock",
@@ -1495,30 +1633,30 @@ def dock_card() -> Element:
                 cls="dock__nav",
                 children=[
                     dock_button(
-                        "dock__btn--person",
-                        "Previous message of yours",
+                        "dock__btn--turn",
+                        "Previous turn",
                         "\N{UPWARDS ARROW}",
-                        {"data-step": "-1", "data-side": "person"},
+                        {"data-step": "-1", "data-stop": "turn"},
                     ),
-                    dock_button(None, "Previous panel", "\N{UPWARDS ARROW}", {"data-step": "-1"}),
+                    dock_button(None, "Previous panel", "\N{UPWARDS ARROW}", {"data-step": "-1", "data-stop": "panel"}),
                     dock_button(
                         "dock__btn--assistant",
                         "Previous panel from the model",
                         "\N{UPWARDS ARROW}",
-                        {"data-step": "-1", "data-side": "model"},
+                        {"data-step": "-1", "data-stop": "panel", "data-side": "model"},
                     ),
                     dock_button(
-                        "dock__btn--person",
-                        "Next message of yours",
+                        "dock__btn--turn",
+                        "Next turn",
                         "\N{DOWNWARDS ARROW}",
-                        {"data-step": "1", "data-side": "person"},
+                        {"data-step": "1", "data-stop": "turn"},
                     ),
-                    dock_button(None, "Next panel", "\N{DOWNWARDS ARROW}", {"data-step": "1"}),
+                    dock_button(None, "Next panel", "\N{DOWNWARDS ARROW}", {"data-step": "1", "data-stop": "panel"}),
                     dock_button(
                         "dock__btn--assistant",
                         "Next panel from the model",
                         "\N{DOWNWARDS ARROW}",
-                        {"data-step": "1", "data-side": "model"},
+                        {"data-step": "1", "data-stop": "panel", "data-side": "model"},
                     ),
                 ],
             ),
@@ -1814,7 +1952,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                 transcript_region(links, showing.session.id, showing.said, stalled),
                 composer(
                     links.to_say(showing.session.id),
-                    chosen_note(showing.chosen, showing.repository, showing.worktree),
+                    chosen_note(showing.chosen, showing.repository, showing.worktree, showing.said.total),
                     live=True,
                     refusing=stalled is not None,
                 ),

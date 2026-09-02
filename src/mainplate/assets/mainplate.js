@@ -142,6 +142,16 @@
       );
     };
 
+    // What one arrow steps over, which the button says rather than this inferring. Panels are
+    // narrowed by the key and by side; the rules that open each turn are not, because a turn is not
+    // one of the kinds the key switches off - it is the thing those kinds are inside of.
+    const stopsFor = (button) => {
+      const box = transcript();
+      if (!box) return [];
+      if (button.dataset.stop !== "turn") return panelsIn(button.dataset.side);
+      return Array.from(box.querySelectorAll(".rule")).filter((rule) => rule.getClientRects().length > 0);
+    };
+
     const atEnd = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 8;
 
     // Ours, so the listener that follows the reader's position can tell a scroll they asked for
@@ -451,10 +461,10 @@
         button.addEventListener("click", () => {
           const box = transcript();
           if (!box) return;
-          const panels = panelsIn(button.dataset.side);
+          const stops = stopsFor(button);
           const top = box.getBoundingClientRect().top;
-          const tops = panels.map((panel) => panel.getBoundingClientRect().top - top);
-          land(panels[stepIndex(tops, Number(button.dataset.step), 40)]);
+          const tops = stops.map((stop) => stop.getBoundingClientRect().top - top);
+          land(stops[stepIndex(tops, Number(button.dataset.step), 40)]);
         });
       });
 

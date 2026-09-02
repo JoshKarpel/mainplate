@@ -70,6 +70,7 @@ from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
 from mainplate.pages import refusal_page
+from mainplate.reference import Prices
 from mainplate.reference import References
 from mainplate.reference import refreshed
 from mainplate.reference import refreshing as refreshing_reference
@@ -216,7 +217,17 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     ) as service:
         answering = work(
             service.durable,
-            conversing(endpoints, settings.instructions, workspaces, bwrap=bwrap),
+            conversing(
+                endpoints,
+                settings.instructions,
+                workspaces,
+                bwrap=bwrap,
+                # The holders rather than what they currently hold, so a turn is priced at the rates
+                # in force when it ran. What that costs the worker is two dictionary lookups per
+                # model request; what it buys is a figure in the checkpoint that nothing later
+                # re-derives, so a session's total means the same thing next month as today.
+                prices=Prices(catalogues=catalogues, references=references),
+            ),
             limit=settings.passes,
         )
         keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
