@@ -19,9 +19,13 @@ from mainplate.catalogue import Offering
 from mainplate.console import LONGEST_PROMPT
 from mainplate.console import NotAMessage
 from mainplate.console import parse_form_prompt
+from mainplate.console import posted_isolation
+from mainplate.console import posted_workspace
+from mainplate.conversation import choice_of
 from mainplate.conversation import messages_key
 from mainplate.conversation import prompt_key
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
@@ -572,3 +576,90 @@ class TestShowingWhatWasRecorded:
         assert answered.status == 200
         assert "<script" not in answered.text
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in answered.text
+
+
+class TestWhatTheIsolationControlsPost:
+    """
+    The two new axes as the form carries them, and the one that a form cannot decide by itself.
+
+    Both are closed sets, so this layer settles them; neither is reconciled with the repository here,
+    because that is `Service.start`'s job and doing it twice is how the two come to disagree.
+    """
+
+    async def test_a_form_naming_the_whole_machine_starts_a_session_on_it(self, app: ASGIApp, service: Service) -> None:
+        async with calling(app) as caller:
+            said = await caller.post(
+                "/sessions",
+                {
+                    "prompt": "look around",
+                    "endpoint": DEFAULT_CHOICE.endpoint,
+                    "model": DEFAULT_CHOICE.model,
+                    "workspace": "everything",
+                    "network": "on",
+                },
+            )
+
+        assert said.status == 303
+        chosen = choice_of(await service.checkpointer.load(said.location.rsplit("/", 1)[-1]))
+        assert chosen is not None
+        assert chosen.isolation.filesystem is Filesystem.EVERYTHING
+        assert chosen.isolation.network
+
+    async def test_a_form_naming_no_isolation_at_all_is_the_safe_answer(self, app: ASGIApp) -> None:
+        """
+        A form predating either control still names a whole choice, and names the tightest one.
+
+        The absent field has to mean what a session had before there was anything to ask, or every
+        such form would silently widen the sessions it starts.
+        """
+        asked = posted_isolation({})
+
+        assert asked.filesystem is Filesystem.NOTHING
+        assert not asked.network
+
+    async def test_a_filesystem_this_console_does_not_know_is_refused(self) -> None:
+        """A card is a suggestion the page made, so a value outside it came from something else."""
+        with pytest.raises(NotAMessage, match="is not something a session can work in"):
+            posted_workspace({"workspace": ["the-whole-internet"]})
+
+    async def test_the_network_is_on_only_when_the_on_card_posted(self) -> None:
+        """
+        A radio that is not checked posts no field, so absent has to be the off answer.
+
+        Asserted against the empty string too, which is what the off card itself posts: the two have
+        to mean one thing or forgetting either would turn the switch on.
+        """
+        assert posted_isolation({"network": ["on"]}).network
+        assert not posted_isolation({"network": [""]}).network
+        assert not posted_isolation({}).network
+
+
+class TestOneQuestionAboutFiles:
+    """
+    A repository and the filesystem level it implies come out of one posted value.
+
+    That is the whole point of merging the two groups: they cannot arrive disagreeing, so nothing
+    downstream reconciles them and no control has to be kept in step with another.
+    """
+
+    def test_a_repository_settles_both(self) -> None:
+        assert posted_workspace({"workspace": ["exe-github:blog"]}) == ("exe-github:blog", Filesystem.WORKTREE)
+
+    def test_the_two_that_are_not_a_repository_settle_both(self) -> None:
+        assert posted_workspace({"workspace": ["nothing"]}) == (None, Filesystem.NOTHING)
+        assert posted_workspace({"workspace": ["everything"]}) == (None, Filesystem.EVERYTHING)
+
+    def test_an_id_is_told_from_a_level_by_its_colon(self) -> None:
+        """
+        What makes the encoding unambiguous rather than lucky.
+
+        A repository id is `forge:key`, so it always holds a colon and can never be either level's
+        name. A prefix would work too and would be one more thing to strip on both sides.
+        """
+        found, level = posted_workspace({"workspace": ["test:nothing"]})
+
+        assert found == "test:nothing", "a repository whose key spells a level is still a repository"
+        assert level is Filesystem.WORKTREE
+
+    def test_an_absent_field_is_the_tightest_answer(self) -> None:
+        assert posted_workspace({}) == (None, Filesystem.NOTHING)

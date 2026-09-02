@@ -52,6 +52,7 @@ from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
 from mainplate.durability import stepping
+from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 
 SESSION = "a-session"
@@ -443,19 +444,26 @@ class TestTheRecordedChoice:
     file and has to keep reading back as the same choice.
     """
 
-    def test_a_choice_is_recorded_as_the_four_things_it_is(self) -> None:
+    def test_a_choice_is_recorded_as_the_things_it_is(self) -> None:
         chosen = Choice(endpoint="gateway", model="wide/steady", repository="exe-github:blog", thinking="high")
         assert recorded_choice(chosen) == {
             "endpoint": "gateway",
             "model": "wide/steady",
             "repository": "exe-github:blog",
+            "isolation": {"filesystem": "nothing", "network": False},
             "thinking": "high",
         }
 
     def test_what_a_session_did_not_choose_is_recorded_rather_than_left_out(self) -> None:
         """Stated, so a reader can tell "asked for nothing" from "written before there was a knob"."""
         recorded = recorded_choice(Choice(endpoint="here", model="ripe/fast"))
-        assert recorded == {"endpoint": "here", "model": "ripe/fast", "repository": None, "thinking": None}
+        assert recorded == {
+            "endpoint": "here",
+            "model": "ripe/fast",
+            "repository": None,
+            "isolation": {"filesystem": "nothing", "network": False},
+            "thinking": None,
+        }
 
     def test_a_choice_written_before_repositories_existed_still_parses(self) -> None:
         """A session started when this console could only talk works in no repository, not a broken one."""
@@ -582,3 +590,26 @@ class TestAnsweringASession:
             ("person", "second session"),
             ("assistant", "answer 2"),
         ]
+
+
+class TestReadingBackWhatWasAlreadyRecorded:
+    """
+    A field that did not exist reads back as what the sessions written without it already had.
+
+    Ordinary parsing of an absent optional, the same way `thinking` is read, and deliberately not a
+    place where retired *values* accumulate: a recorded string this console has stopped writing is a
+    migration's problem at startup, not a branch on the read path that never goes away.
+    """
+
+    def test_a_session_recorded_before_isolation_existed_reads_as_what_it_had(self) -> None:
+        with_repository = parse_choice({"endpoint": "here", "model": "ripe/fast", "repository": "test:fixture"})
+        without = parse_choice({"endpoint": "here", "model": "ripe/fast"})
+
+        assert with_repository.isolation.filesystem is Filesystem.WORKTREE
+        assert without.isolation.filesystem is Filesystem.NOTHING
+        assert not without.isolation.network, "there was no way to reach a network then, so it reads as off"
+
+    def test_a_value_this_console_has_never_written_is_still_a_loud_failure(self) -> None:
+        """Reading a retired name back is not the same as accepting anything at all."""
+        with pytest.raises(TypeError, match="is not a filesystem this console knows"):
+            parse_choice({"endpoint": "here", "model": "m", "isolation": {"filesystem": "everywhere"}})

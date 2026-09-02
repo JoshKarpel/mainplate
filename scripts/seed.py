@@ -80,8 +80,16 @@ async def plant(service: Service, session: Session, chosen: Choice, checkpoint: 
     # The repository comes off the fixture row rather than being restated on the choice, because a
     # read puts it there: the index holds no such column and the sidebar gets it out of `choice`.
     # Declaring it twice is how a seeded session would come to say one thing and render another.
+    #
+    # Settled for the same reason `Service.start` settles it, and this is the one place that would
+    # otherwise skip it: writing the checkpoint directly bypasses the service, so without this a
+    # seeded session names a repository while recording that it reaches no files - exactly the
+    # contradictory pair nothing else in this console can produce.
+    working = replace(chosen, repository=session.repository)
     await service.checkpointer.supply(
-        session.id, CHOICE_KEY, recorded_choice(replace(chosen, repository=session.repository))
+        session.id,
+        CHOICE_KEY,
+        recorded_choice(replace(working, isolation=working.isolation.settled(working.repository))),
     )
     for key, value in checkpoint.items():
         await service.checkpointer.supply(session.id, key, value)

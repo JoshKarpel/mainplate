@@ -38,6 +38,15 @@ catalogue, durability, the worker - start the session on the cheapest model the 
 say the shortest thing that exercises it. Reach for a frontier model only when the change is about
 what a frontier model does differently, and say so.
 
+**`scripts/seed.py` is the one writer that is not `Service`, so an invariant the service enforces
+does not hold there unless it is repeated.** It supplies checkpoint keys directly, which is what lets
+it plant a finished conversation nobody paid for, and is also what makes it the one place a
+contradictory record can be written: it once seeded every fixture naming a repository while recording
+that it reached no files, because `Isolation.settled` lives in `Service.start` and nothing here goes
+through it. So a rule about what a recorded `choice` may hold is a rule this file has to apply too,
+and the demo database is where that is noticed - rebuild it (`rm mainplate-demo.db*` then `just
+seed`) after any change to what a choice records, or it keeps serving the old shape.
+
 **The stylesheet is a deliverable, and no string assertion checks one.** `just shots` renders every
 page from fixture checkpoints and drives a real Chromium over them, so a styling change can be
 looked at rather than argued about. It needs no server, no database, no provider and no
@@ -140,7 +149,8 @@ with nothing to dereference.
 One key for the session and five per turn, written by five different places and read by five:
 
 ```text
-choice               the endpoint, model, repository and thinking level; written by `Service.start`
+choice               the endpoint, model, repository, isolation and thinking level; written by
+                     `Service.start`
                      and by `Service.fork`, before the prompt
 turn:{n}:prompt      the person's message; written from outside a pass, by `Service.say`
 turn:{n}:tree:{i}    the worktree before the i-th model request; written by `StepwiseDurability`
@@ -306,9 +316,12 @@ Three things there are decided rather than incidental:
   answers "Repository not found" for any repository but its own.
 
 `Clones` keeps one **bare** clone per repository, so there is no "main" checkout to confuse with a
-session's and every worktree is a linked one off a shared object store. `Workspaces` is the three
-of them as one value - clones, worktree root, and what the forges reach - because they only mean
-anything as a set: a worktree is of a clone, and a clone is of something a forge reached.
+session's and every worktree is a linked one off a shared object store. `Workspaces` is the four of
+them as one value - clones, the worktree root, the scratch root, and what the forges reach - because
+they only mean anything as a set: a worktree is of a clone, a clone is of something a forge reached,
+and a scratch is what sits beside a worktree. It is the one place the word "workspaces" still means
+anything, naming the storage area rather than a collection of `Worktree`, which is what
+`MAINPLATE_WORKSPACES` and `Settings.workspace_root` have always called it.
 
 **The worker clones, never a request handler.** `Service.start` records the choice and returns; the
 session's first pass clones the repository and plants the worktree. A clone is a network fetch that
@@ -476,7 +489,7 @@ picker. `Service.fork` decides that rather than trusting what the form posted, w
 a form with no repository field quietly moving a branch out of its repository - the bug that shape
 of trust actually produced.
 
-`Workspace.restore` is written and tested but nothing calls it yet: today a snapshot is a record of
+`Worktree.restore` is written and tested but nothing calls it yet: today a snapshot is a record of
 what disk looked like, not something to go back to.
 
 ## How a model names a line
@@ -490,9 +503,12 @@ edit to anything that already imports them.
 
 Within the files one, `tools/files/anchors.py` is pure and `tools/files/tools.py` is the shell
 around it, which is the split that lets the interesting half be tested with a list of strings. A
-session with a repository gets `list`, `read`, `edit` and `create` bound to its own worktree, plus
-`bash` where there is a sandbox to run one in; a session with none gets **no toolset at all**,
-because tools that can only fail are worse than none and cost a description on every request.
+**Which tools a session gets is decided by its `isolation`, not by whether it picked a
+repository.** A session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree
+and its scratch; one on `EVERYTHING` gets the same four over `/`, where `list` refuses because
+nothing there is in git; one on `NOTHING` gets **no toolset at all**, because tools that can only
+fail are worse than none and cost a description on every request. `bash` is added to the first two
+wherever there is a sandbox to run it in.
 
 **`list` asks git rather than walking**, so a `.gitignore` is obeyed and a `.venv` or a
 `node_modules` never reaches a context window. `git ls-files --cached --others --exclude-standard`
@@ -688,7 +704,7 @@ plan or a notes file kept across turns, which is the one thing in a scratch dire
 line editor; a build cache never does.
 
 `Files` holds `roots`, a tuple of *typed* places rather than one path and a list of extras. The type
-is what decides: a `Worktree` is files a conversation is about and is the only kind git can be asked
+is what decides: a `GitTracked` is files a conversation is about and is the only kind git can be asked
 about, so it owns `entries` and answers `list`; a `Scratch` answers no question git answers, which
 is why it exists, so it carries no way to enumerate itself and `listing` refuses it in its own arm
 of a `match` that `assert_never` closes. Adding a kind is one arm, and adding a *second worktree* is
@@ -734,11 +750,70 @@ this console was before there was one. That is `forge.offers`'s promise rather t
 holding a choice they cannot use. It is logged because a shell tool that quietly is not there is the
 state nobody can diagnose.
 
-Two things are deliberately still to come. `Files.tracked` runs `git ls-files` in the parent rather
-than through the sandbox, which is a narrower problem than arbitrary shell (its argv is ours; the
-exposure is a malicious repository's git configuration) and a good next step. And the network is off
-for every session with no way to turn it on: the switch belongs on `choice`, written once before the
-first prompt and changed by forking, exactly as the endpoint and the model are.
+## Isolation, as two axes a session picks
+
+`Choice.isolation` is an `Isolation`, holding a `filesystem` and a `network`, recorded once before
+the first prompt and fixed for the session's life like the rest of the choice. Forking is how it
+changes. One value rather than two fields spread across `Choice`, because they are answered
+together, recorded together and read together by the one thing that builds a session's tools - and a
+third axis, what a command may *spend* in a cgroup, lands as a member rather than as a parameter
+threaded through four signatures.
+
+**The two axes are independent, and `EVERYTHING` still being a sandbox is what keeps them so.** The
+network switch is `--unshare-net` on the same namespace, the credential is kept out by `--clearenv`
+and teardown is `--unshare-pid`, so an arm that dropped the sandbox would silently take all three
+with it and make "the whole machine with no network" unrepresentable. `Sandbox.everywhere` binds `/`
+read-write instead of a worktree and changes nothing else, which is why there is one `argv` rather
+than two.
+
+**The repository and the filesystem level are one question, asked once.** `workspace_cards` is the
+group: every repository a forge reaches, plus `no files` and `this whole machine`. Picking one
+settles `Choice.repository` and `isolation.filesystem` together, so they cannot disagree at the
+source. `posted_workspace` is where one posted value becomes the two recorded ones, told apart
+without a prefix because a repository's id is `forge:key` and so always holds a colon.
+
+That is a correction rather than the first design, and the reason is worth keeping. They were two
+groups, with the worktree level drawn greyed until a repository was picked. Keeping the two in step
+then wanted a swap to refresh the greying, a fix so the narrowing box would not check a disabled
+card, and a card in the completion list that could not be chosen - three pieces of machinery for one
+answer stored in two places, which is the thing this console refuses everywhere else. **If a control
+here starts needing to be kept in step with another control, that is the signal the two are one
+question.**
+
+**An enum whose members are recorded cannot be renamed freely, because the *value* is what is in
+the store.** `Filesystem.WORKTREE` was `WORKSPACE`, and renaming the member changed the recorded
+string too, so every session written until then became a page that answered 500. Nothing had been
+released, so those records were only ever in a development database and the rename stands as it is.
+
+**Where that is not true, the answer is a migration at startup, not a branch on the read path.**
+`parse_isolation` describes the shape this console writes *now*; a retired value bridged inline never
+goes away, and a file accreting them stops saying what the record is. Defaulting an *absent* field is
+a different thing and stays: that is ordinary parsing of an optional, the way `thinking` is read, and
+it is what lets every session written before `isolation` existed read back as what it already had.
+
+`Isolation.settled` survives the merge and is still applied by `Service.start` and `Service.fork`,
+because a fork's repository is *inherited* rather than posted and a form is not the only way in. What
+it no longer has to do is correct the start page, which can no longer express a contradiction.
+`parse_isolation` still takes a record as it stands and only *defaults* it, from `repository`, for
+the checkpoints written before the field existed.
+
+Whether the workspace can be chosen at all is the caller's answer, given to `picker` as `None` rather
+than as an empty `Reachable`. The difference is load-bearing now that the group holds more than
+repositories: empty means no forge reaches anything, which still leaves two answers worth offering,
+where `None` means a fork already works somewhere and a control would be a lie about what the page
+does.
+
+The network sits under the workspace and above the endpoint, following the picker's order of
+breadth: what a session's files are decides what it can touch, whether it can dial out decides what
+it can do with them, and the endpoint and model only decide who answers.
+
+**A session on `EVERYTHING` can read `config.yaml` and the store**, which is to say the credentials
+and every other conversation. That is what choosing it means rather than an oversight, and the card
+says so.
+
+One thing is deliberately still to come. `GitTracked.entries` runs `git ls-files` in the parent
+rather than through the sandbox, which is a narrower problem than arbitrary shell (its argv is ours;
+the exposure is a malicious repository's git configuration) and a good next step.
 
 ## Durability
 
@@ -928,24 +1003,29 @@ the list and draws the rest of it over what follows. **And a control revealed by
 exist**, which is `@media (hover: none)` rather than a width: the branch link is offered on a
 person's panel and nowhere else, so hiding it there hides forking entirely.
 
-**The picker is ordered widest-first: repository, endpoint, model, thinking**, and then the name and
-the message box, which are the composer's rather than the picker's. Where a session works is the
-broadest thing about it and the only one deciding what the agent can touch at all, so it leads; the
-endpoint and the model are adjacent because they are a pair, the list being whatever the endpoint
-above it offers; the thinking level is a setting *on* the model, so it sits under it.
+**The picker is ordered widest-first: workspace, network, endpoint, model, thinking**, and then the
+name and the message box, which are the composer's rather than the picker's. What files a session
+has is the broadest thing about it and is one question rather than two, so it leads; the network
+follows because it is the other thing deciding what the agent can do at all, where the endpoint and
+the model only decide who answers; the endpoint and the model are adjacent because they are a pair,
+the list being whatever the endpoint above it offers; the thinking level is a setting *on* the
+model, so it sits under it.
 
 **Every question the picker asks is one component.** `choosing` in `pages.py` takes a legend, a
 toggle id, the names on offer and a body of cards, and gives back a group that folds to what is
-picked, says how many options it has, and can be narrowed by typing. All four questions - the
-repository, the endpoint, the model, the thinking level - are built from it, which is why the
-repository and the thinking level stopped being `<select>`s: a select renders its options as text in
-every browser, so it could carry neither the forge a repository came from nor the fold, and having
-two kinds of control answering four versions of one question was the thing to remove.
+picked, says how many options it has, and can be narrowed by typing. All five questions - the
+workspace, the network, the endpoint, the model and the thinking level - are built from it, and that
+is why none of them is a `<select>`: a select renders its options as text in every browser, so it
+could carry neither the forge a repository came from, nor the sentence under a level that is not
+one, nor the fold. Having two kinds of control answering versions of one question was the thing to
+remove.
 
-A fifth picker is a `choosing` call and nothing else. The script names none of the four card classes
+A sixth question is a `choosing` call and nothing else. The script names none of the card classes
 - it finds a card structurally, as a `<label>` with a radio in it, or by the `data-name` the card
 declares - so a new kind of card needs no edit there. The one selector it does name is
-`.models__provider`, which is not a card but the heading over a run of them.
+`.models__provider`, which is not a card but the heading over a run of them. The CSS is the one
+place a new kind is listed by name, because the shared card rules are a grouped selector, so a card
+added without being added there is drawn unstyled and, worse, does not fold.
 
 Four things there are decided:
 
@@ -991,7 +1071,7 @@ is what it was always for.
 
 The picker's controls are **associated with their form by name, not by nesting**, and that is
 load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned
-under it, so every radio in all four groups is a *sibling* of the form that posts them;
+under it, so every radio in every group is a *sibling* of the form that posts them;
 `form="choosing"` (`CHOOSING_ID` in `pages.py`) is the whole of what makes them submit, and without it
 the console refuses its own page with a 422 saying a message needs an endpoint and a model. The fork
 page nests its picker inside a form of the same name, so `model_cards` can carry one attribute and

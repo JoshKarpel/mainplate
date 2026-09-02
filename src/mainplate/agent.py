@@ -24,18 +24,21 @@
 # over it, and how to ask it what it serves. They are together because they are the same knowledge,
 # and because a third format should be one class rather than an edit in three files.
 #
-# The file tools hang off the agent as a toolset, and they hang off it *per session* rather than
-# once for the process, because what makes a path safe is the worktree it is resolved inside and
-# every session has its own. A session with no repository is built with no toolset at all: a console
-# used to talk rather than to edit is what this was before there were repositories, and four tools
-# that can only fail are worse than none. `StepwiseDurability` is what records the calls, on the
-# same capability that already records the model requests.
+# The tools hang off the agent as toolsets, and they hang off it *per session* rather than once for
+# the process, because what makes a path safe is the root it is resolved inside and every session
+# picks its own. **Which tools a session gets is decided by its `isolation`**, not by what this
+# module happens to be handed: a worktree gets the file tools over it and its scratch, the whole
+# machine gets them over `/`, and reaching nothing gets no toolset at all - a console used to talk
+# rather than to edit is what this was before there were repositories, and tools that can only fail
+# are worse than none. `StepwiseDurability` is what records the calls, on the same capability that
+# already records the model requests.
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from typing import Final
 from typing import Protocol
@@ -55,10 +58,16 @@ from pydantic_ai.settings import ThinkingLevel
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.durability import StepwiseDurability
-from mainplate.snapshots import Workspace
+from mainplate.sandbox import Confinement
+from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Isolation
+from mainplate.sandbox import OverEverything
+from mainplate.snapshots import Worktree
 from mainplate.tools import Files
+from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
-from mainplate.tools import Worktree
+from mainplate.tools import System
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
 from mainplate.tools.files.tools import Root
@@ -105,6 +114,28 @@ class Choice:
     An id rather than a path or a URL, because how to reach a repository is a discovery-time fact
     and which repository it is is not. Absent means a session with no files at all, which is what a
     console being used to talk rather than to edit has and what every session had before this.
+    """
+
+    isolation: Isolation = field(default_factory=Isolation)
+    """
+    How confined this session is: what its tools may reach, and whether they may dial out.
+
+    Not free of `repository` on the filesystem axis: a session that picked one reaches its worktree
+    and can reach nothing else, and a session that picked none cannot reach a worktree there is none
+    of. `Isolation.settled` is what makes that true, applied by `Service.start` and `Service.fork`
+    rather than trusted from a form - the same stance that stops a form with no repository field
+    moving a branch out of its repository. So the pair can never be recorded contradicting itself and
+    nothing downstream reconciles anything.
+
+    The network is off by default, and off rather than allowlisted. An allowlist containing a code
+    forge contains every gist on it, one containing a package registry contains a package anybody can
+    publish, and a DNS query carries whatever you like out through any resolver that is permitted.
+    What it would cost is a proxy in front of every command and a certificate authority inside the
+    sandbox; what it would buy is a defence against a repository's own build script and very little
+    against anything deliberate.
+
+    Defaulted to reaching nothing with no network, because that is what every session had before
+    this existed and what a checkpoint written then must keep reading back as.
     """
 
     thinking: ThinkingLevel | None = None
@@ -406,7 +437,7 @@ def build_wires(config: Config) -> Wires:
     return Wires(by_endpoint={name: build_wire(endpoint) for name, endpoint in config.endpoints.items()})
 
 
-def working_note(workspace: Workspace, scratch: Path | None = None) -> str:
+def working_note(worktree: Worktree, scratch: Path | None = None) -> str:
     """
     What the agent is told about the directory its tools reach, which is where it is and nothing more.
 
@@ -416,17 +447,53 @@ def working_note(workspace: Workspace, scratch: Path | None = None) -> str:
     since a toolset is built per session and its own description is not.
     """
     said = (
-        f"You are working in a git worktree at {workspace.root}. The file tools take paths relative "
+        f"You are working in a git worktree at {worktree.root}. The file tools take paths relative "
         f"to it and reach nothing outside it. Changes you make there are snapshotted automatically; "
         f"you never need to commit, and you should not run git commands to record your work."
     )
     if scratch is None:
         return said
-    # The path and not the policy, for the reason above: what the scratch directory is *for* is on
-    # the tool that reaches it, and what cannot live there is which directory this session got.
+    # The paths and the policy both, because both are this session's rather than the tool's. A
+    # `bash` description cannot carry either: one toolset is built per session and its tools'
+    # descriptions are not, so what varies between sessions has to be said here.
     return (
         f"{said} You also have a scratch directory at {scratch}, outside the worktree and outside "
-        f"every snapshot, which is where anything that is not the repository's belongs."
+        f"every snapshot, which is where anything that is not the repository's belongs. Commands "
+        f"you run reach those two directories and a read-only system, and nothing else: no home "
+        f"directory, no other session's files, and no configuration of the console itself. Git can "
+        f"be read but not written there, so `status`, `diff`, `log` and `blame` answer while `add`, "
+        f"`commit` and `stash` fail."
+    )
+
+
+def network_note(reachable: bool) -> str:
+    """
+    Whether commands can dial out, which is this session's setting rather than the tool's.
+
+    Said either way rather than only when it is off. "There is no network" stops a model wasting
+    a turn on a fetch that cannot work; "there is a network" stops one refusing to try.
+    """
+    if reachable:
+        return "Commands you run can reach the network."
+    return (
+        "Commands you run cannot reach the network: no fetching, no installing, no cloning. "
+        "Something that needs one fails rather than hanging."
+    )
+
+
+def whole_machine_note() -> str:
+    """
+    What a session reaching everything is told, which is the shape of what it has rather than a path.
+
+    No root to name, because the root is `/` and saying so tells a model nothing it cannot see. What
+    it cannot see is that this was *chosen*, and that nothing here is snapshotted: a session on this
+    arm has no worktree, so the record of what it did is the conversation and nothing else.
+    """
+    return (
+        "You are working on this machine directly, with no repository and no worktree. Paths are "
+        "absolute and reach the whole filesystem. Nothing you change is snapshotted, so there is no "
+        "going back to before a change through this console; say what you are about to do to "
+        "anything you cannot undo."
     )
 
 
@@ -434,7 +501,7 @@ def agent_for(
     wires: Wires,
     chosen: Choice,
     instructions: str,
-    workspace: Workspace | None = None,
+    worktree: Worktree | None = None,
     scratch: Path | None = None,
     bwrap: str | None = None,
 ) -> Agent[None, str]:
@@ -450,34 +517,51 @@ def agent_for(
     and are as fixed as it is: a pass that resumed a session at a different effort would continue a
     conversation whose earlier answers were reasoned at another.
 
-    **A session with no workspace gets no tools at all**, rather than tools that refuse every
-    call. A console being used to talk rather than to edit is what this was before there were any
-    repositories, and offering a model tools that cannot work is worse than offering none:
-    it spends the description on every request and invites a call that can only fail.
+    **What the tools are is decided by the session's own isolation**, not by what this happens to be
+    handed. `Filesystem.NOTHING` gets no toolset at all rather than tools that refuse every call: a
+    console being used to talk rather than to edit is what this was before there were repositories,
+    and offering a model tools that cannot work is worse than offering none, since it spends the
+    description on every request and invites a call that can only fail.
 
     `bwrap` is passed in rather than looked up here, because where the sandbox binary is is a fact
-    about the machine and this is called once per pass. A session with a workspace and no sandbox
-    gets the file tools and no `bash`, which is what this console was before there was one: the
-    alternative is running somebody else's build script against the whole home directory, and a
-    missing sandbox is not a reason to do that.
+    about the machine and this is called once per pass. Without it a `WORKTREE` session keeps its
+    file tools and is offered no `bash`, which is what this console was before there was one, and an
+    `EVERYTHING` session gets nothing at all: what that arm *is* is a sandbox with `/` in it, so
+    without one there is nothing to give it that anybody chose.
     """
     tools = []
-    running = workspace is not None and scratch is not None and bwrap is not None
-    if workspace is not None:
-        # The scratch is reachable by the file tools only where a command can make it exist, which
-        # is the same condition `bash` is offered under. Offered without one, `read` would name a
-        # directory nothing ever creates. The worktree is first, so a relative path still means the
-        # repository however many roots a session ends up with.
-        reaching: tuple[Root, ...] = (Worktree(path=workspace.root),)
-        if running and scratch is not None:
-            reaching = (*reaching, Scratch(path=scratch))
-        tools.append(file_tools(Files(roots=reaching)))
-        if scratch is not None and bwrap is not None:
-            tools.append(bash_tools(workspace, scratch, bwrap))
-    if workspace is None:
-        spoken = instructions
-    else:
-        spoken = f"{instructions}\n\n{working_note(workspace, scratch if running else None)}"
+    spoken = instructions
+    confinement: Confinement | None = None
+    match chosen.isolation.filesystem:
+        case Filesystem.NOTHING:
+            pass
+        case Filesystem.WORKTREE if worktree is not None:
+            # The scratch is reachable by the file tools only where a command can make it exist,
+            # which is the same condition `bash` is offered under. Offered without one, `read` would
+            # name a directory nothing ever creates. The worktree is first, so a relative path still
+            # means the repository however many roots a session ends up with.
+            running = scratch is not None and bwrap is not None
+            reaching: tuple[Root, ...] = (GitTracked(path=worktree.root),)
+            if running and scratch is not None:
+                reaching = (*reaching, Scratch(path=scratch))
+                confinement = InAWorktree(worktree=worktree, scratch=scratch)
+            tools.append(file_tools(Files(roots=reaching)))
+            spoken = f"{instructions}\n\n{working_note(worktree, scratch if running else None)}"
+            spoken = f"{spoken}\n\n{network_note(chosen.isolation.network)}" if running else spoken
+        case Filesystem.WORKTREE:
+            # A worktree was chosen and none was supplied, which is the instant before a session's
+            # first pass has planted one. No tools rather than tools rooted nowhere.
+            pass
+        case Filesystem.EVERYTHING if bwrap is not None:
+            confinement = OverEverything()
+            tools.append(file_tools(Files(roots=(System(path=Path("/")),))))
+            spoken = f"{instructions}\n\n{whole_machine_note()}\n\n{network_note(chosen.isolation.network)}"
+        case Filesystem.EVERYTHING:
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+    if confinement is not None and bwrap is not None:
+        tools.append(bash_tools(confinement, bwrap, chosen.isolation.venue))
     return Agent(
         wires.for_endpoint(chosen.endpoint).model(chosen.model),
         name="mainplate",

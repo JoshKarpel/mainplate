@@ -61,20 +61,24 @@ provider turns up under more than one endpoint, since every Fireworks model on e
 listed by both of its formats under one id. So the shape is `endpoint -> model`, and the provider is
 the heading the model cards are grouped under.
 
-A session records the endpoint, the model, a thinking level *and* a repository, at the moment it is
-created, and all four are fixed for its life. The endpoint is what carries the API format, which is
-why it is recorded rather than looked up later: the same model id genuinely does sit behind two
-formats, and the two serialize a conversation differently. You pick all four on the new-session
-page, where the endpoints are cards naming the API format each speaks and the URL each points at,
-and the models are cards carrying what they cost, how much they read, and what they can do, grouped
-by the vendor each comes from. All four questions are the same component: a group of cards **folded
-down to the one you picked**, with the count of what else is on offer beside it and a box that
-narrows the group as you type. A gateway serves seventy models, and a wall of seventy cards is not a
-page you can see the rest of your choices on; shut, the whole of what a session is decided by is
-four lines. Opening a group is a checkbox and the folding is a CSS `:has()` rule, so it works with
-JavaScript off and a shut group can never name something other than what is actually checked. After
-that
-the session says what it is on rather than offering a control that could not change it. A
+A session records five things at the moment it is created: its workspace, whether its commands may
+reach the network, the endpoint, the model, and a thinking level. All five are fixed for its life.
+The workspace is one question rather than two: a repository this console can reach, or no files, or
+this whole machine, and picking one settles both what the session works in and what its tools may
+touch. The endpoint is what carries the API format, which is why it is recorded
+rather than looked up later: the same model id genuinely does sit behind two formats, and the two
+serialize a conversation differently.
+
+You pick all five on the new-session page, ordered widest first. The endpoints are cards naming the
+API format each speaks and the URL each points at, and the models are cards carrying what they cost,
+how much they read, and what they can do, grouped by the vendor each comes from. Every one of the five
+is the same component: a group of cards **folded down to the one you picked**, with the count of what
+else is on offer beside it and a box that narrows the group as you type. A gateway serves seventy
+models, and a wall of seventy cards is not a page you can see the rest of your choices on; shut, the
+whole of what a session is decided by is five lines. Opening a group is a checkbox and the folding is
+a CSS `:has()` rule, so it works with JavaScript off and a shut group can never name something other
+than what is actually checked. After that the session says what it is on rather than offering a
+control that could not change it. A
 conversation that switched model halfway would replay its recorded answers from one and continue on
 another, so what the transcript shows and what the next turn reasons from would have different
 authors.
@@ -249,9 +253,19 @@ instance is simply in scope.
 
 ## How the agent edits files
 
-A session that picked a repository gets `list`, `read`, `edit` and `create`, bound to that session's
-own git worktree and refusing any path outside it. A session that picked no repository gets no tools
-at all, which is what this console was before there were repositories: a place to talk.
+What a session's tools reach is one of the two things it picks when it is created. A session
+working in a repository gets `list`, `read`, `edit` and `create` over its own git worktree and a
+scratch directory beside it, refusing any path outside the two. One working on the whole machine
+gets the same four with no such boundary. One reaching nothing gets no tools at all, which is what
+this console was before there were repositories: a place to talk.
+
+Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
+Every command runs in a mount namespace of its own holding exactly what that session reaches and a
+read-only system, so there is no home directory and no configuration of the console in it, and the
+network is off unless the session asked for it. Inside a worktree the repository's git objects go in
+read-only: `status`, `diff`, `log` and `blame` all answer, while `commit` and `stash` fail. That is
+deliberate rather than incidental, because the conversation is how work is recorded here and
+committing is yours to do.
 
 `list` takes a directory and a depth, and a directory at that depth is summarised by a count rather
 than opened, so the depth bounds the answer instead of hinting at it:
@@ -392,10 +406,15 @@ box pinned under it, and the fork page scrolls as the one long thing it is.
 
 Named plainly, because they are the next things rather than omissions nobody noticed:
 
-- **Three file tools, and no way to run anything.** The agent reads, edits and creates files in its
-  worktree, and cannot run a command, search across files, or list a directory. Each of those is
-  another tool on the same toolset rather than a change to anything under it, since a tool call is
-  already a recorded step and the console already draws one.
+- **No allowlist for the network, only on or off.** An allowlist holding a code forge holds every
+  gist on it and one holding a package registry holds a package anybody can publish, so what it
+  would buy is a defence against a repository's own build script and little against anything
+  deliberate, at the price of a proxy in front of every command.
+  Narrowing it would be that proxy, not a longer setting.
+- **Nothing serialises `bash` against an edit.** Two `edit` calls at one file are serialised, so a
+  batch of them cannot lose each other's work, but a shell command writing a file while an edit
+  writes it is outside what that can see: the paths a command touches are not knowable before it
+  runs.
 - **Two API formats, not every format.** An endpoint's `format` takes `anthropic` or `openai`, which
   between them cover most gateways. A third is one `Endpoint` class saying how to name a model over
   that format and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.

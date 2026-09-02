@@ -59,7 +59,7 @@ from without_durability.stepwise import Parse
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
-from mainplate.snapshots import Workspace
+from mainplate.snapshots import Worktree
 
 ModelResponseTypeAdapter: TypeAdapter[ModelResponse] = TypeAdapter(ModelResponse)
 
@@ -89,21 +89,21 @@ def parse_returned(recorded: object) -> object:
     return recorded
 
 
-def snapshotting(workspace: Workspace | None, why: str) -> Callable[[], Awaitable[object]]:
+def snapshotting(worktree: Worktree | None, why: str) -> Callable[[], Awaitable[object]]:
     """
-    What the workspace looked like at one model request, as the effect `Run.step` takes.
+    What the worktree looked like at one model request, as the effect `Run.step` takes.
 
     A step rather than a plain read, and that is the rule the mechanism asks for rather than a
     preference: reading a worktree returns a different answer every time it is asked, so a pass
     that re-read it would resume a conversation against a directory that has moved since. Recorded
     once, every later pass is handed the hash the first one saw and runs no git at all.
 
-    No workspace records `None` rather than nothing at all, so a turn taken before one was
+    No worktree records `None` rather than nothing at all, so a turn taken before one was
     configured is distinguishable from a turn nobody has reached yet.
     """
 
     async def capture() -> object:
-        return None if workspace is None else await workspace.capture(why)
+        return None if worktree is None else await worktree.capture(why)
 
     return capture
 
@@ -142,14 +142,14 @@ class Stepping:
     of the recorded model response, and a replay is handed the same response, so it is stable
     across passes for free where a counter is not.
 
-    Fresh per turn, so nothing survives the scope for another one to see. `workspace` is the one
+    Fresh per turn, so nothing survives the scope for another one to see. `worktree` is the one
     thing on it that belongs to the session rather than the turn, and it is here because the point
     where a snapshot may be taken is a model request and this is what stands at one.
     """
 
     run: Run
     prefix: str
-    workspace: Workspace | None = None
+    worktree: Worktree | None = None
     taken: Counter[str] = field(default_factory=Counter)
 
     def key(self, kind: str) -> StepKey:
@@ -167,7 +167,7 @@ class Stepping:
 
     async def snapshot(self) -> str | None:
         """
-        Record what the workspace holds right now, at a point where nothing is writing to it.
+        Record what the worktree holds right now, at a point where nothing is writing to it.
 
         Called from `CheckpointedModel.request`, which is the only place that can honestly call it.
         A model request is the boundary at which every tool of the previous batch has returned by
@@ -179,14 +179,14 @@ class Stepping:
         request of which turn it was taken before without a second naming scheme to keep in step.
         """
         key = self.key("tree")
-        return await self.step(key, snapshotting(self.workspace, key), parse_tree)
+        return await self.step(key, snapshotting(self.worktree, key), parse_tree)
 
 
 current_stepping: ContextVar[Stepping | None] = ContextVar("mainplate_stepping", default=None)
 
 
 @contextmanager
-def stepping(run: Run, prefix: str, workspace: Workspace | None = None) -> Iterator[Stepping]:
+def stepping(run: Run, prefix: str, worktree: Worktree | None = None) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
 
@@ -196,7 +196,7 @@ def stepping(run: Run, prefix: str, workspace: Workspace | None = None) -> Itera
     through. It is the same place DBOS reads its workflow id from, and the same place Pydantic AI
     keeps its own ambient run context.
     """
-    scope = Stepping(run=run, prefix=prefix, workspace=workspace)
+    scope = Stepping(run=run, prefix=prefix, worktree=worktree)
     token = current_stepping.set(scope)
     try:
         yield scope
@@ -232,7 +232,7 @@ class CheckpointedModel(WrapperModel):
         store is an `object` on the pass that ran the request as much as on the one that
         resumed it.
 
-        The workspace is snapshotted first, because this is the moment it is worth snapshotting:
+        The worktree is snapshotted first, because this is the moment it is worth snapshotting:
         no tool is running, so the tree is a coherent thing to read, and what is recorded is the
         state the model is about to be asked to reason about. A pass that replays this request
         replays the snapshot too and runs no git, so the pair stay in step whatever happens

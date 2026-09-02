@@ -13,8 +13,8 @@
 # One key for the session, and five per turn. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
-#     choice               the endpoint, model, repository and thinking level this session is on,
-#                          written once at creation
+#     choice               the endpoint, model, repository, isolation and thinking level this
+#                          session is on, written once at creation
 #     turn:{n}:prompt      what the person said, written from outside the pass by `arrive`
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
@@ -78,7 +78,9 @@ from mainplate.durability import parse_model_response
 from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
-from mainplate.snapshots import Workspace
+from mainplate.sandbox import Filesystem
+from mainplate.sandbox import Isolation
+from mainplate.snapshots import Worktree
 from mainplate.thinking import BY_LEVEL
 
 CHOICE_KEY: StepKey = "choice"
@@ -88,6 +90,14 @@ CHOICE_KEY: StepKey = "choice"
 THINKING_FIELD: Final = "thinking"
 
 REPOSITORY_FIELD: Final = "repository"
+
+# The two isolation axes, named here beside the rest of the choice's fields. Both are absent from
+# every record written before they existed, and both read back as what those sessions already had:
+# `filesystem` from whether a repository was picked, `network` as off, since there was no way for a
+# session to reach one at all.
+ISOLATION_FIELD: Final = "isolation"
+FILESYSTEM_FIELD: Final = "filesystem"
+NETWORK_FIELD: Final = "network"
 
 # A value no checkpoint can hold, so that "no such key" stays distinguishable from a step that
 # recorded `None`. The store keeps those apart deliberately - its `value` column is `NOT NULL` - and
@@ -147,7 +157,7 @@ def messages_key(turn: int) -> StepKey:
 
 def tree_key(turn: int, at: int) -> StepKey:
     """
-    What the workspace looked like before the `at`-th model request of this turn.
+    What the worktree looked like before the `at`-th model request of this turn.
 
     One per model request rather than one per turn, because with tools the worktree changes
     *during* a turn and a single snapshot at the top would describe only the state the first
@@ -233,6 +243,33 @@ def parse_thinking(recorded: object) -> ThinkingLevel | None:
     raise TypeError(f"a thinking level must be a boolean or an effort, not {recorded!r}")
 
 
+def parse_isolation(recorded: object, repository: str | None) -> Isolation:
+    """
+    How much of the filesystem a session reaches, defaulted from what it is working in.
+
+    A record written before this field existed has no key, and what it must read back as is exactly
+    what that session already had: a worktree if it picked a repository and no files if it did not.
+    Deriving the default from `repository` rather than picking a constant is what makes that true for
+    both kinds of session at once.
+
+    A recorded value is taken as it stands and *not* reconciled with `repository`, deliberately.
+    Making the pair agree is `Service`'s job at the moment a session is created, so a disagreement
+    here would mean a record this console never writes, and quietly correcting it would hide that.
+    """
+    if recorded is None:
+        return Isolation(filesystem=Filesystem.WORKTREE if repository is not None else Filesystem.NOTHING)
+    if not isinstance(recorded, dict):
+        raise TypeError(f"an isolation must be a mapping, not {recorded!r}")
+    named = recorded.get(FILESYSTEM_FIELD)
+    if not isinstance(named, str):
+        raise TypeError(f"a filesystem must be a name, not {named!r}")
+    try:
+        reaching = Filesystem(named)
+    except ValueError:
+        raise TypeError(f"{named!r} is not a filesystem this console knows") from None
+    return Isolation(filesystem=reaching, network=recorded.get(NETWORK_FIELD) is True)
+
+
 def parse_choice(recorded: object) -> Choice:
     """
     What a session was started on, or a loud failure if the record is not a choice.
@@ -253,6 +290,7 @@ def parse_choice(recorded: object) -> Choice:
         endpoint=endpoint,
         model=model,
         repository=repository,
+        isolation=parse_isolation(recorded.get(ISOLATION_FIELD), repository),
         thinking=parse_thinking(recorded.get(THINKING_FIELD)),
     )
 
@@ -270,6 +308,7 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
         ENDPOINT_FIELD: chosen.endpoint,
         "model": chosen.model,
         REPOSITORY_FIELD: chosen.repository,
+        ISOLATION_FIELD: {FILESYSTEM_FIELD: chosen.isolation.filesystem.value, NETWORK_FIELD: chosen.isolation.network},
         THINKING_FIELD: chosen.thinking,
     }
 
@@ -397,7 +436,7 @@ class Panel:
 
     On the person's panel because that is where the snapshot is taken and where the fork link
     already is: the two are the same point, so a reader deciding to go back to a turn can see what
-    going back would put on disk. Absent everywhere else, and absent altogether where no workspace
+    going back would put on disk. Absent everywhere else, and absent altogether where no worktree
     is configured, since a hash for a directory nobody chose would be a fact about nothing.
     """
 
@@ -778,7 +817,7 @@ class NoSuchRepository(LookupError):
     """
 
 
-async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn: int) -> Workspace | None:
+async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn: int) -> Worktree | None:
     """
     The session's own worktree, made to exist before the turn that will work in it.
 
@@ -796,7 +835,7 @@ async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn
     return planted
 
 
-def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> Workspace | None:
+def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> Worktree | None:
     """
     Where this session's files are, as a value, without asking whether they are there yet.
 
@@ -807,7 +846,7 @@ def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> W
     """
     if workspaces is None or chosen.repository is None:
         return None
-    return workspaces.workspace(session)
+    return workspaces.worktree(session)
 
 
 def conversing(
@@ -842,11 +881,11 @@ def conversing(
         # One value for the session's files, used twice: the agent's tools are bound to it, and
         # every snapshot inside a turn is taken of it. A session with no repository has none, and
         # gets an agent with no file tools rather than tools that refuse every call.
-        workspace = working_in(workspaces, run.workflow, chosen)
-        # Only where there is a workspace to sit beside: a session with no repository has nothing
+        worktree = working_in(workspaces, run.workflow, chosen)
+        # Only where there is a worktree to sit beside: a session with no repository has nothing
         # the scratch would be scratch *for*, and gets no tool that could reach it either.
-        scratch = None if workspaces is None or workspace is None else workspaces.scratch_at(run.workflow)
-        agent = agent_for(endpoints, chosen, instructions, workspace=workspace, scratch=scratch, bwrap=bwrap)
+        scratch = None if workspaces is None or worktree is None else workspaces.scratch_at(run.workflow)
+        agent = agent_for(endpoints, chosen, instructions, worktree=worktree, scratch=scratch, bwrap=bwrap)
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
@@ -865,12 +904,12 @@ def conversing(
             # this pass. A pass that resumes mid-conversation issues its first request under
             # `turn:7:model:0` exactly as the pass that first reached turn 7 did.
             #
-            # The snapshots are inside this rather than taken here, and that is what the workspace
+            # The snapshots are inside this rather than taken here, and that is what the worktree
             # is handed over for. One per model request is the only cadence that holds once tools
             # can write: the first is taken before the model is asked anything, which is the state
             # a rewind to this turn puts back, and each later one records what the previous batch
             # of calls left behind.
-            with stepping(run, turn_prefix(at.turn), workspace):
+            with stepping(run, turn_prefix(at.turn), worktree):
                 answered = await agent.run(prompt, message_history=list(at.history))
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             at = Reached(turn=at.turn + 1, history=(*at.history, *said))

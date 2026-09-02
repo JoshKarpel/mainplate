@@ -29,8 +29,9 @@ from without_web import post
 from without_web import query_param
 
 from mainplate.agent import Choice
-from mainplate.conversation import REPOSITORY_FIELD
+from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
+from mainplate.pages import WORKSPACE_FIELD
 from mainplate.pages import Links
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
@@ -42,6 +43,8 @@ from mainplate.pages import session_page
 from mainplate.pages import stalled_by
 from mainplate.pages import start_page
 from mainplate.pages import transcript_region
+from mainplate.sandbox import Filesystem
+from mainplate.sandbox import Isolation
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.streaming import watching
@@ -129,10 +132,51 @@ def parse_form_start(raw: bytes) -> Started:
         chosen=Choice(
             endpoint=endpoint,
             model=model,
-            repository=fields.get(REPOSITORY_FIELD, [""])[0].strip() or None,
+            repository=posted_workspace(fields)[0],
+            isolation=posted_isolation(fields),
             thinking=posted_thinking(fields),
         ),
     )
+
+
+def posted_workspace(fields: Mapping[str, list[str]]) -> tuple[str | None, Filesystem]:
+    """
+    What files a form asked for, as the repository and the filesystem level it means.
+
+    One posted field becoming two recorded values, parsed once here at the boundary. That is the
+    whole point of the control being one group: a repository and the level it implies are one answer,
+    so they are read out of one value and cannot arrive disagreeing.
+
+    A value is either a `Filesystem` member's own name or a repository id, told apart without a
+    prefix because an id is `forge:key` and so always holds a colon. An absent field is `NOTHING`
+    rather than a refusal, so a form predating the control still names a whole choice and names the
+    tightest answer, which is what a session had before there was anything to ask.
+    """
+    named = fields.get(WORKSPACE_FIELD, [""])[0].strip()
+    if not named:
+        return None, Filesystem.NOTHING
+    if ":" in named:
+        return named, Filesystem.WORKTREE
+    try:
+        return None, Filesystem(named)
+    except ValueError:
+        raise NotAMessage(f"{named!r} is not something a session can work in") from None
+
+
+def posted_isolation(fields: Mapping[str, list[str]]) -> Isolation:
+    """
+    How confined a form asked for, as the two axes together.
+
+    The network is a closed set, so this layer settles it the way it settles the thinking level and
+    for the same reason: unlike an endpoint it is not discovered. A radio that is not checked posts
+    no field at all, so an absent one has to mean off, which is also the safe answer.
+
+    Nothing here reconciles the filesystem with the repository, and after the merge nothing needs to:
+    they come out of one posted value. `Isolation.settled` is still what the service applies, because
+    a fork's repository is inherited rather than posted and a form is not the only way in.
+    """
+    _, reaching = posted_workspace(fields)
+    return Isolation(filesystem=reaching, network=fields.get(NETWORK_FIELD, [""])[0].strip() == "on")
 
 
 def posted_thinking(fields: Mapping[str, list[str]]) -> ThinkingLevel | None:
@@ -202,7 +246,8 @@ def parse_form_fork(raw: bytes) -> Forking:
             model=model,
             # Only meaningful for a fork of a session that has no repository, and the service is
             # what decides that: one already in a repository keeps it whatever arrives here.
-            repository=fields.get(REPOSITORY_FIELD, [""])[0].strip() or None,
+            repository=posted_workspace(fields)[0],
+            isolation=posted_isolation(fields),
             thinking=posted_thinking(fields),
         ),
         said=fields.get("prompt", [""])[0].strip() or None,

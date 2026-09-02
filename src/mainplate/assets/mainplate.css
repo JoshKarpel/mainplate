@@ -1079,7 +1079,7 @@ main > * {
 /* Shut: everything not picked is gone, and so is the provider heading over it - a lone card under
    `ANTHROPIC` is a group of one, which is not what a settled choice looks like - and so is the box
    for narrowing a list that is not being shown. */
-.picker__part:not(:has(> .picker__toggle:checked)) :is(.endpoint, .model, .repo, .think):not(:has(:checked)),
+.picker__part:not(:has(> .picker__toggle:checked)) :is(.endpoint, .model, .network, .repo, .think):not(:has(:checked)),
 .picker__part:not(:has(> .picker__toggle:checked)) .models__provider:not(:has(.model__pick:checked)),
 .picker__part:not(:has(> .picker__toggle:checked)) .models__heading,
 .picker__part:not(:has(> .picker__toggle:checked)) .picker__filter {
@@ -1123,6 +1123,7 @@ main > * {
     gap: var(--space-3);
 }
 
+.networks__grid,
 .thinks__grid {
     display: flex;
     flex-wrap: wrap;
@@ -1130,6 +1131,7 @@ main > * {
 }
 
 .repo,
+.network,
 .think {
     position: relative;
     display: flex;
@@ -1143,11 +1145,13 @@ main > * {
 }
 
 .repo:hover,
+.network:hover,
 .think:hover {
     border-color: color-mix(in srgb, var(--person-edge) 45%, var(--edge));
 }
 
 .repo__pick,
+.network__pick,
 .think__pick {
     position: absolute;
     width: 1px;
@@ -1157,12 +1161,14 @@ main > * {
 }
 
 .repo:has(.repo__pick:checked),
+.network:has(.network__pick:checked),
 .think:has(.think__pick:checked) {
     border-color: var(--person-edge);
     background: color-mix(in srgb, var(--person-edge) 8%, var(--raised));
 }
 
 .repo:has(.repo__pick:focus-visible),
+.network:has(.network__pick:focus-visible),
 .think:has(.think__pick:focus-visible) {
     outline: 2px solid var(--mark);
     outline-offset: 2px;
@@ -1185,6 +1191,21 @@ main > * {
     color: var(--tool-edge);
 }
 
+.network__name {
+    min-width: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* What the level actually means, in the quiet voice the forge uses on a repository row: the name is
+   what you pick by, and this is what stops you picking the wrong one. */
+.network__note {
+    margin-left: auto;
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+}
+
+
 .think__name {
     font-family: var(--mono);
     font-size: 0.8rem;
@@ -1193,11 +1214,13 @@ main > * {
 /* The picker sits on a raised card on the fork page, so its own cards need a ground to stand out
    from rather than the one they are already on - the same trade the endpoints and models make. */
 .forking .repo,
+.forking .network,
 .forking .think {
     background: var(--ground);
 }
 
 .forking .repo:has(.repo__pick:checked),
+.forking .network:has(.network__pick:checked),
 .forking .think:has(.think__pick:checked) {
     background: color-mix(in srgb, var(--person-edge) 8%, var(--ground));
 }

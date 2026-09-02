@@ -1,4 +1,4 @@
-# The workspace as something a session can go back to, recorded beside what was said about it.
+# The worktree as something a session can go back to, recorded beside what was said about it.
 #
 # A snapshot is a git *tree*, taken through a shadow index so nothing the reader can see moves: not
 # their staged changes, not `HEAD`, not a branch, not `git log`. The trees are chained into commits
@@ -47,9 +47,9 @@ IDENTITY: Final[Mapping[str, str]] = {
 }
 
 
-class NotAWorkspace(ValueError):
+class NotAWorktree(ValueError):
     """
-    A workspace was configured that is not a git repository.
+    A worktree was configured that is not a git repository.
 
     Loud, and at startup, for the reason an unusable `config.yaml` is: a console that accepted the
     path and silently recorded no snapshots would look like it was keeping a history it was not,
@@ -87,7 +87,7 @@ def deletions(holding: Sequence[str], wanted: Sequence[str]) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
-class Workspace:
+class Worktree:
     """
     A git worktree this console can snapshot and put back.
 
@@ -106,13 +106,13 @@ class Workspace:
         through it would stage their whole working tree out from under them, and `git add` there
         takes `.git/index.lock`, so it would fight whatever they were running at the time.
 
-        A fresh one *per operation* rather than one per workspace, because two of these can be in
+        A fresh one *per operation* rather than one per worktree, because two of these can be in
         flight at once. A single shared path is a file two concurrent captures would write over
         each other, and the loser's `write-tree` would then describe a tree that never existed.
 
         The directory is asked for rather than assumed to be `.git`, because in a *linked* worktree
         it is not: `.git` there is a file holding a pointer, and every session having a worktree of
-        its own means almost every workspace here is a linked one.
+        its own means almost every worktree here is a linked one.
         """
         index = Path(await self.demand("rev-parse", "--absolute-git-dir")) / f"mainplate-index-{token_hex(8)}"
         try:
@@ -146,7 +146,7 @@ class Workspace:
         """That this is a git worktree at all, asked once at startup rather than at the first turn."""
         ran = await self.git("rev-parse", "--is-inside-work-tree")
         if not ran.ok or ran.out != "true":
-            raise NotAWorkspace(f"{self.root} is not a git worktree: {ran.err or ran.out}")
+            raise NotAWorktree(f"{self.root} is not a git worktree: {ran.err or ran.out}")
 
     async def tip(self) -> str | None:
         """The commit the snapshot chain currently points at, or nothing before the first one."""
@@ -244,27 +244,27 @@ class Worktrees:
     def at(self, session: str) -> Path:
         return self.root / session
 
-    def workspace(self, session: str) -> Workspace:
+    def worktree(self, session: str) -> Worktree:
         """
         The session's own worktree, as something to snapshot, whether or not it has been planted.
 
         A value rather than a lookup, so a caller that only wants to *name* the worktree - a page
         saying where a session works - needs no repository call and cannot fail.
         """
-        return Workspace(root=self.at(session))
+        return Worktree(root=self.at(session))
 
     async def confirm(self) -> None:
         """That the repository is one, once at startup rather than at the first session."""
-        await Workspace(root=self.repo).confirm()
+        await Worktree(root=self.repo).confirm()
 
     async def planted(self) -> frozenset[Path]:
         """Every worktree this repository currently has, by where it sits."""
-        listed = await Workspace(root=self.repo).demand("worktree", "list", "--porcelain")
+        listed = await Worktree(root=self.repo).demand("worktree", "list", "--porcelain")
         return frozenset(
             Path(line.removeprefix("worktree ")) for line in listed.splitlines() if line.startswith("worktree ")
         )
 
-    async def plant(self, session: str, *, tree: str | None = None) -> Workspace:
+    async def plant(self, session: str, *, tree: str | None = None) -> Worktree:
         """
         The session's worktree, checked out at `tree`, made if it is not there already.
 
@@ -282,16 +282,16 @@ class Worktrees:
         """
         here = self.at(session)
         if here in await self.planted():
-            return Workspace(root=here)
+            return Worktree(root=here)
         self.root.mkdir(parents=True, exist_ok=True)
-        repository = Workspace(root=self.repo)
+        repository = Worktree(root=self.repo)
         commit = (
             await repository.demand("rev-parse", "HEAD")
             if tree is None
             else await repository.demand("commit-tree", tree, "-m", f"session {session}")
         )
         await repository.demand("worktree", "add", "--detach", str(here), commit)
-        return Workspace(root=here)
+        return Worktree(root=here)
 
     async def uproot(self, session: str) -> None:
         """
@@ -304,4 +304,4 @@ class Worktrees:
         """
         here = self.at(session)
         if here in await self.planted():
-            await Workspace(root=self.repo).demand("worktree", "remove", "--force", str(here))
+            await Worktree(root=self.repo).demand("worktree", "remove", "--force", str(here))

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from mainplate.snapshots import Workspace
+from mainplate.snapshots import Worktree
 from mainplate.snapshots import Worktrees
 
 logger = logging.getLogger(__name__)
@@ -207,7 +207,7 @@ class Clones:
             return here
         self.root.mkdir(parents=True, exist_ok=True)
         logger.info(f"cloning {repository.name} from {repository.forge}")
-        await Workspace(root=self.root).demand("clone", "--bare", repository.url, str(here))
+        await Worktree(root=self.root).demand("clone", "--bare", repository.url, str(here))
         return here
 
 
@@ -248,13 +248,13 @@ class Workspaces:
         """
         return self.scratch / session
 
-    def workspace(self, session: str) -> Workspace:
-        return Workspace(root=self.at(session))
+    def worktree(self, session: str) -> Worktree:
+        return Worktree(root=self.at(session))
 
     def named(self, repository: str) -> Repository | None:
         return self.reaching.current.offers(repository)
 
-    async def plant(self, session: str, repository: str, *, tree: str | None = None) -> Workspace | None:
+    async def plant(self, session: str, repository: str, *, tree: str | None = None) -> Worktree | None:
         """
         A session's worktree, cloning the repository first if this console has not seen it before.
 

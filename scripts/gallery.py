@@ -53,6 +53,8 @@ from mainplate.pages import start_page
 from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
+from mainplate.sandbox import Filesystem
+from mainplate.sandbox import Isolation
 from mainplate.service import Conversation
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
@@ -91,6 +93,9 @@ CATALOGUE = Catalogue(
         endpoint="llm-anthropic",
         model="anthropic/claude-sonnet-4-6",
         repository="exe-github:mainplate",
+        # Settled here for the reason `Service.start` settles it: a fixture naming a repository and
+        # recording that it reaches no files would draw a page no real session can produce.
+        isolation=Isolation(filesystem=Filesystem.WORKTREE),
         thinking="high",
     ),
 )
@@ -290,7 +295,7 @@ TREES = ("9e75602b2554519c9f620dfdb2010586fde7e076", "3de66468884176acb6dc1a522a
 
 
 def snapshotted(written: dict[str, object]) -> dict[str, object]:
-    """The same checkpoint with a tree recorded per turn, as a console with a workspace writes."""
+    """The same checkpoint with a tree recorded per turn, as a console with a worktree writes."""
     return {**written, **{opening_tree_key(turn): tree for turn, tree in enumerate(TREES)}}
 
 
@@ -305,7 +310,7 @@ def showing(
         chosen=chosen,
         answerable=answerable,
         repository=REPOSITORY if working else None,
-        workspace=WORKSPACE / session.id if working else None,
+        worktree=WORKSPACE / session.id if working else None,
     )
 
 

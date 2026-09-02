@@ -15,10 +15,10 @@ from mainplate.tools.files.anchors import Substitute
 from mainplate.tools.files.tools import MAX_BYTES
 from mainplate.tools.files.tools import MAX_ROWS
 from mainplate.tools.files.tools import Files
+from mainplate.tools.files.tools import GitTracked
 from mainplate.tools.files.tools import Refused
 from mainplate.tools.files.tools import Scratch
 from mainplate.tools.files.tools import Text
-from mainplate.tools.files.tools import Worktree
 from mainplate.tools.files.tools import catalogue
 from mainplate.tools.files.tools import catalogued
 from mainplate.tools.files.tools import file_tools
@@ -30,7 +30,7 @@ SOURCE = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
 @pytest.fixture
 def files(tmp_path: Path) -> Files:
     (tmp_path / "app.py").write_text(SOURCE)
-    return Files(roots=(Worktree(path=tmp_path),))
+    return Files(roots=(GitTracked(path=tmp_path),))
 
 
 def naming(files: Files, at: int) -> str:
@@ -103,7 +103,7 @@ class TestReachingTheScratchDirectory:
         scratch = tmp_path.parent / "scratch-for-session"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(Worktree(path=tmp_path), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(path=tmp_path), Scratch(path=scratch)))
 
     async def test_a_file_there_can_be_created_read_and_edited(self, reaching: Files) -> None:
         where = str(reaching.roots[1].path / "plan.md")
@@ -134,7 +134,7 @@ class TestReachingTheScratchDirectory:
         `entries`, where "not a repository" would arrive as a fault and end the turn instead of
         telling the model to reach for `bash`.
         """
-        with pytest.raises(Refused, match="which `list` does not read"):
+        with pytest.raises(Refused, match="`list` only reads one"):
             await reaching.listing(str(reaching.roots[1].path), 2)
 
     async def test_somewhere_reachable_by_neither_is_still_refused(self, reaching: Files) -> None:

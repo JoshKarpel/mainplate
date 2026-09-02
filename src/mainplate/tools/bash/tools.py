@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Final
 
 from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
-from mainplate.sandbox import Sandbox
+from mainplate.sandbox import Confinement
+from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Venue
-from mainplate.snapshots import Workspace
+from mainplate.sandbox import confined_by
+from mainplate.sandbox import starting_at
 
 SHELL: Final = "/bin/sh"
 
@@ -63,11 +64,11 @@ def reported(command: str, code: int | None, output: str) -> str:
     return "\n".join((f"$ {command}", "", body, "", ended)) if body else "\n".join((f"$ {command}", "", ended))
 
 
-async def ran(workspace: Workspace, scratch: Path, bwrap: str, command: str, seconds: int) -> str:
+async def ran(confinement: Confinement, bwrap: str, venue: Venue, command: str, seconds: int) -> str:
     """
     One command, inside a namespace of its own, for at most `seconds`.
 
-    The sandbox is resolved here rather than held, because the worktree does not exist yet when the
+    The sandbox is resolved here rather than held, because a worktree does not exist yet when the
     agent is built: a session's first pass plants it, and the agent that will use it is constructed
     before that happens. Asking git where the clone is costs one short subprocess against a call
     that is already spawning one, and it is right about a worktree that moved.
@@ -81,11 +82,13 @@ async def ran(workspace: Workspace, scratch: Path, bwrap: str, command: str, sec
     # Made here rather than when the session was planted, because bwrap will not bind a source that
     # does not exist and this is the one place that knows a command is about to run. Idempotent, so
     # every later call reaches it and does nothing.
-    await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
-    sandbox = await Sandbox.around(workspace, scratch)
+    if isinstance(confinement, InAWorktree):
+        scratch = confinement.scratch
+        await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
+    sandbox = await confined_by(confinement)
     process = await asyncio.create_subprocess_exec(
         bwrap,
-        *sandbox.argv(at=str(sandbox.worktree), venue=Venue.CONFINED),
+        *sandbox.argv(at=str(starting_at(confinement)), venue=venue),
         SHELL,
         "-c",
         command,
@@ -112,54 +115,45 @@ async def ran(workspace: Workspace, scratch: Path, bwrap: str, command: str, sec
     return reported(command, process.returncode, out.decode(errors="replace"))
 
 
-def bash_tools(workspace: Workspace, scratch: Path, bwrap: str) -> FunctionToolset[None]:
+def bash_tools(confinement: Confinement, bwrap: str, venue: Venue) -> FunctionToolset[None]:
     """
-    One tool, bound to one session's worktree and to the sandbox binary that confines it.
+    One tool, bound to what this session's commands may see and whether they may dial out.
 
-    Built per session for the same reason the file tools are: the worktree is what makes a command
-    safe to run, and every session has its own.
+    Built per session for the same reason the file tools are: what makes a command safe to run is
+    the namespace it runs in, and every session picks its own. The confinement is a value rather
+    than a built sandbox because a worktree does not exist yet at this moment - the session's first
+    pass plants it, and this runs before that.
     """
     toolset = FunctionToolset[None]()
 
     async def bash(command: str, seconds: int = DEFAULT_SECONDS) -> str:
         """
-        Run a shell command in the session's workspace.
+        Run a shell command.
 
         Reach for this to build, test, search, or inspect. Prefer `read`, `edit` and `create` for
-        working on a file, and `list` for seeing what is there: those are anchored and bounded, where
-        this is neither.
+        working on a file, and `list` for seeing what is in a repository: those are anchored and
+        bounded, where this is neither.
 
-        The command runs in a namespace holding the workspace and a read-only system, and nothing
-        else. Four things follow from that, and all four are worth knowing before writing a command:
+        Every command runs in a namespace of its own. **What that namespace holds, and whether it
+        can reach the network, are this session's own settings and are stated in your instructions**
+        - do not assume either from a previous session. Three things are true of every command
+        whatever those settings are:
 
-        - **There is no network.** No fetching, no installing, no cloning. A command that needs one
-          will fail rather than hang.
-        - **Nothing outside the workspace exists.** No home directory, no other session's files, no
-          console configuration. A path leading out points at nothing.
-        - **Git can be read but not written.** `status`, `diff`, `log`, `show`, `blame` and
-          `ls-files` all work. `add`, `commit`, `stash`, `checkout` and anything else that writes
-          fails on a read-only filesystem. That is deliberate: this conversation's own history is
-          how work is recorded here, and committing is the person's to do.
         - **No shell state persists between calls.** Each command gets a new namespace, so a `cd`,
           an exported variable, a background process, and anything written to `/tmp` are gone by the
           next call. Chain what belongs together into one command with `&&`.
-
-        Files do persist in two places, and the difference between them is what gets recorded. The
-        workspace is the repository, and every change there is snapshotted with the conversation.
-        The scratch directory, named in your instructions, is not snapshotted by anything: put a
-        build cache, a downloaded artifact, or a note to yourself there, and it is still there next
-        call and next turn without ever appearing in the repository.
-
-        Output is capped: a long result comes back as its first and last lines with a count of what
-        was dropped in between. Filter the command rather than asking twice.
+        - **Output is capped.** A long result comes back as its first and last lines with a count of
+          what was dropped in between. Filter the command rather than asking twice.
+        - **The exit status is always reported**, including zero, so a command that printed nothing
+          and worked is distinguishable from one that did not run.
 
         Args:
-            command: The shell command, run with `sh -c` from the workspace root.
+            command: The shell command, run with `sh -c`.
             seconds: How long to allow before it is stopped and its output discarded.
 
         """
         try:
-            return await ran(workspace, scratch, bwrap, command, seconds)
+            return await ran(confinement, bwrap, venue, command, seconds)
         except Refused as refusal:
             raise ModelRetry(str(refusal)) from None
 

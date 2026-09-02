@@ -74,7 +74,7 @@ from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import grouped
-from mainplate.conversation import REPOSITORY_FIELD
+from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
 from mainplate.conversation import Kind
@@ -84,12 +84,12 @@ from mainplate.conversation import Reasoning
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
-from mainplate.forge import Repository
 from mainplate.markup import as_markup
 from mainplate.reference import Cost
 from mainplate.reference import Described
 from mainplate.reference import Reference
 from mainplate.reference import describe
+from mainplate.sandbox import Filesystem
 from mainplate.service import Conversation
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
@@ -139,6 +139,14 @@ THINKING_ID: Final = "thinking"
 
 REPOSITORY_ID: Final = "repository"
 
+NETWORK_TOGGLE_ID: Final = "open-network"
+NETWORK_ID: Final = "network"
+
+# The one field the worktree group posts. Form-only rather than a recorded field, because what
+# it carries is *two* recorded things at once - a repository and a filesystem level - and which
+# two is decided by parsing it, at the boundary, once.
+WORKSPACE_FIELD: Final = "workspace"
+
 SENDING_ID: Final = "sending"
 
 # The form the picker's controls belong to, named because on the start page they do not sit inside
@@ -171,9 +179,9 @@ SIDES: Final[dict[Kind, str]] = {
 }
 
 # What the link that starts one is called, and what the tab says on the page where a session does
-# not exist yet. "Session" rather than "workspace", which is the other word for this and is already
-# taken: a session's *workspace* is the git worktree it works in, so calling the session one too
-# would make "a workspace's workspace" a sentence somebody has to parse.
+# not exist yet. "Session" rather than "worktree", which is the other word for this and is already
+# taken: a session's *worktree* is the git worktree it works in, so calling the session one too
+# would make "a worktree's worktree" a sentence somebody has to parse.
 NEW_SESSION: Final = "New session"
 
 # What a session with no name of its own is called. Unreachable today, because every session is
@@ -852,21 +860,86 @@ def thinking_cards(chosen: ThinkingLevel | None) -> Element:
     )
 
 
-NO_REPOSITORY: Final = ""
+# The two answers to "what files does this session have" that are not a repository. Their values are
+# the `Filesystem` members they mean, and that is unambiguous rather than lucky: a repository's id is
+# `forge:key`, so it always holds a colon and can never be either of these.
+NO_FILES: Final = "no files"
+WHOLE_MACHINE: Final = "this whole machine"
 
-# What the card for "no repository" is called. Named, because it is both the card's own text and one
-# of the names the group can be narrowed by, and those two must be the same string.
-NO_REPOSITORY_NAME: Final = "no repository"
+WITHOUT_A_REPOSITORY: Final[tuple[tuple[str, Filesystem, str], ...]] = (
+    (NO_FILES, Filesystem.NOTHING, "a conversation with nothing to edit"),
+    (WHOLE_MACHINE, Filesystem.EVERYTHING, "every file this console can reach, including its own"),
+)
+
+NETWORK_CHOICES: Final[tuple[tuple[str, bool, str], ...]] = (
+    ("off", False, "commands cannot dial out"),
+    ("on", True, "commands can reach anything this machine can"),
+)
 
 
-def repository_card(reached: Repository | None, naming: str, chosen: bool) -> Element:
+def network_card(naming: str, saying: str, chosen: bool) -> Element:
+    return label(
+        cls="network",
+        attrs={"data-name": naming},
+        children=[
+            input_(
+                cls="network__pick",
+                attrs={
+                    "type": "radio",
+                    "name": NETWORK_FIELD,
+                    # `on` and nothing, because a radio that is not checked posts no field at all and
+                    # an absent field has to mean the safe answer. Spelling the off card's value as
+                    # anything else would make "no field" and "the off card" two different strings
+                    # meaning one thing, which is the shape that goes wrong when one of them is
+                    # forgotten.
+                    "value": "on" if naming == NETWORK_CHOICES[1][0] else "",
+                    "checked": chosen,
+                    "form": CHOOSING_ID,
+                },
+            ),
+            span(cls="network__name", children=naming),
+            span(cls="network__note", children=saying),
+        ],
+    )
+
+
+def network_cards(chosen: bool) -> Element:
     """
-    One repository as something to pick, or the choice to work in none.
+    Whether a session's commands may dial out, offered wherever there are commands to run.
 
-    A card rather than an `<option>`, and that is what the forge is drawn on: an `<option>` renders
-    as text in every browser, so anything said about *where* a repository comes from has nowhere to
-    go inside a select. A row here can carry it, which matters the moment a second forge exists and
-    two rows read `owner/repo` from different places.
+    On or off, and off rather than a list of hosts. An allowlist containing a code forge contains
+    every gist on it and one containing a package registry contains a package anybody can publish,
+    so what it would buy is a defence against a repository's own build script and very little
+    against anything deliberate - at the price of a proxy in front of every command.
+    """
+    return choosing(
+        "Network",
+        NETWORK_TOGGLE_ID,
+        [naming for naming, _, _ in NETWORK_CHOICES],
+        div(
+            cls="networks",
+            attrs={"id": NETWORK_ID, "role": "radiogroup", "aria-label": "Network"},
+            children=[
+                div(
+                    cls="networks__grid",
+                    children=[
+                        network_card(naming, saying, chosen=reaching is chosen)
+                        for naming, reaching, saying in NETWORK_CHOICES
+                    ],
+                )
+            ],
+        ),
+    )
+
+
+def workspace_card(naming: str, value: str, saying: str, chosen: bool) -> Element:
+    """
+    One answer to what files a session has: a repository of its own, or one of the two that are not.
+
+    A card rather than an `<option>`, and that is what the second line is drawn on: an `<option>`
+    renders as text in every browser, so neither the forge a repository came from nor what a level
+    means has anywhere to go inside a select. A row here carries it, which matters the moment two
+    rows read `owner/repo` from different places.
     """
     return label(
         cls="repo",
@@ -876,50 +949,64 @@ def repository_card(reached: Repository | None, naming: str, chosen: bool) -> El
                 cls="repo__pick",
                 attrs={
                     "type": "radio",
-                    "name": REPOSITORY_FIELD,
-                    "value": reached.id if reached is not None else NO_REPOSITORY,
+                    "name": WORKSPACE_FIELD,
+                    "value": value,
                     "checked": chosen,
                     "form": CHOOSING_ID,
                 },
             ),
             span(cls="repo__name", children=naming),
-            span(cls="repo__forge", children=reached.forge if reached is not None else "no files"),
+            span(cls="repo__forge", children=saying),
         ],
     )
 
 
-def repository_cards(reachable: Reachable, chosen: str | None) -> Element:
+def workspace_cards(reachable: Reachable, repository: str | None, chosen: Filesystem) -> Element:
     """
-    Which repository a session works in, offered only where there is one to offer.
+    What files a session has, as **one** question rather than two that must be kept agreeing.
 
-    Nothing at all when no forge reaches anything, rather than an empty or disabled control: off
-    exe.dev, or on a machine with no integrations attached, this console is what it was before
-    repositories existed and a control for a choice with no options is a question nobody can
-    answer. That answer is the caller's; this is only reached when there is something to show.
+    A repository and a filesystem level used to be separate groups, and that was the mistake: the
+    level a repository implies is not a second decision beside it, so the two controls had to be kept
+    in step - the worktree level greyed until a repository was picked, a swap to update the greying,
+    and a filter that could name a card it must not check. Every one of those is machinery for
+    keeping one answer stored in two places, which is the thing this console refuses everywhere else.
 
-    "No repository" is always offered even when there are some, because a conversation that is not
-    about code is an ordinary thing to want and picking a repository for it would give the agent
-    files nobody meant it to have. It is a card like the rest, so the fold has something to collapse
-    to when it is what was chosen.
+    Asked once, the answers are simply the cards: each repository this console can reach, and the two
+    that are not a repository. Picking one settles `repository` and `isolation.filesystem` together,
+    so they cannot disagree at the source rather than being reconciled after the fact.
 
-    Labels come from `Reachable`, which qualifies a row only where two would otherwise read the
-    same: the same repository can be attached twice with different rights, and choosing between two
+    Values are the repository's id or the `Filesystem` member's own name, and that is unambiguous
+    rather than lucky: an id is `forge:key`, so it always holds a colon and can never be either name.
+
+    `this whole machine` is worth reading twice before picking. A session on it can read this
+    console's own configuration, which holds the credentials, and its store, which holds every other
+    conversation. It is still inside a sandbox, so the network answer below still means what it says,
+    but nothing about the filesystem is held back.
+
+    Labels come from `Reachable`, which qualifies a row only where two would otherwise read the same:
+    the same repository can be attached twice with different rights, and choosing between two
     identical rows is guessing.
     """
     rows = reachable.labelled()
     return choosing(
-        "Working in",
+        "Worktree",
         REPOSITORY_TOGGLE_ID,
-        [NO_REPOSITORY_NAME, *(naming for _, naming in rows)],
+        [*(naming for naming, _, _ in WITHOUT_A_REPOSITORY), *(naming for _, naming in rows)],
         div(
             cls="repos",
-            attrs={"id": REPOSITORY_ID, "role": "radiogroup", "aria-label": "Repository"},
+            attrs={"id": REPOSITORY_ID, "role": "radiogroup", "aria-label": "Worktree"},
             children=[
                 div(
                     cls="repos__grid",
                     children=[
-                        repository_card(None, NO_REPOSITORY_NAME, chosen is None),
-                        *(repository_card(reached, naming, reached.id == chosen) for reached, naming in rows),
+                        *(
+                            workspace_card(naming, level.value, saying, chosen=repository is None and level is chosen)
+                            for naming, level, saying in WITHOUT_A_REPOSITORY
+                        ),
+                        *(
+                            workspace_card(naming, reached.id, reached.forge, reached.id == repository)
+                            for reached, naming in rows
+                        ),
                     ],
                 )
             ],
@@ -930,7 +1017,7 @@ def repository_cards(reachable: Reachable, chosen: str | None) -> Element:
 def picker(
     links: Links,
     catalogue: Catalogue,
-    reachable: Reachable,
+    reachable: Reachable | None,
     reference: Reference | None,
     chosen: Choice | None = None,
 ) -> Element:
@@ -958,9 +1045,11 @@ def picker(
     A fork passes the parent's own choice instead, so continuing on the same model is the path that
     needs nothing touched: the fork exists to let the choice change, not to require it.
 
-    Whether a repository *can* be chosen here is the caller's answer, given as what it says is
-    reachable: a fork of a session already in a repository is handed nothing, because it inherits
-    that one and a control that could not be honoured would be a lie about what the page does.
+    Whether the worktree *can* be chosen here is the caller's answer, given as `None` rather than
+    as an empty set: a fork of a session already in a repository is handed `None`, because it
+    inherits that one and a control that could not be honoured would be a lie about what the page
+    does. An empty `Reachable` is a different thing and still draws the group, since a machine with
+    no forge attached still has two answers worth offering.
 
     A choice naming an endpoint the catalogue no longer has falls back to the default rather than
     rendering a picker with nothing selected. That is the same case `stalled_by` explains on the
@@ -970,7 +1059,16 @@ def picker(
     return div(
         cls="picker",
         children=[
-            *((repository_cards(reachable, starting.repository),) if reachable.repositories else ()),
+            *(
+                ()
+                if reachable is None
+                else (workspace_cards(reachable, starting.repository, starting.isolation.filesystem),)
+            ),
+            # The network sits under the worktree and above the endpoint, because that is the order
+            # of breadth: what a session's files are decides what it can touch, whether it can dial
+            # out decides what it can do with them, and the endpoint and model only decide who
+            # answers.
+            network_cards(starting.isolation.network),
             choosing(
                 "Endpoint",
                 ENDPOINT_TOGGLE_ID,
@@ -983,7 +1081,7 @@ def picker(
     )
 
 
-def chosen_note(chosen: Choice | None, repository: str | None = None, workspace: Path | None = None) -> Element:
+def chosen_note(chosen: Choice | None, repository: str | None = None, worktree: Path | None = None) -> Element:
     """
     What an existing session is on, as a fact rather than a control: it cannot be changed.
 
@@ -994,7 +1092,7 @@ def chosen_note(chosen: Choice | None, repository: str | None = None, workspace:
 
     The thinking level is named only when there is one to name. A session that said nothing about
     thinking is not a session set to some level called "default"; it is one that never raised the
-    question, and printing a word for that would invent a setting nobody chose. The workspace is
+    question, and printing a word for that would invent a setting nobody chose. The worktree is
     named on the same terms, and its absence means the same thing: no snapshots are being kept, so
     there is nothing a later fork could put back on disk.
     """
@@ -1010,14 +1108,14 @@ def chosen_note(chosen: Choice | None, repository: str | None = None, workspace:
             *(
                 (
                     span(
-                        cls="workspace",
+                        cls="worktree",
                         # The repository is what a reader recognises and the worktree is where to
                         # point an editor, so one is shown and the other is there to be read. No
                         # worktree yet is an ordinary state rather than a missing one: the first
                         # pass makes it, so a session says where it works before it has worked.
                         attrs={
-                            "title": f"This session's worktree: {workspace}"
-                            if workspace is not None
+                            "title": f"This session's worktree: {worktree}"
+                            if worktree is not None
                             else "This session works here once its first turn runs"
                         },
                         children=f"\N{MIDDLE DOT} {repository}",
@@ -1716,7 +1814,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                 transcript_region(links, showing.session.id, showing.said, stalled),
                 composer(
                     links.to_say(showing.session.id),
-                    chosen_note(showing.chosen, showing.repository, showing.workspace),
+                    chosen_note(showing.chosen, showing.repository, showing.worktree),
                     live=True,
                     refusing=stalled is not None,
                 ),
@@ -1730,15 +1828,19 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
     )
 
 
-def attachable(showing: Conversation, reachable: Reachable) -> Reachable:
+def attachable(showing: Conversation, reachable: Reachable) -> Reachable | None:
     """
-    What a fork of this session may choose to work in, which is nothing once it works somewhere.
+    What a fork of this session may work in, or nothing at all once the question is already answered.
 
-    A fork attaches a repository or inherits one; it never swaps. Answering that here, as an empty
-    set of choices, is what keeps `picker` a rendering rather than a place that knows the rule.
+    A fork attaches a repository or inherits one; it never swaps. `None` rather than an empty set of
+    choices, and the difference is load-bearing now that the worktree group holds more than
+    repositories: empty means "no forge reaches anything", which still leaves two answers worth
+    offering, where `None` means the question is settled and the control would be a lie about what
+    the page does. Answering it here is what keeps `picker` a rendering rather than a place that
+    knows the rule.
     """
     settled = showing.chosen is not None and showing.chosen.repository is not None
-    return Reachable(repositories=()) if settled else reachable
+    return None if settled else reachable
 
 
 def inheriting(at: int, asking: bool) -> str:

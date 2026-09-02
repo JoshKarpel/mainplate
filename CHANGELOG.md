@@ -112,7 +112,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   originally saw, so a branch re-asks its question against the files that question was asked about.
   Snapshots are gitignore-aware, so going back to a turn restores what is version-controlled and
   leaves the environment alone.
-- A `bash` tool, on sessions that picked a repository and only where there is a sandbox to run one
+- Two isolation settings on a session, picked when it is created and fixed for its life like the
+  endpoint and the model, with forking the way to change them. **What files it has** is a repository
+  it works in, no files at all, or this whole machine. **Network** is on or off, and off rather than
+  a list of allowed hosts, because an allowlist holding a code forge holds every gist on it and one
+  holding a package registry holds a package anybody can publish.
+- The two are independent, because the whole-machine setting is still a sandbox with `/` bound
+  rather than no sandbox: a session can have every file and no network, or a worktree and a network.
+  A session on the whole machine can read this console's own configuration and its store, which is
+  what choosing it means, and the card says so.
+- Where a session works and what its tools may touch are **one** question on the picker, not two
+  that have to be kept agreeing: the choices are every repository this console can reach, plus no
+  files and this whole machine. Picking one settles both, so they cannot disagree at the source.
+- A `bash` tool, on sessions with somewhere to run one and only where there is a sandbox to run it
   in. Every command runs in a mount namespace of its own holding that session's worktree, its clone
   read-only, and a read-only system: there is no network, no home directory, and nothing belonging
   to any other session. Reading git works, so `status`, `diff`, `log` and `blame` all answer, while

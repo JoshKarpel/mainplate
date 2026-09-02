@@ -5,10 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Isolation
+from mainplate.sandbox import OverEverything
 from mainplate.sandbox import Sandbox
 from mainplate.sandbox import Venue
+from mainplate.sandbox import confined_by
 from mainplate.sandbox import sandbox_command
-from mainplate.snapshots import Workspace
+from mainplate.snapshots import Worktree
 from mainplate.tools.bash.tools import HEAD_LINES
 from mainplate.tools.bash.tools import MAX_LINE
 from mainplate.tools.bash.tools import TAIL_LINES
@@ -40,7 +45,7 @@ def bwrap() -> str:
 
 
 @pytest.fixture
-async def workspace(tmp_path: Path) -> Workspace:
+async def worktree(tmp_path: Path) -> Worktree:
     """
     A **linked** worktree off a bare clone, which is the only shape this console ever makes.
 
@@ -64,7 +69,7 @@ async def workspace(tmp_path: Path) -> Workspace:
     await run("git", "clone", "-q", "--bare", str(source), str(clone), cwd=tmp_path)
     planted = tmp_path / "worktrees" / "session"
     await run("git", "worktree", "add", "-q", str(planted), "HEAD", cwd=clone)
-    return Workspace(root=planted)
+    return Worktree(root=planted)
 
 
 @pytest.fixture
@@ -78,14 +83,14 @@ def scratch(tmp_path: Path) -> Path:
     return tmp_path / "scratch" / "session"
 
 
-async def inside(workspace: Workspace, scratch: Path, bwrap: str, command: str) -> str:
+async def inside(worktree: Worktree, scratch: Path, bwrap: str, command: str) -> str:
     """One command through the real tool, so these test what a session would actually get."""
-    return await ran(workspace, scratch, bwrap, command, seconds=20)
+    return await ran(InAWorktree(worktree=worktree, scratch=scratch), bwrap, Venue.CONFINED, command, seconds=20)
 
 
 class TestWhereTheCloneIs:
     async def test_the_common_directory_is_what_is_bound_not_the_worktrees_own(
-        self, workspace: Workspace, scratch: Path, tmp_path: Path
+        self, worktree: Worktree, scratch: Path, tmp_path: Path
     ) -> None:
         """
         The distinction that decides whether git works in there at all.
@@ -94,42 +99,47 @@ class TestWhereTheCloneIs:
         for objects and refs, so binding that one reaches neither the objects nor the refs. Binding
         the common one reaches both, because the other is underneath it.
         """
-        sandbox = await Sandbox.around(workspace, scratch)
-        own = Path(await run("git", "rev-parse", "--absolute-git-dir", cwd=workspace.root))
+        sandbox = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
+        own = Path(await run("git", "rev-parse", "--absolute-git-dir", cwd=worktree.root))
 
-        assert sandbox.clone == tmp_path / "clones" / "fixture.git"
-        assert sandbox.clone in own.parents, "the worktree's own git directory is under the clone, not beside it"
-        assert sandbox.worktree == workspace.root
+        tree, clone, kept = sandbox.places
+
+        assert clone.path == tmp_path / "clones" / "fixture.git"
+        assert clone.path in own.parents, "the worktree's own git directory is under the clone, not beside it"
+        assert not clone.writable, "and it goes in read-only, which is what refuses a commit"
+        assert tree.path == worktree.root
+        assert tree.writable
+        assert kept.path == scratch
 
 
 class TestWhatTheVenueDecides:
     async def test_a_confined_command_gets_a_network_namespace_of_its_own(
-        self, workspace: Workspace, scratch: Path
+        self, worktree: Worktree, scratch: Path
     ) -> None:
-        sandbox = await Sandbox.around(workspace, scratch)
+        sandbox = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
 
-        assert "--unshare-net" in sandbox.argv(at=str(workspace.root), venue=Venue.CONFINED)
+        assert "--unshare-net" in sandbox.argv(at=str(worktree.root), venue=Venue.CONFINED)
 
-    async def test_a_connected_command_keeps_the_hosts_network(self, workspace: Workspace, scratch: Path) -> None:
+    async def test_a_connected_command_keeps_the_hosts_network(self, worktree: Worktree, scratch: Path) -> None:
         """The only difference between the two, so the rest of the policy cannot drift between them."""
-        sandbox = await Sandbox.around(workspace, scratch)
-        confined = sandbox.argv(at=str(workspace.root), venue=Venue.CONFINED)
-        connected = sandbox.argv(at=str(workspace.root), venue=Venue.CONNECTED)
+        sandbox = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
+        confined = sandbox.argv(at=str(worktree.root), venue=Venue.CONFINED)
+        connected = sandbox.argv(at=str(worktree.root), venue=Venue.CONNECTED)
 
         assert "--unshare-net" not in connected
         assert [each for each in confined if each != "--unshare-net"] == list(connected)
 
 
 class TestWhatACommandCanReach:
-    async def test_it_can_write_in_the_worktree(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
-        said = await inside(workspace, scratch, bwrap, "echo written > new.txt && cat new.txt")
+    async def test_it_can_write_in_the_worktree(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        said = await inside(worktree, scratch, bwrap, "echo written > new.txt && cat new.txt")
 
         assert "written" in said
         assert "exit 0" in said
-        assert (workspace.root / "new.txt").read_text() == "written\n", "the write reached the real worktree"
+        assert (worktree.root / "new.txt").read_text() == "written\n", "the write reached the real worktree"
 
     async def test_the_home_directory_does_not_exist_in_there(
-        self, workspace: Workspace, scratch: Path, bwrap: str
+        self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
         """
         The containment that matters most, since the home directory is where the keys are.
@@ -140,26 +150,26 @@ class TestWhatACommandCanReach:
         home = Path.home()
         assert home.is_dir(), "the control: this path really is there outside the sandbox"
 
-        said = await inside(workspace, scratch, bwrap, f"ls {home} 2>&1 || echo DENIED")
+        said = await inside(worktree, scratch, bwrap, f"ls {home} 2>&1 || echo DENIED")
 
         assert "DENIED" in said
 
-    async def test_there_is_no_network(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
+    async def test_there_is_no_network(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         said = await inside(
-            workspace, scratch, bwrap, "getent hosts example.com >/dev/null 2>&1 && echo REACHED || echo DENIED"
+            worktree, scratch, bwrap, "getent hosts example.com >/dev/null 2>&1 && echo REACHED || echo DENIED"
         )
 
         assert "DENIED" in said
 
-    async def test_nothing_persists_between_two_calls(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
+    async def test_nothing_persists_between_two_calls(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         """
         The property the per-call shape buys, and the one a long-lived executor would take away.
 
         It is asserted rather than assumed because it is what the tool's own description promises,
         and a model that believed otherwise would chain commands that quietly lose their state.
         """
-        await inside(workspace, scratch, bwrap, "echo transient > /tmp/left-behind")
-        said = await inside(workspace, scratch, bwrap, "cat /tmp/left-behind 2>&1 || echo GONE")
+        await inside(worktree, scratch, bwrap, "echo transient > /tmp/left-behind")
+        said = await inside(worktree, scratch, bwrap, "cat /tmp/left-behind 2>&1 || echo GONE")
 
         assert "GONE" in said
 
@@ -174,24 +184,24 @@ class TestTheScratchDirectory:
     """
 
     async def test_it_is_made_on_demand_rather_than_planted(
-        self, workspace: Workspace, scratch: Path, bwrap: str
+        self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
         assert not scratch.exists(), "the control: nothing has made it yet"
 
-        await inside(workspace, scratch, bwrap, "true")
+        await inside(worktree, scratch, bwrap, "true")
 
         assert scratch.is_dir()
 
     async def test_what_is_written_there_survives_the_next_call(
-        self, workspace: Workspace, scratch: Path, bwrap: str
+        self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
-        await inside(workspace, scratch, bwrap, f"echo kept > {scratch}/notes.txt")
-        said = await inside(workspace, scratch, bwrap, f"cat {scratch}/notes.txt")
+        await inside(worktree, scratch, bwrap, f"echo kept > {scratch}/notes.txt")
+        said = await inside(worktree, scratch, bwrap, f"cat {scratch}/notes.txt")
 
         assert "kept" in said
         assert "exit 0" in said
 
-    async def test_nothing_in_it_reaches_git(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
+    async def test_nothing_in_it_reaches_git(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         """
         What a scratch directory under the worktree would get wrong.
 
@@ -199,9 +209,9 @@ class TestTheScratchDirectory:
         and every `status` until something excludes it, and the only place to write that exclusion
         is a git directory this command cannot write to.
         """
-        await inside(workspace, scratch, bwrap, f"mkdir -p {scratch}/cache && echo x > {scratch}/cache/blob")
+        await inside(worktree, scratch, bwrap, f"mkdir -p {scratch}/cache && echo x > {scratch}/cache/blob")
 
-        said = await inside(workspace, scratch, bwrap, "git status --porcelain; git ls-files --others")
+        said = await inside(worktree, scratch, bwrap, "git status --porcelain; git ls-files --others")
 
         assert "scratch" not in said
         assert "cache" not in said
@@ -216,31 +226,31 @@ class TestWhatGitCanDoInThere:
     passes under exactly one of the three policies, so together they pin the one that is right.
     """
 
-    async def test_reading_git_works(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
-        said = await inside(workspace, scratch, bwrap, "git ls-files")
+    async def test_reading_git_works(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        said = await inside(worktree, scratch, bwrap, "git ls-files")
 
         assert "README.md" in said
         assert "src/app.py" in said
         assert "exit 0" in said
 
-    async def test_status_and_log_work(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
-        (workspace.root / "README.md").write_text("hi\nedited\n")
+    async def test_status_and_log_work(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        (worktree.root / "README.md").write_text("hi\nedited\n")
 
-        said = await inside(workspace, scratch, bwrap, "git status --porcelain && git log --oneline")
+        said = await inside(worktree, scratch, bwrap, "git status --porcelain && git log --oneline")
 
         assert "M README.md" in said
         assert "first" in said
 
-    async def test_committing_is_refused(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
-        (workspace.root / "README.md").write_text("hi\nedited\n")
+    async def test_committing_is_refused(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        (worktree.root / "README.md").write_text("hi\nedited\n")
 
-        said = await inside(workspace, scratch, bwrap, "git add -A && git commit -m 'from the agent'")
+        said = await inside(worktree, scratch, bwrap, "git add -A && git commit -m 'from the agent'")
 
         assert "Read-only file system" in said
         assert "exit 0" not in said
 
     async def test_stashing_is_refused_and_the_work_survives(
-        self, workspace: Workspace, scratch: Path, bwrap: str
+        self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
         """
         `git stash` reads as safe and is the sharpest case against a command allowlist.
@@ -250,49 +260,47 @@ class TestWhatGitCanDoInThere:
         describes. The assertion is on the worktree rather than on the message: what matters is that
         the work is still on disk.
         """
-        (workspace.root / "README.md").write_text("hi\nedited\n")
+        (worktree.root / "README.md").write_text("hi\nedited\n")
 
-        said = await inside(workspace, scratch, bwrap, "git stash")
+        said = await inside(worktree, scratch, bwrap, "git stash")
 
         assert "Read-only file system" in said
-        assert (workspace.root / "README.md").read_text() == "hi\nedited\n", "the edit is still there"
+        assert (worktree.root / "README.md").read_text() == "hi\nedited\n", "the edit is still there"
 
 
 class TestWhatABashCallSaysBack:
-    async def test_a_command_that_worked_says_so(self, workspace: Workspace, scratch: Path, bwrap: str) -> None:
+    async def test_a_command_that_worked_says_so(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         """
         Success is stated rather than left to be inferred from an empty answer.
 
         A model reading no output and no status cannot tell "it worked and printed nothing" from
         "it never ran", and runs the thing a second time.
         """
-        said = await inside(workspace, scratch, bwrap, "true")
+        said = await inside(worktree, scratch, bwrap, "true")
 
         assert said.endswith("exit 0")
         assert "$ true" in said
 
     async def test_a_command_that_failed_carries_its_code_and_its_output(
-        self, workspace: Workspace, scratch: Path, bwrap: str
+        self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
-        said = await inside(workspace, scratch, bwrap, "echo trouble >&2; exit 3")
+        said = await inside(worktree, scratch, bwrap, "echo trouble >&2; exit 3")
 
         assert "trouble" in said, "stderr is folded in rather than dropped"
         assert "exit 3" in said
 
     async def test_an_empty_command_is_something_to_ask_again(
-        self, workspace: Workspace, scratch: Path, bwrap: str
+        self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
         with pytest.raises(ValueError, match="a command to run is required"):
-            await inside(workspace, scratch, bwrap, "   ")
+            await inside(worktree, scratch, bwrap, "   ")
 
-    async def test_a_command_that_runs_too_long_is_stopped(
-        self, workspace: Workspace, scratch: Path, bwrap: str
-    ) -> None:
+    async def test_a_command_that_runs_too_long_is_stopped(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         with pytest.raises(ValueError, match="ran longer than"):
-            await ran(workspace, scratch, bwrap, "sleep 30", seconds=1)
+            await ran(InAWorktree(worktree=worktree, scratch=scratch), bwrap, Venue.CONFINED, "sleep 30", seconds=1)
 
     def test_the_toolset_offers_exactly_one_tool_under_the_name_the_model_sees(
-        self, workspace: Workspace, scratch: Path, bwrap: str
+        self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
         """
         The name is what a model writes, so a rename is a silently broken call rather than an error.
@@ -301,7 +309,9 @@ class TestWhatABashCallSaysBack:
         file tools' `guarded` already carries a test for, and reaching it would mean building a
         `RunContext` to drive a library dataclass whose shape is not ours to depend on.
         """
-        assert set(bash_tools(workspace, scratch, bwrap).tools) == {"bash"}
+        confinement = InAWorktree(worktree=worktree, scratch=scratch)
+
+        assert set(bash_tools(confinement, bwrap, Venue.CONFINED).tools) == {"bash"}
 
 
 class TestHowMuchOutputComesBack:
@@ -328,3 +338,78 @@ class TestHowMuchOutputComesBack:
 
         assert said.startswith("x" * 80)
         assert "40 more characters" in said
+
+
+class TestSettlingTheTwoAxes:
+    """
+    The filesystem answer is not free of the repository, and this is where that is made true.
+
+    Not checked at read time and not reconciled by any consumer: a contradictory pair is simply never
+    recorded, because the one place a session is created settles it first.
+    """
+
+    @pytest.mark.parametrize(
+        "asked",
+        [
+            pytest.param(Filesystem.NOTHING, id="a form that named no files"),
+            pytest.param(Filesystem.EVERYTHING, id="a form that named the whole machine"),
+            pytest.param(Filesystem.WORKTREE, id="a form that already named the worktree"),
+        ],
+    )
+    def test_a_repository_forces_the_worktree_whatever_was_asked(self, asked: Filesystem) -> None:
+        settled = Isolation(filesystem=asked, network=True).settled("exe-github:blog")
+
+        assert settled.filesystem is Filesystem.WORKTREE
+        assert settled.network, "and the network answer is untouched, because the axes are independent"
+
+    def test_without_a_repository_the_worktree_becomes_no_files(self) -> None:
+        """
+        The direction that stops a form widening a session by naming something it cannot have.
+
+        `NOTHING` rather than a refusal, because the honest reading of "a worktree" with no
+        repository is the state a session with no repository already had.
+        """
+        settled = Isolation(filesystem=Filesystem.WORKTREE).settled(None)
+
+        assert settled.filesystem is Filesystem.NOTHING
+
+    def test_the_other_two_are_left_alone_without_a_repository(self) -> None:
+        for asked in (Filesystem.NOTHING, Filesystem.EVERYTHING):
+            assert Isolation(filesystem=asked).settled(None).filesystem is asked
+
+    def test_the_network_answer_becomes_the_sandboxs_own_word(self) -> None:
+        assert Isolation(network=False).venue is Venue.CONFINED
+        assert Isolation(network=True).venue is Venue.CONNECTED
+
+
+class TestReachingTheWholeMachine:
+    async def test_it_binds_the_root_read_write(self) -> None:
+        (only,) = Sandbox.everywhere().places
+
+        assert only.path == Path("/")
+        assert only.writable
+
+    async def test_a_command_sees_outside_any_worktree(self, bwrap: str) -> None:
+        """
+        What choosing it means, asserted rather than described.
+
+        Against the real home directory, because a planted stand-in would only prove that a path
+        nobody has is visible. `TestWhatACommandCanReach` asserts the same path is *denied* under a
+        worktree, so the pair is what says the setting does anything.
+        """
+        home = Path.home()
+
+        said = await ran(OverEverything(), bwrap, Venue.CONFINED, f"ls {home} >/dev/null && echo VISIBLE", seconds=20)
+
+        assert "VISIBLE" in said
+
+    async def test_the_network_is_still_off_unless_the_session_asked(self, bwrap: str) -> None:
+        """
+        The reason `EVERYTHING` is still a sandbox rather than no sandbox.
+
+        Dropping it for this arm would take the network switch with it, so the whole machine would
+        silently imply the whole internet and one of the two axes would stop being expressible.
+        """
+        reaching = "getent hosts example.com >/dev/null 2>&1 && echo REACHED || echo DENIED"
+
+        assert "DENIED" in await ran(OverEverything(), bwrap, Venue.CONFINED, reaching, seconds=20)

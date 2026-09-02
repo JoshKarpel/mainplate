@@ -88,7 +88,7 @@ class Conversation:
     thing somebody recognises.
     """
 
-    workspace: Path | None = None
+    worktree: Path | None = None
     """
     This session's own worktree of it, which is where its files actually are.
 
@@ -189,7 +189,7 @@ class Service:
             chosen=chosen,
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             repository=self.repository_of(chosen),
-            workspace=self.workspaces.at(session) if self.workspaces is not None and working else None,
+            worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
         )
 
     async def token(self, session: str) -> int:
@@ -253,6 +253,12 @@ class Service:
         not alter that, because this is still the one moment it is decided.
         """
         named = name_from(title) if title else ""
+        # The isolation is settled here rather than taken as posted, which is the same stance that
+        # stops a form with no repository field moving a branch out of its repository. A session
+        # working in a repository reaches its worktree and nothing else, and one working in none
+        # cannot reach a worktree there is none of, so the pair is never recorded contradicting
+        # itself and no reader downstream has to reconcile the two.
+        chosen = replace(chosen, isolation=chosen.isolation.settled(chosen.repository))
         session = Session(id=mint_session_id(), created_at=self.now(), title=named or name_from(said))
         await enrol(self.database, session)
         # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
@@ -308,6 +314,10 @@ class Service:
         was = choice_of(recorded)
         held = was.repository if was is not None else None
         chosen = replace(chosen, repository=chosen.repository if held is None else held)
+        # Settled *after* the repository is decided, and the order is the whole of it: a fork that
+        # inherits its parent's repository reaches that worktree whatever the form said, and one
+        # attaching a repository to a session that had none moves to `WORKTREE` by the same rule.
+        chosen = replace(chosen, isolation=chosen.isolation.settled(chosen.repository))
         forked = Session(
             id=mint_session_id(),
             created_at=self.now(),

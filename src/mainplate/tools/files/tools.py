@@ -84,7 +84,7 @@ class ListingFailed(RuntimeError):
     """
     git could not say what is in a directory.
 
-    Not a `Refused`, because it is not something a model can retry its way out of: every workspace
+    Not a `Refused`, because it is not something a model can retry its way out of: every worktree
     these tools are built against is a linked worktree, so this is a broken environment rather than
     a badly-aimed call.
     """
@@ -140,7 +140,7 @@ class Text:
 
 
 @dataclass(frozen=True, slots=True)
-class Worktree:
+class GitTracked:
     """
     A git worktree: files a conversation is *about*, and the only kind of root git can be asked about.
 
@@ -200,7 +200,20 @@ class Scratch:
     path: Path
 
 
-type Root = Worktree | Scratch
+@dataclass(frozen=True, slots=True)
+class System:
+    """
+    The whole machine, for a session that chose to work on it rather than in a repository.
+
+    Like `Scratch` it answers no question git answers, so `list` refuses it for the same reason and
+    points at `bash`. Unlike `Scratch` it is not somewhere to *keep* things, it is everywhere: a
+    relative path lands here only because it is the session's first and only root.
+    """
+
+    path: Path
+
+
+type Root = GitTracked | Scratch | System
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,12 +329,12 @@ class Files:
         """
         found = self.resolved(path)
         match found.root:
-            case Scratch():
+            case Scratch() | System():
                 raise Refused(
-                    f"{path!r} is in the scratch directory, which `list` does not read: it asks git, "
-                    f"and nothing there is in git. Use `bash` with `ls` to see what is in it."
+                    f"{path!r} is not in a repository, and `list` only reads one: it asks git, and "
+                    f"nothing there is in git. Use `bash` with `ls` to see what is there."
                 )
-            case Worktree() as tree:
+            case GitTracked() as tree:
                 if not found.path.exists():
                     raise Refused(f"there is no directory at {path!r}")
                 if not found.path.is_dir():
