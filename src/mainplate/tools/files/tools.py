@@ -7,10 +7,18 @@
 # and lives here anyway, next to the call whose answer it shapes rather than off in the core, since
 # none of it is about anchors.
 #
-# **Every path is resolved inside one worktree and refused outside it.** A session's files are its
-# own linked worktree, so the root is a real boundary rather than a convention: `..`, an absolute
-# path, and a symlink pointing out of the tree are all the same mistake and all get the same answer.
-# `Path.resolve` is what makes the symlink case work, since it is the only check that follows one.
+# **Every path is resolved before it is compared, and refused if it lands somewhere out of reach.**
+# `..`, an absolute path, and a symlink pointing out of the tree are all the same mistake and all get
+# the same answer. `Path.resolve` is what makes the symlink case work, since it is the only check
+# that follows one.
+#
+# There are *two* places a session may reach, and they are not symmetric. A relative path is always
+# inside the worktree, because that is what a conversation is about; the scratch directory is reached
+# by naming its absolute path, which the instructions carry. `list` is the exception to both and
+# stays on the worktree alone: it answers by asking git, and the scratch is deliberately not in git,
+# so extending it would mean a second implementation that walks a directory instead. What `list`
+# earns its keep for is bounding a large repository tree, which a scratch directory does not have,
+# and `ls` under `bash` answers that question there perfectly well.
 #
 # **A refusal is a `ModelRetry`, not an exception.** Everything a tool turns down here is something
 # the model can fix by trying again with different arguments: an anchor that has moved, a `find`
@@ -32,8 +40,10 @@ from collections.abc import Awaitable
 from collections.abc import Iterator
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from typing import Final
+from typing import assert_never
 
 from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
@@ -130,55 +140,18 @@ class Text:
 
 
 @dataclass(frozen=True, slots=True)
-class Files:
+class Worktree:
     """
-    One session's worktree, as the four things a model may do to it.
+    A git worktree: files a conversation is *about*, and the only kind of root git can be asked about.
 
-    Frozen and holding one path, so it is a value rather than a handle: every method is an effect
-    against the filesystem, and two callers sharing one share no state.
+    It owns how to enumerate itself rather than leaving that to whoever holds it, because "ask git"
+    is the one thing that is true of this root and false of every other. A second worktree is one
+    more of these in `Files.roots` and nothing else.
     """
 
-    root: Path
+    path: Path
 
-    def resolved(self, path: str) -> Path:
-        """
-        Where `path` actually is, or a refusal if that turns out to be outside the worktree.
-
-        Resolved before it is compared, which is the whole of the check: `..` collapses, an
-        absolute path replaces the root outright under `/`, and a symlink is followed to whatever
-        it really points at. Comparing the unresolved join would pass all three.
-        """
-        root = self.root.resolve()
-        here = (root / path).resolve()
-        if here != root and root not in here.parents:
-            raise Refused(f"{path!r} is outside this session's workspace, which is the only place these tools reach")
-        return here
-
-    def loaded(self, path: str) -> tuple[Path, Text]:
-        here = self.resolved(path)
-        if not here.exists():
-            raise Refused(f"there is no file at {path!r}")
-        if here.is_dir():
-            raise Refused(f"{path!r} is a directory, not a file")
-        if here.stat().st_size > MAX_BYTES:
-            raise Refused(f"{path!r} is larger than {MAX_BYTES // (1024 * 1024)}MiB, which is too large to read here")
-        try:
-            # `newline=""` turns off universal newlines, which would otherwise translate every
-            # `\r\n` to `\n` on the way in. `Text` exists to carry those endings back out again,
-            # and with the translation left on there would be nothing left for it to notice.
-            content = here.read_text(encoding="utf-8", newline="")
-        except UnicodeDecodeError:
-            raise Refused(f"{path!r} is not UTF-8 text, so it has no lines to anchor") from None
-        return here, Text.of(content)
-
-    async def read(self, path: str, offset: int, limit: int) -> str:
-        _, text = await asyncio.to_thread(self.loaded, path)
-        anchored = Anchored.over(text.lines)
-        start = max(0, offset - 1)
-        stop = min(len(text.lines), start + max(1, limit))
-        return "\n".join((reading(path, len(text.lines), start, stop), "", anchored.rendered(start, stop)))
-
-    async def tracked(self, here: Path) -> tuple[str, ...]:
+    async def entries(self, here: Path) -> tuple[str, ...]:
         """
         What git says is under `here`, which is everything committed or new but nothing ignored.
 
@@ -193,9 +166,9 @@ class Files:
         never directories, so there is no tree to ask it for and none to be had - an empty directory
         does not exist as far as this is concerned. `catalogue` is what turns those paths into one.
 
-        A failure is a fault rather than a `Refused`: every workspace these tools are built against
-        is a linked worktree, so git failing here is not something a model can retry its way out of,
-        and returning nothing would be a silent wrong answer.
+        A failure is a fault rather than a `Refused`: this root is a git worktree by construction,
+        so git failing here is not something a model can retry its way out of, and returning nothing
+        would be a silent wrong answer.
         """
         process = await asyncio.create_subprocess_exec(
             "git",
@@ -213,33 +186,177 @@ class Files:
             raise ListingFailed(f"git ls-files failed ({process.returncode}): {err.decode().strip()}")
         return tuple(sorted(found for found in out.decode().split("\0") if found))
 
-    async def listing(self, path: str, depth: int) -> str:
-        here = self.resolved(path)
+
+@dataclass(frozen=True, slots=True)
+class Scratch:
+    """
+    Somewhere to keep what is not any repository's, and which nothing snapshots.
+
+    It answers no question git answers, which is the whole reason it exists, so it carries no way to
+    enumerate itself: `ls` under `bash` does that, and a walk here would be a second implementation
+    of listing inside the one tool whose design is that it asks rather than walks.
+    """
+
+    path: Path
+
+
+type Root = Worktree | Scratch
+
+
+@dataclass(frozen=True, slots=True)
+class Located:
+    """
+    A resolved path together with the root it turned out to be in.
+
+    Both halves, because every caller needs both and working the second one out twice is how they
+    come to disagree. A tool that has one of these is holding proof the path is reachable *and* what
+    kind of place it landed in, so nothing downstream re-asks either question.
+    """
+
+    path: Path
+    root: Root
+
+
+@dataclass(frozen=True, slots=True)
+class Files:
+    """
+    The places one session may touch, as the four things a model may do to them.
+
+    Frozen and holding only roots, so it is a value rather than a handle: every method is an effect
+    against the filesystem, and two callers sharing one share no state.
+
+    The **first** root is where a relative path lands, which keeps every path a model writes meaning
+    what it has always meant and stays well defined however many roots there are. Anywhere else is
+    reached by naming its absolute path, which the instructions carry. The asymmetry is deliberate: a
+    bare `notes.md` is about the repository, because that is what a conversation is about.
+    """
+
+    roots: tuple[Root, ...]
+
+    locks: dict[Path, asyncio.Lock] = field(default_factory=dict, compare=False)
+    """
+    One lock per path touched, so two calls in one batch cannot lose each other's work.
+
+    A model emits several tool calls in one response and they run **concurrently**, so two `edit`s
+    aimed at one file interleave: each reads, each computes against what it read, each writes, and
+    the loser's write silently disappears while *both* calls report success. Two `create`s race the
+    same way, both seeing a path that does not exist yet.
+
+    Held around the whole read-modify-write rather than around the write, which is what makes the
+    difference: serialised that way the second call reads the first one's result, and anchors then
+    do the job they already do. If the first edit invalidated the second's anchors the second fails
+    loudly, which is correct and is the behaviour anchors were chosen for; if it did not, both land.
+
+    Interior mutability on a frozen value, and out of the comparison, because this is machinery
+    rather than any part of what a `Files` *is*. It grows with the paths one pass touches and is
+    thrown away with the pass. It does not reach `bash`, whose paths are not knowable in advance:
+    a command that rewrites a file under an `edit` is outside what this can see.
+    """
+
+    def exclusively(self, here: Path) -> asyncio.Lock:
+        """
+        The lock for one resolved path, made on first use.
+
+        `setdefault` rather than a check and an insert: there is no `await` between the two halves,
+        so it is atomic against every other coroutine and two callers cannot make two locks for one
+        path and each hold a different one.
+        """
+        return self.locks.setdefault(here, asyncio.Lock())
+
+    def resolved(self, path: str) -> Located:
+        """
+        Where `path` actually is and which root it is in, or a refusal if it is out of reach.
+
+        Resolved before it is compared, which is the whole of the check: `..` collapses, an
+        absolute path replaces the root outright under `/`, and a symlink is followed to whatever
+        it really points at. Comparing the unresolved join would pass all three.
+
+        A relative path joins the first root and therefore cannot climb into another by accident.
+        """
+        wheres = tuple(each.path.resolve() for each in self.roots)
+        here = (wheres[0] / path).resolve()
+        for root, where in zip(self.roots, wheres, strict=True):
+            if here == where or where in here.parents:
+                return Located(path=here, root=root)
+        named = " and ".join(str(each) for each in wheres)
+        raise Refused(f"{path!r} is outside this session's workspace. These tools reach {named}")
+
+    def loaded(self, path: str) -> tuple[Path, Text]:
+        here = self.resolved(path).path
         if not here.exists():
-            raise Refused(f"there is no directory at {path!r}")
-        if not here.is_dir():
-            raise Refused(f"{path!r} is a file rather than a directory; `read` is what opens one")
-        return catalogued(path, await self.tracked(here), max(1, depth))
+            raise Refused(f"there is no file at {path!r}")
+        if here.is_dir():
+            raise Refused(f"{path!r} is a directory, not a file")
+        if here.stat().st_size > MAX_BYTES:
+            raise Refused(f"{path!r} is larger than {MAX_BYTES // (1024 * 1024)}MiB, which is too large to read here")
+        try:
+            # `newline=""` turns off universal newlines, which would otherwise translate every
+            # `\r\n` to `\n` on the way in. `Text` exists to carry those endings back out again,
+            # and with the translation left on there would be nothing left for it to notice.
+            content = here.read_text(encoding="utf-8", newline="")
+        except UnicodeDecodeError:
+            raise Refused(f"{path!r} is not UTF-8 text, so it has no lines to anchor") from None
+        return here, Text.of(content)
+
+    async def read(self, path: str, offset: int, limit: int) -> str:
+        async with self.exclusively(self.resolved(path).path):
+            _, text = await asyncio.to_thread(self.loaded, path)
+        anchored = Anchored.over(text.lines)
+        start = max(0, offset - 1)
+        stop = min(len(text.lines), start + max(1, limit))
+        return "\n".join((reading(path, len(text.lines), start, stop), "", anchored.rendered(start, stop)))
+
+    async def listing(self, path: str, depth: int) -> str:
+        """
+        What is in a directory, answered by whichever root the directory turned out to be in.
+
+        The root decides rather than a check here, which is what keeps `list` honest as roots are
+        added: a `Scratch` is refused because it answers no question git answers, and adding a kind
+        that *can* enumerate itself is one more arm rather than an edit to the condition above.
+        """
+        found = self.resolved(path)
+        match found.root:
+            case Scratch():
+                raise Refused(
+                    f"{path!r} is in the scratch directory, which `list` does not read: it asks git, "
+                    f"and nothing there is in git. Use `bash` with `ls` to see what is in it."
+                )
+            case Worktree() as tree:
+                if not found.path.exists():
+                    raise Refused(f"there is no directory at {path!r}")
+                if not found.path.is_dir():
+                    raise Refused(f"{path!r} is a file rather than a directory; `read` is what opens one")
+                return catalogued(path, await tree.entries(found.path), max(1, depth))
+            case _ as unreachable:
+                assert_never(unreachable)
 
     async def edit(self, path: str, operations: Sequence[Operation]) -> str:
-        found, text = await asyncio.to_thread(self.loaded, path)
-        done = written(Anchored.over(text.lines), operations)
-        # `newline=""` again, so the endings `Text` just put back are written as they are rather
-        # than translated a second time on the way out.
-        await asyncio.to_thread(found.write_text, text.rejoined(done.lines), encoding="utf-8", newline="")
+        # The read and the write are one critical section, not two. Holding this around the write
+        # alone would leave each caller writing out a whole file it read *before* the other one's
+        # edit landed, which is the same lost write with a smaller window.
+        async with self.exclusively(self.resolved(path).path):
+            found, text = await asyncio.to_thread(self.loaded, path)
+            done = written(Anchored.over(text.lines), operations)
+            # `newline=""` again, so the endings `Text` just put back are written as they are rather
+            # than translated a second time on the way out.
+            await asyncio.to_thread(found.write_text, text.rejoined(done.lines), encoding="utf-8", newline="")
         return reported(path, done)
 
     async def create(self, path: str, content: str) -> str:
-        here = self.resolved(path)
-        if here.exists():
-            raise Refused(f"{path!r} already exists; `create` never overwrites, so edit it instead")
+        here = self.resolved(path).path
         text = Text.of(content if content.endswith("\n") else content + "\n")
 
         def write() -> None:
             here.parent.mkdir(parents=True, exist_ok=True)
             here.write_text(text.rejoined(text.lines), encoding="utf-8", newline="")
 
-        await asyncio.to_thread(write)
+        # The existence check is *inside* the lock, which is the whole of what makes `create` refuse
+        # to overwrite under concurrency: checked outside it, two calls in one batch both see a path
+        # that is not there yet and the second silently replaces the first.
+        async with self.exclusively(here):
+            if here.exists():
+                raise Refused(f"{path!r} already exists; `create` never overwrites, so edit it instead")
+            await asyncio.to_thread(write)
         anchored = Anchored.over(text.lines)
         return "\n".join((f"created {path}, {counted(len(text.lines), 'line')}", "", anchored.rendered(0, MAX_LINES)))
 
@@ -374,7 +491,7 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         readable text; `read` says so.
 
         Args:
-            path: Directory to list, relative to the session's workspace. Defaults to its root.
+            path: Directory to list, relative to the repository. Defaults to its root.
             depth: How many levels of directory to open. A directory deeper than this is shown
                 with a count of what is inside it instead of its contents.
 
@@ -418,7 +535,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         the unique lines around the run.
 
         Args:
-            path: Path to the file, relative to the session's workspace.
+            path: Path to the file. Relative paths are inside the repository; name the scratch
+                directory's absolute path to reach a file there.
             offset: First line to show, counting from 1.
             limit: How many lines to show at most.
 
@@ -471,7 +589,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         reading the file again, and lists any anchor elsewhere in the file that changed as a result.
 
         Args:
-            path: Path to the file, relative to the session's workspace.
+            path: Path to the file. Relative paths are inside the repository; name the scratch
+                directory's absolute path to reach a file there.
             operations: The changes to apply together.
 
         """
@@ -486,7 +605,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         are created as needed, and the file is given a trailing newline if it lacks one.
 
         Args:
-            path: Path for the new file, relative to the session's workspace.
+            path: Path for the new file. Relative paths are inside the repository; name the
+                scratch directory's absolute path to create a file there.
             content: What to write into it.
 
         """

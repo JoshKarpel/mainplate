@@ -224,5 +224,6 @@ force-single-line = true
 "tests/**" = [
     "SLF001",   # tests inspect internals deliberately
     "ASYNC110", # tests poll observed state with sleep loops; no event to await
+    "ASYNC240", # tests assert against the real filesystem; a thread hop would only hide the assert
     "SIM117",   # nested `with` expresses resource scoping; flattening moves scoped asserts
 ]

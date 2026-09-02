@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from inspect import cleandoc
 from pathlib import Path
@@ -15,7 +16,9 @@ from mainplate.tools.files.tools import MAX_BYTES
 from mainplate.tools.files.tools import MAX_ROWS
 from mainplate.tools.files.tools import Files
 from mainplate.tools.files.tools import Refused
+from mainplate.tools.files.tools import Scratch
 from mainplate.tools.files.tools import Text
+from mainplate.tools.files.tools import Worktree
 from mainplate.tools.files.tools import catalogue
 from mainplate.tools.files.tools import catalogued
 from mainplate.tools.files.tools import file_tools
@@ -27,14 +30,116 @@ SOURCE = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
 @pytest.fixture
 def files(tmp_path: Path) -> Files:
     (tmp_path / "app.py").write_text(SOURCE)
-    return Files(root=tmp_path)
+    return Files(roots=(Worktree(path=tmp_path),))
 
 
 def naming(files: Files, at: int) -> str:
     """The anchor of one line of the fixture file, read the way the tool would compute it."""
-    found = Anchored.over(Text.of((files.root / "app.py").read_text()).lines).codes[at]
+    found = Anchored.over(Text.of((files.roots[0].path / "app.py").read_text()).lines).codes[at]
     assert found is not None
     return found
+
+
+class TestTwoCallsAtOneFileAtOnce:
+    """
+    A model emits several tool calls in one response and they run concurrently.
+
+    Aimed at one file that used to interleave: each call read, each computed against what it read,
+    each wrote, and the loser's work vanished while *both* calls reported success. Every case here
+    is repeated, because the old behaviour lost a write only sometimes and one round of a race
+    proves nothing about a race.
+    """
+
+    ROUNDS = 20
+
+    async def test_two_edits_to_different_lines_both_survive(self, files: Files) -> None:
+        target = files.roots[0].path / "app.py"
+        anchored = Anchored.over(("alpha", "bravo", "charlie"))
+        first, third = anchored.codes[0], anchored.codes[2]
+        assert first is not None
+        assert third is not None
+
+        for _ in range(self.ROUNDS):
+            target.write_text("alpha\nbravo\ncharlie\n")
+
+            await asyncio.gather(
+                files.edit("app.py", [Substitute(op="substitute", at=first, find="alpha", replace="ALPHA")]),
+                files.edit("app.py", [Substitute(op="substitute", at=third, find="charlie", replace="CHARLIE")]),
+            )
+
+            after = target.read_text()
+            assert "ALPHA" in after, "the first edit was lost"
+            assert "CHARLIE" in after, "the second edit was lost"
+
+    async def test_two_creates_of_one_path_leave_exactly_one_refusal(self, files: Files) -> None:
+        """
+        `create` promises never to overwrite, and checked outside the lock it silently did.
+
+        Both callers saw a path that was not there yet, both wrote, and the second replaced the
+        first while telling the model it had created something.
+        """
+        for at in range(self.ROUNDS):
+            done = await asyncio.gather(
+                files.create(f"made-{at}.txt", "from the first\n"),
+                files.create(f"made-{at}.txt", "from the second\n"),
+                return_exceptions=True,
+            )
+
+            refusals = [each for each in done if isinstance(each, Refused)]
+            assert len(refusals) == 1, "exactly one of the two should be told it already exists"
+            assert "already exists" in str(refusals[0])
+
+
+class TestReachingTheScratchDirectory:
+    """
+    The second place a session may touch, and the three ways it differs from the worktree.
+
+    Named absolutely rather than reached relatively, covered by `read`/`edit`/`create` but not by
+    `list`, and still bounded: somewhere out of reach is refused exactly as it was before.
+    """
+
+    @pytest.fixture
+    def reaching(self, tmp_path: Path) -> Files:
+        scratch = tmp_path.parent / "scratch-for-session"
+        scratch.mkdir(exist_ok=True)
+        (tmp_path / "app.py").write_text(SOURCE)
+        return Files(roots=(Worktree(path=tmp_path), Scratch(path=scratch)))
+
+    async def test_a_file_there_can_be_created_read_and_edited(self, reaching: Files) -> None:
+        where = str(reaching.roots[1].path / "plan.md")
+
+        await reaching.create(where, "one\ntwo\n")
+        said = await reaching.read(where, 1, 10)
+
+        assert "one" in said
+        assert (reaching.roots[1].path / "plan.md").read_text() == "one\ntwo\n"
+
+    def test_a_relative_path_still_means_the_repository(self, reaching: Files) -> None:
+        """
+        The asymmetry that keeps every path a model already writes meaning what it meant.
+
+        A bare name is about the repository, so adding a second reachable root must not make it
+        ambiguous or let it drift somewhere else.
+        """
+        found = reaching.resolved("app.py")
+
+        assert found.path == reaching.roots[0].path.resolve() / "app.py"
+        assert found.root == reaching.roots[0], "and it says which root, so nothing re-checks"
+
+    async def test_list_refuses_it_and_says_what_does_answer(self, reaching: Files) -> None:
+        """
+        `list` asks git, and the scratch is deliberately not in git.
+
+        Refused by the *root* rather than by a check in the tool, and refused rather than left to
+        `entries`, where "not a repository" would arrive as a fault and end the turn instead of
+        telling the model to reach for `bash`.
+        """
+        with pytest.raises(Refused, match="which `list` does not read"):
+            await reaching.listing(str(reaching.roots[1].path), 2)
+
+    async def test_somewhere_reachable_by_neither_is_still_refused(self, reaching: Files) -> None:
+        with pytest.raises(Refused, match="outside this session's workspace"):
+            await reaching.read("/etc/passwd", 1, 10)
 
 
 class TestStayingInsideTheWorkspace:
@@ -57,7 +162,7 @@ class TestStayingInsideTheWorkspace:
         """
         outside = tmp_path.parent / "secret.txt"
         outside.write_text("not yours\n")
-        (files.root / "link.txt").symlink_to(outside)
+        (files.roots[0].path / "link.txt").symlink_to(outside)
 
         with pytest.raises(Refused, match="outside this session's workspace"):
             await files.read("link.txt", 1, 10)
@@ -73,17 +178,17 @@ class TestRefusingWhatCannotBeRead:
             await files.read("absent.py", 1, 10)
 
     async def test_a_directory_is_not_a_file(self, files: Files) -> None:
-        (files.root / "pkg").mkdir()
+        (files.roots[0].path / "pkg").mkdir()
         with pytest.raises(Refused, match="is a directory"):
             await files.read("pkg", 1, 10)
 
     async def test_something_that_is_not_text_has_no_lines_to_anchor(self, files: Files) -> None:
-        (files.root / "blob.bin").write_bytes(b"\xff\xfe\x00\x01binary")
+        (files.roots[0].path / "blob.bin").write_bytes(b"\xff\xfe\x00\x01binary")
         with pytest.raises(Refused, match="not UTF-8 text"):
             await files.read("blob.bin", 1, 10)
 
     async def test_something_far_too_large_is_refused_before_it_is_decoded(self, files: Files) -> None:
-        (files.root / "huge.txt").write_bytes(b"x" * (MAX_BYTES + 1))
+        (files.roots[0].path / "huge.txt").write_bytes(b"x" * (MAX_BYTES + 1))
         with pytest.raises(Refused, match="too large to read"):
             await files.read("huge.txt", 1, 10)
 
@@ -103,13 +208,13 @@ class TestKeepingWhatSplittingLinesThrowsAway:
         assert Text.of("one\n\x0ctwo\n").lines == ("one", "\x0ctwo")
 
     async def test_an_edit_leaves_the_endings_of_the_rest_of_the_file_alone(self, files: Files) -> None:
-        (files.root / "crlf.py").write_text("alpha\r\nbeta\r\ngamma\r\n", newline="")
+        (files.roots[0].path / "crlf.py").write_text("alpha\r\nbeta\r\ngamma\r\n", newline="")
         found = Anchored.over(("alpha", "beta", "gamma")).codes[1]
         assert found is not None
 
         await files.edit("crlf.py", [Substitute(op="substitute", at=found, find="beta", replace="middle")])
 
-        assert (files.root / "crlf.py").read_bytes() == b"alpha\r\nmiddle\r\ngamma\r\n"
+        assert (files.roots[0].path / "crlf.py").read_bytes() == b"alpha\r\nmiddle\r\ngamma\r\n"
 
 
 class TestBuildingATreeFromFlatPaths:
@@ -155,12 +260,12 @@ class TestBuildingATreeFromFlatPaths:
 class TestListingADirectory:
     @pytest.fixture
     def repository(self, files: Files) -> Files:
-        (files.root / ".gitignore").write_text("build/\n")
-        (files.root / "build").mkdir()
-        (files.root / "build" / "out.js").write_text("")
-        (files.root / "pkg").mkdir()
-        (files.root / "pkg" / "deep.py").write_text("")
-        subprocess.run(["git", "init", "-q"], cwd=files.root, check=True)
+        (files.roots[0].path / ".gitignore").write_text("build/\n")
+        (files.roots[0].path / "build").mkdir()
+        (files.roots[0].path / "build" / "out.js").write_text("")
+        (files.roots[0].path / "pkg").mkdir()
+        (files.roots[0].path / "pkg" / "deep.py").write_text("")
+        subprocess.run(["git", "init", "-q"], cwd=files.roots[0].path, check=True)
         return files
 
     async def test_it_shows_what_is_there(self, repository: Files) -> None:
@@ -181,7 +286,7 @@ class TestListingADirectory:
 
     async def test_a_file_created_but_never_committed_still_shows(self, repository: Files) -> None:
         """`--others` is what covers this, and it is the case the agent hits most: its own work."""
-        (repository.root / "brand_new.py").write_text("")
+        (repository.roots[0].path / "brand_new.py").write_text("")
         assert "brand_new.py" in await repository.listing(".", 1)
 
     async def test_a_subdirectory_is_listed_relative_to_itself(self, repository: Files) -> None:
@@ -218,7 +323,7 @@ class TestReadingAFile:
 class TestEditingAFile:
     async def test_the_change_reaches_disk(self, files: Files) -> None:
         await files.edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
-        assert (files.root / "app.py").read_text() == SOURCE.replace("return 1", "return 42")
+        assert (files.roots[0].path / "app.py").read_text() == SOURCE.replace("return 1", "return 42")
 
     async def test_the_reply_shows_the_changed_region_with_fresh_anchors(self, files: Files) -> None:
         said = await files.edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
@@ -228,28 +333,28 @@ class TestEditingAFile:
     async def test_a_refused_edit_writes_nothing(self, files: Files) -> None:
         with pytest.raises(ModelRetry):
             await guarded(files.edit("app.py", [Substitute(op="substitute", at="zzzz", find="x", replace="y")]))
-        assert (files.root / "app.py").read_text() == SOURCE
+        assert (files.roots[0].path / "app.py").read_text() == SOURCE
 
     async def test_a_span_ending_before_a_line_swallows_the_blanks_above_it(self, files: Files) -> None:
         await files.edit("app.py", [Splice(op="splice", from_=naming(files, 0), before=naming(files, 4), text="")])
-        assert (files.root / "app.py").read_text() == "def second():\n    return 2\n"
+        assert (files.roots[0].path / "app.py").read_text() == "def second():\n    return 2\n"
 
 
 class TestCreatingAFile:
     async def test_a_new_file_is_written_and_shown_back(self, files: Files) -> None:
         said = await files.create("sub/deep/new.py", "print('hi')")
 
-        assert (files.root / "sub" / "deep" / "new.py").read_text() == "print('hi')\n"
+        assert (files.roots[0].path / "sub" / "deep" / "new.py").read_text() == "print('hi')\n"
         assert said.startswith("created sub/deep/new.py, 1 line")
 
     async def test_an_existing_path_is_refused_rather_than_overwritten(self, files: Files) -> None:
         with pytest.raises(Refused, match="never overwrites"):
             await files.create("app.py", "clobbered")
-        assert (files.root / "app.py").read_text() == SOURCE
+        assert (files.roots[0].path / "app.py").read_text() == SOURCE
 
     async def test_a_missing_trailing_newline_is_supplied(self, files: Files) -> None:
         await files.create("terse.txt", "no newline here")
-        assert (files.root / "terse.txt").read_text().endswith("\n")
+        assert (files.roots[0].path / "terse.txt").read_text().endswith("\n")
 
 
 class TestHowARefusalReachesTheModel:
@@ -307,7 +412,7 @@ class TestWhatTheToolsetOffers:
 
         header, body = example.split("\n\n", 1)
         path = header.split(",")[0]
-        (files.root / path).write_text("\n".join(line.split(GUTTER, 1)[1] for line in body.split("\n")) + "\n")
+        (files.roots[0].path / path).write_text("\n".join(line.split(GUTTER, 1)[1] for line in body.split("\n")) + "\n")
 
         assert await files.read(path, 1, 100) == example
 

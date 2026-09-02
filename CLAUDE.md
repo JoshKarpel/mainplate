@@ -482,16 +482,17 @@ what disk looked like, not something to go back to.
 ## How a model names a line
 
 Every tool lives under `tools/`, one package per tool, as `tools/{name}/{module}.py`. Only the
-constructor reaches the harness: `tools/__init__.py` exports `Files` and `file_tools` and nothing
-else, so `agent.py` asks for the tools a workspace affords without knowing that editing is anchored
-or that a worktree root has to be resolved against. A second tool is a new package beside `files/`
-and one more name in that list, rather than an edit to anything that already imports it.
+constructor reaches the harness: `tools/__init__.py` exports `Files`, `file_tools` and `bash_tools`
+and nothing else, so `agent.py` asks for the tools a workspace affords without knowing that editing
+is anchored, that a worktree root has to be resolved against, or how a command is confined. A third
+tool is a new package beside `files/` and `bash/` and one more name in that list, rather than an
+edit to anything that already imports them.
 
-Within the one that exists, `tools/files/anchors.py` is pure and `tools/files/tools.py` is the shell
+Within the files one, `tools/files/anchors.py` is pure and `tools/files/tools.py` is the shell
 around it, which is the split that lets the interesting half be tested with a list of strings. A
-session with a repository gets `list`, `read`, `edit` and `create` bound to its own worktree; a
-session with none gets **no toolset at all**, because four tools that can only fail are worse than
-none and cost a description on every request.
+session with a repository gets `list`, `read`, `edit` and `create` bound to its own worktree, plus
+`bash` where there is a sandbox to run one in; a session with none gets **no toolset at all**,
+because tools that can only fail are worse than none and cost a description on every request.
 
 **`list` asks git rather than walking**, so a `.gitignore` is obeyed and a `.venv` or a
 `node_modules` never reaches a context window. `git ls-files --cached --others --exclude-standard`
@@ -502,12 +503,18 @@ tree from those paths, which is also why an empty directory does not appear at a
 the answer rather than hinting at it: a directory at that depth is summarised with a count instead
 of opened, and `MAX_ROWS` is the backstop on a large depth over a large repository.
 
-`list` is the one tool here with no defence against a bash tool arriving later. Anchored `edit` has
-one - within the at-least-once window a re-run edit fails loudly on anchors its own first run
-invalidated, where an arbitrary shell command re-runs silently - but listing a directory is
-something `git ls-files` in a shell does exactly as well. It exists because there is no bash tool
-today and a session otherwise cannot discover a filename, and it is the first thing to delete when
-there is one.
+**`list` survives `bash` rather than being replaced by it**, because what it does is not listing. A
+`git ls-files` in a shell returns every path in the repository, flat, into a context window; `list`
+builds a tree from those paths, opens it only to `depth`, summarises a directory past that with a
+count, and caps the whole answer at `MAX_ROWS`. That is context economy, and it is the difference
+between orienting in a large repository for a few hundred tokens and doing it for tens of thousands.
+The sandbox gives it a second reason to exist: `list` is a narrow tool whose argv this console
+writes, so the question a model asks most often stays off the unbounded path.
+
+What `bash` does *not* get a defence for is the at-least-once window. Anchored `edit` has one, since
+a re-run edit fails loudly on anchors its own first run invalidated; an arbitrary shell command
+re-runs silently. That is the cost of `step` rather than `transact` and it is unchanged by the
+sandbox, which bounds where a command reaches and says nothing about how many times it runs.
 
 **A line is addressed by a hash of its own content.** A line number is the one address that cannot
 fail, so a stale one silently edits the wrong place; a content hash either resolves to exactly one
@@ -567,9 +574,36 @@ partner does not describe a span. The exclusive forms are also how a span reache
 which has no anchor: deleting a function and the blanks after it is `from` its first line `before`
 the next code line.
 
+**Two calls at one file are serialised, because a batch of tool calls runs concurrently.** `Files`
+holds a lock per resolved path and every operation takes the one for the path it touches. Without it
+two `edit`s aimed at one file interleave: each reads, each computes against what it read, each
+writes, and the loser's work vanishes while *both* calls report success to the model. Two `create`s
+race the same way, both seeing a path that is not there yet, so `create`'s promise never to
+overwrite quietly fails.
+
+The lock is held around the whole read-modify-write rather than around the write, and that is what
+makes it work: serialised that way the second call reads the first one's result, so anchors do the
+job they were chosen for. An edit whose anchors the first one invalidated fails loudly; one whose
+anchors still resolve lands. `create`'s existence check is inside the lock for the same reason.
+
+It does not reach `bash`, whose paths are not knowable before the command runs, so a shell command
+rewriting a file under an `edit` is outside what this can see. That is the same boundary snapshots
+already draw when they capture only at model-request boundaries, where every tool of the previous
+batch has returned by construction.
+
+**Every tool that writes hands back anchors**, so a write is never followed by a read to find out
+where anything now is. `create` renders the whole new file; `edit` renders the changed regions and
+names any anchor that moved elsewhere. That is one property rather than two conveniences, and it is
+what lets a run of edits happen with no re-read between them.
+
 Two things are refusals rather than omissions. **There is no `write`**: a tool that overwrites a
 whole file is the escape hatch that makes anchored editing pointless, since the first refused edit
-becomes a full rewrite that discards whatever was not read. `create` refuses an existing path.
+becomes a full rewrite that discards whatever was not read. `create` is that same whole-file write
+restricted to the one case where the objection does not apply - a path that does not exist yet has
+nothing to discard - so `here.exists()` is the entire difference between the tool that is here and
+the tool that is refused. It is also why there is no `delete` now that there is a `bash`: deletion
+addresses nothing and returns nothing, so it never joins the anchoring scheme, and `rm` does it
+exactly as well.
 And **the formatter is not wired into `edit`**, which was tried and dropped: exclusive bounds fix
 the addressing gap that made blank-line hygiene awkward, where a formatter would only have tidied
 the symptom, at the price of a per-repository configuration decision on every write.
@@ -585,6 +619,126 @@ correctable mistake into a failed turn.
 quietly normalise a CRLF file. Without both halves an edit to one line is a diff on every line,
 attributed to an edit that touched one. It splits on `\n` and not with `splitlines`, which also
 breaks on form feed - a page break some source files genuinely use.
+
+## Where a command runs
+
+`sandbox.py` is the boundary `bash` runs behind, and it is a **mount namespace** rather than a list
+of commands that are allowed. A denylist over commands loses on contact with reality: `git stash`
+reads as safe and reverts every tracked edit in the worktree, `git config` can set `core.hooksPath`,
+and a release next year adds something nobody has classified. A mount says what a process can
+*reach*, so it is already right about commands nobody has thought of, including whatever a
+repository's own build script runs. `test_sandbox.py` pins that with `git stash` specifically.
+
+**Per call, never a long-lived executor**, and the reason is replay rather than cost. A pass re-runs
+the conversation body from the top and `wrap_tool_execute` replays recorded results instead of
+re-running them, so a sandbox holding state between calls would offer that state on a first pass and
+withhold it on a resumed one, with nothing to tell the agent which it is in. State that survives
+*sometimes* is worse than state that never survives, because it invites reliance and then breaks
+only under crash-resume. A fresh namespace costs a couple of milliseconds against a call that costs
+hundreds, and leaves no process to supervise, reap, or reconstruct. The tool's own description says
+nothing persists, and `test_sandbox.py` asserts it.
+
+Five things about the policy are decided rather than incidental:
+
+- **The clone is bound read-only, and that is the load-bearing half.** Every read still works -
+  `ls-files`, `status`, `diff`, `log`, `blame` - while `add`, `commit`, `stash` and `checkout` fail
+  on a read-only `index.lock`. What that buys is not tidiness: a git write from in there would be a
+  second history that no panel shows, no fork inherits and no rewind restores, which is the second
+  copy of state this whole console exists to refuse. Snapshots keep working because they run in the
+  parent, where the clone is writable, so the agent physically cannot rewrite the history
+  `refs/mainplate/snapshots` is chained onto. The invariant `snapshots.py` used to hold by being
+  careful is now one no tool can break, including tools that do not exist yet.
+- **The *common* directory is what is bound, not the worktree's own.** A linked worktree's `.git` is
+  a file holding an absolute pointer into the clone, and the per-worktree directory sits inside the
+  clone with a `commondir` pointing back out at it for objects and refs. So `--git-common-dir`
+  reaches both and `--absolute-git-dir` reaches neither: bind the wrong one and there is no git in
+  the sandbox at all, which silently takes `list` with it.
+- **Both are bound at their own absolute paths**, never remapped to a tidy `/workspace`. That is
+  forced by the same pointer being absolute. The alternative is a `GIT_COMMON_DIR` that every
+  consumer has to carry and any subprocess is free to unset, bought for a shorter path.
+- **The session binds come after `--tmpfs /tmp`.** bwrap applies arguments in order, so a workspace
+  root that happens to live under `/tmp` is covered by the tmpfs and disappears if the binds come
+  first, leaving a command that cannot change directory into its own worktree. That is not
+  hypothetical: it is where every test in the suite puts a worktree.
+- **`--unshare-pid` is teardown as much as isolation.** Killing the namespace's init reaps whatever
+  the command left running, which is what makes the timeout and a cancelled turn leave no orphan
+  build behind.
+
+**A session gets a scratch directory, and nothing captures it on purpose.** `workspaces/scratch/
+<session>` is bound read-write beside the worktree, so a build cache, a downloaded artifact or a
+note to itself survives from one call to the next and from one turn to the next. That it is *not*
+snapshotted is the same decision as snapshots honouring a `.gitignore`, arrived at one level out:
+going back to before a call should not uninstall what was installed since. The cost is the one an
+ignored path already carries, that what is in there goes stale while the source around it moves
+back.
+
+Outside the worktree rather than under it, and that is not tidiness. `list` passes `--others`, so a
+directory inside the worktree is in every listing and every `git status` until something excludes
+it, and the only place to write that exclusion is a git directory read-only wherever a command can
+see it. `test_sandbox.py` pins this by asserting that nothing in the scratch reaches either.
+
+It is made on the first command rather than when the session is planted, because bwrap will not bind
+a source that does not exist and the tool is the one thing that knows a command is about to run. A
+fork gets its own, empty: copying it would be copying mutable state, and sharing it would be two
+sessions writing one directory. That matches the worktree, which a fork plants fresh at a recorded
+tree and therefore without any ignored file either.
+
+**`read`, `edit` and `create` reach it; `list` does not.** The point of extending them at all is a
+plan or a notes file kept across turns, which is the one thing in a scratch directory that wants a
+line editor; a build cache never does.
+
+`Files` holds `roots`, a tuple of *typed* places rather than one path and a list of extras. The type
+is what decides: a `Worktree` is files a conversation is about and is the only kind git can be asked
+about, so it owns `entries` and answers `list`; a `Scratch` answers no question git answers, which
+is why it exists, so it carries no way to enumerate itself and `listing` refuses it in its own arm
+of a `match` that `assert_never` closes. Adding a kind is one arm, and adding a *second worktree* is
+one more element, where a `root` plus an `also` would have hardcoded exactly one.
+
+`resolved` returns a `Located`, which is the resolved path **and** the root it landed in. Both
+halves, because the caller needs both and working the second one out twice is how they come to
+disagree: a tool holding one of these has proof the path is reachable and proof of what kind of
+place it is, so nothing downstream re-asks either question. That is what turned `list`'s restriction
+from a condition inside the tool into a property of the root.
+
+The **first** root is where a relative path lands, and that stays well defined however many roots a
+session ends up with. So a bare `notes.md` is about the repository, because that is what a
+conversation is about, and anywhere else is reached by naming the absolute path the instructions
+carry. Refusing `list` in the tool rather than leaving it to `entries` is the usual reason: "not a
+repository" arrives from git as a `ListingFailed` fault and ends the turn, where a `Refused` tells
+the model to reach for `bash` instead.
+
+The file tools reach the scratch only where `bash` is offered, since without a command to make the
+directory exist `read` would name a path nothing ever creates.
+
+**Binding a port works; reaching it does not.** `--unshare-net` gives a namespace with loopback up,
+so a command can start a server and curl it within one call, which covers integration tests. What it
+cannot do is make that port visible to a person, and that is deliberate: a dev server somebody
+watches is the harness's to run, outside the sandbox, not something an agent tool call should leave
+behind. `Venue.CONNECTED` is the arm for that and nothing uses it yet.
+
+Network is **off**, and off rather than allowlisted. An allowlist containing github.com contains
+gists, one containing a package registry contains a package anybody can publish, and a DNS query to
+`<secret>.attacker.example` leaves through any resolver that is allowed. It would buy a MITM proxy,
+a CA inside the sandbox, and every tool that pins certificates breaking, for a defence against the
+malicious-repository case and almost none against a determined injection. Landlock cannot help here
+either: its network rules key on a *port*, never an address, and do not cover UDP at all.
+
+`--clearenv` is what keeps the parent's environment out, and the credential is out of the sandbox
+structurally rather than carefully: the agent loop that holds it stays in the parent and only the
+command crosses.
+
+**A missing sandbox is reported, not refused.** `open_console` resolves `bwrap` once and logs what
+it found; without it a session keeps every file tool and is offered no `bash`, which is exactly what
+this console was before there was one. That is `forge.offers`'s promise rather than
+`catalogue.discover`'s refusal, and the difference is the usual one: nothing here leaves somebody
+holding a choice they cannot use. It is logged because a shell tool that quietly is not there is the
+state nobody can diagnose.
+
+Two things are deliberately still to come. `Files.tracked` runs `git ls-files` in the parent rather
+than through the sandbox, which is a narrower problem than arbitrary shell (its argv is ours; the
+exposure is a malicious repository's git configuration) and a good next step. And the network is off
+for every session with no way to turn it on: the switch belongs on `choice`, written once before the
+first prompt and changed by forking, exactly as the endpoint and the model are.
 
 ## Durability
 
@@ -640,11 +794,15 @@ accident:
 - **The environment file is written once and never overwritten.** It holds the credential, so an
   install that rewrote it would delete the key on every upgrade.
 
-There is no `Protect*`/`ReadWritePaths` hardening, deliberately. The agent edits repositories, so
-the paths it legitimately writes are the worktree root and everything under it, which is exactly
-what a `ReadWritePaths` would have to name; the boundary that actually holds is `Files.resolved`,
-which resolves every path and refuses anything that lands outside the session's own worktree. A unit
-sandbox loose enough to permit the worktree protects nothing the tools do not already refuse.
+There is no `Protect*`/`ReadWritePaths` hardening, deliberately, and the sandbox is the reason
+rather than an exception to it. The agent edits repositories, so the paths it legitimately writes
+are the worktree root and everything under it, which is exactly what a `ReadWritePaths` would have
+to name: a unit sandbox loose enough to permit the worktree protects nothing. The boundaries that
+actually hold are both *inside* the process and per session rather than per service, which is what a
+unit setting can never be: `Files.resolved` for the file tools, and a mount namespace for `bash`.
+That is also why the service is not itself confined - it holds the credential, the store, and every
+session's worktree, all of which it needs, so the useful boundary is the one around what a model
+asked for and not the one around the console.
 
 ## Dependencies
 

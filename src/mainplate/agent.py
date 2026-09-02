@@ -36,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 from typing import Protocol
 from typing import assert_never
@@ -56,7 +57,11 @@ from mainplate.config import Endpoint
 from mainplate.durability import StepwiseDurability
 from mainplate.snapshots import Workspace
 from mainplate.tools import Files
+from mainplate.tools import Scratch
+from mainplate.tools import Worktree
+from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
+from mainplate.tools.files.tools import Root
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,7 +406,7 @@ def build_wires(config: Config) -> Wires:
     return Wires(by_endpoint={name: build_wire(endpoint) for name, endpoint in config.endpoints.items()})
 
 
-def working_note(workspace: Workspace) -> str:
+def working_note(workspace: Workspace, scratch: Path | None = None) -> str:
     """
     What the agent is told about the directory its tools reach, which is where it is and nothing more.
 
@@ -410,14 +415,29 @@ def working_note(workspace: Workspace) -> str:
     already says, kept in step by hand. What cannot live there is which directory this session got,
     since a toolset is built per session and its own description is not.
     """
-    return (
+    said = (
         f"You are working in a git worktree at {workspace.root}. The file tools take paths relative "
         f"to it and reach nothing outside it. Changes you make there are snapshotted automatically; "
         f"you never need to commit, and you should not run git commands to record your work."
     )
+    if scratch is None:
+        return said
+    # The path and not the policy, for the reason above: what the scratch directory is *for* is on
+    # the tool that reaches it, and what cannot live there is which directory this session got.
+    return (
+        f"{said} You also have a scratch directory at {scratch}, outside the worktree and outside "
+        f"every snapshot, which is where anything that is not the repository's belongs."
+    )
 
 
-def agent_for(wires: Wires, chosen: Choice, instructions: str, workspace: Workspace | None = None) -> Agent[None, str]:
+def agent_for(
+    wires: Wires,
+    chosen: Choice,
+    instructions: str,
+    workspace: Workspace | None = None,
+    scratch: Path | None = None,
+    bwrap: str | None = None,
+) -> Agent[None, str]:
     """
     The agent one session is answered by, built for the pass that is about to run it.
 
@@ -430,13 +450,34 @@ def agent_for(wires: Wires, chosen: Choice, instructions: str, workspace: Worksp
     and are as fixed as it is: a pass that resumed a session at a different effort would continue a
     conversation whose earlier answers were reasoned at another.
 
-    **A session with no workspace gets no file tools at all**, rather than tools that refuse every
+    **A session with no workspace gets no tools at all**, rather than tools that refuse every
     call. A console being used to talk rather than to edit is what this was before there were any
-    repositories, and offering a model four tools that cannot work is worse than offering none:
+    repositories, and offering a model tools that cannot work is worse than offering none:
     it spends the description on every request and invites a call that can only fail.
+
+    `bwrap` is passed in rather than looked up here, because where the sandbox binary is is a fact
+    about the machine and this is called once per pass. A session with a workspace and no sandbox
+    gets the file tools and no `bash`, which is what this console was before there was one: the
+    alternative is running somebody else's build script against the whole home directory, and a
+    missing sandbox is not a reason to do that.
     """
-    tools = [] if workspace is None else [file_tools(Files(root=workspace.root))]
-    spoken = instructions if workspace is None else f"{instructions}\n\n{working_note(workspace)}"
+    tools = []
+    running = workspace is not None and scratch is not None and bwrap is not None
+    if workspace is not None:
+        # The scratch is reachable by the file tools only where a command can make it exist, which
+        # is the same condition `bash` is offered under. Offered without one, `read` would name a
+        # directory nothing ever creates. The worktree is first, so a relative path still means the
+        # repository however many roots a session ends up with.
+        reaching: tuple[Root, ...] = (Worktree(path=workspace.root),)
+        if running and scratch is not None:
+            reaching = (*reaching, Scratch(path=scratch))
+        tools.append(file_tools(Files(roots=reaching)))
+        if scratch is not None and bwrap is not None:
+            tools.append(bash_tools(workspace, scratch, bwrap))
+    if workspace is None:
+        spoken = instructions
+    else:
+        spoken = f"{instructions}\n\n{working_note(workspace, scratch if running else None)}"
     return Agent(
         wires.for_endpoint(chosen.endpoint).model(chosen.model),
         name="mainplate",

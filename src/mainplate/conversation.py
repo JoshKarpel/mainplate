@@ -811,7 +811,7 @@ def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> W
 
 
 def conversing(
-    endpoints: Wires, instructions: str, workspaces: Workspaces | None = None
+    endpoints: Wires, instructions: str, workspaces: Workspaces | None = None, bwrap: str | None = None
 ) -> Callable[[Run], Awaitable[Never]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -843,7 +843,10 @@ def conversing(
         # every snapshot inside a turn is taken of it. A session with no repository has none, and
         # gets an agent with no file tools rather than tools that refuse every call.
         workspace = working_in(workspaces, run.workflow, chosen)
-        agent = agent_for(endpoints, chosen, instructions, workspace=workspace)
+        # Only where there is a workspace to sit beside: a session with no repository has nothing
+        # the scratch would be scratch *for*, and gets no tool that could reach it either.
+        scratch = None if workspaces is None or workspace is None else workspaces.scratch_at(run.workflow)
+        agent = agent_for(endpoints, chosen, instructions, workspace=workspace, scratch=scratch, bwrap=bwrap)
         at = reached(run.recorded)
         while True:
             prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)

@@ -73,6 +73,8 @@ from mainplate.pages import refusal_page
 from mainplate.reference import References
 from mainplate.reference import refreshed
 from mainplate.reference import refreshing as refreshing_reference
+from mainplate.sandbox import NoSandbox
+from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import prepare
 from mainplate.settings import DEFAULT_WATCHING
@@ -187,6 +189,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     workspaces = Workspaces(
         clones=Clones(root=settings.workspace_root / "clones"),
         root=settings.workspace_root / "worktrees",
+        scratch=settings.workspace_root / "scratch",
         reaching=reaching,
     )
     # Read before ready like the other two, and unlike either of them it cannot refuse to start.
@@ -197,11 +200,24 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     references = References()
     if config.model_reference is not None:
         await refreshed(references, config.model_reference)
+    # Reported rather than refused, which is `forge.offers`'s promise and not `catalogue.discover`'s
+    # refusal: a console with no sandbox is one whose sessions keep every file tool and are offered
+    # no `bash`, which is exactly what this was before there was one. Nothing here leaves somebody
+    # holding a choice they cannot use, so it is not a reason not to start. Logged because the
+    # alternative - a shell tool that quietly is not there - is the state nobody can diagnose.
+    try:
+        bwrap: str | None = sandbox_command()
+        logger.info(f"sandbox found: {bwrap}")
+    except NoSandbox as missing:
+        bwrap = None
+        logger.warning(f"no sandbox, so sessions get no shell: {missing}")
     async with open_store(
         settings.database, settings.lease, catalogues, workspaces, references, settings.watching
     ) as service:
         answering = work(
-            service.durable, conversing(endpoints, settings.instructions, workspaces), limit=settings.passes
+            service.durable,
+            conversing(endpoints, settings.instructions, workspaces, bwrap=bwrap),
+            limit=settings.passes,
         )
         keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
         # A stack rather than nested `async with`, because one of these tasks is conditional and

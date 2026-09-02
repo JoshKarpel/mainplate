@@ -11,7 +11,10 @@
 # its constructor reaching this far out. A second tool is a new package beside `files/` and one
 # more name below, rather than an edit to anything that already imports this one.
 
+from mainplate.tools.bash import bash_tools
 from mainplate.tools.files import Files
+from mainplate.tools.files import Scratch
+from mainplate.tools.files import Worktree
 from mainplate.tools.files import file_tools
 
-__all__ = ["Files", "file_tools"]
+__all__ = ["Files", "Scratch", "Worktree", "bash_tools", "file_tools"]

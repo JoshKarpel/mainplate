@@ -225,11 +225,28 @@ class Workspaces:
 
     clones: Clones
     root: Path
+    scratch: Path
     reaching: Reaching
 
     def at(self, session: str) -> Path:
         """Where a session's files are, which is a question a page asks and never a call that fails."""
         return self.root / session
+
+    def scratch_at(self, session: str) -> Path:
+        """
+        Somewhere a session may keep things that are not its repository's.
+
+        Outside the worktree rather than inside it, which is what keeps it out of everything git
+        answers: a directory under the worktree is `--others` to `git ls-files`, so it would show up
+        in `list` and in `status`, and excluding it means writing an exclusion into a git directory
+        that is read-only wherever a command can see it.
+
+        Nothing snapshots this, deliberately and for the reason snapshots are gitignore-aware in the
+        first place: going back to before a call should not uninstall what was installed between
+        then and now. The cost is the same one an ignored path already carries, that what is in here
+        goes stale while the source around it moves back.
+        """
+        return self.scratch / session
 
     def workspace(self, session: str) -> Workspace:
         return Workspace(root=self.at(session))

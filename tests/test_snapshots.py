@@ -92,7 +92,12 @@ async def workspaces(workspace: Workspace, tmp_path: Path) -> Workspaces:
             repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(workspace.root)),)
         )
     )
-    return Workspaces(clones=Clones(root=tmp_path / "clones"), root=tmp_path / "worktrees", reaching=reaching)
+    return Workspaces(
+        clones=Clones(root=tmp_path / "clones"),
+        root=tmp_path / "worktrees",
+        scratch=tmp_path / "scratch",
+        reaching=reaching,
+    )
 
 
 class TestWorkingFromARelativeDatabase:

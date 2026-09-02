@@ -112,6 +112,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   originally saw, so a branch re-asks its question against the files that question was asked about.
   Snapshots are gitignore-aware, so going back to a turn restores what is version-controlled and
   leaves the environment alone.
+- A `bash` tool, on sessions that picked a repository and only where there is a sandbox to run one
+  in. Every command runs in a mount namespace of its own holding that session's worktree, its clone
+  read-only, and a read-only system: there is no network, no home directory, and nothing belonging
+  to any other session. Reading git works, so `status`, `diff`, `log` and `blame` all answer, while
+  `add`, `commit` and `stash` fail on a read-only filesystem. That is deliberate rather than
+  incidental: a git write from inside would be a second history that no panel shows, no fork
+  inherits and no rewind restores, and committing is the person's to do. Snapshots are unaffected
+  because they run outside the sandbox, so the history they are chained onto cannot be rewritten
+  from in there.
+- Each command gets a new namespace, so nothing persists between two calls: no working directory,
+  no exported variable, no background process. That follows from how a pass resumes rather than from
+  frugality, since a sandbox held across calls would offer its state on a first pass and withhold it
+  on a resumed one, where recorded results are replayed instead of re-run. Output is capped to its
+  first and last lines with a count of what was dropped, a command that runs past its time limit is
+  stopped and says so, and a command's exit status is always stated so success is never inferred
+  from an empty answer.
+- A scratch directory per session, beside its worktree and bound read-write, for whatever is not the
+  repository's: a build cache, a downloaded artifact, a note to itself. It survives from one call to
+  the next and from one turn to the next, and nothing snapshots it, which is the same decision as
+  snapshots honouring a `.gitignore`: going back to before a call should not uninstall what was
+  installed since. Being outside the worktree is what keeps it out of `list` and out of `git
+  status`, where a directory inside would need an exclusion written somewhere no command can write.
+- Two tool calls aimed at one file are serialised, so a batch of them cannot lose each other's work.
+  A model emits several calls in one response and they run concurrently: two edits to one file each
+  read it, each computed against what they read, and the loser's write disappeared while both calls
+  reported success. Two `create`s of one path raced the same way, so the promise never to overwrite
+  quietly failed. The lock covers the whole read-modify-write, so the second call reads the first
+  one's result and an edit whose anchors that invalidated now fails loudly instead of silently.
+- `read`, `edit` and `create` reach the scratch directory as well as the repository, so a plan or a
+  notes file can be kept across turns and edited by anchor rather than rewritten. A relative path
+  still means the repository; anywhere else is reached by naming its absolute path. `list` stays on
+  the repository alone, because it answers by asking git and the scratch is deliberately not in git,
+  and it says so and points at `bash` rather than failing.
+- A console started on a machine with no `bwrap` says so in its log and offers its sessions every
+  file tool and no `bash`, rather than refusing to start or running commands unconfined.
 - A `list` tool taking a directory and a depth, so finding a file is looking rather than guessing at
   a name. A directory at the depth asked for is summarised with a count instead of opened, so the
   depth bounds the answer. It asks git what is there rather than walking, which means a `.gitignore`
