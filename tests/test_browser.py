@@ -679,6 +679,75 @@ class TestWatchingATurnArrive:
         await expect(page.locator(".panel[data-fresh]")).to_have_count(0)
 
 
+class TestOpeningTheRecordBehindARequest:
+    """
+    The `r{i}` on a rule stays exactly where it was when it is pressed.
+
+    A control that moves under the finger that pressed it is a control a reader cannot press twice,
+    and it reads as the page having jumped rather than as something having opened. Invisible to a
+    markup assertion and to a still alike: both states are correct markup and each screenshot is
+    right on its own, so what has to be measured is one element's box across the press.
+    """
+
+    async def opened(self, console: tuple[str, Service], page: Page) -> Locator:
+        """A conversation with one recorded request in it, as the closed tag on that request's rule."""
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        tag = page.locator(".tag").first
+        await expect(tag).to_have_count(1)
+        return tag
+
+    async def where_on_its_rule(self, tag: Locator) -> dict[str, float]:
+        """
+        Where the marker sits within the rule it is on, rather than within the window.
+
+        The window is the wrong frame for this one question: the page follows the end, so a record
+        opening at the bottom of a conversation scrolls the transcript under it, which is the
+        console doing what it is asked and would report as the marker having moved. What the marker
+        must not do is change its place on its own line.
+        """
+        return dict(
+            await tag.evaluate(
+                """(tag) => {
+                    const summary = tag.querySelector('summary').getBoundingClientRect();
+                    const rule = tag.closest('.rule').getBoundingClientRect();
+                    return { x: summary.x - rule.x, y: summary.y - rule.y };
+                }"""
+            )
+        )
+
+    async def test_the_marker_does_not_move_when_it_is_pressed(self, page: Page, console: tuple[str, Service]) -> None:
+        tag = await self.opened(console, page)
+        before = await self.where_on_its_rule(tag)
+        await tag.locator("summary").click()
+        await expect(tag).to_have_attribute("open", "")
+        assert await self.where_on_its_rule(tag) == before
+
+    async def test_the_record_opens_underneath_the_rule_it_belongs_to(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The other half of the same measurement: nothing moving is also what a tag that never opened
+        would report, so the record has to be shown to arrive, below the line and across it.
+        """
+        tag = await self.opened(console, page)
+        summary = tag.locator("summary")
+        record = tag.locator(".record__json")
+        await expect(record).to_be_hidden()
+        await summary.click()
+        await expect(record).to_be_visible()
+        above = await summary.bounding_box()
+        below = await record.bounding_box()
+        rule = await page.locator(".rule").first.bounding_box()
+        assert above is not None
+        assert below is not None
+        assert rule is not None
+        assert below["y"] >= above["y"] + above["height"]
+        assert below["width"] > rule["width"] / 2
+
+
 class TestWhereTheComposerSendsTo:
     """
     That pressing Fork lands the reader in a *different* session, driven by a real htmx.

@@ -1587,10 +1587,30 @@ fetched are decided rather than incidental:
 **Opened, it grows the rule downward rather than lying over the conversation.** A record read against
 the reply it came from is worth more than a page that holds still, and an overlay is the one shape
 where the two cannot be looked at together. It takes a line of the rule to itself - the rule wraps
-and the tag asks for the whole of one - which is what a phone decides: sharing the line leaves the
+and the record asks for the whole of one - which is what a phone decides: sharing the line leaves the
 record a column six characters wide, and pinning the figures so it does not is a row that runs off
-the side of the screen. The `r{i}` marker moves down with it because it is the tag's own summary, and
-it reads as the label of the block it opened.
+the side of the screen.
+
+**A control that toggles may not move.** Whatever a disclosure opens, the thing that opened it stays
+exactly where it was, and that holds for every fold this console draws. A control that moves under
+the finger that pressed it cannot be pressed twice, and the page reads as having jumped rather than
+as something having opened. The record tag is where that was learned: what wrapped onto the second
+line was the whole `<details>`, so `r0` set off across the rule on the way to opening it.
+
+The shape that gets this right is the general one, so reach for it before inventing another. What
+wraps must be the *content* and never the summary above it, which means the summary and the content
+have to be separate items of the row that wraps. `display: contents` on the `<details>` is what does that: the
+tag makes no box of its own, so the summary stays an item in its own place and the content becomes
+the item that takes a line. Both candidates for that item are told the same thing, because
+`::details-content` is the box a browser wraps a disclosure's content in and the content itself is
+the item where there is no such box, and the closed state has to hide *both* or an empty item leaves
+every shut rule a row gap taller.
+
+`TestOpeningTheRecordBehindARequest` is what fails when this breaks, and it has to be a browser: both
+states are correct markup and each screenshot is right on its own, so what is measured is one
+element's box across the press. Within its rule rather than within the window, because the page
+follows the end and a record opening at the bottom scrolls the transcript under it - which is the
+console doing what it is asked, and would otherwise report as the marker having moved.
 
 Tests drive the app through `without-http`'s in-memory loopback client (`tests/calling.py`), so
 nothing binds a port and the suite parallelizes; `Caller.watching` consumes a real event stream
