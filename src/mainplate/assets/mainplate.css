@@ -463,6 +463,74 @@ main > * {
     text-decoration: underline;
 }
 
+/* --- Copy buttons: seated by the script -------------------------------- */
+
+/* Lifting what is on the page off it, on a panel and inside every block of code in one. Two places
+   and one look, because they are one thing: what each copies is decided by where it sits.
+
+   Drawn on every one of them rather than on whatever is under the pointer, and merely quieter until
+   its own panel is: a control revealed by hover does not exist at all on a touch screen, which is
+   the lesson the branch link had to learn.
+
+   The size and family are not inherited - a button takes neither from its container - so both are
+   said here, in the mono the rest of the chrome is set in and a step under it. The uppercase and the
+   tracking are the panel role's, so every small mark on a panel reads as one kind of thing. */
+.copy {
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--edge);
+    border-radius: 3px;
+    background: var(--raised);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.07em;
+    /* Tight, so the one standing in the row of facts costs that row no height of its own. */
+    line-height: 1.2;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.panel:hover .copy,
+.copy:focus-visible {
+    opacity: 1;
+}
+
+/* The panel's own stands in the row of facts, just left of the permalink, and takes the free space
+   the permalink used to take. In the row rather than hung off the text below it, so the panel keeps
+   the spacing it has always had: a button given room of its own costs every panel a strip of empty
+   page between its title and what it says, which is a change to the whole transcript's rhythm bought
+   for one control.
+
+   The permalink gives up its own `margin-left: auto` only where this button is there to take it
+   over, so a page rendered with the script absent still has it flush right. */
+.panel__meta > .copy {
+    margin-left: auto;
+}
+
+.panel__meta > .copy + .panel__anchor {
+    margin-left: 0;
+}
+
+/* A block of code carries its own inside its top right corner, inset on both axes over the padding
+   the block already has, which is the place a reader looks for one. */
+pre > .copy {
+    position: absolute;
+    z-index: 1;
+    top: var(--space-3);
+    right: var(--space-3);
+}
+
+/* Copied, in the ink the console uses for what the console itself is doing. Deliberately not the
+   green a finished thing takes elsewhere: `--moss` is worn by a literal inside a fence and by
+   nothing else, where `--mark` already says "the page is answering you" on a search hit and on the
+   panel you landed on. */
+.copy[data-copied] {
+    border-color: var(--mark);
+    color: var(--mark);
+    opacity: 1;
+}
+
 /* --- Blocks ----------------------------------------------------------- */
 
 .block {
@@ -535,17 +603,22 @@ main > * {
 }
 
 .text pre {
+    position: relative;
     margin: var(--space-4) 0;
     line-height: var(--mono-line);
     padding: var(--space-4) var(--space-5);
     border: 1px solid var(--edge-soft);
     border-radius: var(--radius);
     background: var(--sunk);
-    /* Its own scroller, so a long line moves the block and never the page. */
-    overflow-x: auto;
 }
 
+/* The code scrolls sideways, not the block around it, so a long line still moves the block and never
+   the page. One level in rather than on the `pre` itself, because a copy button pinned to a scroll
+   container travels with the content: anchored to the block that scrolls, it would slide off its own
+   corner and across the code the moment a reader looked at the end of a long line. */
 .text pre code {
+    display: block;
+    overflow-x: auto;
     padding: 0;
     background: none;
     font-size: var(--mono-size);
@@ -809,6 +882,7 @@ main > * {
 }
 
 .tool__body pre {
+    position: relative;
     margin: 0;
     /* On the same grid as a fenced block, because a read's gutter is the longest column of box
        drawing this console ever draws and it is here rather than in a fence. The family is said

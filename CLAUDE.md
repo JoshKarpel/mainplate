@@ -1389,6 +1389,43 @@ moved. Two things there are decided:
   The first render marks nothing, since every panel is new to the script then and a conversation
   flashing top to bottom points at everything.
 
+**A copy button sits on every panel and inside every block of code in one, and they are one control
+in two places rather than two controls.** One look, one listener, one clipboard, one way of saying it
+worked; what each copies is decided by where it sits, so the one in a fence hands over the fence and
+the panel's own hands over what the panel says. Five things there are decided:
+
+- **The script seats them, and the server draws none of them.** A fence is markup the Markdown
+  renderer produced, so `pages.py` has no node to hang a button on inside one; rendering the panel's
+  and seating the code's would be two mechanisms for one thing when the seating has to exist anyway.
+  They come off before a swap and go back after it, exactly as the search marks do and for the same
+  reason: a node the server never sent is a node a morph should not be reconciling.
+- **What comes out is what was *written*, not what is drawn.** A message is rendered Markdown and
+  the rendering is lossy in exactly the way somebody copying cares about, so a block that was
+  Markdown carries its source in `data-markdown` and that is what the button hands over. It is not a
+  second copy of anything: it is the same value the element was built from, put into the same render,
+  and nothing else reads it. Only the kinds that *are* Markdown, since a tool's arguments and its
+  return are already shown verbatim and a fence renders as the characters it was written with.
+  Measured on the gallery's own conversation, carrying the sources costs the page 9%.
+- **Where there is no source to carry it is `textContent`, never `innerText`.** `innerText` is what
+  is *rendered*, so a folded call would copy as its summary alone and one button would answer two
+  different things a click apart. The buttons are taken back out of the text first, since one seated
+  inside a fence is inside the very text that fence hands over.
+- **The confirmation is a value, projected.** A running turn morphs the transcript every time it
+  records anything, which is exactly when somebody is lifting a result out of it, so `copied` names
+  the button rather than marking it - the panel it is on and where in the panel it sits.
+- **A block that scrolls has no still corner to pin to.** An absolutely positioned child of a scroll
+  container travels with the content, so `.text pre` no longer scrolls and its `code` does, and the
+  raw record on a rule - a bounded box that genuinely scrolls - gets no button at all.
+
+The panel's own stands in the row of facts just left of the permalink, and the code's is inset inward
+from its block's corner on both axes, which is where a reader looks for each. **The panel keeps the
+spacing it has always had, and that is the point of putting the button in a row that already
+exists.** Hung off the top edge of the text instead - which is where scriptorium puts it, riding the
+border of a block that has one - it needs room, and the room costs every panel a strip of empty page
+between its title and what it says: a change to the whole transcript's rhythm bought for one control.
+The permalink gives up its own `margin-left: auto` only where the button is there to take it over, so
+a page rendered with the script absent still has it flush right.
+
 **Following the end is being at the end**, decided in both directions by where the reader has
 scrolled, and re-entered by sending a message. `land` therefore has to route its scroll through
 `scrolling()` like `toEnd` does: without it, landing on the *last* panel puts the reader at the

@@ -1420,14 +1420,31 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     )
 
 
+def written_block(kind: str, text: str) -> Element:
+    """
+    One block of rendered Markdown, carrying the Markdown it was rendered from.
+
+    The attribute is what a copy button hands over, and it has to be here because the rendering is
+    lossy in exactly the way a person copying cares about: the fences, the emphasis, the list markers
+    and the table are all gone from the text of the page, and no reading of the rendered markup gets
+    them back. Nothing else reads it - it is not a second copy of anything, since it is the same
+    value this element was built from, put into the same render.
+
+    Only the kinds that *are* Markdown. A tool's arguments and its return are shown verbatim already,
+    so what is on the page is the source, and an attribute repeating it would be the second copy this
+    one is not.
+    """
+    return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text))
+
+
 def block_element(block: Block, anchor: str, at: int) -> Element:
     match block:
         case Prose(text=text):
-            return div(cls=("block", "block--text"), children=written(text))
+            return written_block("block--text", text)
         case Steering(text=text):
-            return div(cls=("block", "block--text"), children=written(text))
+            return written_block("block--text", text)
         case Reasoning(text=text):
-            return div(cls=("block", "block--thinking"), children=written(text))
+            return written_block("block--thinking", text)
         case ToolUse():
             return div(cls=("block", "block--tool"), children=tool_block(block, anchor, at))
         case _ as unreachable:
@@ -1600,6 +1617,11 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
     What a panel says is what is *in* it, and nothing about the turn or the request around it. The
     worktree, the fork, what was spent and the raw record are all facts about the exchange rather
     than about any one run of blocks, so they are on the rules between them. See `rule_element`.
+
+    Nothing here draws the copy buttons, and that is not an omission. One of them sits inside a
+    fenced block, which is markup the Markdown renderer produced and this has no node to reach into,
+    so seating them is `mainplate.js`'s - and a button in the markup for the panel beside a seated one
+    for the code in it would be two mechanisms for one thing.
     """
     return article(
         cls="panel",

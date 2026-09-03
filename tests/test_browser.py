@@ -739,6 +739,148 @@ class TestHowReasoningIsSet:
         assert drawn == ["italic", "normal", "normal"]
 
 
+class TestWhatComesOutOfACopyButton:
+    """
+    What a panel says and what a block of code holds, lifted off the page.
+
+    A browser twice over. The clipboard is a live thing the server never renders, so all a markup
+    assertion or a still could ask is whether a button is drawn, which is not the question. And what
+    comes out of one has to be the same text whatever the reader has open, which is a property of two
+    presses in two states rather than of either rendering.
+    """
+
+    async def copying(self, page: Page, gallery: str, kind: str) -> Locator:
+        """One kind's first panel on a settled conversation, with the clipboard readable."""
+        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        panel = page.locator(f".panel[data-kind={kind}]").first
+        await expect(panel.locator(".copy").first).to_be_visible()
+        return panel
+
+    async def clipboard(self, page: Page) -> str:
+        return str(await page.evaluate("() => navigator.clipboard.readText()"))
+
+    async def test_a_panel_copies_what_it_says_and_none_of_the_chrome_around_it(self, page: Page, gallery: str) -> None:
+        panel = await self.copying(page, gallery, "person")
+        said = str(await panel.locator(".block").first.inner_text()).strip()
+        await panel.locator(".panel__meta > .copy").click()
+        taken = await self.clipboard(page)
+        assert taken == said
+        # The role, the permalink and the buttons themselves are on the panel and are not what it says.
+        assert "copy" not in taken.lower()
+
+    async def test_a_panel_copies_the_markdown_it_was_written_as(self, page: Page, gallery: str) -> None:
+        """
+        What is on the page is rendered Markdown, and the rendering is lossy in exactly the way
+        somebody copying cares about: a reading of the markup gives text with the fences, the
+        emphasis and the table gone from it, and nothing gets them back. So the source rides along in
+        the markup and is what the button hands over.
+        """
+        await self.copying(page, gallery, "assistant")
+        # The one that was written with everything a rendering loses in it.
+        panel = page.locator(".panel[data-kind=assistant]:has(pre)").first
+        await panel.locator(".panel__meta > .copy").click()
+        taken = await self.clipboard(page)
+        assert "```python" in taken
+        assert "**kept**" in taken
+        assert "| trigger | fires | survives a morph |" in taken
+        # And none of that can be read off the page, which is what makes carrying the source
+        # load-bearing rather than a convenience.
+        drawn = str(await panel.inner_text())
+        assert "```" not in drawn
+        assert "**kept**" not in drawn
+
+    async def test_a_block_of_code_copies_itself_rather_than_the_panel_it_is_in(self, page: Page, gallery: str) -> None:
+        """
+        The two are one control in two places, told apart by where each sits, so the one inside a
+        fence has to hand over the fence: seated but reading the panel it happened to be in, every
+        button on a panel would answer identically and three of them would be one.
+        """
+        panel = await self.copying(page, gallery, "thinking")
+        code = panel.locator("pre").first
+        await code.locator(".copy").click()
+        taken = await self.clipboard(page)
+        assert taken.strip() == str(await code.locator("code").inner_text()).strip()
+        assert "The trigger is" not in taken
+
+    async def test_a_call_copies_the_same_whether_it_is_folded_or_open(self, page: Page, gallery: str) -> None:
+        """
+        `textContent` rather than `innerText`, which is the whole of what makes this true: what is
+        *rendered* of a folded `<details>` is its summary alone, so one button would answer two
+        different things a click apart depending on what the reader happened to have open.
+        """
+        panel = await self.copying(page, gallery, "tool")
+        fold = panel.locator("details.tool").first
+        await expect(fold).not_to_have_attribute("open", "")
+        await panel.locator(".panel__meta > .copy").click()
+        folded = await self.clipboard(page)
+        await fold.locator("summary").click()
+        await expect(fold).to_have_attribute("open", "")
+        await panel.locator(".panel__meta > .copy").click()
+        assert await self.clipboard(page) == folded
+        # And it is the call rather than the one line of its summary: what it was handed is in there.
+        assert "called with" in folded
+
+    async def test_the_button_says_so_and_then_stops_saying_so(self, page: Page, gallery: str) -> None:
+        panel = await self.copying(page, gallery, "assistant")
+        button = panel.locator(".panel__meta > .copy")
+        await expect(button).to_have_text("copy")
+        await button.click()
+        await expect(button).to_have_text("copied")
+        await expect(button).to_have_text("copy", timeout=5_000)
+
+    async def test_only_the_button_that_was_pressed_says_it_was(self, page: Page, gallery: str) -> None:
+        """One panel holds several of these, so the confirmation names one rather than a place."""
+        panel = await self.copying(page, gallery, "thinking")
+        await panel.locator("pre .copy").first.click()
+        await expect(page.locator(".copy[data-copied]")).to_have_count(1)
+        assert await page.locator(".copy[data-copied]").first.evaluate("(one) => one.parentElement.tagName") == "PRE"
+
+
+class TestSayingSomethingWasCopiedThroughASwap:
+    """
+    The confirmation survives the turn recording something, which is exactly when it has to.
+
+    A running turn morphs the transcript every time anything lands, and every one of these buttons is
+    inside it, so a label written onto the markup would be written back off a moment later - while
+    the reader is watching the very turn they just lifted a result out of. It is held as a value and
+    projected after every swap instead, and only a real server writing real steps under a real
+    browser can tell the two apart.
+    """
+
+    async def test_what_was_copied_still_says_so_when_the_turn_records_more(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        button = page.locator(".panel[data-kind=person] .panel__meta > .copy")
+        await expect(button).to_be_visible()
+        await button.click()
+        await expect(button).to_have_text("copied")
+        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
+        # The swap has landed - a panel that was not there before is - and the button still says it.
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
+        await expect(button).to_have_text("copied")
+
+    async def test_a_panel_that_arrives_is_seated_too(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The other half of the same swap. These are elements the server never sent, so they are taken
+        off before a morph and put back after it, and a panel that arrived while the page was open
+        would otherwise be the one panel a reader could not copy.
+        """
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(0)
+        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
+        await expect(page.locator(".panel[data-kind=thinking] .panel__meta > .copy")).to_have_count(1)
+        # And nothing is seated twice, which is what an unguarded re-seating after every swap does.
+        await service.checkpointer.supply(session.id, tool_key(0, "call-1"), "the first file")
+        await expect(page.locator(".panel[data-kind=thinking] .copy")).to_have_count(1)
+
+
 # One response of a turn, as the capability records it partway through: the model reasoned and asked
 # for two files at once. Two calls because that is the state worth watching arrive - they run
 # together, so one comes back while the other is still out.

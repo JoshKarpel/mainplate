@@ -12,8 +12,8 @@
 //
 // Everything it drives is an enhancement. With this file absent the page still renders, still
 // posts messages, and every tool call is still a `<details>` a reader can open; what they lose is
-// the search, the dock, the key, the theme toggle, and the live connection that would have brought
-// an answer without a reload.
+// the search, the dock, the key, the theme toggle, the copy buttons on a panel and on the code in
+// it, and the live connection that would have brought an answer without a reload.
 (() => {
   "use strict";
 
@@ -122,6 +122,8 @@
     let following = true;
     let signatures = new Map(); // what each panel said, so a change can be told from a repaint
     let sentFrom = null; // the box a message has just left, so the cursor can be put back in it
+    let copied = null; // the panel whose copy button is saying so
+    let saying = null; // and the timer that stops it saying it
 
     let shelf = []; // text kept and not sent, as {name, text}
 
@@ -353,6 +355,73 @@
       if (toggle) toggle.setAttribute("aria-pressed", String(following));
     };
 
+    // --- Copying -----------------------------------------------------------
+    //
+    // A button on every panel, and one inside every block of code in it. Two places rather than two
+    // things: one look, one listener, one clipboard, one way of saying it worked, and what each one
+    // copies is decided by where it sits.
+    //
+    // Seated here rather than rendered by the server, which the code button forces: a fence is
+    // markup the Markdown renderer produced, so there is no node for `pages.py` to hang a button on
+    // inside one. Rendering the panel's and seating the code's would be two mechanisms for one
+    // thing, and the seating has to exist either way.
+    //
+    // Named after where they sit - the panel, and where in it - so the confirmation below survives a
+    // swap; see `paintCopied`. Positional within a panel, which is sound for the same reason a
+    // panel's blocks are read that way: they only ever grow at the end.
+
+    // `before` is where in its place the button goes, and `null` is the end: a block of code takes
+    // one in its corner, and a panel takes one in the row of facts just ahead of the permalink,
+    // which is also the order the stylesheet's own rules read in.
+    const seated = (place, name, before = null) => {
+      if (place.querySelector(":scope > [data-copy]")) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "copy";
+      button.dataset.copy = name;
+      button.textContent = "copy";
+      button.title = "Copy this to the clipboard";
+      place.insertBefore(button, before);
+    };
+
+    const paintCopies = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll(".panel").forEach((panel) => {
+        const meta = panel.querySelector(":scope > .panel__meta");
+        // A panel with nothing in it yet is the one being waited on, and a button that would copy
+        // the empty string is a control offering to do nothing.
+        const says = [...panel.querySelectorAll(":scope > .block")].some((block) => block.textContent.trim());
+        if (meta && says) seated(meta, panel.id, meta.querySelector(".panel__anchor"));
+        // Only the code *inside a panel*: the raw record on a rule is a bounded box that scrolls,
+        // and a button pinned in a scroller travels with the content and off its own corner.
+        panel.querySelectorAll("pre").forEach((code, at) => seated(code, `${panel.id}:${at}`));
+      });
+    };
+
+    // Taken off again before a swap, for the reason the search marks are: these are elements the
+    // server has never heard of, and morphing merges incoming markup into what is on screen.
+    const stripCopies = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-copy]").forEach((button) => button.remove());
+    };
+
+    // Which button has just been copied from, said on that button. A value projected rather than a
+    // label left on the markup, for the reason everything else here is: while a turn is being
+    // answered the transcript is morphed every time anything is recorded, so a button told it was
+    // copied would be told otherwise a moment later - which is exactly when somebody is most likely
+    // to be lifting a result out of a turn they are watching.
+    const paintCopied = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-copy]").forEach((button) => {
+        const done = button.dataset.copy === copied;
+        button.toggleAttribute("data-copied", done);
+        button.textContent = done ? "copied" : "copy";
+      });
+    };
+
     // --- Search ----------------------------------------------------------
 
     const clearHits = () => {
@@ -378,8 +447,9 @@
         if (!node.nodeValue.trim()) continue;
         const parent = node.parentElement;
         if (!parent) continue;
-        // A panel's own label and permalink are chrome, not conversation.
-        if (parent.closest(".panel__meta")) continue;
+        // A panel's own label and permalink are chrome, not conversation, and so is the word on a
+        // copy button - which is seated inside a fence, where the marks would otherwise reach it.
+        if (parent.closest(".panel__meta, [data-copy]")) continue;
         // Only the kinds the reader left in play, so the count is of what they are looking at.
         const panel = parent.closest(".panel");
         if (panel && muted.has(panel.dataset.kind)) continue;
@@ -457,6 +527,8 @@
       paintLanded();
       paintFolds();
       paintFollow();
+      paintCopies();
+      paintCopied();
       research(false);
       if (following) toEnd();
     };
@@ -853,6 +925,95 @@
       });
     };
 
+    // --- What comes out of a copy button -----------------------------------
+
+    // A node's text with this file's own buttons taken back out of it: a button seated inside a
+    // fence is inside the very text that fence would otherwise hand over.
+    //
+    // `textContent` rather than `innerText`, and that is what makes the answer independent of what
+    // the reader has open: `innerText` is what is *rendered*, so a folded call would copy as its
+    // summary alone and one button would give two different answers a click apart.
+    const wordsOf = (node) => {
+      const taken = node.cloneNode(true);
+      taken.querySelectorAll("[data-copy]").forEach((button) => button.remove());
+      return taken.textContent;
+    };
+
+    // What one block says, as it was written rather than as it is drawn.
+    //
+    // A message is rendered Markdown, and the rendering is lossy in exactly the way somebody copying
+    // cares about: the fences, the emphasis, the list markers and the table are gone from the text of
+    // the page. So a block that was Markdown carries its own source and that is what is handed over -
+    // see `written_block` in `pages.py`. A block of code inside one needs no such thing, since a
+    // fence renders as the characters it was written with.
+    //
+    // A tool call is the block that is not simply its own text either: its parts are a name, what it
+    // was handed and what it gave back, and run together they are one unreadable line. So the pairs
+    // are read off the list the server already draws them as, which keeps the labels in one place -
+    // "called with" and "returned" are written in `pages.py` and nowhere here.
+    const spoken = (block) => {
+      if (block.dataset.markdown !== undefined) return block.dataset.markdown.trim();
+      const body = block.querySelector(".tool__body");
+      if (!body) return wordsOf(block).trim();
+      const name = block.querySelector(".tool__name");
+      const said = Array.from(body.children, (part) => wordsOf(part).trim());
+      return [name && name.textContent.trim(), ...said].filter(Boolean).join("\n");
+    };
+
+    // A panel's blocks and nothing else: the role, the permalink and the button itself are chrome,
+    // which is the same cut `signature` makes and the same one the search already skips.
+    const copyable = (panel) =>
+      Array.from(panel.querySelectorAll(":scope > .block"), spoken)
+        .filter(Boolean)
+        .join("\n\n");
+
+    // The clipboard, or a throwaway textarea where the page has none to reach. That second path is
+    // not a fallback around something that failed: `navigator.clipboard` is simply absent outside a
+    // secure context, which a console reached at a bare address on a network is, and what it would
+    // leave there instead is a button that silently does nothing.
+    const copyToClipboard = async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {}
+      const box = document.createElement("textarea");
+      box.value = text;
+      box.style.position = "fixed";
+      box.style.opacity = "0";
+      document.body.appendChild(box);
+      box.select();
+      try {
+        document.execCommand("copy");
+      } catch {}
+      box.remove();
+    };
+
+    // Delegated, because every one of these is seated inside the region that is morphed whenever the
+    // session records anything: wired to the buttons themselves, the listeners would be pointing at
+    // the panels of whatever the conversation looked like when it was opened.
+    //
+    // What a button copies is decided by where it sits: a block of code hands over itself, and a
+    // panel's own hands over what the panel says.
+    const wireCopy = () => {
+      document.addEventListener("click", async (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const button = pressed.closest("[data-copy]");
+        if (!button) return;
+        const code = button.parentElement.closest("pre");
+        const panel = button.closest(".panel");
+        if (!code && !panel) return;
+        await copyToClipboard(code ? wordsOf(code) : copyable(panel));
+        copied = button.dataset.copy;
+        paintCopied();
+        clearTimeout(saying);
+        saying = setTimeout(() => {
+          copied = null;
+          paintCopied();
+        }, 1200);
+      });
+    };
+
     // The mark comes off when the animation it drives has run, so a panel that changes again is
     // marked again. Named, because it is not the only animation on the page: the working dots run
     // forever, and clearing on any animation at all would take the mark off before it was seen.
@@ -873,13 +1034,16 @@
 
     // --- Swaps -------------------------------------------------------------
     //
-    // The marks come off before the swap and go back on after it. Taking them off first is not
-    // tidiness: morphing merges the incoming markup into the DOM already on screen, and elements
-    // this file put there are not in that markup, so leaving them would make the merge reconcile
-    // nodes the server has never heard of.
+    // Everything this file put in the transcript comes out before the swap and goes back after it:
+    // the search marks, and the copy buttons. Taking them off first is not tidiness: morphing merges
+    // the incoming markup into the DOM already on screen, and elements this file put there are not
+    // in that markup, so leaving them would make the merge reconcile nodes the server has never
+    // heard of.
     const wireSwaps = () => {
       document.addEventListener("htmx:before:swap", (event) => {
-        if (event.target === transcript()) clearHits();
+        if (event.target !== transcript()) return;
+        clearHits();
+        stripCopies();
       });
       document.addEventListener("htmx:after:swap", () => repaint());
     };
@@ -896,6 +1060,7 @@
     wireFolding();
     wireFilter();
     wireSend();
+    wireCopy();
     wireFresh();
     wireSwaps();
     wireHash();

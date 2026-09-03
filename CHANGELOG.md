@@ -108,6 +108,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hue, so a reader watching a turn fill in is told which part of it moved rather than left to spot
   it. Worked out from what a panel *says*, so unfolding a call or laying a search mark over one is
   not mistaken for news, and suppressed on a first render, where every panel is new.
+- A copy button on every panel and inside every block of code in one, so what a model answered, what
+  a call was handed, and what it gave back can each be taken off the page whole. One control in two
+  places: the panel's own stands in its row of facts and hands over the whole of what it says, and a
+  block of code sits inside its own corner and hands over itself. What comes out is the Markdown a
+  message was written as rather than a reading of the rendering of it, so the fences, the emphasis
+  and the tables survive being copied, and it does not depend on what the reader has open, so a call
+  copies the same folded as unfolded.
 - Following the end as a mode rather than a setting: a page opens pinned to the end, scrolling away
   releases it, scrolling back to the bottom re-enters it, and sending a message re-enters it too,
   since what a reader wants to see after typing is the answer to what they just sent.

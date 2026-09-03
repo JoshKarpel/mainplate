@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from html.parser import HTMLParser
+from re import sub
 
 import pytest
 from calling import calling
@@ -62,6 +64,29 @@ async def watched(app: ASGIApp, session: str) -> str:
     """
     async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
         return (await anext(events)).data
+
+
+def blocks_carrying_markdown(region: str) -> list[dict[str, str | None]]:
+    """
+    Every element carrying a `data-markdown`, as the attributes a browser would actually see on it.
+
+    Parsed rather than searched, because what these assert is a property of the *document*: a value
+    that broke out of its attribute would put a second attribute on the element and leave the value
+    truncated, and both are invisible to any assertion about which escaped spelling appears in the
+    text.
+    """
+    found: list[dict[str, str | None]] = []
+
+    class Reading(HTMLParser):
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            held = dict(attrs)
+            if "data-markdown" in held:
+                found.append(held)
+
+    reading = Reading()
+    reading.feed(region)
+    reading.close()
+    return found
 
 
 # A catalogue offering something else entirely, for the session whose pair went away. It stands in
@@ -559,12 +584,34 @@ class TestTheConsole:
         sidebar, where it is escaped as an ordinary child. A page-level assertion would therefore
         pass on the sidebar's copy whatever the transcript did with it, which is the check that
         cannot fail measuring the wrong thing.
+
+        Asserted on what is *drawn*, with the sources the copy buttons hand over taken back out. A
+        block carries the Markdown it was written as, so it holds that message's angle brackets by
+        construction; what it must not do is let them become anything, which is the test below.
         """
         session = await a_session(app, "<script>alert(1)</script> and <img src=x onerror=alert(2)>")
-        region = await watched(app, session)
-        assert "<script" not in region
-        assert "alert(1)" not in region
-        assert "onerror" not in region
+        drawn = sub(r' data-markdown="[^"]*"', "", await watched(app, session))
+        assert "<script" not in drawn
+        assert "alert(1)" not in drawn
+        assert "onerror" not in drawn
+
+    async def test_the_source_a_copy_button_hands_over_cannot_break_out_of_its_attribute(self, app: ASGIApp) -> None:
+        """
+        The message a block carries for its copy button is the raw thing somebody typed, so what
+        stops it being markup is the escaping of the attribute holding it and nothing else. The
+        message here is written to close that attribute and open an event handler on the element.
+
+        Read back with a real HTML parser rather than by looking for the escaped form, because what
+        has to hold is that the document parses to one element whose attribute is exactly the message
+        - which is the same statement whether the renderer spells a quote `&#34;` or `&quot;`.
+        """
+        said = '" onmouseover="alert(1)'
+        session = await a_session(app, said)
+        carrying = blocks_carrying_markdown(await watched(app, session))
+        assert [held["data-markdown"] for held in carrying] == [said]
+        # And the element carries nothing else, which is what says the value did not close its own
+        # attribute and open a handler beside it.
+        assert [sorted(held) for held in carrying] == [["class", "data-markdown"]]
 
 
 ANSWERED = [
