@@ -131,16 +131,18 @@
        device rows render as two half-lit ones, which is a hairline on some rows of a figure and not
        others.
 
-       So 19 is chosen for reading rather than forced by the join, with three pixels in hand. What
-       the margin is for is that the two ways to be wrong are not equal: overlapping ink still draws
-       the line the figure means, and a gap draws a line the figure does not.
+       So 21 is the loosest pitch box drawing can be given, less the pixel that keeps it from being
+       the boundary itself. What that pixel is for is that the two ways to be wrong are not equal:
+       overlapping ink still draws the line the figure means, and a gap draws a line the figure does
+       not. Anything looser has to come from a larger `--mono-size`, since the span this is measured
+       against is a multiple of it and not a constant.
 
        Both are stated in pixels, which is what a grid of cells is, and 13 is where this face's cell
        comes out at 8. The cost is that a reader who has raised their browser's default font size
        does not raise this with it, where every other size on this page is in `rem` and does.
        Browser zoom still scales it, being a scale on the pixel rather than on the root. */
     --mono-size: 13px;
-    --mono-line: 19px;
+    --mono-line: 21px;
 }
 
 /* The toggle forces one side of every pair by pinning `color-scheme`; with no attribute (or

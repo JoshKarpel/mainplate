@@ -1591,11 +1591,13 @@ right.
 
 So `assets/JuliaMono-Regular.woff2` and its bold are upstream unmodified, under the OFL beside them,
 and `--mono-size` and `--mono-line` are stated in pixels: 13, where this face's cell comes out at 8,
-and 19, chosen for reading with three pixels in hand under the 22 its ink spans. **Measured rather
-than taken from the outline**, because a rendered glyph is hinted: a run of bar joins at a 22px pitch
-and breaks at 23, where the outline says 1.70em and `measureText` says less again, and neither is the
-number to build on. The margin is not symmetry: overlapping ink still draws the line the figure
-means, and a gap draws a line the figure does not. Both the size and the pitch have to move together,
+and 21, which is the 22 its ink spans less the pixel that keeps the pitch off its own boundary.
+**Measured rather than taken from the outline**, because a rendered glyph is hinted: a run of bar
+joins at a 22px pitch and breaks at 23, where the outline says 1.70em and `measureText` says less
+again, and neither is the number to build on. The pixel held back is not symmetry: overlapping ink
+still draws the line the figure means, and a gap draws a line the figure does not. Air beyond that
+has to come from a larger `--mono-size`, since the span is a multiple of the size rather than a
+constant, which is the one knob that moves the ceiling. Both the size and the pitch have to move together,
 and both belong to every monospace block at once - `.text pre` for a fence and `.tool__body pre` for
 a read, whose family is said again there rather than inherited, since a browser's own sheet sets
 `pre` to `monospace` and a rule on the element beats a value inherited from an ancestor.
