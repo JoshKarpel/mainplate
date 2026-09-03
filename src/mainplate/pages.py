@@ -78,10 +78,14 @@ from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import grouped
+from mainplate.commands import UNFINISHED
+from mainplate.conversation import BASE_FIELD
+from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
+from mainplate.conversation import Command
 from mainplate.conversation import Disposition
 from mainplate.conversation import Kind
 from mainplate.conversation import Panel
@@ -102,6 +106,7 @@ from mainplate.service import Conversation
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import Session
+from mainplate.snapshots import LONGEST_REF
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
 
@@ -155,6 +160,13 @@ NETWORK_ID: Final = "network"
 # two is decided by parsing it, at the boundary, once.
 WORKSPACE_FIELD: Final = "workspace"
 
+# What the two fields under the repository cards are, as one thing to swap: picking a repository
+# replaces the whole block so the completions are that repository's. Both are named here because the
+# card carries the target and the block carries the id, and the two must not drift.
+BASIS_ID: Final = "basis"
+BRANCHES_ID: Final = "branches"
+FOUND_ID: Final = "branches-found"
+
 SENDING_ID: Final = "sending"
 
 # The form the picker's controls belong to, named because on the start page they do not sit inside
@@ -172,6 +184,7 @@ CHOOSING_ID: Final = "choosing"
 NAMES: Final[tuple[tuple[Kind, str], ...]] = (
     ("person", "you"),
     ("steering", "you (steering)"),
+    ("command", "you (ran)"),
     ("thinking", "thinking"),
     ("assistant", "assistant"),
     ("tool", "tool"),
@@ -183,6 +196,10 @@ NAMES: Final[tuple[tuple[Kind, str], ...]] = (
 SIDES: Final[dict[Kind, str]] = {
     "person": "person",
     "steering": "person",
+    # The person's side because the axis is who produced the text, which is the same rule `steering`
+    # follows. It is the one kind on that side the model never saw, and the panel says so rather than
+    # the palette: a hue is for who, not for who was told.
+    "command": "person",
     "assistant": "model",
     "thinking": "model",
     "tool": "model",
@@ -222,6 +239,7 @@ class Links:
     stream: Reversible
     request_record: Reversible
     endpoint_models: Reversible
+    workspace_branches: Reversible
     fork_form: Reversible
     fork: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
@@ -260,6 +278,17 @@ class Links:
         interpolation and the select needs no script to build one.
         """
         return url_for(self.endpoint_models)
+
+    def to_workspace_branches(self) -> str:
+        """
+        Where a repository's branches come from, asked for with the workspace in the query string.
+
+        The same shape as `to_endpoint_models` and for the same reason: the workspace is *the value
+        of the card that asks*, so htmx sends it and this URL needs no interpolation. One route for
+        every card rather than one per repository, which is also what lets `no files` ask it and get
+        a block with nothing to complete.
+        """
+        return url_for(self.workspace_branches)
 
     def to_request_record(self, session: str, turn: int, at: int) -> str:
         """
@@ -730,9 +759,15 @@ def priced(cost: Cost | None) -> tuple[Element, ...]:
     )
 
 
-def counted(many: int, thing: str) -> str:
-    """`3 models`, `1 option`: a count with the word it counts, pluralised."""
-    return f"{many} {thing}{'' if many == 1 else 's'}"
+def counted(many: int, thing: str, plural: str | None = None) -> str:
+    """
+    `3 models`, `1 option`, `2 branches`: a count with the word it counts, pluralised.
+
+    The plural is given where an `s` does not make one, and asked for rather than worked out: an
+    English pluraliser is a pile of rules and exceptions to get a handful of nouns right, where the
+    caller already knows the word it is passing.
+    """
+    return f"{many} {thing if many == 1 else plural or f'{thing}s'}"
 
 
 def choosing(
@@ -1069,7 +1104,7 @@ def network_cards(chosen: bool) -> Element:
     )
 
 
-def workspace_card(naming: str, value: str, saying: str, chosen: bool) -> Element:
+def workspace_card(links: Links, naming: str, value: str, saying: str, chosen: bool) -> Element:
     """
     One answer to what files a session has: a repository of its own, or one of the two that are not.
 
@@ -1077,6 +1112,17 @@ def workspace_card(naming: str, value: str, saying: str, chosen: bool) -> Elemen
     renders as text in every browser, so neither the forge a repository came from nor what a level
     means has anywhere to go inside a select. A row here carries it, which matters the moment two
     rows read `owner/repo` from different places.
+
+    The `hx-get` is the same shape the endpoint cards use one group down, and for the same reason:
+    what a session may *start at* is whatever this repository's branches are, so picking one asks for
+    those and swaps the block under the cards. htmx sends the triggering input's own value, so it
+    needs no interpolation, and the two cards that are not repositories ask the same question and get
+    a block with no completions - which is what stops a list going stale under a reader who changed
+    their mind about where they were working.
+
+    `outerHTML` and not `outerMorph`, exactly as the model group is: the point of the swap is that
+    the completions are now a *different* list, and merging would keep suggestions from a repository
+    nobody is looking at any more.
     """
     return label(
         cls="repo",
@@ -1090,6 +1136,11 @@ def workspace_card(naming: str, value: str, saying: str, chosen: bool) -> Elemen
                     "value": value,
                     "checked": chosen,
                     "form": CHOOSING_ID,
+                    "hx-get": links.to_workspace_branches(),
+                    "hx-target": f"#{BASIS_ID}",
+                    "hx-swap": "outerHTML",
+                    "hx-status:4xx": "swap:none",
+                    "hx-status:5xx": "swap:none",
                 },
             ),
             span(cls="repo__name", children=naming),
@@ -1098,7 +1149,141 @@ def workspace_card(naming: str, value: str, saying: str, chosen: bool) -> Elemen
     )
 
 
-def workspace_cards(reachable: Reachable, repository: str | None, chosen: Filesystem) -> Element:
+def starting_at(base: str | None, branch: str | None, branches: Sequence[str] = ()) -> Element:
+    """
+    Where in the repository the worktree starts, and what branch it starts there.
+
+    Free text and not cards, because neither has a closed set to draw: a commit-ish is anything `git
+    rev-parse` resolves, and a branch is a name that does not exist yet. `choosing` is the component
+    for a question with answers to show, and putting an unbounded one behind it would mean either
+    drawing a card per ref a repository has or drawing a card that is really a text box.
+
+    What the branches do instead is **narrow it**: they are drawn under the box and cut to what
+    matches as it is typed, so the field is a search over what the repository has and still takes a
+    tag, a hash or `main~3`. One box rather than the cards every other question here gets, because
+    those cards *are* the answer where these only fill one in - and a card posting `base` beside a
+    field posting `base` would be two places one value could come from.
+
+    It is drawn twice on purpose and that is not a copy to keep in step: a `<datalist>` for the
+    browser's own completion, and a list the script narrows. Both come from `branches` in this one
+    call, and exactly one is ever live, because enhancing the field removes the `list` attribute that
+    makes the first one work.
+
+    **Inside the worktree group and always shown, rather than greyed until a repository is picked.**
+    Two controls kept in step is the mistake `workspace_cards` was written to undo, and this is the
+    same mistake one level in. What settles it instead is `Choice.settled`, which drops both where
+    there is no repository, so a form that says `no files` and names a branch records the thing it
+    said first and no reader downstream reconciles anything.
+
+    Both are optional and the placeholders say what leaving them does, which is the whole of what
+    keeps two more fields from becoming two more steps: blank is the repository's default branch as
+    it stands now, on a branch this console names after the session.
+
+    **Two fields and not one, because naming a base cannot check that branch out.** Git refuses a
+    branch another worktree already holds, so a session started at `main` that was left *on* `main`
+    would stop the next one planting at all. So one says where to begin and the other says what to
+    begin, and the placeholder on this one has to say so rather than implying the first answers both.
+    """
+    return div(
+        cls="basis",
+        attrs={"id": BASIS_ID},
+        children=[
+            label(
+                cls="basis__field",
+                children=[
+                    span(
+                        cls="basis__label",
+                        children=[
+                            "Start at",
+                            # Said only where there is something to say it about, because "0
+                            # branches" on a repository nobody could reach reads as a fact about the
+                            # repository rather than about this console not having asked.
+                            *(
+                                (span(cls="basis__count", children=counted(len(branches), "branch", "branches")),)
+                                if branches
+                                else ()
+                            ),
+                        ],
+                    ),
+                    input_(
+                        cls="basis__box",
+                        attrs={
+                            "type": "text",
+                            "name": BASE_FIELD,
+                            "value": base,
+                            "form": CHOOSING_ID,
+                            # The browser's own completion, which is the whole of what this field has
+                            # with the script absent. `mainplate.js` takes this attribute *off* at
+                            # the moment it takes the narrowing over, because two dropdowns over one
+                            # box is one more than a reader can use. See `paintBranches`.
+                            "list": BRANCHES_ID,
+                            "maxlength": str(LONGEST_REF),
+                            "autocapitalize": "off",
+                            "autocomplete": "off",
+                            "spellcheck": "false",
+                            "placeholder": "a branch, tag or commit (or leave it at the default branch)",
+                        },
+                    ),
+                    datalist(attrs={"id": BRANCHES_ID}, children=[option(attrs={"value": name}) for name in branches]),
+                    # The same names again, as the list the script narrows and shows under the box.
+                    # Not a second copy to keep in step: both are rendered from `branches` in this one
+                    # call, and exactly one of them is ever live, because enhancing removes the
+                    # `list` above.
+                    #
+                    # `hidden` from the server and shown by the script, so with the file absent it
+                    # stays out of the flow rather than being a wall of fifty branches under a field
+                    # nobody has typed in.
+                    ul(
+                        cls="basis__found",
+                        attrs={"id": FOUND_ID, "hidden": True},
+                        children=[
+                            li(
+                                children=button(
+                                    cls="basis__found-one",
+                                    # A `button` and not the `<label>` with a radio in it that every
+                                    # card in this picker is. Those *are* the answer; these only fill
+                                    # in the one answer beside them, and a second control posting
+                                    # `base` would be two places one value could come from.
+                                    attrs={"type": "button", "data-branch": name},
+                                    children=name,
+                                )
+                            )
+                            for name in branches
+                        ],
+                    ),
+                ],
+            ),
+            label(
+                cls="basis__field",
+                children=[
+                    span(cls="basis__label", children="New branch"),
+                    input_(
+                        attrs={
+                            "type": "text",
+                            "name": BRANCH_FIELD,
+                            "value": branch,
+                            "form": CHOOSING_ID,
+                            "maxlength": str(LONGEST_REF),
+                            "autocapitalize": "off",
+                            "autocomplete": "off",
+                            "spellcheck": "false",
+                            "placeholder": "name one (or leave it off and this session gets its own)",
+                        }
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+def workspace_cards(
+    links: Links,
+    reachable: Reachable,
+    repository: str | None,
+    chosen: Filesystem,
+    base: str | None = None,
+    branch: str | None = None,
+) -> Element:
     """
     What files a session has, as **one** question rather than two that must be kept agreeing.
 
@@ -1137,15 +1322,25 @@ def workspace_cards(reachable: Reachable, repository: str | None, chosen: Filesy
                     cls="repos__grid",
                     children=[
                         *(
-                            workspace_card(naming, level.value, saying, chosen=repository is None and level is chosen)
+                            workspace_card(
+                                links, naming, level.value, saying, chosen=repository is None and level is chosen
+                            )
                             for naming, level, saying in WITHOUT_A_REPOSITORY
                         ),
                         *(
-                            workspace_card(naming, reached.id, reached.forge, reached.id == repository)
+                            workspace_card(links, naming, reached.id, reached.forge, reached.id == repository)
                             for reached, naming in rows
                         ),
                     ],
-                )
+                ),
+                # Under the cards rather than beside them, because they are details of the answer
+                # above: which repository comes first, and where in it comes after.
+                #
+                # With no completions, always: on a first render nothing has been picked yet, and
+                # asking every reachable repository what branches it has to draw a page on which all
+                # but one of those lists is never looked at is several network calls for nothing.
+                # Picking a card is what fetches the one list that matters.
+                starting_at(base, branch),
             ],
         ),
     )
@@ -1199,7 +1394,16 @@ def picker(
             *(
                 ()
                 if reachable is None
-                else (workspace_cards(reachable, starting.repository, starting.isolation.filesystem),)
+                else (
+                    workspace_cards(
+                        links,
+                        reachable,
+                        starting.repository,
+                        starting.isolation.filesystem,
+                        starting.base,
+                        starting.branch,
+                    ),
+                )
             ),
             # The network sits under the worktree and above the endpoint, because that is the order
             # of breadth: what a session's files are decides what it can touch, whether it can dial
@@ -1278,7 +1482,14 @@ def chosen_note(
                             if worktree is not None
                             else "This session works here once its first turn runs"
                         },
-                        children=f"\N{MIDDLE DOT} {repository}",
+                        # The branch, because that is what somebody about to run `git push` in the box
+                        # below needs to know and the one part of this line they cannot work out from
+                        # the repository's name - a generated one especially, since it is named after
+                        # the session rather than after anything they typed. Where the session
+                        # *began* is settled and on the first turn's own rule; this is where it is
+                        # now. Conditional for the sessions recorded before every one had a branch.
+                        children=f"\N{MIDDLE DOT} {repository}"
+                        + (f" @ {chosen.branch}" if chosen.branch is not None else ""),
                     ),
                 )
                 if repository is not None
@@ -1420,6 +1631,77 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     )
 
 
+def status_element(status: int) -> Element:
+    """
+    What a command exited with, as the number and what it means.
+
+    The **number**, not "failed", because an exit status is a program's own vocabulary and flattening
+    it loses what it said: `git diff --quiet` exits 1 to mean *there are changes*, and `grep` exits 1
+    to mean *no match*, neither of which is a failure. `ok` is written out for zero because that is
+    the one value every program agrees on, and the rest are shown as they came.
+
+    `UNFINISHED` is the console admitting it never learned, which is a third thing rather than a bad
+    exit: the process that would have read the status was stopped first.
+    """
+    if status == UNFINISHED:
+        return span(
+            cls="ran__status",
+            attrs={"data-status": "unfinished", "title": "This never reported a status"},
+            children="unfinished",
+        )
+    ended = "ok" if status == 0 else f"exit {status}"
+    return span(
+        cls="ran__status",
+        attrs={"data-status": "ok" if status == 0 else "other", "title": f"This exited with status {status}"},
+        children=ended,
+    )
+
+
+def command_block(ran: Command, anchor: str, at: int) -> Element:
+    """
+    One command the person ran, with what it said folded under it.
+
+    Folded like a tool call and open while it is still running, for the same reasons: the output is
+    context somebody reaches for rather than prose they read through, and a run with nothing under it
+    yet is the one thing on the page actually in flight.
+
+    The command itself is shown verbatim and never as Markdown. It is a shell line, so the
+    backticks, asterisks and underscores in it are characters rather than emphasis, and rendering it
+    would change what a reader is told they ran.
+
+    No `data-markdown`, for the same reason `tool_block` carries none: what is on the page is already
+    the source, so an attribute repeating it would be the second copy that one is not.
+    """
+    return details(
+        cls="ran",
+        attrs={"id": f"{anchor}-ran-{at}", "open": ran.result is None},
+        children=[
+            summary(
+                children=[
+                    code(cls="ran__line", children=ran.text),
+                    *(
+                        (
+                            span(
+                                cls="ran__took",
+                                attrs={"title": f"This took {elapsed(ran.result.took)}"},
+                                children=elapsed(ran.result.took),
+                            ),
+                        )
+                        if ran.result is not None and ran.result.took is not None
+                        else ()
+                    ),
+                    working() if ran.result is None else status_element(ran.result.status),
+                ]
+            ),
+            *(
+                ()
+                if ran.result is None
+                else (div(cls="ran__body", children=pre(children=code(children=ran.result.output))),)
+            ),
+        ],
+    )
+
+
 def written_block(kind: str, text: str) -> Element:
     """
     One block of rendered Markdown, carrying the Markdown it was rendered from.
@@ -1443,6 +1725,8 @@ def block_element(block: Block, anchor: str, at: int) -> Element:
             return written_block("block--text", text)
         case Steering(text=text):
             return written_block("block--text", text)
+        case Command():
+            return div(cls=("block", "block--ran"), children=command_block(block, anchor, at))
         case Reasoning(text=text):
             return written_block("block--thinking", text)
         case ToolUse():
@@ -1990,7 +2274,9 @@ def sending_option(name: str, saying: str, attrs: Mapping[str, str | int | bool 
     )
 
 
-def sending_control(refusing: bool, continuing: bool, returning: bool = False, answering: bool = False) -> Element:
+def sending_control(
+    refusing: bool, continuing: bool, returning: bool = False, answering: bool = False, running: bool = False
+) -> Element:
     """
     What happens to what you typed: send it, and everything else folded behind a caret beside it.
 
@@ -2031,10 +2317,27 @@ def sending_control(refusing: bool, continuing: bool, returning: bool = False, a
     which is the one failure a control like this can have that nobody notices until after it has
     happened; here what a button says is always what it does.
 
+    `running` is whether this session has files to run a command in, which is the one answer here
+    that is not a message going somewhere. It is in this menu all the same, because the question the
+    menu asks is what happens to what you typed and running it is one more answer; a control of its
+    own would spend a slot in the row above the box, which is the row a phone has least of.
+
+    **`!` is a shortcut to that row and not a second way to say it.** With `mainplate.js` present,
+    typing `!` into an empty box turns the composer into a command box: the border takes the person's
+    hue, the placeholder says so, and this button says `Run`. That is the whole safety property - a
+    mode you can see is not the failure the paragraph above refuses, which is a button that says one
+    thing and does another. The server parses no leader out of the message, so a paragraph that opens
+    with `!` is a paragraph, and the menu below is what works with the file absent.
+
     With no conversation yet there is no menu, only Send: nothing to fork from, and no session for a
     shelf to belong to.
     """
     send = button(
+        # Classed rather than found by position, because the script has to name it: it is the
+        # submitter `requestSubmit` is handed, so that the keyboard posts the same pair the button
+        # would. `form.querySelector('button[type=submit]')` matched it today and would have matched
+        # a menu row the moment one was rendered above it.
+        cls="sender__send",
         # The key is named on the button because otherwise nothing on the page says it exists, and a
         # shortcut nobody can find is one nobody uses.
         attrs={"type": "submit", "disabled": refusing, "title": "Shift-Enter"},
@@ -2046,6 +2349,31 @@ def sending_control(refusing: bool, continuing: bool, returning: bool = False, a
         cls="sender",
         children=[
             send,
+            # The *same* control in command mode, rendered beside it rather than made out of it by
+            # the script. Two buttons and one visible, because what makes `!` safe is that a reader
+            # can see which one they are about to press, and a button whose name, value and label the
+            # script rewrote would be exactly the thing that makes a `Send` that forks dangerous.
+            #
+            # It also keeps every word and every posted name in this file: the script toggles one
+            # attribute on the form and hands `requestSubmit` whichever button that leaves standing,
+            # so it holds no label, no field name and no disposition of its own.
+            *(
+                (
+                    button(
+                        cls="sender__run",
+                        attrs={
+                            "type": "submit",
+                            "disabled": refusing,
+                            "name": DISPOSITION_FIELD,
+                            "value": Disposition.RUN.value,
+                            "title": "Shift-Enter \N{MIDDLE DOT} Escape to go back to a message",
+                        },
+                        children="Run",
+                    ),
+                )
+                if running
+                else ()
+            ),
             details(
                 cls="sender__more",
                 children=[
@@ -2110,6 +2438,25 @@ def sending_control(refusing: bool, continuing: bool, returning: bool = False, a
                                 if returning
                                 else ()
                             ),
+                            *(
+                                (
+                                    sending_option(
+                                        "Run",
+                                        "Run it in this session's worktree, as you rather than as the"
+                                        " agent, without telling the model",
+                                        {
+                                            "type": "submit",
+                                            "disabled": refusing,
+                                            "name": DISPOSITION_FIELD,
+                                            "value": Disposition.RUN.value,
+                                            "data-running": "run",
+                                            "title": "! in an empty box",
+                                        },
+                                    ),
+                                )
+                                if running
+                                else ()
+                            ),
                             sending_option(
                                 "Keep",
                                 "Put it on the shelf, unsent, and clear the box",
@@ -2132,6 +2479,7 @@ def composer(
     continuing: bool = False,
     returning: bool = False,
     answering: bool = False,
+    running: bool = False,
     above: Placed = None,
     identified: str | None = None,
 ) -> Element:
@@ -2169,6 +2517,12 @@ def composer(
     there is one. Its own argument rather than read off `live` even though the two coincide today,
     because they mean different things - `live` is whether the answer swaps or navigates - so tying
     them together would be one of the two silently deciding the other.
+
+    `running` says this session has files a command could run in, which puts `Run` in the menu and
+    lets `!` turn the box into a command box. Declared on the form as `data-running` rather than
+    inferred by the script from the menu row, so the one thing that decides it is the one thing that
+    knows: a page for a session with no repository offers neither, and neither half can drift from
+    the other.
     """
     driving = (
         {
@@ -2189,7 +2543,7 @@ def composer(
     )
     return form(
         cls="composer",
-        attrs={"method": "post", "action": action, "id": identified, **driving},
+        attrs={"method": "post", "action": action, "id": identified, "data-running": running or None, **driving},
         children=[
             above,
             div(
@@ -2209,8 +2563,28 @@ def composer(
                             "aria-label": "Message",
                         }
                     ),
-                    sending_control(refusing, continuing, returning, answering),
+                    sending_control(refusing, continuing, returning, answering, running),
                 ],
+            ),
+            # What the box will do with what is in it, said in words and only while that is not what
+            # the box normally does. Drawn by the stylesheet off the form's own `data-commanding`, so
+            # the words live here and the script sets one attribute; a `title` would not do, because
+            # a mode nobody can see is the whole failure this sentence exists to prevent.
+            #
+            # A row of its own rather than an item in the one below, because the composer is a column
+            # and this is a whole sentence: sharing that row squeezes the line saying what the session
+            # is on into half the width, on every window, to make room for something that is usually
+            # not there.
+            *(
+                (
+                    p(
+                        cls="commanding",
+                        attrs={"role": "status"},
+                        children="Runs in this session's worktree, as you. Escape to go back to a message.",
+                    ),
+                )
+                if running
+                else ()
             ),
             div(
                 cls="row",
@@ -2335,6 +2709,9 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     # Only while something is actually being answered: a steer into a turn nobody is
                     # running would sit in the store unread, which is a message on the floor.
                     answering=showing.said.answering is not None,
+                    # Only where there are files to run in. A session with no repository has no
+                    # worktree, so `Run` would be an offer with nowhere to honour it.
+                    running=showing.runnable,
                 ),
             ],
             # Only where there is a conversation to navigate. On the page where a session does not

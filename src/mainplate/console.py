@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import assert_never
@@ -30,6 +31,8 @@ from without_web import post
 from without_web import query_param
 
 from mainplate.agent import Choice
+from mainplate.conversation import BASE_FIELD
+from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
@@ -46,11 +49,14 @@ from mainplate.pages import refusal_page
 from mainplate.pages import session_page
 from mainplate.pages import stalled_by
 from mainplate.pages import start_page
+from mainplate.pages import starting_at
 from mainplate.pages import transcript_region
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
+from mainplate.snapshots import parse_branch
+from mainplate.snapshots import parse_commitish
 from mainplate.streaming import watching
 from mainplate.thinking import DEFAULT_THINKING
 from mainplate.thinking import UnknownThinking
@@ -68,6 +74,10 @@ LONGEST_PROMPT = 100_000
 session_id = path_param("session", STR)
 # The endpoint whose models to render, which is the value of the select that asks for them.
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
+# Which workspace's branches to offer, which is the value of the card that asks for them. A query
+# parameter for the reason the endpoint is one: htmx sends a triggering input's own value, so the
+# card needs no interpolation and no script to build a URL.
+of_workspace = query_param(WORKSPACE_FIELD, once(str), schema={"type": "string"})
 # Which conversation a watching page is showing. A query parameter rather than a path segment
 # because the stream belongs to the page: this narrows what one connection reports on, where a path
 # segment would say the connection is a thing *of* that session. It is what lets a second region
@@ -151,6 +161,12 @@ def parse_form_start(raw: bytes) -> Started:
     and a model it is a closed set rather than something discovered. An absent field is the
     configured default rather than a refusal, so a form posted by something that predates the
     control still names a session's whole choice.
+
+    The base and the branch are **refused** rather than dropped when they are not usable, and that is
+    the split `posted_workspace` already makes: an empty box means somebody wants the default, where
+    `my branch` in the box is somebody who meant something and would otherwise get a session quietly
+    started somewhere else. Both become `git` arguments, so refusing here is also what keeps a
+    leading `-` from ever reaching one.
     """
     said = parse_form_prompt(raw)
     fields = parse_qs(raw.decode("utf-8", errors="replace"))
@@ -169,10 +185,33 @@ def parse_form_start(raw: bytes) -> Started:
             endpoint=endpoint,
             model=model,
             repository=posted_workspace(fields)[0],
+            base=posted_ref(fields, BASE_FIELD, parse_commitish, "a commit, branch or tag"),
+            branch=posted_ref(fields, BRANCH_FIELD, parse_branch, "a branch name"),
             isolation=posted_isolation(fields),
             thinking=posted_thinking(fields),
         ),
     )
+
+
+def posted_ref(
+    fields: Mapping[str, list[str]], named: str, parsing: Callable[[str], str | None], wanted: str
+) -> str | None:
+    """
+    One posted git ref as the value it names, nothing where the box was empty, and a refusal where
+    it holds something that is not one.
+
+    Three answers from two, which is why this is not `parsing(...)` at the call site: an empty box
+    and an unusable one are the same to the parser and must not be to the form. Blank is somebody
+    taking the default; anything else is somebody who meant a particular thing, and starting a
+    session somewhere other than where they said is the mistake worth a `422`.
+    """
+    written = fields.get(named, [""])[0].strip()
+    if not written:
+        return None
+    found = parsing(written)
+    if found is None:
+        raise NotAMessage(f"{written!r} is not {wanted}")
+    return found
 
 
 def posted_workspace(fields: Mapping[str, list[str]]) -> tuple[str | None, Filesystem]:
@@ -466,6 +505,39 @@ async def endpoint_models(service: Service, endpoint: str) -> Response:
     return page_response(200, fragment(model_cards(found, service.references.current)))
 
 
+@get("/fragments/branches", of_workspace, summary="Where a session on this workspace could start")
+async def workspace_branches(service: Service, workspace: str) -> Response:
+    """
+    The branches a repository has, as the completions beside the field that asks where to start.
+
+    Asked when a workspace card is picked, so the list is that repository's rather than the one that
+    happened to be checked when the page was drawn. On demand rather than serialized into the page
+    for every repository at once: a console reaching six repositories would make six network calls to
+    render a page on which five of the lists are never looked at.
+
+    **Nothing about a repository makes this refuse.** One that is not a repository at all, one no
+    forge reaches, one whose host is not answering: every one of them is the same block with nothing
+    to complete, which is exactly the field as it was before it offered anything. That is
+    `forge.offers`'s promise rather than `catalogue.discover`'s refusal, and the difference is the
+    usual one - the field takes free text either way, so having no completions costs a suggestion and
+    not an ability. A workspace value this console does not recognise is the one refusal, because
+    that is a malformed request rather than an answer about an environment, and the card's own
+    `hx-status:4xx` leaves the block standing.
+
+    The values it renders are *not* trusted on the way back in: `parse_form_start` re-parses whatever
+    was posted, since a completion menu is a suggestion a browser was given rather than a constraint
+    on what a form can carry.
+    """
+    try:
+        repository, _ = posted_workspace({WORKSPACE_FIELD: [workspace]})
+    except NotAMessage as unknown:
+        # Refused *here* rather than by `recover`, which only converts what an extractor raised: a
+        # `ValueError` from inside a handler is a fault there, so this has to say so itself.
+        return page_response(422, refusal_page(LINKS, 422, str(unknown)))
+    branches = () if repository is None or service.workspaces is None else await service.workspaces.branches(repository)
+    return page_response(200, fragment(starting_at(None, None, branches)))
+
+
 @get(t"/sessions/{session_id}", session_id, summary="One session, whole")
 async def show_session(service: Service, session: str) -> Response:
     found = await service.read(session)
@@ -579,6 +651,20 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             if forked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
             return navigating(LINKS.to_session(forked.id))
+        case Disposition.RUN:
+            # Not a message at all: the text is run in this session's worktree, as the person, and
+            # the record of it is never told to a model. Refused rather than silently ignored where
+            # there is nowhere to run it, because a command that vanished would be indistinguishable
+            # from one that did nothing.
+            if not found.runnable:
+                return page_response(
+                    422, refusal_page(LINKS, 422, f"session {session} has no files to run a command in")
+                )
+            await service.run(session, sending.said)
+            asked = await service.read(session)
+            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot
@@ -601,6 +687,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     show_session,
     stream,
     endpoint_models,
+    workspace_branches,
     fork_form,
     fork,
     say,
@@ -615,6 +702,7 @@ LINKS = Links(
     stream=stream,
     request_record=request_record,
     endpoint_models=endpoint_models,
+    workspace_branches=workspace_branches,
     fork_form=fork_form,
     fork=fork,
     assets=ASSETS,

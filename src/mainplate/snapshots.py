@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -43,6 +44,89 @@ IDENTITY: Final[Mapping[str, str]] = {
     "GIT_COMMITTER_NAME": "mainplate",
     "GIT_COMMITTER_EMAIL": "mainplate@localhost",
 }
+
+
+# What may appear in something a session names a commit by. Every one of these characters is one git
+# itself accepts in a revision expression: a ref name, a tag, an abbreviated hash, and the suffixes
+# that walk from one (`main~2`, `v2^{commit}`, `@{upstream}`).
+#
+# A pattern rather than a call to `git check-ref-format`, because what has to be true here is
+# narrower than what git will accept and is true *before* any git runs: this value becomes an
+# argument, so what it must not be is an option. A leading `-` is the whole of that risk and the
+# anchored pattern refuses it along with everything else nobody types on purpose.
+COMMITISH = re.compile(r"[0-9A-Za-z_][0-9A-Za-z_./~^@{}+-]*\Z")
+
+# Stricter, because this one is *created* rather than resolved, and a branch git accepts but nobody
+# can address later is worse than a refusal now. These are `git check-ref-format --branch`'s rules
+# written out for the shapes a person types: no leading dot or dash, nothing that ends a component
+# in `.lock`, no `..`, and none of the characters git reserves for revision syntax.
+BRANCH = re.compile(r"[0-9A-Za-z_][0-9A-Za-z_./-]*\Z")
+
+# Long enough for the longest branch name anybody types and short enough that neither of these is a
+# way to put a paragraph into a `git` argument.
+LONGEST_REF: Final = 250
+
+
+def parse_commitish(named: str) -> str | None:
+    """
+    Something a session may be started at, or nothing at all where it is not one.
+
+    `None` rather than a refusal, so the caller decides whether an unusable value is a mistake to
+    report or a field somebody left blank - the split `parse_disposition` already makes. An empty box
+    reaches here as an empty string and is nothing, which is the common case.
+    """
+    named = named.strip()
+    if not named or len(named) > LONGEST_REF or ".." in named:
+        return None
+    return named if COMMITISH.fullmatch(named) else None
+
+
+# What a branch this console made for a session is called. A namespace of its own, so `git branch`
+# says where these came from and `git branch --list 'mainplate/*'` is how you find them all again.
+BRANCH_PREFIX: Final = "mainplate/"
+
+# How much of a session's id names its branch. Eight hex characters is git's own abbreviation length
+# and the same number a rule prints for a tree, so it is a length a reader here is already used to.
+BRANCH_ID: Final = 8
+
+
+def branch_named(session: str) -> str:
+    """
+    The branch a session gets when nobody named one, which is every session working in a repository.
+
+    **A branch and not a detached `HEAD`**, which is what this used to leave, and the reason is that
+    committing is now something somebody does here: `Run` puts `git commit` in the box under the
+    conversation, and a commit on a detached `HEAD` is reachable only through the reflog. Reading,
+    editing and every question `git` answers are fine detached; the one thing that is not is the
+    thing this console just made easy.
+
+    Named from the **session id**, so it is unique by construction: `git worktree add -b` refuses a
+    name already in use, and two sessions on one repository must both be able to plant. That is also
+    why it is not derived from the session's title - two sessions opened with the same message would
+    collide, so the id would have to be in the name anyway, and a title is prose where a ref is not.
+    What a session is *called* is in the sidebar; this only has to be somewhere commits can live.
+
+    The cost, stated: one local branch per session in the bare clone, accumulating, with nothing
+    pruning them. `git branch --list 'mainplate/*'` is what finds them, which is what the prefix is
+    for.
+    """
+    return f"{BRANCH_PREFIX}{session[:BRANCH_ID]}"
+
+
+def parse_branch(named: str) -> str | None:
+    """
+    A branch name a session may start, or nothing at all where it is not one.
+
+    The `.lock` rule is git's and is easy to miss: a component ending in it collides with the file
+    git writes while updating a ref, so `git branch` refuses the name and the refusal arrives from a
+    worktree that failed to plant rather than from the box it was typed in.
+    """
+    named = named.strip().removeprefix("refs/heads/")
+    if not named or len(named) > LONGEST_REF or ".." in named:
+        return None
+    if any(part.endswith(".lock") or not part for part in named.split("/")):
+        return None
+    return named if BRANCH.fullmatch(named) else None
 
 
 class NotAWorktree(ValueError):
@@ -218,17 +302,85 @@ class Worktrees:
             Path(line.removeprefix("worktree ")) for line in listed.splitlines() if line.startswith("worktree ")
         )
 
-    async def plant(self, session: str, *, tree: str | None = None) -> Worktree:
+    async def default_branch(self) -> str | None:
         """
-        The session's worktree, checked out at `tree`, made if it is not there already.
+        What this repository calls its default branch, or nothing where its `HEAD` names no branch.
 
-        `tree` is a *tree* and `git worktree add` wants a commit, so one is made for it. That is
-        not a wasted object: a commit for a tree is three lines of text, the tree and its blobs
-        already exist, and being a worktree's `HEAD` is what keeps the whole thing reachable when
-        `gc` runs.
+        Read from the clone's own `HEAD`, which `git clone --bare` sets as a symbolic ref to whatever
+        the remote's default was. It is the *name* that is wanted rather than the commit: the commit
+        under `refs/heads/` is as old as the clone, and the name is what `resolve` turns into the
+        current one by preferring the fetched `refs/remotes/origin/` side.
 
-        `None` plants at the repository's own `HEAD`, which is what a session started rather than
-        forked wants: begin where the repository is.
+        `None` is a clone whose `HEAD` is detached, which `--bare` does not produce from an ordinary
+        remote. It is read as "there is no branch name to resolve" and the caller falls back to the
+        raw `HEAD`, which is parsing the two shapes a `HEAD` can have rather than a second mechanism.
+        """
+        named = await Worktree(root=self.repo).git("symbolic-ref", "--short", "--quiet", "HEAD")
+        return named.out or None if named.ok else None
+
+    async def resolve(self, base: str) -> str:
+        """
+        The commit something a person typed names, as the hash it is.
+
+        `origin/<base>` first and the bare name second, and that ordering is what makes "start at
+        `main`" mean today's `main`. A bare clone keeps the branches it was made with under
+        `refs/heads/`, and those are as old as the clone; a fetch writes the current ones under
+        `refs/remotes/origin/`. So the same word names two commits here, and the fresher of them is
+        the one somebody typing a branch name means. A tag, a hash and anything with revision syntax
+        in it are not under `origin/` at all and fall through to the second try.
+
+        `^{commit}` so a tag object resolves to what it points at rather than to itself, since a
+        worktree is planted at a commit and an annotated tag is not one.
+
+        `--verify` and `--quiet`, so a name that resolves to nothing is a failed call naming the
+        name rather than git printing the string back and this planting a worktree at a ref that
+        does not exist.
+        """
+        repository = Worktree(root=self.repo)
+        found = await repository.git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}^{{commit}}")
+        if found.ok and found.out:
+            return found.out
+        return await repository.demand("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+
+    async def plant(
+        self, session: str, *, tree: str | None = None, base: str | None = None, branch: str | None = None
+    ) -> Worktree:
+        """
+        The session's worktree, checked out where it was asked for, made if it is not there already.
+
+        Three ways to say where, and they are ranked rather than combined:
+
+        - `tree` is a **fork**, and it wins over everything. It is a *tree* and `git worktree add`
+          wants a commit, so one is made for it. That is not a wasted object: a commit for a tree is
+          three lines of text, the tree and its blobs already exist, and being a worktree's `HEAD` is
+          what keeps the whole thing reachable when `gc` runs.
+        - `base` is what a session was started at, resolved through `resolve` above.
+        - Neither is the repository's default branch, resolved through the *same* call, which is what
+          makes a session that said nothing start where the repository is *now*. Reading the clone's
+          own `HEAD` commit instead would be reading a value as old as the clone, so a fetch before
+          this would refresh `refs/remotes/origin/` and then plant at the stale commit beside it -
+          a round trip that changes nothing, which is worse than not making it.
+
+        Ranked and not merged because a fork's tree is the answer to a question a base cannot also
+        answer: a branch re-asks its turn against the files that turn saw, so a base beside it would
+        be two claims about one checkout. `Service.fork` never sends both, and this is what makes
+        that impossible to get wrong from here.
+
+        `branch` starts one at whatever that came to. Without it the worktree is on **no** branch,
+        and `--detach` is stated rather than left to git so that is a decision rather than a default -
+        though nothing reaches here without one for a session in a repository, since `Choice.branching`
+        fills it. This stays answerable either way because it is the layer below that decision: what
+        it is handed is what it does.
+
+        Naming a base cannot check that branch out instead, which is the question `branch` answers
+        and the reason the two are separate fields: git refuses a branch another worktree already
+        holds, so two sessions started at `main` would mean the second failing to plant at all.
+
+        What a branch buys is somewhere for a commit to go, since a detached `HEAD` has nowhere. It
+        has to be a name nothing is using, and `git worktree add -b` refusing one that exists is the
+        honest failure - two sessions on one branch would be two writers in one history, and the
+        whole reason each session gets a worktree of its own is that two writers make a record
+        unattributable.
 
         Idempotent, because the alternative is worse than the check. A worktree already planted is
         one a session has been working in, and re-planting would either fail the request or throw
@@ -239,12 +391,14 @@ class Worktrees:
             return Worktree(root=here)
         self.root.mkdir(parents=True, exist_ok=True)
         repository = Worktree(root=self.repo)
-        commit = (
-            await repository.demand("rev-parse", "HEAD")
-            if tree is None
-            else await repository.demand("commit-tree", tree, "-m", f"session {session}")
-        )
-        await repository.demand("worktree", "add", "--detach", str(here), commit)
+        if tree is not None:
+            commit = await repository.demand("commit-tree", tree, "-m", f"session {session}")
+        elif (named := base if base is not None else await self.default_branch()) is not None:
+            commit = await self.resolve(named)
+        else:
+            commit = await repository.demand("rev-parse", "HEAD")
+        placing = ("-b", branch) if branch is not None else ("--detach",)
+        await repository.demand("worktree", "add", *placing, str(here), commit)
         return Worktree(root=here)
 
     async def uproot(self, session: str) -> None:

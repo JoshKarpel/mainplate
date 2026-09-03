@@ -19,7 +19,9 @@ from collections import Counter
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
+from typing import Final
 from typing import Protocol
 
 from mainplate.snapshots import Worktree
@@ -167,6 +169,31 @@ class Reaching:
     current: Reachable
 
 
+# What `git ls-remote --heads` puts in front of every branch it names.
+HEADS: Final = "refs/heads/"
+
+# How long a repository has to say what branches it has. Short, because this is a swap somebody is
+# watching: a host that is not answering should leave the field taking free text, which is what it
+# did before it offered anything, rather than holding the page.
+LISTING: Final = timedelta(seconds=5)
+
+
+def named(listed: str) -> tuple[str, ...]:
+    r"""
+    Branch names out of what `git ls-remote --heads` printed, which is `<sha>\trefs/heads/<name>`.
+
+    Pure, so the parsing is testable against the shapes git actually prints without a repository to
+    ask. The name is whatever follows the prefix and may hold slashes of its own, so this cuts once
+    at the prefix rather than splitting on every separator.
+    """
+    found: list[str] = []
+    for line in listed.splitlines():
+        _, _, ref = line.partition("\t")
+        if ref.startswith(HEADS) and (name := ref.removeprefix(HEADS)):
+            found.append(name)
+    return tuple(found)
+
+
 @dataclass(frozen=True, slots=True)
 class Clones:
     """
@@ -193,6 +220,57 @@ class Clones:
     def cloned(self, repository: str) -> bool:
         """Whether this repository is already on disk, which is a question with no I/O in it."""
         return (self.at(repository) / "HEAD").exists()
+
+    async def refresh(self, repository: Repository) -> None:
+        """
+        Bring this clone's idea of the remote up to date, so a branch name means today's commit.
+
+        Into `refs/remotes/origin/` and never over `refs/heads/`, which is the whole care here. A
+        bare clone's branches live under `refs/heads/` and are as old as the clone; fetching over
+        them with a forcing refspec would also walk over a branch a session started and has been
+        committing to, which is somebody's work rather than a stale copy. Fetching beside them costs
+        one namespace and takes nothing away, and `Worktrees.resolve` is what prefers the fresh side.
+
+        Logged rather than raised, because this is an improvement on what a name resolves to and not
+        a precondition for planting: a machine that is offline, or a repository whose integration was
+        detached this morning, still gets the worktree it would have got before this existed.
+        """
+        here = self.at(repository.id)
+        fetched = await Worktree(root=here).git(
+            "fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*"
+        )
+        if not fetched.ok:
+            logger.warning(f"could not refresh {repository.name}, so a branch name may be stale: {fetched.err}")
+
+    async def branches(self, repository: Repository) -> tuple[str, ...]:
+        """
+        What branches this repository has right now, for the page to offer as a starting point.
+
+        Asked of the **remote** rather than of the clone, which is what lets the very first session on
+        a repository be started on a branch: there is no clone yet at that moment, and cloning to find
+        out what to check out is minutes of network inside a request somebody is waiting on.
+        `ls-remote` transfers no objects, so it is one round trip and no disk.
+
+        It also cannot go stale in the way reading the clone would. A clone is refreshed when a
+        session plants a worktree in it, so a list read from one would be as old as the last session
+        on that repository - which is exactly the trap a named base already had.
+
+        **It promises not to raise**, which is `forge.offers`'s promise one level down: this describes
+        an environment rather than deciding anything, and what it produces is a list of suggestions
+        beside a field that takes free text. A repository that cannot be reached, a host that hangs,
+        a git that is not there: all of them are a field with no completions and nothing else.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            async with asyncio.timeout(LISTING.total_seconds()):
+                listed = await Worktree(root=self.root).git("ls-remote", "--heads", "--refs", "--", repository.url)
+        except TimeoutError:
+            logger.warning(f"{repository.name} did not say what branches it has within {LISTING}")
+            return ()
+        if not listed.ok:
+            logger.warning(f"could not read {repository.name}'s branches: {listed.err}")
+            return ()
+        return named(listed.out)
 
     async def ensure(self, repository: Repository) -> Path:
         """
@@ -254,7 +332,26 @@ class Workspaces:
     def named(self, repository: str) -> Repository | None:
         return self.reaching.current.offers(repository)
 
-    async def plant(self, session: str, repository: str, *, tree: str | None = None) -> Worktree | None:
+    async def branches(self, repository: str) -> tuple[str, ...]:
+        """
+        What a session started on this repository could begin at, or nothing where none can be read.
+
+        Nothing for a repository no forge currently reaches, which is the same answer as one that
+        cannot be asked: what this feeds is a list of completions beside a field that takes free
+        text, so having none costs a suggestion rather than an ability.
+        """
+        found = self.named(repository)
+        return () if found is None else await self.clones.branches(found)
+
+    async def plant(
+        self,
+        session: str,
+        repository: str,
+        *,
+        tree: str | None = None,
+        base: str | None = None,
+        branch: str | None = None,
+    ) -> Worktree | None:
         """
         A session's worktree, cloning the repository first if this console has not seen it before.
 
@@ -267,11 +364,31 @@ class Workspaces:
         not strand a conversation whose files are already on disk; what it stops is starting a new
         session on one that was never cloned, and that is the honest failure because there is
         nowhere to get it from.
+
+        **Planting a worktree fetches first**, whether or not a base was named, and that is where a
+        person gets to say when this console's copy of a repository catches up. Nothing else here
+        ever refreshes a clone: it is made once and would otherwise answer out of whatever the
+        repository looked like the first time anybody used it, for as long as the machine lives. So
+        starting a session is the refresh, which is both the moment it is affordable and the moment
+        somebody actually wants current code.
+
+        Two cases skip it and both would be round trips that cannot change an answer. A clone that
+        has just been *made* is current by construction. And a **fork** plants at a recorded tree,
+        which is an object this console wrote and therefore already holds.
+
+        Only where the worktree is about to be made, which keeps the cost to one fetch per session
+        rather than one per pass: a session's second turn finds its worktree planted and never
+        reaches this at all.
         """
-        if not self.clones.cloned(repository):
+        cloning = not self.clones.cloned(repository)
+        if cloning:
             found = self.named(repository)
             if found is None:
                 return None
             await self.clones.ensure(found)
         worktrees = self.clones.worktrees(repository, self.root)
-        return await worktrees.plant(session, tree=tree)
+        if not cloning and tree is None and worktrees.at(session) not in await worktrees.planted():
+            reached = self.named(repository)
+            if reached is not None:
+                await self.clones.refresh(reached)
+        return await worktrees.plant(session, tree=tree, base=base, branch=branch)

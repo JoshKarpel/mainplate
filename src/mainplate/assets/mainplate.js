@@ -23,6 +23,12 @@
 
   const THEMES = ["system", "light", "dark"];
 
+  // Everything in the transcript that folds: a tool call, and a command the person ran. Named once
+  // because two places act on the set - putting a reader's folds back after a swap, and the dock's
+  // fold-everything buttons - and a kind added to one and not the other is a fold that reopens
+  // itself on the next render.
+  const FOLDS = "details.tool, details.ran";
+
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
   // must not leave the page in a scheme it has no rules for.
   const asTheme = (held) => (THEMES.includes(held) ? held : "system");
@@ -126,6 +132,11 @@
     let saying = null; // and the timer that stops it saying it
 
     let shelf = []; // text kept and not sent, as {name, text}
+
+    // Whether the box is a command box. Not stored, and that is the same line `following` is on:
+    // this is a mode within a visit rather than a decision about a conversation, so carrying it
+    // across a reload would be a page that opens as something the reader has to notice and undo.
+    let commanding = false;
 
     try {
       const stored = JSON.parse(held(scoped("muted")) || "[]");
@@ -308,8 +319,9 @@
       const box = transcript();
       if (!box) return;
       // Only what the reader opened is forced. A call still waiting on its result is rendered open
-      // by the server, and leaving that alone is what lets the server say so.
-      box.querySelectorAll("details.tool").forEach((fold) => {
+      // by the server, and leaving that alone is what lets the server say so. A command reads the
+      // same way and folds the same way, which is why one selector answers for both.
+      box.querySelectorAll(FOLDS).forEach((fold) => {
         if (opened.has(fold.id)) fold.open = true;
       });
     };
@@ -353,6 +365,101 @@
     const paintFollow = () => {
       const toggle = document.querySelector('[data-follow="toggle"]');
       if (toggle) toggle.setAttribute("aria-pressed", String(following));
+    };
+
+    // --- The command box ---------------------------------------------------
+    //
+    // `!` in an empty box turns the composer into one, and Escape turns it back. It is a shortcut to
+    // the `Run` row in the sending menu and never a second way of saying it: the server parses no
+    // leader out of a message, so a paragraph that opens with `!` is a paragraph, and with this file
+    // absent the menu is still there to be opened.
+    //
+    // One attribute is the whole of what this sets. Which button shows, what it is called, what it
+    // posts and the sentence under the box are all in `pages.py` and drawn off `data-commanding` by
+    // the stylesheet, so nothing here holds a label, a field name or a disposition. That is also what
+    // makes the mode safe rather than the failure a remembered choice would be: the button a reader
+    // is about to press is one the server rendered, saying what it does.
+    const composerForm = () => document.querySelector(".composer[data-running]");
+
+    const paintCommanding = () => {
+      const form = composerForm();
+      if (!form) return;
+      if (commanding) form.dataset.commanding = "";
+      else delete form.dataset.commanding;
+    };
+
+    // Which button a submit should be attributed to, which is whichever one the mode leaves standing.
+    // `requestSubmit` with no submitter posts no name at all, so without this the keyboard would
+    // always mean Send however the box was drawn.
+    const submitter = (form) => form.querySelector(commanding ? ".sender__run" : ".sender__send");
+
+    // --- Narrowing the branches -------------------------------------------
+    //
+    // The one field in the picker that is a search rather than a set of cards, because a starting
+    // point is an open question: a branch, but also a tag, a hash, or `main~3`. So the branches are
+    // drawn under the box and cut to what matches, and typing anything else is still typing.
+    //
+    // Everything here is an enhancement over a field that already works. With this file absent the
+    // box keeps its `<datalist>` and the browser completes from the same names; what enhancing adds
+    // is a list you can *see* and step through. Taking the `list` attribute off is the other half of
+    // that: two dropdowns over one box is one more than a reader can use.
+
+    const basisBox = () => document.querySelector(".basis__box");
+    const basisFound = () => document.getElementById("branches-found");
+
+    let matching = -1; // which of the shown branches the keyboard is on
+
+    const paintBranches = () => {
+      const box = basisBox();
+      const found = basisFound();
+      if (!box || !found) return;
+      // Only where there is something to narrow. A repository that offered none leaves the field
+      // exactly as it was, rather than declaring itself a combobox with an empty list behind it.
+      if (!found.querySelector("[data-branch]")) return;
+      box.removeAttribute("list");
+      box.setAttribute("role", "combobox");
+      box.setAttribute("aria-controls", found.id);
+      box.setAttribute("aria-expanded", String(!found.hidden));
+    };
+
+    const shutBranches = () => {
+      const found = basisFound();
+      if (!found) return;
+      matching = -1;
+      found.hidden = true;
+      basisBox()?.setAttribute("aria-expanded", "false");
+    };
+
+    // What is on offer for what is typed so far, as the buttons left showing. Case-insensitive and
+    // anywhere in the name rather than a prefix, because a branch is named `feature/the-thing` far
+    // more often than it is named for the word you remember about it.
+    const narrowBranches = () => {
+      const box = basisBox();
+      const found = basisFound();
+      if (!box || !found || box.getAttribute("role") !== "combobox") return [];
+      const wanted = box.value.trim().toLowerCase();
+      const showing = [];
+      found.querySelectorAll("[data-branch]").forEach((one) => {
+        const name = one.dataset.branch;
+        // An exact match is the reader having already answered, so there is nothing left to offer:
+        // a list holding only what is in the box is a menu whose one item changes nothing.
+        const fits = name.toLowerCase().includes(wanted) && name !== box.value.trim();
+        one.parentElement.hidden = !fits;
+        if (fits) showing.push(one);
+      });
+      found.hidden = !showing.length;
+      box.setAttribute("aria-expanded", String(!found.hidden));
+      if (matching >= showing.length) matching = showing.length - 1;
+      showing.forEach((one, at) => one.setAttribute("aria-selected", String(at === matching)));
+      return showing;
+    };
+
+    const takeBranch = (name) => {
+      const box = basisBox();
+      if (!box) return;
+      box.value = name;
+      shutBranches();
+      box.focus();
     };
 
     // --- Copying -----------------------------------------------------------
@@ -527,6 +634,8 @@
       paintLanded();
       paintFolds();
       paintFollow();
+      paintCommanding();
+      paintBranches();
       paintCopies();
       paintCopied();
       research(false);
@@ -659,6 +768,61 @@
       });
     };
 
+    // Delegated for the reason `wireSend` is: this block is swapped in whenever a workspace card is
+    // picked, so wiring the element at load would wire the one the page happened to start with.
+    const wireBranches = () => {
+      document.addEventListener("input", (event) => {
+        if (event.target === basisBox()) narrowBranches();
+      });
+      // Opening on focus is what makes the list a way of *reading* what is on offer rather than only
+      // of completing something already half typed.
+      document.addEventListener("focusin", (event) => {
+        if (event.target === basisBox()) narrowBranches();
+        else if (!(event.target instanceof Element) || !event.target.closest(".basis__found")) shutBranches();
+      });
+      document.addEventListener("keydown", (event) => {
+        const box = basisBox();
+        if (event.target !== box || box.getAttribute("role") !== "combobox") return;
+        if (event.key === "Escape") {
+          const found = basisFound();
+          if (found && !found.hidden) event.stopPropagation();
+          shutBranches();
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          const showing = narrowBranches();
+          if (!showing.length) return;
+          // Preventing the default is what keeps the caret still: an arrow key in a text field
+          // otherwise runs it to one end of what is typed while the selection moves behind it.
+          event.preventDefault();
+          matching = (matching + (event.key === "ArrowDown" ? 1 : -1) + showing.length) % showing.length;
+          narrowBranches();
+          showing[matching]?.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (event.key !== "Enter") return;
+        const showing = narrowBranches();
+        if (matching < 0 || !showing[matching]) return;
+        // Only where the reader is actually on one. Enter in a text field submits its form, and this
+        // field's form is the one that starts the session, so swallowing it whenever the list is
+        // open would make the obvious key do nothing on a page whose whole purpose is that form.
+        event.preventDefault();
+        takeBranch(showing[matching].dataset.branch);
+      });
+      // `mousedown` rather than `click`, and that is the whole of why pressing one works: a click
+      // takes the focus off the box first, and the `focusin` above would shut the list out from
+      // under the press. Preventing the default here means the focus never leaves at all.
+      document.addEventListener("mousedown", (event) => {
+        const pressed = event.target instanceof Element ? event.target.closest("[data-branch]") : null;
+        if (!pressed) {
+          if (event.target instanceof Element && !event.target.closest(".basis__field")) shutBranches();
+          return;
+        }
+        event.preventDefault();
+        takeBranch(pressed.dataset.branch);
+      });
+    };
+
     const wireSearch = () => {
       if (!field) return;
       field.addEventListener("input", () => {
@@ -704,7 +868,7 @@
           const box = transcript();
           if (!box) return;
           const open = button.dataset.fold === "open";
-          box.querySelectorAll("details.tool").forEach((fold) => {
+          box.querySelectorAll(FOLDS).forEach((fold) => {
             fold.open = open;
             if (open) opened.add(fold.id);
             else opened.delete(fold.id);
@@ -882,11 +1046,29 @@
     // box on every page rather than one wired per form at load.
     const wireSend = () => {
       document.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" || !event.shiftKey) return;
         const box = event.target;
         if (!(box instanceof HTMLTextAreaElement) || box.name !== "prompt" || !box.form) return;
+        // `!` into an *empty* box is what opens the command box, and only there: mid-message it is
+        // an ordinary character, which is the whole reason the leader is a mode rather than
+        // something the server strips off the front of what was posted.
+        if (event.key === "!" && !commanding && box.value === "" && box.form.dataset.running !== undefined) {
+          event.preventDefault();
+          commanding = true;
+          paintCommanding();
+          return;
+        }
+        if (event.key === "Escape" && commanding) {
+          event.preventDefault();
+          commanding = false;
+          paintCommanding();
+          return;
+        }
+        if (event.key !== "Enter" || !event.shiftKey) return;
         event.preventDefault();
-        box.form.requestSubmit();
+        // Named rather than left to the browser, because `requestSubmit()` with no submitter posts
+        // no button's pair at all: unattributed, a command typed into a command box would arrive as
+        // an ordinary message and be said to the model.
+        box.form.requestSubmit(submitter(box.form));
       });
       // Sending is a decision to be looking at the end: whatever a reader had scrolled up to check
       // before typing, what they want to see now is the answer to what they just sent. On `submit`
@@ -951,8 +1133,17 @@
     // was handed and what it gave back, and run together they are one unreadable line. So the pairs
     // are read off the list the server already draws them as, which keeps the labels in one place -
     // "called with" and "returned" are written in `pages.py` and nowhere here.
+    //
+    // A command is the same problem in a smaller shape: the line, the status and the output run
+    // together read as one word followed by a wall. Its line is what somebody copying almost always
+    // wants back, so it leads, and its output follows on a line of its own.
     const spoken = (block) => {
       if (block.dataset.markdown !== undefined) return block.dataset.markdown.trim();
+      const line = block.querySelector(".ran__line");
+      if (line) {
+        const output = block.querySelector(".ran__body");
+        return [line.textContent.trim(), output && wordsOf(output).trim()].filter(Boolean).join("\n");
+      }
       const body = block.querySelector(".tool__body");
       if (!body) return wordsOf(block).trim();
       const name = block.querySelector(".tool__name");
@@ -1051,6 +1242,7 @@
     wireKey();
     wireShelf();
     wireSender();
+    wireBranches();
     wireSearch();
     wireDock();
     wireScroll();

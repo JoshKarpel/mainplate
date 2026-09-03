@@ -81,16 +81,14 @@ async def plant(service: Service, session: Session, chosen: Choice, checkpoint: 
     # read puts it there: the index holds no such column and the sidebar gets it out of `choice`.
     # Declaring it twice is how a seeded session would come to say one thing and render another.
     #
-    # Settled for the same reason `Service.start` settles it, and this is the one place that would
-    # otherwise skip it: writing the checkpoint directly bypasses the service, so without this a
-    # seeded session names a repository while recording that it reaches no files - exactly the
-    # contradictory pair nothing else in this console can produce.
+    # Both of the rules `Service.start` applies, because this is the one place that would otherwise
+    # skip them: writing the checkpoint directly bypasses the service, so without them a seeded
+    # session names a repository while recording that it reaches no files, or that it is on no
+    # branch - contradictory pairs nothing else in this console can produce. `settled` is one call
+    # rather than a rule per field, so a field added to what a repository decides needs no edit here;
+    # `branching` is separate for the reason it is separate there, that it needs the session's id.
     working = replace(chosen, repository=session.repository)
-    await service.checkpointer.supply(
-        session.id,
-        CHOICE_KEY,
-        recorded_choice(replace(working, isolation=working.isolation.settled(working.repository))),
-    )
+    await service.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(working.settled().branching(session.id)))
     for key, value in checkpoint.items():
         await service.checkpointer.supply(session.id, key, value)
     return True

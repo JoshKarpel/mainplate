@@ -54,6 +54,7 @@ from mainplate.catalogue import Catalogues
 from mainplate.catalogue import discover
 from mainplate.catalogue import refreshing
 from mainplate.catalogue import summarise
+from mainplate.commands import Commands
 from mainplate.config import Config
 from mainplate.config import config_path
 from mainplate.config import read_config
@@ -78,6 +79,7 @@ from mainplate.sandbox import NoSandbox
 from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import prepare
+from mainplate.settings import DEFAULT_PATIENCE
 from mainplate.settings import DEFAULT_WATCHING
 from mainplate.settings import Settings
 
@@ -133,6 +135,7 @@ async def open_store(
     workspaces: Workspaces | None = None,
     references: References | None = None,
     watching: timedelta = DEFAULT_WATCHING,
+    patience: timedelta = DEFAULT_PATIENCE,
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -145,18 +148,32 @@ async def open_store(
         await migrate(opened)
         await prepare(opened)
         checkpointer = SqliteCheckpointer(opened)
-        yield Service(
-            database=opened,
-            durable=SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease)),
-            checkpointer=checkpointer,
-            catalogues=catalogues,
-            workspaces=workspaces,
-            # A holder either way, so nothing downstream has to ask whether there is one. An empty
-            # holder is a console that was never told to look anything up, which is a different
-            # state from one whose database would not load and the state a card must not report.
-            references=references if references is not None else References(),
-            watching=watching,
-        )
+        # Only where there are workspaces, since a command runs in a session's worktree and a
+        # console keeping none has nowhere to put one. The same pairing the file tools already have,
+        # one level out.
+        running = Commands(checkpointer=checkpointer, patience=patience) if workspaces is not None else None
+        try:
+            yield Service(
+                database=opened,
+                durable=SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease)),
+                checkpointer=checkpointer,
+                catalogues=catalogues,
+                workspaces=workspaces,
+                commands=running,
+                # A holder either way, so nothing downstream has to ask whether there is one. An
+                # empty holder is a console that was never told to look anything up, which is a
+                # different state from one whose database would not load and the state a card must
+                # not report.
+                references=references if references is not None else References(),
+                watching=watching,
+            )
+        finally:
+            # Inside the store's own `finally`, and the nesting is the point: cancelling a command
+            # is what makes it record that it was stopped, so the connection has to outlive that
+            # write. Closed the other way round, every command in flight at a shutdown would leave a
+            # panel saying it is still running.
+            if running is not None:
+                await running.aclose()
     finally:
         # Never `connection.close()`: the store's own `aclose` waits out any statement still
         # running on a worker thread, and closing under one segfaults the process rather than
@@ -213,7 +230,13 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         bwrap = None
         logger.warning(f"no sandbox, so sessions get no shell: {missing}")
     async with open_store(
-        settings.database, settings.lease, catalogues, workspaces, references, settings.watching
+        settings.database,
+        settings.lease,
+        catalogues,
+        workspaces,
+        references,
+        settings.watching,
+        settings.patience,
     ) as service:
         answering = work(
             service.durable,

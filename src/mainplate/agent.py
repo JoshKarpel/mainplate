@@ -39,6 +39,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 from typing import Protocol
@@ -64,6 +65,7 @@ from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
 from mainplate.snapshots import Worktree
+from mainplate.snapshots import branch_named
 from mainplate.tools import Files
 from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
@@ -116,6 +118,45 @@ class Choice:
     console being used to talk rather than to edit has and what every session had before this.
     """
 
+    base: str | None = None
+    """
+    What the worktree is checked out at when this session's files are first planted, or nothing at
+    all to begin where the repository is.
+
+    A **commit-ish** and not a commit: a branch name, a tag, a hash, or anything else `git rev-parse`
+    resolves. It is recorded as the words somebody typed rather than as what they resolved to, and
+    that is deliberate - what a session says about itself is the answer it was given, and `main` is a
+    truer record of that intent than the hash `main` happened to be at that minute. The hash it came
+    to is in `turn:0:tree:0` for anybody who wants it.
+
+    Fixed for the session's life like everything else here, and it stops mattering after the first
+    pass: a worktree is planted once, so this is read by exactly one call and is thereafter a fact
+    about where the session began. A fork does not carry it, because a fork plants at a recorded tree
+    and a base beside that would be two claims about one checkout.
+    """
+
+    branch: str | None = None
+    """
+    A branch to start at `base` and leave the worktree on.
+
+    Optional on the *form* and not in the record: `Choice.branching` fills it with a name from the
+    session's id wherever a repository was picked, so every session working in one is on a branch.
+    `None` here therefore means a session with no repository, or a checkpoint written before this
+    existed. What it buys is somewhere for a commit to go, since a commit on a detached `HEAD` is
+    reachable only through the reflog and `Run` is what made committing easy.
+
+    **Naming a base does not put the worktree on that branch, and cannot.** Git refuses to check out
+    a branch that another worktree already holds, so two sessions started at `main` would mean the
+    second one failing to plant at all - and a session's whole shape here is that it gets a worktree
+    of its own. So a base names *where to begin* and this names *what to begin*, which is why they
+    are two fields rather than one that sometimes means both.
+
+    Not carried by a fork, and that is a refusal rather than an oversight: `git worktree add -b`
+    takes a branch name that is not already in use, so a fork inheriting one could not be planted at
+    all. Two sessions on one branch would be two writers in one history besides, which is the thing a
+    worktree apiece exists to prevent. A fork is given one of its **own** instead, by the same call.
+    """
+
     isolation: Isolation = field(default_factory=Isolation)
     """
     How confined this session is: what its tools may reach, and whether they may dial out.
@@ -148,6 +189,49 @@ class Choice:
     ours; `parse_choice` supplies it explicitly, so a checkpoint written before this existed reads
     back as the default rather than as a failure.
     """
+
+    def branching(self, session: str) -> Choice:
+        """
+        The same choice with a branch of its own, where a repository was picked and nobody named one.
+
+        Every session working in a repository gets one, because the alternative is a detached `HEAD`
+        and committing is something somebody does here now: `Run` puts `git commit` in the box under
+        the conversation, and a commit on a detached `HEAD` is reachable only through the reflog.
+
+        Taken rather than derived, so a name somebody typed always wins. It is the session's id that
+        makes the generated one usable at all - see `branch_named` - which is why this takes one and
+        why it is not part of `settled`, whose whole subject is the choice on its own.
+        """
+        if self.repository is None or self.branch is not None:
+            return self
+        return replace(self, branch=branch_named(session))
+
+    def settled(self, *, forked: bool = False) -> Choice:
+        """
+        The same choice with everything that depends on the repository made to agree with it.
+
+        **One place that makes a posted choice self-consistent**, rather than a rule per field spread
+        over the two callers. A form is not the only way in - a fork inherits its repository rather
+        than posting one - so the alternative to settling here is every writer reconciling the same
+        three fields and one of them eventually not.
+
+        With no repository there is no worktree, so there is nothing to reach, nothing to check out
+        and no branch to start: all three collapse together because they are answers to one question
+        the picker asks once. That is what lets the start page be a form that *cannot* express a
+        contradiction, instead of two controls kept in step with a swap.
+
+        `forked` drops the base and the branch whatever the repository is. A fork plants at the tree
+        of the turn it re-asks, so a base would be a second answer to where its files come from, and
+        a branch would be a name `git worktree add -b` refuses because the parent already holds it.
+        """
+        if forked or self.repository is None:
+            return replace(
+                self,
+                base=None,
+                branch=None,
+                isolation=self.isolation.settled(self.repository),
+            )
+        return replace(self, isolation=self.isolation.settled(self.repository))
 
     @property
     def settings(self) -> ModelSettings | None:

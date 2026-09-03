@@ -10,7 +10,7 @@
 # been said is what has been recorded, so the page renders the checkpoint, a crash resumes from
 # it, and a second process reading the same file sees exactly what the first one did.
 #
-# One key for the session, and nine per turn. The whole scheme is here so that the code that
+# One key for the session, and eleven per turn. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
 #     choice               the endpoint, model, repository, isolation and thinking level this
@@ -18,6 +18,9 @@
 #     turn:{n}:prompt      what the person said, written from outside the pass by `arrive`
 #     turn:{n}:steer:{k}   what the person said *into* the turn while it ran, written from outside
 #                          the pass by `Service.steer`
+#     turn:{n}:command:{k} what the person ran themselves, written from outside the pass by
+#                          `Service.run`
+#     turn:{n}:result:{k}  what that command exited with, said and took, written when it finishes
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:heard:{i}   which steers were appended to that request
 #     turn:{n}:late:{k}    which steers were found where the run would have ended, redirecting it
@@ -26,8 +29,15 @@
 #     turn:{n}:took:{id}   how long that call ran, named by the same id and written after it
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
 #
-# `prompt` and `steer` are the only two a person writes, and they are written from *outside* a pass,
-# because somebody acting on a turn that is already running cannot be a step of it.
+# `prompt`, `steer` and `command` are the three a person writes, and they are written from *outside*
+# a pass, because somebody acting on a turn that is already running cannot be a step of it.
+#
+# **`command` is recorded and not told**, which is the whole of what a command is here. Those two
+# questions are separate and this console already keeps them apart everywhere else: `tree:{i}`,
+# `heard:{i}` and `took:{id}` are all records the page draws and no model ever sees. So a command is
+# in the checkpoint - it renders, it survives a reload, a fork carries it - and it is not in the
+# message history, so it costs the conversation no context and reaches no provider. Telling the model
+# is a message somebody writes, which is what the box above it is already for.
 #
 # `steer` is also the only key both halves write. The pass claims the next free slot with `CLOSED`
 # when it is about to stop listening, so that one contended write settles whether a message arriving
@@ -110,6 +120,8 @@ from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.snapshots import Worktree
+from mainplate.snapshots import parse_branch
+from mainplate.snapshots import parse_commitish
 from mainplate.thinking import BY_LEVEL
 
 CHOICE_KEY: StepKey = "choice"
@@ -119,6 +131,13 @@ CHOICE_KEY: StepKey = "choice"
 THINKING_FIELD: Final = "thinking"
 
 REPOSITORY_FIELD: Final = "repository"
+
+# Where in that repository the session's worktree starts, and what branch it starts there, inside the
+# recorded choice and on the form that begins one. Named here beside the repository they depend on,
+# for the reason the turn keys are: the code that writes them and the code that reads them are both
+# in this file and must not drift.
+BASE_FIELD: Final = "base"
+BRANCH_FIELD: Final = "branch"
 
 # The two isolation axes, named here beside the rest of the choice's fields. Both are absent from
 # every record written before they existed, and both read back as what those sessions already had:
@@ -178,6 +197,23 @@ class Disposition(Enum):
 
     Nothing mechanical differs, and saying so is better than inventing a difference: what it buys is
     that the sidebar can draw a digression as one, and that the session knows to offer a way back."""
+
+    RUN = "run"
+    """`Service.run`, which runs the text as a command in this session's own worktree.
+
+    The one answer here that is not a message going somewhere. It is in this field all the same,
+    because the question the menu asks is what happens to what you typed and this is one more answer
+    to it - and because a control of its own would spend a slot in the row above the box, which is
+    the row a phone has least of.
+
+    **As the person and not as the agent.** A session's `isolation` bounds what a *model* asked for,
+    and the clone is bound read-only inside that sandbox precisely so no tool can write history. That
+    is what makes this the useful half: `git commit` and `git push` are the person's to run, and
+    confining them is what would make this pointless. The authority is nothing new - a session on
+    `Filesystem.EVERYTHING` already hands a model the store and `config.yaml` - but it does mean who
+    can reach this console is the whole of what guards it.
+
+    Recorded and not told, so nothing here reaches the model. See the key scheme."""
 
     PARENT = "parent"
     """`Service.say` into the session this one was forked from, which is how an aside comes back.
@@ -312,6 +348,43 @@ sent into that window is written to a key nothing will ever look at again.
 `None` rather than a string, so no message anybody could type is mistakable for it: a steer is always
 text, so the shape alone tells them apart. That is `turn_of`'s trick, one level down.
 """
+
+
+def command_key(turn: int, at: int) -> StepKey:
+    """
+    The `at`-th command the person ran themselves while this turn was the latest one.
+
+    Written from *outside* a pass, like `turn:{n}:prompt` and `turn:{n}:steer:{k}`, and for a reason
+    those two only half share: nothing in a pass runs this at all. A command is the person acting on
+    their own files beside a conversation, so the pass neither writes it nor reads it.
+
+    Numbered within the turn and claimed by trying, exactly as a steer is, because two commands
+    posted at once would otherwise lose the loser's to the store's keep-the-first rule. Unlike a
+    steer the slots are *not* contended with a pass, so there is no `CLOSED` here and never will be:
+    the only writer is whoever is typing.
+
+    Which turn is `turns - 1`, the last one started, whether or not it is still being answered. That
+    is what puts a command at the end of everything said so far, which is where it happened.
+    """
+    return f"{turn_prefix(turn)}:command:{at}"
+
+
+def result_key(turn: int, at: int) -> StepKey:
+    """
+    What the `at`-th command of this turn exited with, said, and took.
+
+    A second key rather than one record written when the command finishes, because a `pytest` is
+    minutes and somebody is watching: the command's own panel is drawn from `ran` the instant it is
+    posted, and this landing is what fills in the result. Absent is "still running", which is exactly
+    how `ToolUse.returned` reads and needs no flag beside it.
+
+    The duration is **in** this record rather than in a key of its own, and that is the difference
+    between a command and a tool call rather than an inconsistency with it. `turn:{n}:took:{id}`
+    exists because a tool returns somebody else's value of an unknown shape, so a duration beside it
+    would be indistinguishable from a tool that returned a field of that name. This record's shape is
+    ours, so it has somewhere to put one.
+    """
+    return f"{turn_prefix(turn)}:result:{at}"
 
 
 def heard_key(turn: int, at: int) -> StepKey:
@@ -455,6 +528,18 @@ def parse_isolation(recorded: object, repository: str | None) -> Isolation:
     return Isolation(filesystem=reaching, network=recorded.get(NETWORK_FIELD) is True)
 
 
+def text_at(recorded: Mapping[str, object], field_name: str) -> str:
+    """
+    One optional string out of a record, with anything that is not one reading as absent.
+
+    For the fields where "not there" and "not usable" are the same answer, which is what the parser
+    below says about a base and a branch: both mean the session names none, and a checkpoint holding
+    a number under one of those keys was never written by this console anyway.
+    """
+    held = recorded.get(field_name)
+    return held if isinstance(held, str) else ""
+
+
 def parse_choice(recorded: object) -> Choice:
     """
     What a session was started on, or a loud failure if the record is not a choice.
@@ -475,6 +560,14 @@ def parse_choice(recorded: object) -> Choice:
         endpoint=endpoint,
         model=model,
         repository=repository,
+        # Re-parsed on the way out rather than trusted because it was checked on the way in. What
+        # these become is a `git` argument, and the record is the one thing between the form that
+        # checked them and the pass that uses them - a checkpoint edited by hand, or written by
+        # `scripts/seed.py`, has been through no boundary at all. Absent and unusable read the same,
+        # which is right: both mean this session names no base and no branch, and every session
+        # written before these existed is in exactly that state.
+        base=parse_commitish(text_at(recorded, BASE_FIELD)),
+        branch=parse_branch(text_at(recorded, BRANCH_FIELD)),
         isolation=parse_isolation(recorded.get(ISOLATION_FIELD), repository),
         thinking=parse_thinking(recorded.get(THINKING_FIELD)),
     )
@@ -493,6 +586,8 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
         ENDPOINT_FIELD: chosen.endpoint,
         "model": chosen.model,
         REPOSITORY_FIELD: chosen.repository,
+        BASE_FIELD: chosen.base,
+        BRANCH_FIELD: chosen.branch,
         ISOLATION_FIELD: {FILESYSTEM_FIELD: chosen.isolation.filesystem.value, NETWORK_FIELD: chosen.isolation.network},
         THINKING_FIELD: chosen.thinking,
     }
@@ -561,7 +656,12 @@ type Outcome = Literal["success", "failed", "denied", "interrupted"]
 # kind and the two are worth filtering apart: reading a long turn back, what somebody said *into* it
 # is a different thing from the question that opened it. It takes the person's hue all the same,
 # since the axis is about who produced the text and that is the same person.
-type Kind = Literal["person", "steering", "assistant", "thinking", "tool"]
+#
+# `command` is on the person's side for the same reason `steering` is, that the axis is about who
+# produced the text. It is its own kind rather than a `person` panel because the key filters by kind
+# and the two are worth filtering apart: reading a session back, what somebody *ran* is a different
+# thing from what they said, and it is the one kind nothing in the conversation ever saw.
+type Kind = Literal["person", "steering", "command", "assistant", "thinking", "tool"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -624,7 +724,57 @@ class ToolUse:
     """
 
 
-type Block = Prose | Steering | Reasoning | ToolUse
+@dataclass(frozen=True, slots=True)
+class Result:
+    """
+    What a command exited with, said, and took: everything a run is worth knowing once it is over.
+
+    One value rather than three fields on `Command`, so "it has finished" is a single thing to test
+    and cannot be half true. That is `ToolUse.returned`'s shape, arrived at from the same place.
+
+    Its own type rather than `Returned`, which is the tool's. They look alike and are not: a tool's
+    outcome is one of the four words Pydantic AI's `ToolReturnPart` uses, where a command's is an
+    exit status a program chose, and collapsing the two would mean inventing a mapping between them.
+
+    `status` is the process's own exit code, kept as the number rather than reduced to a boolean:
+    `git diff --quiet` exits 1 to mean *there are changes*, so a console that only said "failed"
+    would be lying about a command doing exactly what it was asked.
+
+    `output` is stdout and stderr together, in the order they were written, which is what a terminal
+    shows and what somebody reading a run actually wants. Kept apart they interleave wrongly or not
+    at all, and no reader has ever wanted a build's errors in a second column.
+    """
+
+    status: int
+    output: str
+
+    took: timedelta | None = None
+    """
+    How long it ran, and nothing where the console stopped before it could be timed.
+
+    Inside this record rather than beside it, unlike a tool call's; see `result_key`.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Command:
+    """
+    Something the person ran themselves, and what came of it once it has run.
+
+    `result is None` is the whole of "still running", exactly as `ToolUse.returned is None` is the
+    whole of "still out", and for the same reason: a flag beside a result is a second thing to keep
+    in step with it.
+
+    No model ever sees one of these. It is in the checkpoint because that is the only place this
+    console keeps anything, and it is out of the message history because telling a model what you ran
+    is a message somebody writes. See the key scheme.
+    """
+
+    text: str
+    result: Result | None = None
+
+
+type Block = Prose | Steering | Command | Reasoning | ToolUse
 
 
 @dataclass(frozen=True, slots=True)
@@ -886,6 +1036,8 @@ def kind_of(block: Block) -> Kind:
             return "assistant"
         case Steering():
             return "steering"
+        case Command():
+            return "command"
         case Reasoning():
             return "thinking"
         case ToolUse():
@@ -1031,6 +1183,56 @@ def returned_step(recorded: object) -> Returned:
         return Returned(outcome="success", content="")
     said = recorded if isinstance(recorded, str) else to_json(recorded).decode()
     return Returned(outcome="success", content=said)
+
+
+STATUS_FIELD: Final = "status"
+OUTPUT_FIELD: Final = "output"
+TOOK_FIELD: Final = "took"
+
+
+def recorded_result(result: Result) -> dict[str, object]:
+    """What a finished command is as the JSON-native value the store's codec will take."""
+    return {
+        STATUS_FIELD: result.status,
+        OUTPUT_FIELD: result.output,
+        TOOK_FIELD: None if result.took is None else result.took.total_seconds(),
+    }
+
+
+def parse_result(recorded: object) -> Result:
+    """
+    What a command came back with, or a loud failure if the checkpoint holds something else.
+
+    Strict about the pair that must be there and lenient about the duration, which is the same split
+    `parse_choice` makes: a status and an output are what this record *is*, where a run nothing timed
+    is an ordinary state a reader already has a rendering for.
+    """
+    if not isinstance(recorded, dict):
+        raise TypeError(f"a command's result must be a mapping, not {recorded!r}")
+    status, output = recorded.get(STATUS_FIELD), recorded.get(OUTPUT_FIELD)
+    if not isinstance(status, int) or isinstance(status, bool) or not isinstance(output, str):
+        raise TypeError(f"a command's result must name a status and its output, not {recorded!r}")
+    return Result(status=status, output=output, took=parse_took(recorded.get(TOOK_FIELD)))
+
+
+def commands_in(recorded: Mapping[str, object], turn: int) -> tuple[Command, ...]:
+    """
+    Every command the person ran while this turn was the latest one, in the order they ran them.
+
+    Consecutive from zero, so the scan stops at the first slot nobody has claimed rather than
+    searching for the highest key, exactly as `steers_in` and `responded` walk theirs. `Service.run`
+    never leaves a gap, which is what its clash check costs it.
+
+    A slot with no result beside it is a command still running, which is what a reader watching one
+    sees and what a command a killed console leaves behind. The second is the honest record: the
+    process that would have written the result is gone, and inventing one would be a claim about
+    something nobody observed.
+    """
+    ran: list[Command] = []
+    while isinstance(said := recorded.get(command_key(turn, len(ran))), str):
+        came = recorded.get(result_key(turn, len(ran)))
+        ran.append(Command(text=said, result=None if came is None else parse_result(came)))
+    return tuple(ran)
 
 
 def steers_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
@@ -1245,6 +1447,28 @@ def said_by(turn: int, prompt: str, tree: str | None = None) -> Panel:
     return Panel(turn=turn, at=0, kind="person", blocks=(Prose(text=prompt),), tree=tree)
 
 
+def ran_by(recorded: Mapping[str, object], turn: int, at: int) -> tuple[Panel, ...]:
+    """
+    A turn's commands as one panel at the end of it, or nothing where none were run.
+
+    **At the end rather than interleaved**, and that is what makes this the cheap reading it is.
+    Nothing records which model request was in flight when somebody ran `git status`, and nothing
+    should: a second writer racing the pass for a position in its sequence is what `heard:{i}` costs
+    a steer, and a steer earns it by actually reaching the model. A command reaches nothing, so where
+    it sits among the model's own panels is a distinction with no consequence.
+
+    What that buys is the property the two readings of a turn already depend on: this appends the
+    same panel whether the turn is running or settled, so nothing moves when `turn:{n}:messages`
+    lands. A command run during turn 3 stays at the end of turn 3 for ever, which is also where it
+    happened.
+
+    `asked` is `None`, like the person's own panel and a steer, because no model request produced it
+    and so it opens none. That is what keeps it from drawing a rule of its own.
+    """
+    ran = commands_in(recorded, turn)
+    return (Panel(turn=turn, at=at, kind="command", blocks=ran),) if ran else ()
+
+
 def transcript(recorded: Mapping[str, object]) -> Transcript:
     """
     The whole conversation, read out of the checkpoint that is the only record of it.
@@ -1276,6 +1500,10 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answering = responses_in(said)
         panels.append(said_by(turn, parse_prompt(asked), parse_tree(recorded.get(opening_tree_key(turn)))))
         panels.extend(panelled(turn, parted(said, tooks_in(recorded, turn, answering))))
+        # After the turn's own panels, which is where a command ran and where it stays. Counted from
+        # what this turn has drawn so far rather than tracked alongside, so `at` is the next free
+        # position however many panels the turn came to.
+        panels.extend(ran_by(recorded, turn, sum(1 for panel in panels if panel.turn == turn)))
         spent[turn] = spent_on(answering)
         asking[turn] = requests_in(recorded, turn, answering)
         turn += 1
@@ -1296,6 +1524,10 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
             if answering:
                 spent[turn] = spent_on(answering)
                 asking[turn] = requests_in(recorded, turn, answering)
+        # Outside the branch above, because a command is not something the model is doing: a person
+        # can run one against a turn queued behind the reply in flight, and that turn draws no model
+        # panels at all until its own turn comes.
+        panels.extend(ran_by(recorded, turn, sum(1 for panel in panels if panel.turn == turn)))
         awaiting = True
         turn += 1
     return Transcript(
@@ -1357,13 +1589,18 @@ async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn
 
     A turn already carrying a recorded tree is planted *at* it, which is what a fork is: it
     inherits the tree of the turn it is re-asking, so the branch answers the same question against
-    the same files. Every other turn plants at whatever the repository's head is, which only
-    happens once because the worktree is then already there.
+    the same files. Every other turn plants at whatever the session was started at, which is a base
+    somebody named or the repository's own head, and which only happens once because the worktree is
+    then already there.
+
+    Both are handed over on every pass and only one can be true of a session at a time: `settled`
+    clears the base and the branch on a fork, so a run that finds a recorded tree finds no base
+    beside it and `Worktrees.plant`'s ranking never has to choose between two answers somebody gave.
     """
     if workspaces is None or chosen.repository is None:
         return None
     at = parse_tree(run.recorded.get(opening_tree_key(turn)))
-    planted = await workspaces.plant(run.workflow, chosen.repository, tree=at)
+    planted = await workspaces.plant(run.workflow, chosen.repository, tree=at, base=chosen.base, branch=chosen.branch)
     if planted is None:
         raise NoSuchRepository(f"no forge reaches {chosen.repository!r} and it has never been cloned")
     return planted

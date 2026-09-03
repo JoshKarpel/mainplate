@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
+from dataclasses import replace
 from functools import partial
 from http.server import SimpleHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -11,8 +12,11 @@ from threading import Thread
 import pytest
 import pytest_asyncio
 from conftest import DEFAULT_CHOICE
+from conftest import FIXTURE
+from conftest import FIXTURE_NAME
 from conftest import LEASE
 from conftest import already
+from conftest import run
 from playwright.async_api import Browser
 from playwright.async_api import Locator
 from playwright.async_api import Page
@@ -25,11 +29,15 @@ from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
 from mainplate.conversation import THINKING_FIELD
+from mainplate.conversation import command_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
+from mainplate.conversation import prompt_key
 from mainplate.conversation import steers_in
 from mainplate.conversation import tool_key
+from mainplate.forge import Workspaces
 from mainplate.service import Service
+from mainplate.snapshots import Worktree
 from scripts.gallery import pages
 from scripts.gallery import write
 
@@ -1158,13 +1166,6 @@ class TestWhereTheComposerSendsTo:
         await page.click(".composer textarea")
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
 
-    async def test_escape_shuts_the_menu(self, page: Page, console: tuple[str, Service]) -> None:
-        await a_conversation(console, page)
-        await page.click(".sender__caret")
-        await expect(page.locator(".sender__more")).to_have_attribute("open", "")
-        await page.keyboard.press("Escape")
-        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
-
     async def test_sending_stays_in_this_conversation(self, page: Page, console: tuple[str, Service]) -> None:
         """
         The control beside it, on the same form, posting no disposition at all. Asserted here rather
@@ -1219,6 +1220,255 @@ class TestWhereTheComposerSendsTo:
         await page.reload(wait_until="load")
         await page.click(".sender__caret")
         await expect(page.locator('.sender__option[value="next"]')).to_have_count(0)
+
+    async def test_escape_shuts_the_menu(self, page: Page, console: tuple[str, Service]) -> None:
+        await a_conversation(console, page)
+        await page.click(".sender__caret")
+        await expect(page.locator(".sender__more")).to_have_attribute("open", "")
+        await page.keyboard.press("Escape")
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces) -> AsyncIterator[tuple[str, Service]]:
+    """
+    The console over a store with files, which is what a command needs somewhere to run in.
+
+    A second fixture rather than workspaces on the first, because the one above is deliberately a
+    console with none: what most of these drive is a conversation, and giving every one of them a
+    real repository would put a clone and a worktree behind tests that never look at either.
+    """
+    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues, workspaces) as service:
+        async with serving(build_app(already(service)), port=0) as server:
+            yield f"http://{server.host}:{server.port}", service
+
+
+async def a_session_with_files(working: tuple[str, Service], page: Page) -> str:
+    url, service = working
+    session = await service.start("what is a mainplate", replace(DEFAULT_CHOICE, repository=FIXTURE))
+    await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+    await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+    return session.id
+
+
+class TestTurningTheBoxIntoACommandBox:
+    """
+    `!` in an empty box, which is a shortcut to the menu's `Run` and never a second way of saying it.
+
+    A browser twice over. The mode is a class the script sets and nothing the server renders, so no
+    markup assertion can see it; and what the mode has to *do* is make the keyboard post a different
+    button's pair, which is `requestSubmit`'s behaviour rather than ours and looks identical either
+    way in the markup.
+
+    The point of pinning it is the one failure a control like this can have: a box that runs what was
+    meant to be said, or says what was meant to be run. Both are irreversible by the time anybody
+    notices, so what these ask is that the mode is visible before the press and honoured at it.
+    """
+
+    async def test_a_leading_bang_in_an_empty_box_turns_it_into_a_command_box(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.press("!")
+
+        await expect(page.locator(".composer")).to_have_attribute("data-commanding", "")
+        # The whole safety property: what the reader is about to press says what it does.
+        await expect(page.locator(".sender__run")).to_be_visible()
+        await expect(page.locator(".sender__send")).to_be_hidden()
+        assert await page.input_value(".composer textarea") == "", "the leader is consumed, not typed"
+
+    async def test_a_bang_inside_a_message_is_an_ordinary_character(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        Which is the whole reason the leader is a mode rather than something the server strips off
+        the front of what was posted: a paragraph that opens with `!` has to stay a paragraph.
+        """
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("wow!")
+
+        await expect(page.locator(".composer")).not_to_have_attribute("data-commanding", "")
+        assert await page.input_value(".composer textarea") == "wow!"
+
+    async def test_escape_puts_it_back_to_a_message_box(self, page: Page, working: tuple[str, Service]) -> None:
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.press("!")
+        await expect(page.locator(".composer")).to_have_attribute("data-commanding", "")
+
+        await page.keyboard.press("Escape")
+
+        await expect(page.locator(".composer")).not_to_have_attribute("data-commanding", "")
+        await expect(page.locator(".sender__send")).to_be_visible()
+
+    async def test_the_keyboard_runs_what_is_in_a_command_box_rather_than_saying_it(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        The one that matters, and the one only a browser can ask. `requestSubmit()` with no submitter
+        posts no button's pair at all, so an unattributed send would arrive as an ordinary message -
+        a command said to the model instead of run, which is both wrong things at once.
+        """
+        _, service = working
+        session = await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.press("!")
+        await page.keyboard.type("echo from the keyboard")
+        await page.keyboard.press("Shift+Enter")
+
+        await expect(page.locator("#transcript")).to_contain_text("echo from the keyboard")
+        recorded = await service.checkpointer.load(session)
+        assert recorded.get(command_key(0, 0)) == "echo from the keyboard"
+        assert recorded.get(prompt_key(1)) is None, "a command is not a message, so it queues no turn"
+
+    async def test_a_session_with_no_files_has_no_command_box_to_turn_into(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The mode is declared by the server on the form, so a page that offers no `Run` cannot be put
+        into one: the two cannot drift, because there is only the one thing that decides it.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.press("!")
+
+        await expect(page.locator(".composer")).not_to_have_attribute("data-commanding", "")
+        assert await page.input_value(".composer textarea") == "!"
+
+
+async def a_start_page(working: tuple[str, Service], page: Page, workspace: str = FIXTURE_NAME) -> None:
+    """
+    The new-session page with the `workspace` card picked, which is what puts branches on the field.
+
+    Two things a browser makes true that a markup test would not, and both of them look like a hang
+    rather than a missing step. The group folds down to the card that is picked, so it has to be
+    *opened* before any other card is on the page to press. And a card is a `<label>`: the radio in
+    it is a pixel at zero opacity with no pointer events, so pressing the input is pressing something
+    a reader could never reach.
+    """
+    url, _ = working
+    await page.goto(f"{url}/", wait_until="load")
+    await page.click('label[for="open-repository"]')
+    await page.click(f'.repo[data-name="{workspace}"]')
+    await expect(page.locator(".basis__box")).to_be_attached()
+
+
+async def showing_branches(page: Page) -> list[str]:
+    """Which branches the narrowed list is actually offering, in the order it draws them."""
+    return await page.eval_on_selector_all(
+        ".basis__found-one",
+        "(all) => all.filter((one) => one.parentElement.offsetParent !== null).map((one) => one.dataset.branch)",
+    )
+
+
+class TestNarrowingTheBranches:
+    """
+    The one field in the picker that is a search rather than a set of cards.
+
+    A browser throughout, and not because the markup is awkward to assert on: the list is `hidden` in
+    what the server sends, and everything that makes it a search - narrowing it, stepping it, taking
+    one - happens after that. A markup test would be looking at a hidden list and calling it a
+    feature.
+    """
+
+    async def test_the_branches_are_offered_once_a_repository_is_picked(
+        self, page: Page, working: tuple[str, Service], worktree: Worktree
+    ) -> None:
+        await run("git", "branch", "release/2.1", cwd=worktree.root)
+
+        await a_start_page(working, page)
+
+        await expect(page.locator(".basis__count")).to_have_text("2 branches")
+        await page.click(".basis__box")
+        await expect(page.locator(".basis__found")).to_be_visible()
+        await expect(page.locator(".basis__found-one")).to_have_count(2)
+
+    async def test_typing_cuts_the_list_to_what_matches_anywhere_in_a_name(
+        self, page: Page, working: tuple[str, Service], worktree: Worktree
+    ) -> None:
+        """
+        Anywhere rather than at the front, because a branch is named `feature/the-thing` far more
+        often than it is named for the word you remember about it.
+        """
+        await run("git", "branch", "feature/anchored-edits", cwd=worktree.root)
+        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await a_start_page(working, page)
+
+        await page.click(".basis__box")
+        await page.keyboard.type("anchor")
+
+        assert await showing_branches(page) == ["feature/anchored-edits"]
+
+    async def test_pressing_one_puts_it_in_the_box(
+        self, page: Page, working: tuple[str, Service], worktree: Worktree
+    ) -> None:
+        """
+        The press has to survive the focus leaving the box, which is what `mousedown` is for: on a
+        `click` the list would shut under the press and nothing would be taken.
+        """
+        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await a_start_page(working, page)
+        await page.click(".basis__box")
+
+        await page.click('.basis__found-one[data-branch="release/2.1"]')
+
+        assert await page.input_value(".basis__box") == "release/2.1"
+        await expect(page.locator(".basis__found")).to_be_hidden()
+
+    async def test_the_keyboard_steps_the_list_and_takes_one(
+        self, page: Page, working: tuple[str, Service], worktree: Worktree
+    ) -> None:
+        """
+        What makes it a search box rather than a mouse-only menu. Enter is only swallowed while the
+        reader is actually on an entry, because this field's form is the one that starts the session.
+        """
+        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await a_start_page(working, page)
+        await page.click(".basis__box")
+
+        await page.keyboard.press("ArrowDown")
+        await page.keyboard.press("Enter")
+
+        assert await page.input_value(".basis__box") in {"main", "release/2.1"}
+        await expect(page.locator(".basis__found")).to_be_hidden()
+
+    async def test_escape_shuts_the_list_without_leaving_the_page(
+        self, page: Page, working: tuple[str, Service], worktree: Worktree
+    ) -> None:
+        await a_start_page(working, page)
+        await page.click(".basis__box")
+        await expect(page.locator(".basis__found")).to_be_visible()
+
+        await page.keyboard.press("Escape")
+
+        await expect(page.locator(".basis__found")).to_be_hidden()
+
+    async def test_the_browser_s_own_completion_is_taken_off_once_this_takes_over(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        Two dropdowns over one box is one more than a reader can use. The `list` attribute is what
+        the field has with this file absent, so it is removed at the moment the script replaces it -
+        and only then, which is why a repository offering nothing keeps it.
+        """
+        await a_start_page(working, page)
+
+        await expect(page.locator(".basis__found-one").first).to_be_attached()
+
+        assert await page.get_attribute(".basis__box", "list") is None
+
+    async def test_a_workspace_with_no_branches_is_left_exactly_as_it_was(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """A field that declared itself a combobox over an empty list would be offering nothing."""
+        await a_start_page(working, page, workspace="no files")
+
+        await expect(page.locator(".basis__count")).to_have_count(0)
+
+        assert await page.get_attribute(".basis__box", "list") == "branches"
+        assert await page.get_attribute(".basis__box", "role") is None
 
 
 class TestWhereTheCursorIsAfterSending:

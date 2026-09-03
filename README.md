@@ -61,27 +61,49 @@ provider turns up under more than one endpoint, since every Fireworks model on e
 listed by both of its formats under one id. So the shape is `endpoint -> model`, and the provider is
 the heading the model cards are grouped under.
 
-A session records five things at the moment it is created: its workspace, whether its commands may
-reach the network, the endpoint, the model, and a thinking level. All five are fixed for its life.
-The workspace is one question rather than two: a repository this console can reach, or no files, or
-this whole machine, and picking one settles both what the session works in and what its tools may
-touch. The endpoint is what carries the API format, which is why it is recorded
-rather than looked up later: the same model id genuinely does sit behind two formats, and the two
-serialize a conversation differently.
+A session records what it is answered on at the moment it is created: its workspace, whether its
+commands may reach the network, the endpoint, the model, and a thinking level. All of it is fixed for
+its life. The workspace is one question rather than two: a repository this console can reach, or no
+files, or this whole machine, and picking one settles both what the session works in and what its
+tools may touch. The endpoint is what carries the API format, which is why it is recorded rather than
+looked up later: the same model id genuinely does sit behind two formats, and the two serialize a
+conversation differently.
 
-You pick all five on the new-session page, ordered widest first. The endpoints are cards naming the
+Under the repository you can say **where in it to start** and **what branch to start there**. Both are
+optional. Left blank, the worktree is checked out at the repository's default branch as it stands
+now, on a branch named after the session (`mainplate/349e2f1e`), so a `git commit` from the box under
+the conversation has somewhere to live and `git push origin HEAD` does the obvious thing. Name one
+yourself and that wins.
+
+They are two questions rather than one because **starting at `main` cannot put the worktree on
+`main`**: git refuses a branch another worktree already holds, so the second session you started
+there would fail to get files at all. One says where to begin, the other says what to begin.
+
+The starting point is a **search over the branches the repository actually has**, read from the
+repository itself rather than from this console's copy of it, so it works on the very first session
+you start on one. Typing narrows them under the box, matching anywhere in a name rather than at the
+front, and the arrow keys step what is left. It is the one control in the picker that is not cards,
+because it is the one question with no closed set of answers: a tag, a hash or `main~3` is still
+typed, and with JavaScript off the browser completes from the same names.
+
+**Starting a session is also when this console's copy of a repository catches up.** It clones once
+and nothing else ever refreshes that, so planting a session's worktree fetches first: a new session
+begins at the repository as it is now, whether you named a starting point or left it alone. A fork is
+the exception, because it begins at the files its forked turn actually saw, which is what makes it
+the same question.
+
+You pick all of it on the new-session page, ordered widest first. The endpoints are cards naming the
 API format each speaks and the URL each points at, and the models are cards carrying what they cost,
-how much they read, and what they can do, grouped by the vendor each comes from. Every one of the five
-is the same component: a group of cards **folded down to the one you picked**, with the count of what
-else is on offer beside it and a box that narrows the group as you type. A gateway serves seventy
-models, and a wall of seventy cards is not a page you can see the rest of your choices on; shut, the
-whole of what a session is decided by is five lines. Opening a group is a checkbox and the folding is
-a CSS `:has()` rule, so it works with JavaScript off and a shut group can never name something other
-than what is actually checked. After that the session says what it is on rather than offering a
-control that could not change it. A
-conversation that switched model halfway would replay its recorded answers from one and continue on
-another, so what the transcript shows and what the next turn reasons from would have different
-authors.
+how much they read, and what they can do, grouped by the vendor each comes from. Every one of those
+questions is the same component: a group of cards **folded down to the one you picked**, with the
+count of what else is on offer beside it and a box that narrows the group as you type. A gateway
+serves seventy models, and a wall of seventy cards is not a page you can see the rest of your choices
+on; shut, the whole of what a session is decided by is five lines. Opening a group is a checkbox and
+the folding is a CSS `:has()` rule, so it works with JavaScript off and a shut group can never name
+something other than what is actually checked. After that the session says what it is on rather than
+offering a control that could not change it. A conversation that switched model halfway would replay
+its recorded answers from one and continue on another, so what the transcript shows and what the next
+turn reasons from would have different authors.
 
 You can name a session there too, in the field above the box. Left empty it is named after its first
 message, which is what every session was named after before the field existed.
@@ -96,6 +118,11 @@ The repository is the one part a fork will not change. It inherits its parent's,
 a turn against different files is a different question wearing the same words. A session working in
 *no* repository is the exception, and forking one is how you pick a repository up: think something
 through first, then fork it into the code.
+
+A fork carries neither the starting point nor the branch its parent was given. It is checked out at
+the files the forked turn actually saw, which is what makes it the same question, so a starting point
+beside that would be a second answer to where its files come from; and a branch its parent's worktree
+still holds is one git will not check out twice.
 
 Each row in the sidebar names the repository its session works in, which is what tells two
 conversations apart once you are working in more than one. It reads `owner/repo` while a forge still
@@ -265,7 +292,8 @@ read-only system, so there is no home directory and no configuration of the cons
 network is off unless the session asked for it. Inside a worktree the repository's git objects go in
 read-only: `status`, `diff`, `log` and `blame` all answer, while `commit` and `stash` fail. That is
 deliberate rather than incidental, because the conversation is how work is recorded here and
-committing is yours to do.
+committing is yours to do. **Run** in the composer is where you do it: the same command from there
+runs outside all of this, as you, in the same worktree.
 
 `list` takes a directory and a depth, and a directory at that depth is summarised by a count rather
 than opened, so the depth bounds the answer instead of hinting at it:
@@ -440,6 +468,21 @@ is there, so several of them assemble into one message. That is also how a long 
 keep the conclusions as you go, then send them back together. It is scoped to the conversation and a
 fork inherits its parent's. It lives in your browser, so it does not follow you to another machine
 yet.
+
+**Run** is the one answer there that is not a message. It runs what is in the box in this session's
+own worktree, as *you* rather than as the agent, and the model is never told. That last part is the
+point: the agent's shell runs behind a mount namespace with the repository's git objects bound
+read-only, so no tool can write a history no panel shows, and `git commit` and `git push` are exactly
+the things that boundary is meant to keep for you. Nothing about the run enters the conversation the
+model is given, so committing at the end of a session costs it no context and reaches no provider.
+The run is still recorded, though, so it draws as a `you (ran)` panel with the command, how long it
+took and what it exited with, it survives a reload, and a fork carries it. The exit status is shown
+as the number rather than as "failed", because `git diff --quiet` exits 1 to say there *are* changes.
+
+Typing `!` into an empty box is the shortcut: the box becomes a command box, set in the terminal's
+own face, and the button next to it says `Run`. Escape puts it back. Nothing is ever inferred from
+what you typed, so a paragraph that opens with `!` is a paragraph, and what you are about to press
+always says what it does.
 
 Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
 often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
