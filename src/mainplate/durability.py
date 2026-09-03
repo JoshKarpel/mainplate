@@ -35,7 +35,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import timedelta
 from decimal import Decimal
+from time import monotonic
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -71,6 +73,16 @@ from mainplate.snapshots import Worktree
 
 ModelResponseTypeAdapter: TypeAdapter[ModelResponse] = TypeAdapter(ModelResponse)
 
+TOOK = "took"
+"""
+What a duration is called, in a response's `metadata` and as the kind of a tool call's own step.
+
+One word for one thing, in the two places a duration is recorded. They are two places rather than
+one because the values are: a `ModelResponse` is a thing this console fills in before recording it
+and has a slot for exactly this, where a tool's return is somebody else's value of an unknown shape
+with nowhere to put a fact about the call.
+"""
+
 
 def parse_model_response(recorded: object) -> ModelResponse:
     """A recorded model response, back as the type the agent expects to receive."""
@@ -95,6 +107,21 @@ def parse_steers(recorded: object) -> tuple[str, ...]:
     if not isinstance(recorded, list):
         raise TypeError(f"what a request was told must be a list, not {recorded!r}")
     return tuple(said if isinstance(said, str) else str(said) for said in recorded)
+
+
+def parse_took(recorded: object) -> timedelta | None:
+    """
+    How long one recorded thing took, or nothing where the pass that wrote it could not say.
+
+    Seconds in the store and a `timedelta` out of it, because seconds are what the codec takes and a
+    bare number is a unit somebody downstream has to remember. `None` is "nothing timed this", which
+    is what a record written by a pass that replayed the work rather than doing it holds.
+    """
+    if recorded is None:
+        return None
+    if isinstance(recorded, int | float) and not isinstance(recorded, bool):
+        return timedelta(seconds=float(recorded))
+    raise TypeError(f"how long something took must be seconds or nothing, not {recorded!r}")
 
 
 def parse_returned(recorded: object) -> object:
@@ -301,6 +328,29 @@ class Stepping:
             return
         answered.usage.cost = self.pricer(answered.usage)
 
+    def stamp(self, answered: ModelResponse, took: timedelta) -> None:
+        """
+        Say how long the provider took to answer, on the response and before it is recorded.
+
+        `metadata` is Pydantic AI's own slot for what the application knows and the model is not
+        told, and it is the reason this needs no key of its own: a response carries it into
+        `turn:{n}:model:{i}` and into `turn:{n}:messages` alike, so both readings of a turn find the
+        same figure without either being taught where to look. That is the same bargain `price`
+        makes one field along, and it is what keeps a running turn's reading a prefix of the settled
+        one.
+
+        Measured across the wrapped model's own call and nothing else, so it is the round trip to
+        the provider rather than the pass around it: the snapshot before it and the store write after
+        it are this console's time, not the model's.
+
+        Never overwritten, because a duration is a fact about the request that was actually made and
+        a resumed pass did not make it. What a replay is handed is what the first pass timed.
+        """
+        stamped = dict(answered.metadata or {})
+        if TOOK in stamped:
+            return
+        answered.metadata = stamped | {TOOK: took.total_seconds()}
+
 
 current_stepping: ContextVar[Stepping | None] = ContextVar("mainplate_stepping", default=None)
 
@@ -359,8 +409,9 @@ class CheckpointedModel(WrapperModel):
         store is an `object` on the pass that ran the request as much as on the one that
         resumed it.
 
-        It is priced on the way past for the same reason it is recorded at all: see `Stepping.price`,
-        which has to run here because everything further out happens after the record is written.
+        It is priced and timed on the way past for the same reason it is recorded at all: see
+        `Stepping.price` and `Stepping.stamp`, both of which have to run here because everything
+        further out happens after the record is written.
 
         The worktree is snapshotted first, because this is the moment it is worth snapshotting:
         no tool is running, so the tree is a coherent thing to read, and what is recorded is the
@@ -371,7 +422,9 @@ class CheckpointedModel(WrapperModel):
         await self.scope.snapshot()
 
         async def ask() -> object:
+            started = monotonic()
             answered = await self.wrapped.request(messages, model_settings, model_request_parameters)
+            self.scope.stamp(answered, timedelta(seconds=monotonic() - started))
             self.scope.price(answered)
             return ModelResponseTypeAdapter.dump_python(answered, mode="json")
 
@@ -543,12 +596,31 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         returning and the record landing re-runs it on the next pass. That window is one store
         round trip, and the failure it produces is the mild one, because an anchored edit whose
         anchors no longer resolve is refused rather than applied somewhere wrong.
+
+        **How long it took is a second step rather than part of the first**, and that is what the
+        recorded value forces: a tool return is an arbitrary value of the tool's own shape, so a
+        record that wrapped it to carry a duration beside it would be indistinguishable from a tool
+        that happened to return those two fields. `turn:{n}:took:{id}` is named by the call the way
+        the return is, so a replay pairs them for free. It is written after the return, so the same
+        crash window that makes a tool at-least-once leaves a call whose duration nobody can say;
+        that records as nothing, which is what the page draws where a tool went untimed.
         """
         scope = current_stepping.get()
         if scope is None:
             return await handler(args)
 
-        async def perform() -> object:
-            return to_jsonable_python(await handler(args))
+        timing: list[float] = []
 
-        return await scope.step(scope.identified("tool", call.tool_call_id), perform, parse_returned)
+        async def perform() -> object:
+            started = monotonic()
+            try:
+                return to_jsonable_python(await handler(args))
+            finally:
+                timing.append(monotonic() - started)
+
+        async def taken() -> object:
+            return timing[0] if timing else None
+
+        came_back = await scope.step(scope.identified("tool", call.tool_call_id), perform, parse_returned)
+        await scope.step(scope.identified(TOOK, call.tool_call_id), taken, parse_took)
+        return came_back

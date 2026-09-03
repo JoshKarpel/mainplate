@@ -44,9 +44,11 @@ from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import steer_key
+from mainplate.conversation import took_key
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
+from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
@@ -199,6 +201,22 @@ def spending(asked: int, answered: int, cached: int = 0, cost: str = "0") -> Req
     )
 
 
+def timing(seconds: float) -> dict[str, object]:
+    """
+    How long one fixture response took to come back, in the slot a real pass stamps.
+
+    On the response rather than in a key beside it, because that is where `Stepping.stamp` puts it:
+    a fixture recording it anywhere else would draw a figure the live path cannot produce.
+    """
+    return {TOOK: seconds}
+
+
+# How long each fixture call ran, by the call id, so a folded turn carries the figure a real one
+# does. Two scales rather than one, because `elapsed` formats them differently and a shot is where
+# you find out whether both read well. A call still out is absent from here on purpose: its duration
+# is written after its return, so a call with a time and no result is a state nothing can record.
+TIMINGS = {"call-1": 0.184, "call-7": 12.65}
+
 CONVERSATION: list[ModelMessage] = [
     ModelRequest(parts=[UserPromptPart(content="Why does the poll stop after one answer?")]),
     ModelResponse(
@@ -217,6 +235,7 @@ CONVERSATION: list[ModelMessage] = [
             ),
         ],
         usage=spending(asked=4_182, answered=196, cost="0.0156"),
+        metadata=timing(3.4),
     ),
     ModelRequest(
         parts=[
@@ -251,6 +270,7 @@ CONVERSATION: list[ModelMessage] = [
             )
         ],
         usage=spending(asked=4_610, answered=832, cached=3_968, cost="0.0219"),
+        metadata=timing(9.7),
     ),
 ]
 
@@ -262,6 +282,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
             ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-2"),
         ],
         usage=spending(asked=5_604, answered=88, cached=4_608, cost="0.0041"),
+        metadata=timing(1.2),
     ),
 ]
 
@@ -278,6 +299,7 @@ PARTWAY = ModelResponse(
     # records it rather than after the run ends. Left off, this fixture would draw the state the
     # console used to have and no longer does.
     usage=spending(asked=6_120, answered=142, cached=5_120, cost="0.0067"),
+    metadata=timing(2.8),
 )
 
 
@@ -305,6 +327,9 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
     Each response is written twice over, as part of the turn's `messages` and as the step that
     recorded it, because a pass writes both: the step is what the rule at that request's boundary
     opens, so a fixture with only the messages renders a fold that answers 404 for every request.
+
+    A call's duration is a key of its own, written for the calls `TIMINGS` names, because that is
+    what a pass writes: a return and, beside it, how long the call took.
     """
     written: dict[str, object] = {}
     for turn, messages in enumerate(turns):
@@ -312,6 +337,9 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
         written[messages_key(turn)] = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
         for at, response in enumerate(message for message in messages if isinstance(message, ModelResponse)):
             written[model_key(turn, at)] = ModelResponseTypeAdapter.dump_python(response, mode="json")
+            for part in response.parts:
+                if isinstance(part, ToolCallPart) and part.tool_call_id in TIMINGS:
+                    written[took_key(turn, part.tool_call_id)] = TIMINGS[part.tool_call_id]
     return written
 
 
@@ -379,6 +407,7 @@ def pages() -> dict[str, str]:
     answering = dict(waiting)
     answering[model_key(2, 0)] = ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
     answering[tool_key(2, "call-7")] = "# The one connection a page holds open, and what goes down it."
+    answering[took_key(2, "call-7")] = TIMINGS["call-7"]
     # A steer sent into that turn and not yet put to any model, which is the state Send now reaches
     # every time somebody types while a reply is coming. It is drawn from `turn:{n}:steer:{k}` rather
     # than from messages that do not exist yet, so a screenshot is where you find out whether a

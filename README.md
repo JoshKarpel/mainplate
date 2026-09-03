@@ -371,20 +371,23 @@ apart before reading a word. Messages are rendered as Markdown and sanitised bef
 page.
 
 A **rule** stands at every round trip to the model, carrying what is true of that request rather than
-of any panel in it: the worktree it was made against, what it spent in tokens and money, and an `r0`
-fold showing the JSON the checkpoint actually holds for it. Since the checkpoint *is* the
-conversation, that is the state itself rather than a debug view of it, and it is fetched only when
-you open it so the transcript never carries it. A request is recorded the moment the provider
-answers, so a record can be opened while the turn is still running.
+of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and
+money, and an `r0` fold showing the JSON the checkpoint actually holds for it. Since the checkpoint
+*is* the conversation, that is the state itself rather than a debug view of it, and it is fetched
+only when you open it so the transcript never carries it, and it opens in place, below the rule, so
+the record and the reply it came from can be read together. A request is recorded the moment the
+provider answers, so a record can be opened while the turn is still running.
 
 The rule that opens a turn carries the turn's own facts besides: which turn it is, the `fork` link,
 and what the whole turn spent. That costs no new idea, because every rule already stood at a request
 boundary - a turn opens with its first request. The spend fills in as the turn runs, because each
-response is priced as it is recorded rather than when the page is drawn: what a turn cost is settled
-the moment it is answered, where pricing it again later from a database that has since moved would
-change what an old session appears to have cost. It is an estimate from published rates and not a
-bill, since no gateway reports what it actually charged; a model nobody publishes a price for shows
-its token counts and no money. The session's own total sits under the message box.
+response is priced and timed as it is recorded rather than when the page is drawn: what a turn came
+to is settled the moment it is answered, where pricing it again later from a database that has since
+moved would change what an old session appears to have cost. It is an estimate from published rates
+and not a bill, since no gateway reports what it actually charged; a model nobody publishes a price
+for shows its token counts and no money. The time is what the turn spent waiting on the provider,
+summed over its round trips; the calls it made in between carry their own, beside the tool's name on
+the panel that drew it. The session's own total sits under the message box.
 
 A panel that arrives, or whose blocks say something different, is **marked for a beat** in its own
 kind's hue. A turn fills in over several renders, and a reader watching one needs to be told which

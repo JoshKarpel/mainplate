@@ -10,7 +10,7 @@
 # been said is what has been recorded, so the page renders the checkpoint, a crash resumes from
 # it, and a second process reading the same file sees exactly what the first one did.
 #
-# One key for the session, and eight per turn. The whole scheme is here so that the code that
+# One key for the session, and nine per turn. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
 #     choice               the endpoint, model, repository, isolation and thinking level this
@@ -23,6 +23,7 @@
 #     turn:{n}:late:{k}    which steers were found where the run would have ended, redirecting it
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
 #     turn:{n}:tool:{id}   what one tool call returned, named by the call's own id
+#     turn:{n}:took:{id}   how long that call ran, named by the same id and written after it
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
 #
 # `prompt` and `steer` are the only two a person writes, and they are written from *outside* a pass,
@@ -37,6 +38,11 @@
 # every pass; a batch of tool calls runs concurrently, so counting those would name them by whoever
 # won a race. A call already carries an id, and that id is part of the model response this
 # conversation recorded, so a replay is handed the same one for free.
+#
+# A model request needs no `took` of its own: a `ModelResponse` carries `metadata`, so how long the
+# round trip took rides into `model:{i}` and `messages` alike in the record that already exists. A
+# tool return is a value of the tool's own shape with nowhere to put a fact about the call, which is
+# what the extra key is for.
 #
 # `choice` is in the checkpoint rather than beside the session's row for the reason everything else
 # is: it has to be the same on every pass and after every restart, and the checkpoint is the thing
@@ -62,6 +68,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import timedelta
 from decimal import Decimal
 from enum import Enum
 from itertools import groupby
@@ -91,9 +98,11 @@ from without_durability.stepwise import StepKey
 from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.durability import TOOK
 from mainplate.durability import Pending
 from mainplate.durability import parse_model_response
 from mainplate.durability import parse_steers
+from mainplate.durability import parse_took
 from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
@@ -359,6 +368,23 @@ def tool_key(turn: int, call: str) -> StepKey:
     return f"{turn_prefix(turn)}:tool:{call}"
 
 
+def took_key(turn: int, call: str) -> StepKey:
+    """
+    How long one call of this turn took to come back, named by the same call id its return is.
+
+    A key of its own rather than a field beside the return, because a tool returns a value of its
+    own shape and a record that carried both would be indistinguishable from a tool returning a pair
+    of fields with these names. It is written after the return, so a call can have one and not the
+    other; a call with no record here is one nothing timed, which is what a page draws as no figure.
+
+    A model request needs none of this and has none: a response has `metadata`, so what a round trip
+    took rides along in the record that already exists. See `Stepping.stamp`.
+
+    The counterpart of `Stepping.identified("took", id)`, with the same drift hazard as `tool_key`.
+    """
+    return f"{turn_prefix(turn)}:took:{call}"
+
+
 def opening_tree_key(turn: int) -> StepKey:
     """
     The tree a turn *started* on, which is the one two other things mean by "this turn's tree".
@@ -587,6 +613,16 @@ class ToolUse:
     arguments: str
     returned: Returned | None
 
+    took: timedelta | None = None
+    """
+    How long the call ran, once it has come back and where a pass was there to time it.
+
+    On the call rather than on its `Returned`, because it is a fact about the running rather than
+    about the answer: a call that failed took just as long as one that worked. Absent while a call
+    is still out, and absent for a call whose duration was never recorded, which are two states a
+    reader reads the same way and neither of which is a duration of zero.
+    """
+
 
 type Block = Prose | Steering | Reasoning | ToolUse
 
@@ -662,11 +698,31 @@ class Spent:
     `cost` is `None` where *any* response in the turn went unpriced, rather than the sum of the ones
     that were. A partial total reads as the whole of what a turn cost and understates it silently,
     which is the one way to be wrong about money that nobody looking at the page can catch.
+
+    `took` is the same figure in time and follows the same rule for the same reason. What it adds up
+    is the round trips to the provider and nothing else, so it is what a turn spent *waiting on the
+    model*: the calls it made in between ran here and are timed on their own panels, and summing
+    those into this would double-count a batch that ran at once.
     """
 
     asked: int
     answered: int
     cost: Decimal | None
+    took: timedelta | None = None
+
+
+def response_took(answered: ModelResponse) -> timedelta | None:
+    """
+    How long the round trip that produced this response took, as the pass that made it recorded.
+
+    Read off `metadata` rather than out of a key of its own, which is what makes it the one figure
+    here that needs no walk: the response carries it whether it came back from `turn:{n}:model:{i}`
+    or out of `turn:{n}:messages`. See `Stepping.stamp`, which is the only thing that writes it.
+
+    Nothing for every response recorded before this console timed anything, and nothing for a
+    response some other writer put there, which is the same answer to the same question.
+    """
+    return parse_took((answered.metadata or {}).get(TOOK))
 
 
 def spent_on(responses: Sequence[ModelResponse]) -> Spent:
@@ -684,7 +740,27 @@ def spent_on(responses: Sequence[ModelResponse]) -> Spent:
         asked=sum(response.usage.input_tokens for response in responses),
         answered=sum(response.usage.output_tokens for response in responses),
         cost=sum(settled, Decimal(0)) if settled and len(settled) == len(charged) else None,
+        took=whole(response_took(response) for response in responses),
     )
+
+
+def whole(taken: Iterable[timedelta | None]) -> timedelta | None:
+    """
+    Several durations as one, or nothing at all where any of them is nothing.
+
+    The rule `cost` follows, for the reason `cost` follows it: a total quietly missing one of its
+    parts reads as the whole and understates it, and a reader has no way to tell that from a turn
+    that really was that quick. Recorded before durations existed, every response in a turn is
+    unstamped, so what its rule reports is no figure rather than a suspiciously small one.
+    """
+    total = timedelta()
+    timed = False
+    for one in taken:
+        if one is None:
+            return None
+        total += one
+        timed = True
+    return total if timed else None
 
 
 def altogether(spent: Iterable[Spent]) -> Spent:
@@ -702,6 +778,7 @@ def altogether(spent: Iterable[Spent]) -> Spent:
         asked=sum(one.asked for one in counted),
         answered=sum(one.answered for one in counted),
         cost=sum(settled, Decimal(0)) if settled and len(settled) == len(charged) else None,
+        took=whole(one.took for one in counted),
     )
 
 
@@ -847,7 +924,9 @@ which response it was reading.
 """
 
 
-def blocks_in(response: ModelResponse, returned: Mapping[str, Returned]) -> Iterator[Block]:
+def blocks_in(
+    response: ModelResponse, returned: Mapping[str, Returned], took: Mapping[str, timedelta]
+) -> Iterator[Block]:
     """
     One response's parts as blocks.
 
@@ -873,7 +952,9 @@ def blocks_in(response: ModelResponse, returned: Mapping[str, Returned]) -> Iter
             case ThinkingPart(content=thought) if thought.strip():
                 yield Reasoning(text=thought)
             case ToolCallPart(tool_name=tool, tool_call_id=call):
-                yield ToolUse(tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call))
+                yield ToolUse(
+                    tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call), took=took.get(call)
+                )
             case _:
                 continue
 
@@ -892,7 +973,7 @@ def steering_blocks(message: ModelRequest) -> Iterator[Block]:
             yield Steering(text=part.content)
 
 
-def parted(messages: Sequence[ModelMessage]) -> tuple[Sourced, ...]:
+def parted(messages: Sequence[ModelMessage], took: Mapping[str, timedelta]) -> tuple[Sourced, ...]:
     """
     What a turn's messages are worth reading as, each with the request that produced it.
 
@@ -906,6 +987,12 @@ def parted(messages: Sequence[ModelMessage]) -> tuple[Sourced, ...]:
 
     A steer carries the index of the request it was *sent with* rather than one of its own, which is
     what puts its panel below the tool results it travelled beside instead of above them.
+
+    How long each call took is the one thing a settled turn cannot say for itself, so it arrives from
+    the caller: a result is a `ToolReturnPart` in the message list and a duration is a step beside
+    it, under `turn:{n}:took:{id}`. Asked for rather than defaulted, because a reading that quietly
+    dropped it would differ from the running turn's reading of the same call, which is the one
+    difference this pair of walks exists not to have.
     """
     returned = returns_in(messages)
     blocks: list[Sourced] = []
@@ -913,15 +1000,15 @@ def parted(messages: Sequence[ModelMessage]) -> tuple[Sourced, ...]:
     for index, message in enumerate(messages):
         if isinstance(message, ModelResponse):
             at += 1
-            blocks.extend((block, at) for block in blocks_in(message, returned))
+            blocks.extend((block, at) for block in blocks_in(message, returned, took))
         elif index > 0:
             blocks.extend((block, None) for block in steering_blocks(message))
     return tuple(blocks)
 
 
-def blocks_of(messages: Sequence[ModelMessage]) -> tuple[Block, ...]:
+def blocks_of(messages: Sequence[ModelMessage], took: Mapping[str, timedelta]) -> tuple[Block, ...]:
     """What a turn's messages are worth reading as, in the order they were produced."""
-    return tuple(block for block, _ in parted(messages))
+    return tuple(block for block, _ in parted(messages, took))
 
 
 def returned_step(recorded: object) -> Returned:
@@ -1040,6 +1127,33 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
     return tuple(responses)
 
 
+def called_in(responses: Sequence[ModelResponse]) -> Iterator[str]:
+    """Every call id a turn's responses asked for, which is what names both records a call has."""
+    for response in responses:
+        for part in response.parts:
+            if isinstance(part, ToolCallPart):
+                yield part.tool_call_id
+
+
+def tooks_in(recorded: Mapping[str, object], turn: int, responses: Sequence[ModelResponse]) -> dict[str, timedelta]:
+    """
+    How long each of a turn's calls took, by the call id that names which one it is about.
+
+    Asked of the ids the responses already carry, the way `tool_key` is: the writer and the reader
+    are handed the same id, so nothing scans the checkpoint for keys of a shape. A call nothing timed
+    is simply absent, which `ToolUse.took` reads as no figure rather than as none of it.
+
+    The same mapping serves both readings of a turn - the one built from `turn:{n}:messages` and the
+    one built from the model steps - because a duration is recorded in neither of them and in a key
+    of its own beside both.
+    """
+    return {
+        call: took
+        for call in called_in(responses)
+        if (took := parse_took(recorded.get(took_key(turn, call)))) is not None
+    }
+
+
 def responses_in(messages: Sequence[ModelMessage]) -> tuple[ModelResponse, ...]:
     """The model's own turns within a settled turn, which is what carries what the turn cost."""
     return tuple(message for message in messages if isinstance(message, ModelResponse))
@@ -1086,11 +1200,12 @@ def blocks_from(recorded: Mapping[str, object], turn: int, responses: Sequence[M
         if isinstance(part, ToolCallPart)
         and (held := recorded.get(tool_key(turn, part.tool_call_id), NOTHING)) is not NOTHING
     }
+    took = tooks_in(recorded, turn, responses)
     told = heard_in(recorded, turn)
     blocks: list[Sourced] = []
     for at, response in enumerate(responses):
         blocks.extend((Steering(text=text), None) for text in (told[at] if at < len(told) else ()))
-        blocks.extend((block, at) for block in blocks_in(response, returned))
+        blocks.extend((block, at) for block in blocks_in(response, returned, took))
     blocks.extend((Steering(text=text), None) for text in steers_in(recorded, turn)[sum(len(said) for said in told) :])
     return tuple(blocks)
 
@@ -1160,7 +1275,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         said = parse_messages(answered)
         answering = responses_in(said)
         panels.append(said_by(turn, parse_prompt(asked), parse_tree(recorded.get(opening_tree_key(turn)))))
-        panels.extend(panelled(turn, parted(said)))
+        panels.extend(panelled(turn, parted(said, tooks_in(recorded, turn, answering))))
         spent[turn] = spent_on(answering)
         asking[turn] = requests_in(recorded, turn, answering)
         turn += 1

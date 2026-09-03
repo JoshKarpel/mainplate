@@ -687,6 +687,13 @@ main > * {
     font-weight: 600;
 }
 
+/* How long the call ran, beside the name rather than out at the outcome: it is a fact about this
+   call and the outcome is the column a reader scans down a turn, so the two do not share an edge. */
+.tool__took {
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+}
+
 /* What became of the call, as a word rather than a colour alone: an outcome nobody can name is
    one a screen reader cannot read out either. */
 .tool__outcome {
@@ -764,21 +771,26 @@ main > * {
     font-weight: 600;
 }
 
-/* Opened, it lays its JSON over the panels below rather than growing the rule, so a conversation
-   does not jump when somebody looks at a record. Positioned against the *rule* and anchored to its
-   right edge, which is the reading column's: a record grows leftward across the page it came from
-   instead of off the edge of a scroll container that must never scroll sideways. */
-.tag .record__json,
-.tag .record__missing {
-    position: absolute;
-    top: 1.4rem;
-    right: 0;
-    z-index: 4;
-    width: max-content;
-    max-width: min(40rem, 55vw);
-    /* Its own ground, because it is laid over the prose below rather than boxed above it. */
-    border: 1px solid var(--edge);
-    background: var(--raised);
+/* Opened, it grows the rule downward and pushes the conversation with it, rather than lying over
+   the panels below. A record read against the reply it came from is worth more than a page that
+   holds still, and an overlay is the one shape where the two cannot be looked at together.
+
+   Opened, it takes a line of the rule to itself: the rule is allowed to wrap and the tag asks for
+   the whole of one, so the facts stay on the top line at the width they already had and the record
+   runs the measure underneath them. Sharing the line was tried and is what a phone rules out - a
+   record squeezed into whatever the figures leave is a column six characters wide, and the figures
+   pinned so it is not are a row that runs off the side of the screen.
+
+   The `r{i}` marker moves down with it, since it is the tag's own summary and the tag is what
+   moved. That reads as the label of the block it opened, which is what it is. */
+.rule:has(.tag[open]) {
+    flex-wrap: wrap;
+}
+
+.tag[open] {
+    order: 1;
+    flex: 1 1 100%;
+    min-width: 0;
 }
 
 /* Hidden rather than absent while closed, because htmx swaps into this element and a target that
@@ -1995,14 +2007,16 @@ mark.hit.current {
    never revealed by hover: these are facts to scan down a conversation for, and the fork is the only
    way a session changes its mind, so a pointer-only control would take it off every phone.
 
-   Positioned so an open record inside it has something to be laid over the conversation against. */
+   The right inset is the panels' own, so what a turn spent lines up with the `#1.0` anchors down
+   the conversation instead of sitting under the transcript's scrollbar. Padding rather than a
+   narrower box, so the hairline still crosses the whole column. */
 .rule {
-    position: relative;
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
     margin: var(--space-4) 0 var(--space-3);
     padding-top: var(--space-2);
+    padding-right: var(--space-6);
     border-top: 1px solid var(--edge);
     font-family: var(--mono);
     font-size: 0.68rem;
@@ -2043,7 +2057,8 @@ mark.hit.current {
     text-decoration: underline;
 }
 
-.rule__tree {
+.rule__tree,
+.rule__took {
     color: var(--ink-faint);
 }
 

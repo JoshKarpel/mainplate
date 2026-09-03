@@ -30,6 +30,7 @@ from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import steer_key
+from mainplate.conversation import took_key
 from mainplate.conversation import tree_key
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.sandbox import Filesystem
@@ -579,6 +580,9 @@ ANSWERED = [
     }
 ]
 
+# One call, as a response holds it, for the pages that need a turn with a tool in it.
+CALLED = {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"}
+
 
 class TestBranchingFromTheComposer:
     """
@@ -833,6 +837,44 @@ class TestWhatARuleSays:
         assert "12 out" in region
         assert "rule__cost" not in region
         assert "free" not in region
+
+    async def test_a_rule_says_how_long_the_turn_spent_waiting_on_the_model(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """Read off the response's own `metadata`, which is where a pass stamps it before recording."""
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), [{**ANSWERED[0], "metadata": {"took": 4.25}}])
+        region = await watched(app, session)
+        assert "4.2s" in region
+
+    async def test_a_turn_nothing_timed_says_nothing_about_time(self, app: ASGIApp, service: Service) -> None:
+        """Every response recorded before this console timed anything, which must draw no figure."""
+        session = await a_session(app)
+        await service.checkpointer.supply(session, messages_key(0), ANSWERED)
+        region = await watched(app, session)
+        assert "rule__took" not in region
+
+    async def test_a_call_says_how_long_it_ran(self, app: ASGIApp, service: Service) -> None:
+        """
+        From a key of its own beside the return, because neither of the two readings of a turn holds
+        a duration: a `ToolReturnPart` has nowhere for one and a recorded return is the tool's own
+        value.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            [
+                {"kind": "response", "parts": [CALLED], "usage": {"input_tokens": 1, "output_tokens": 1}},
+                {
+                    "kind": "request",
+                    "parts": [{"part_kind": "tool-return", "tool_name": "read", "content": "x", "tool_call_id": "c1"}],
+                },
+            ],
+        )
+        await service.checkpointer.supply(session, took_key(0, "c1"), 0.184)
+        region = await watched(app, session)
+        assert "184ms" in region
 
 
 class TestShowingWhatWasRecorded:

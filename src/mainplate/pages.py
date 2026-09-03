@@ -23,6 +23,7 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
 from itertools import groupby
 from pathlib import Path
@@ -563,6 +564,28 @@ def charged(cost: Decimal) -> str:
     return f"${cost.quantize(Decimal('0.0001')):f}".rstrip("0").rstrip(".")
 
 
+def elapsed(took: timedelta) -> str:
+    """
+    How long something took, at the scale it actually happened on.
+
+    Three widths rather than one, because what is timed here spans four orders of magnitude: a file
+    read comes back in milliseconds and a build runs for minutes, and the one format that suits
+    either writes the first as `0.0s` - which reads as free rather than as fast - or the second as
+    `184.7s`, which a reader has to divide before it means anything.
+
+    A second is the boundary because it is where the digit that matters moves: under one, the whole
+    figure is in the milliseconds, and over it a tenth is the finest thing worth reporting about a
+    round trip whose length nobody controls.
+    """
+    seconds = took.total_seconds()
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, rest = divmod(seconds, 60)
+    return f"{minutes:.0f}m {rest:.0f}s"
+
+
 def spend_element(spent: Spent, whose: str) -> tuple[Element, ...]:
     """
     What something cost, as counts and money, or nothing at all where it has not answered yet.
@@ -577,10 +600,25 @@ def spend_element(spent: Spent, whose: str) -> tuple[Element, ...]:
     carries the **turn's** total beside that request's own marker. Identical where a turn took one
     round trip and visibly different where it took several, so the title is what settles which is
     being read rather than the reader inferring it from the size of the number.
+
+    The time leads the figures because it is the one a reader is usually waiting on, and it says in
+    its title what it is the time *of*: the round trips to the provider and not the turn from end to
+    end, since the calls a turn made in between are timed on their own panels.
     """
     if not spent.asked and not spent.answered:
         return ()
     return (
+        *(
+            (
+                span(
+                    cls="rule__took",
+                    attrs={"title": f"{whose} spent {elapsed(spent.took)} waiting on the model"},
+                    children=elapsed(spent.took),
+                ),
+            )
+            if spent.took is not None
+            else ()
+        ),
         span(
             cls="rule__tokens",
             attrs={"title": f"{whose}: {spent.asked:,} tokens in, {spent.answered:,} out"},
@@ -1180,6 +1218,19 @@ def picker(
     )
 
 
+def session_spend(spent: Spent) -> str:
+    """
+    What a whole session has come to, as the sentence behind the figure under the message box.
+
+    The time is named only where every turn in the session was timed, which is the rule the money
+    follows: a total quietly missing a turn reads as the whole and understates it.
+    """
+    said = f"{spent.asked:,} tokens in and {spent.answered:,} out over this session"
+    if spent.took is not None:
+        said = f"{said}, {elapsed(spent.took)} waiting on the model"
+    return f"{said}, estimated from published rates rather than billed"
+
+
 def chosen_note(
     chosen: Choice | None,
     repository: str | None = None,
@@ -1237,12 +1288,11 @@ def chosen_note(
                 (
                     span(
                         cls="spent",
-                        attrs={
-                            "title": (
-                                f"{spent.asked:,} tokens in and {spent.answered:,} out over this "
-                                f"session, estimated from published rates rather than billed"
-                            )
-                        },
+                        # The time joins the counts in the title rather than the money on the line.
+                        # This is one line of faint text under a message box and the figure a
+                        # session is asked for is what it cost; how long it has spent waiting is
+                        # worth having and not worth a fourth thing to read past.
+                        attrs={"title": session_spend(spent)},
                         children=f"\N{MIDDLE DOT} {charged(spent.cost)}",
                     ),
                 )
@@ -1330,6 +1380,21 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
             summary(
                 children=[
                     span(cls="tool__name", children=used.tool),
+                    # Beside the outcome rather than in the body, because how long a call ran is what
+                    # a reader scanning a folded turn wants and the body is what they open when they
+                    # want the rest. Absent while a call is still out: a figure there would have to
+                    # count up, and what says a call is running is the working mark already beside it.
+                    *(
+                        (
+                            span(
+                                cls="tool__took",
+                                attrs={"title": f"This call took {elapsed(used.took)}"},
+                                children=elapsed(used.took),
+                            ),
+                        )
+                        if used.took is not None
+                        else ()
+                    ),
                     working()
                     if used.returned is None
                     else span(

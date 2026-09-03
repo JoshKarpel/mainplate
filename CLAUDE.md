@@ -182,7 +182,7 @@ knowing at the moment the word is picked rather than afterwards.
 
 ## The key scheme
 
-One key for the session and eight per turn, written by several different places and read by several:
+One key for the session and nine per turn, written by several different places and read by several:
 
 ```text
 choice               the endpoint, model, repository, isolation and thinking level; written by
@@ -197,6 +197,7 @@ turn:{n}:late:{k}    which steers were found where the run would have ended, and
                      into one more request; written by `StepwiseDurability`
 turn:{n}:model:{i}   the i-th model response of that turn; written by `StepwiseDurability`
 turn:{n}:tool:{id}   what one tool call returned; written by `StepwiseDurability`
+turn:{n}:took:{id}   how long that call ran; written by `StepwiseDurability`
 turn:{n}:messages    what the agent run produced; written by the conversation body
 ```
 
@@ -218,7 +219,17 @@ request, so sharing the counter would drift `heard` off the two keys it names a 
 A *batch* of tool calls runs concurrently, so counting those would name a
 record by whichever won a race and hand a later pass somebody else's result. A call already carries
 an id, and that id is part of the model response the conversation recorded, so a replay is handed
-the same one for free. `Stepping.key` is the positional form and `Stepping.identified` is the other.
+the same one for free. `took:{id}` is named by the call for exactly that reason, which is what pairs
+it with the return it is about. `Stepping.key` is the positional form and `Stepping.identified` is
+the other.
+
+**`took` is per call and there is deliberately no `took:{i}` beside it**, because a model request has
+somewhere to put one already: a `ModelResponse` has a `metadata` dict Pydantic AI keeps for the
+application and does not send to the model, so `Stepping.stamp` writes the duration there and it
+rides into `turn:{n}:model:{i}` and `turn:{n}:messages` alike. A tool return is somebody else's value
+of an unknown shape, so a record carrying a duration beside it would be indistinguishable from a tool
+that returned those two fields, and it needs a key. One word, `TOOK`, in both places; two places
+because the values are two different kinds of thing rather than for symmetry's sake.
 
 `opening_tree_key(n)` is `turn:{n}:tree:0`, and it is what two things mean by "this turn's tree": a
 fork plants its worktree at it, and the rule opening the turn shows it. Both want the state before the turn
@@ -236,7 +247,8 @@ into a fork without being taught each new kind of step: a `turn:3:approval:0` no
 is turn 3 already, and `turn:3:tool:toolu_017` was too before anything read tool keys.
 
 **The names are built in two places and have to agree.** `conversation.py` names them for the
-readers (`prompt_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`, read
+readers (`prompt_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`,
+`took_key`, read
 by `choice_of` and `reached` for the body, `transcript`, `so_far` and `responded` for the page,
 `before` for a fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them for the writers,
 from a turn prefix and a kind, which is what lets one capability name a step without importing the
@@ -500,6 +512,33 @@ not be able to fail a turn.
 unpriced rather than the sum of the ones that were, and `altogether` applies the same rule to a
 session, because a total quietly missing a turn is the one way to be wrong about money that a reader
 cannot catch.
+
+## How long it took
+
+The same argument as the cost, one field along, and it is recorded for the same reason: what a
+request took is settled the moment it is answered, and a resumed pass did not make it. `Stepping.stamp`
+writes it beside `Stepping.price` in `CheckpointedModel.request`, timing the wrapped model's own call
+and nothing around it, so the figure is the round trip to the provider and not the snapshot before it
+or the store write after. Neither is ever overwritten, so the day a wire reports what a request
+actually took, its answer wins.
+
+**Where each one is recorded is decided by the value, not by symmetry.** A `ModelResponse` has
+`metadata`, so the request's duration needs no key of its own and reaches both readings of a turn for
+free; a tool return is somebody else's value with nowhere to put a fact about the call, so it gets
+`turn:{n}:took:{id}`. See the key scheme. The tool's is written *after* its return, so the same crash
+window that makes a tool at-least-once can leave a call nothing timed - which is the honest record,
+since the pass that would have timed it is gone.
+
+**A tool's duration is threaded into both readings rather than found in either.** It is in neither
+`turn:{n}:messages` nor `turn:{n}:tool:{id}`, so `parted` and `blocks_from` are both handed the
+mapping `tooks_in` builds. Handed to one and not the other, a call's time would appear or disappear
+at the moment a turn landed, which is exactly the drift the two readings exist not to have.
+
+**A turn's time is its round trips and not its wall clock.** `Spent.took` sums the responses, so what
+a rule reports is what the turn spent waiting on the provider; the calls it made in between are timed
+on their own panels, and adding those in would double-count a batch that ran at once. Unknown
+anywhere is unknown for the whole, exactly as with the cost, so a turn recorded before this console
+timed anything shows no figure rather than a suspiciously small one.
 
 ## Forking, and where a session may change its mind
 
@@ -1544,6 +1583,14 @@ fetched are decided rather than incidental:
   rewritten, so a request's record is settled the moment it exists - where a panel's record came out
   of `turn:{n}:messages`, which does not exist until the turn ends. So a tag can be opened mid-turn
   and the panel disclosure could not.
+
+**Opened, it grows the rule downward rather than lying over the conversation.** A record read against
+the reply it came from is worth more than a page that holds still, and an overlay is the one shape
+where the two cannot be looked at together. It takes a line of the rule to itself - the rule wraps
+and the tag asks for the whole of one - which is what a phone decides: sharing the line leaves the
+record a column six characters wide, and pinning the figures so it does not is a row that runs off
+the side of the screen. The `r{i}` marker moves down with it because it is the tag's own summary, and
+it reads as the label of the block it opened.
 
 Tests drive the app through `without-http`'s in-memory loopback client (`tests/calling.py`), so
 nothing binds a port and the suite parallelizes; `Caller.watching` consumes a real event stream

@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
@@ -16,6 +17,7 @@ from conftest import Provider
 from conftest import Scripted
 from conftest import calls
 from pydantic_ai import Agent
+from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models import ModelRequestParameters
@@ -31,12 +33,14 @@ from mainplate.conversation import steers_closing
 from mainplate.conversation import steers_in
 from mainplate.conversation import steers_waiting
 from mainplate.conversation import turn_of
+from mainplate.durability import TOOK
 from mainplate.durability import CheckpointedModel
 from mainplate.durability import Stepping
 from mainplate.durability import StepwiseDurability
 from mainplate.durability import StreamingNotRecorded
 from mainplate.durability import current_stepping
 from mainplate.durability import parse_model_response
+from mainplate.durability import parse_took
 from mainplate.durability import stepping
 
 WORKFLOW = "a-workflow"
@@ -245,6 +249,110 @@ class TestPricingARecordedRequest:
         async with a_pass(checkpointer) as run:
             Stepping(run=run, prefix="turn:0").price(answered)
         assert answered.usage.cost is None
+
+
+class TestTimingWhatAPassDid:
+    """
+    How long a round trip and a tool call took, recorded where each of them can be.
+
+    Two homes for one word, because the values differ: a response is a thing this console fills in
+    before recording it and has `metadata` for exactly this, where a tool return is somebody else's
+    value of an unknown shape and needs a key beside it.
+    """
+
+    async def test_the_recorded_response_says_how_long_it_took(
+        self, checkpointer: MemoryCheckpointer, provider: Provider
+    ) -> None:
+        """
+        In the step and not only in the turn's messages, which is what lets a rule report it while
+        the turn is still running.
+        """
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await provider.agent().run("hello")
+        recorded = (await checkpointer.load(WORKFLOW))["turn:0:model:0"]
+        assert isinstance(recorded, dict)
+        took = parse_model_response(recorded).metadata
+        assert took is not None
+        assert isinstance(took[TOOK], float)
+
+    async def test_a_duration_already_on_a_response_is_never_overwritten(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        A duration is a fact about the request that was actually made, and a resumed pass did not
+        make it: what a replay hands on is what the first pass timed.
+        """
+        answered = ModelResponse(parts=[TextPart("answered")], metadata={TOOK: 12.5})
+        async with a_pass(checkpointer) as run:
+            Stepping(run=run, prefix="turn:0").stamp(answered, timedelta(seconds=0.1))
+        assert answered.metadata == {TOOK: 12.5}
+
+    async def test_a_stamp_leaves_whatever_else_the_response_carries(self, checkpointer: MemoryCheckpointer) -> None:
+        """`metadata` is a shared slot, so writing into it must not be writing over it."""
+        answered = ModelResponse(parts=[TextPart("answered")], metadata={"something": "else"})
+        async with a_pass(checkpointer) as run:
+            Stepping(run=run, prefix="turn:0").stamp(answered, timedelta(seconds=2))
+        assert answered.metadata == {"something": "else", TOOK: 2.0}
+
+    async def test_a_call_is_timed_under_the_id_its_return_is(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        Named by the call rather than by position, for the reason the return is: a batch runs at
+        once, so a counter would hand a pass somebody else's figure.
+        """
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await calling(scripted, Noting()).run("go")
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert isinstance(recorded["turn:0:took:call-note-0"], float)
+        assert parse_took(recorded["turn:0:took:call-note-0"]) is not None
+
+    async def test_a_replayed_call_keeps_the_time_the_first_pass_took(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        The reason it is recorded rather than measured on whichever pass draws the page: a replayed
+        call runs no tool at all, so a second pass has nothing to time and must not say so.
+        """
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        tools = Noting()
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await calling(scripted, tools).run("go")
+        first = (await checkpointer.load(WORKFLOW))["turn:0:took:call-note-0"]
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await calling(scripted, tools).run("go")
+
+        assert (await checkpointer.load(WORKFLOW))["turn:0:took:call-note-0"] == first
+
+    async def test_a_tool_that_raised_is_timed_no_more_than_it_is_recorded(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        A refusal propagates out of the step, so neither key is written and the call reads as still
+        out until the retry lands. A duration for a call with no result is a state nothing produces.
+        """
+        scripted = Scripted(script=(calls(("refuse", {})), ModelResponse(parts=[TextPart("done")])))
+        toolset = FunctionToolset[None]()
+
+        async def refuse() -> str:
+            """Refuse whatever it is."""
+            raise ModelRetry("try something else")
+
+        toolset.add_function(refuse)
+        agent = Agent(
+            scripted.model(), name="mainplate", capabilities=[StepwiseDurability()], toolsets=[toolset], retries=1
+        )
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0"):
+                await agent.run("go")
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert scripted.asked == 2, "the refusal reached the model, so the call really was attempted"
+        assert [key for key in recorded if ":tool:" in key or ":took:" in key] == []
 
 
 class TestPuttingAMessageIntoARunningTurn:

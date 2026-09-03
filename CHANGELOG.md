@@ -18,16 +18,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is not run again against a directory that has moved since. Model requests are numbered by
   position within the turn; tool calls are keyed by the call's own id instead, because a batch of
   them runs concurrently and a counter would name a record by whichever won the race. Each response
-  is *priced* on the way past, before the step records it, so what a turn cost is in the checkpoint
-  beside what it said: settled the moment the request is answered, where re-deriving it later from a
-  reference database that has since moved would quietly change what an old session cost. It is
-  transparent outside a session, so the same agent stays usable in a script or a test.
+  is *priced* and *timed* on the way past, before the step records it, so what a turn cost in money
+  and in seconds is in the checkpoint beside what it said: settled the moment the request is
+  answered, where re-deriving either later would quietly change what an old session came to. A tool
+  call is timed as well, under its own id beside its result, because a tool returns a value of its
+  own shape and a record carrying both would be indistinguishable from a tool that returned a pair.
+  It is transparent outside a session, so the same agent stays usable in a script or a test.
 - `mainplate serve`, which runs the console and the worker that answers its sessions over one
   SQLite file.
 - A conversation read as panels of blocks, so reasoning and a tool call each get their own panel
   and their own colour beside the answer they belong to. Messages are rendered as Markdown and
   sanitised before they reach the page, and a tool's arguments are laid out rather than shown as
-  the one line the model sent.
+  the one line the model sent. A call carries how long it ran beside its name, so a folded turn
+  says where its time went without being opened.
 - A turn drawn as it happens, rather than all at once when it finishes. The responses and tool
   results behind a running turn are already in the checkpoint, recorded step by step so a resumed
   pass does not pay for them twice, so the page reads those instead of waiting for the turn's
@@ -68,13 +71,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   slot rather than by reading it, so the pass and whoever is typing contend for one key that the
   store settles: whoever loses is told what the winner put there, and a message sent as a turn ends
   becomes a turn of its own instead of going somewhere nothing would ever read.
-- **A rule at every model request**, carrying the worktree taken before it, what its answer cost, and
-  the raw record behind it, which is the unit the checkpoint actually has a key for: a panel is a run
-  of blocks of one kind and a request is a round trip, so a panel's record was a slice of a stored
-  value reached by indices one walk had to hand another. It adds no concept, because every rule the
-  transcript draws already stood at a request boundary - a turn opens with its first request - and
-  the rule that opens a turn carries the turn's own facts besides. A record can be opened while the
-  turn is still running.
+- **A rule at every model request**, carrying the worktree taken before it, how long it took, what
+  its answer cost, and the raw record behind it, which is the unit the checkpoint actually has a key
+  for: a panel is a run of blocks of one kind and a request is a round trip, so a panel's record was
+  a slice of a stored value reached by indices one walk had to hand another. It adds no concept,
+  because every rule the transcript draws already stood at a request boundary - a turn opens with its
+  first request - and the rule that opens a turn carries the turn's own facts besides. A record can
+  be opened while the turn is still running, and opens in place, below the rule it belongs to.
 - **Asides**: a fork recorded as a step out you mean to come back from, and a way back that sends a
   message into the conversation it came out of. Nothing mechanical separates an aside from a fork, so
   what is recorded is only what was meant, and what it buys is that the sidebar draws a digression as
@@ -90,10 +93,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by nothing.
 - A rule opening each turn, carrying everything true of the turn rather than of any panel inside it:
   which turn it is, where the session may be forked from, the worktree the turn started on, and what
-  it spent in tokens and money. The counts and the cost are read from the same recorded responses the
-  panels are, so a turn being answered fills its rule in as it runs rather than showing nothing until
-  it lands. A model nobody publishes a price for shows counts and no money, which is the same blank
-  its card shows; the session's own total sits under the message box. Forking moved here from a link
+  it spent in time, tokens and money. All three are read from the same recorded responses the panels
+  are, so a turn being answered fills its rule in as it runs rather than showing nothing until it
+  lands. The time is what the turn spent waiting on the provider, summed over its round trips, since
+  the calls it made in between are timed on their own panels and ran at once. A model nobody
+  publishes a price for shows counts and no money, and a turn nothing timed shows no seconds, which
+  is the same blank a card shows; the session's own total sits under the message box. Forking moved here from a link
   revealed by hovering a message, which is where a touch screen could not reach it at all.
 - A panel marked for a beat when it arrives or when what it says changes, tinted in its own kind's
   hue, so a reader watching a turn fill in is told which part of it moved rather than left to spot

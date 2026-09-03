@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from datetime import timedelta
 from decimal import Decimal
 from itertools import pairwise
 from typing import Never
@@ -56,13 +57,17 @@ from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import requested_at
+from mainplate.conversation import responded
 from mainplate.conversation import so_far
 from mainplate.conversation import spent_on
 from mainplate.conversation import steer_key
 from mainplate.conversation import steers_in
+from mainplate.conversation import took_key
+from mainplate.conversation import tooks_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_prefix
+from mainplate.durability import TOOK
 from mainplate.durability import stepping
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
@@ -173,7 +178,7 @@ class TestReadingACheckpoint:
             ModelRequest(parts=[ToolReturnPart("read", "the body", "c1")]),
             ModelResponse(parts=[TextPart("it says hello")]),
         ]
-        assert tuple(panelled(3, parted(turn))) == (
+        assert tuple(panelled(3, parted(turn, {}))) == (
             Panel(turn=3, at=1, kind="thinking", blocks=(Reasoning(text="have a look"),), asked=0),
             Panel(
                 turn=3,
@@ -209,7 +214,7 @@ class TestReadingACheckpoint:
             ModelRequest(parts=[UserPromptPart(content="be brief")]),
             ModelResponse(parts=[TextPart("hello")]),
         ]
-        assert [(panel.kind, panel.asked) for panel in panelled(0, parted(turn))] == [
+        assert [(panel.kind, panel.asked) for panel in panelled(0, parted(turn, {}))] == [
             ("tool", 0),
             ("steering", None),
             ("assistant", 1),
@@ -218,7 +223,7 @@ class TestReadingACheckpoint:
     def test_a_call_with_no_result_recorded_is_still_out(self) -> None:
         """The run ended between the call and its return, which is what a reader has to be able to see."""
         turn: list[ModelMessage] = [ModelResponse(parts=[ToolCallPart("grep", {"q": "z"}, "c9")])]
-        assert blocks_of(turn) == (ToolUse(tool="grep", arguments='{"q":"z"}', returned=None),)
+        assert blocks_of(turn, {}) == (ToolUse(tool="grep", arguments='{"q":"z"}', returned=None),)
 
     def test_a_failed_call_carries_why_rather_than_a_bare_flag(self) -> None:
         """
@@ -230,7 +235,7 @@ class TestReadingACheckpoint:
             ModelResponse(parts=[ToolCallPart("write", {}, "c2")]),
             ModelRequest(parts=[ToolReturnPart("write", "no such directory", "c2", outcome="failed")]),
         ]
-        assert blocks_of(turn) == (
+        assert blocks_of(turn, {}) == (
             ToolUse(
                 tool="write",
                 arguments="{}",
@@ -243,7 +248,7 @@ class TestReadingACheckpoint:
         turn: list[ModelMessage] = [
             ModelResponse(parts=[FilePart(content=BinaryContent(b"\x00", media_type="image/png")), TextPart("and")])
         ]
-        assert blocks_of(turn) == (Prose(text="and"),)
+        assert blocks_of(turn, {}) == (Prose(text="and"),)
 
     def test_a_prompt_that_is_not_text_is_refused_rather_than_rendered(self) -> None:
         with pytest.raises(TypeError):
@@ -341,11 +346,12 @@ READ: dict[str, object] = {**REASONED, tool_key(0, "c1"): "b"}
 ANSWERED: dict[str, object] = {**READ, model_key(0, 1): THE_ANSWER}
 
 
-def answering(asked: int, answered: int, cost: str | None) -> ModelResponse:
+def answering(asked: int, answered: int, cost: str | None, took: float | None = None) -> ModelResponse:
     """One response with the usage a wire reported for it, as the two summing rules are fed."""
     return ModelResponse(
         parts=[TextPart("said")],
         usage=RequestUsage(input_tokens=asked, output_tokens=answered, cost=None if cost is None else Decimal(cost)),
+        metadata=None if took is None else {TOOK: took},
     )
 
 
@@ -388,6 +394,28 @@ class TestWhatATurnSpent:
     def test_a_conversation_with_nothing_in_it_has_no_total(self) -> None:
         assert altogether([]) == Spent(asked=0, answered=0, cost=None)
 
+    def test_a_turn_took_as_long_as_the_round_trips_it_made(self) -> None:
+        """What a turn spent waiting on the provider, which is one duration per request summed."""
+        spent = spent_on([answering(100, 20, "0.001", took=1.5), answering(300, 40, "0.002", took=0.25)])
+        assert spent.took == timedelta(milliseconds=1_750)
+
+    def test_one_untimed_request_leaves_the_whole_turn_untimed(self) -> None:
+        """
+        The rule the cost follows, for the reason the cost follows it.
+
+        Every response recorded before this console timed anything is untimed, so a turn reporting
+        the sum of the ones it could time would say a long turn was quick and nothing on the page
+        could say otherwise.
+        """
+        assert spent_on([answering(100, 20, "0.001", took=1.5), answering(300, 40, "0.002")]).took is None
+
+    def test_a_session_took_as_long_as_its_turns(self) -> None:
+        total = altogether([Spent(1, 2, None, timedelta(seconds=3)), Spent(3, 4, None, timedelta(seconds=1.5))])
+        assert total.took == timedelta(milliseconds=4_500)
+
+    def test_one_untimed_turn_leaves_the_session_untimed(self) -> None:
+        assert altogether([Spent(1, 2, None, timedelta(seconds=3)), Spent(3, 4, None)]).took is None
+
 
 class TestWatchingATurnHappen:
     """
@@ -407,6 +435,7 @@ class TestWatchingATurnHappen:
         """
         assert model_key(3, 1) == "turn:3:model:1"
         assert tool_key(3, "toolu_017") == "turn:3:tool:toolu_017"
+        assert took_key(3, "toolu_017") == "turn:3:took:toolu_017"
         assert heard_key(3, 1) == "turn:3:heard:1"
         assert late_key(3, 0) == "turn:3:late:0"
 
@@ -469,7 +498,30 @@ class TestWatchingATurnHappen:
         steps and reading it from its messages produce the same blocks, so the moment the messages
         land the page morphs into markup it is already showing.
         """
-        assert so_far(ANSWERED, 0) == blocks_of(parse_messages(FOUR_PANELS[messages_key(0)]))
+        assert so_far(ANSWERED, 0) == blocks_of(parse_messages(FOUR_PANELS[messages_key(0)]), {})
+
+    def test_a_call_carries_how_long_it_took_in_both_readings(self) -> None:
+        """
+        A duration is in neither reading's own source - not in the model steps and not in the turn's
+        messages - so it comes from a key beside both, and both have to be handed it. Read from one
+        and not the other, a call's time would appear or vanish at the moment the turn landed.
+        """
+        timed = {**ANSWERED, took_key(0, "c1"): 0.25}
+        called = ToolUse(
+            tool="read",
+            arguments='{"path":"x"}',
+            returned=Returned(outcome="success", content="b"),
+            took=timedelta(milliseconds=250),
+        )
+        assert so_far(timed, 0)[1] == called
+        settled = blocks_of(parse_messages(FOUR_PANELS[messages_key(0)]), tooks_in(timed, 0, responded(timed, 0)))
+        assert settled[1] == called
+
+    def test_a_call_nothing_timed_carries_no_duration_rather_than_none_of_one(self) -> None:
+        """A call recorded before durations existed, which must read as unknown and not as instant."""
+        assert so_far(ANSWERED, 0)[1] == ToolUse(
+            tool="read", arguments='{"path":"x"}', returned=Returned(outcome="success", content="b"), took=None
+        )
 
     def test_a_turn_grows_at_the_end_and_never_in_the_middle(self) -> None:
         """
