@@ -456,13 +456,18 @@ def working_note(worktree: Worktree, scratch: Path | None = None) -> str:
     # The paths and the policy both, because both are this session's rather than the tool's. A
     # `bash` description cannot carry either: one toolset is built per session and its tools'
     # descriptions are not, so what varies between sessions has to be said here.
+    #
+    # Where a command *starts* is said for a different reason: the tool's own description says a
+    # `cd` does not survive to the next call, which on its own reads as an instruction to put one at
+    # the front of every command. `--chdir` has already done it.
     return (
         f"{said} You also have a scratch directory at {scratch}, outside the worktree and outside "
         f"every snapshot, which is where anything that is not the repository's belongs. Commands "
-        f"you run reach those two directories and a read-only system, and nothing else: no home "
-        f"directory, no other session's files, and no configuration of the console itself. Git can "
-        f"be read but not written there, so `status`, `diff`, `log` and `blame` answer while `add`, "
-        f"`commit` and `stash` fail."
+        f"you run start in the worktree, so a relative path means the same thing there as it does "
+        f"to the file tools and you never need to `cd` into it. They reach those two directories "
+        f"and a read-only system, and nothing else: no home directory, no other session's files, "
+        f"and no configuration of the console itself. Git can be read but not written there, so "
+        f"`status`, `diff`, `log` and `blame` answer while `add`, `commit` and `stash` fail."
     )
 
 

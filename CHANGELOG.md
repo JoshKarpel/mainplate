@@ -209,8 +209,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inherits and no rewind restores, and committing is the person's to do. Snapshots are unaffected
   because they run outside the sandbox, so the history they are chained onto cannot be rewritten
   from in there.
-- Each command gets a new namespace, so nothing persists between two calls: no working directory,
-  no exported variable, no background process. That follows from how a pass resumes rather than from
+- Each command gets a new namespace and starts in the session's worktree, so nothing persists
+  between two calls: no working directory, no exported variable, no background process. That follows from how a pass resumes rather than from
   frugality, since a sandbox held across calls would offer its state on a first pass and withhold it
   on a resumed one, where recorded results are replayed instead of re-run. Output is capped to its
   first and last lines with a count of what was dropped, a command that runs past its time limit is
