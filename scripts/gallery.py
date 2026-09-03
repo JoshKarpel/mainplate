@@ -179,6 +179,13 @@ LISTED = (
 # sideways.
 LONG_LINE = "    return Response.from_content(status, html_content(render(transcript_region(links, session, said))))"
 
+# What a read comes back as, in the shape `anchored` renders: a name, the gutter, and the line. Here
+# rather than assembled from the tool, so a fixture stays a value and needs no workspace to build,
+# and written out with the bar in it because that column is what the monospace row pitch is for. A
+# read is the most common thing a panel in this console ever shows and nothing else in this gallery
+# had one, so a pitch that broke the gutter into dashes broke it where nobody was looking.
+READ = 'qwrt│WAITING = "every 1s"\n----│\nmkpv│SWAP = "outerMorph"'
+
 
 def spending(asked: int, answered: int, cached: int = 0, cost: str = "0") -> RequestUsage:
     """
@@ -224,7 +231,14 @@ CONVERSATION: list[ModelMessage] = [
             ThinkingPart(
                 content=(
                     "The trigger is `load`, which fires once per element load. Morphing keeps the "
-                    "element, so it never loads again. It needs to be an interval."
+                    "element, so it never loads again. It needs to be an interval:\n\n"
+                    # A fenced block inside reasoning, which is what says that the italic a
+                    # reasoning panel is set in stops at code. A model reasons *about* code, so it
+                    # quotes some, and a quotation slanted away from the thing it quotes is a
+                    # rendering that has changed what it is showing.
+                    "```html\n"
+                    '<div hx-get="/fragments/sessions/{id}" hx-trigger="every 1s"></div>\n'
+                    "```"
                 )
             ),
             TextPart(content="Let me look at how the region is swapped."),
@@ -241,7 +255,7 @@ CONVERSATION: list[ModelMessage] = [
         parts=[
             ToolReturnPart(
                 tool_name="read_file",
-                content='WAITING = "every 1s"\nSWAP = "outerMorph"',
+                content=READ,
                 tool_call_id="call-1",
             )
         ]
@@ -265,7 +279,23 @@ CONVERSATION: list[ModelMessage] = [
                     "| trigger | fires | survives a morph |\n"
                     "| --- | --- | --- |\n"
                     "| `load` | once per load | no |\n"
-                    "| `every 1s` | on a timer | yes |\n"
+                    "| `every 1s` | on a timer | yes |\n\n"
+                    "Which puts the deciding where it belongs:\n\n"
+                    # An unlabelled fence, because a diagram is not a language Pygments knows and a
+                    # guess at one would colour it by a grammar it is not written in. It is here so
+                    # that the shots show the other half of what the row pitch is for: a diagram
+                    # somebody drew, where a pitch too tall for the font draws every join apart.
+                    "```\n"
+                    "┌──────────┐  records   ┌──────────┐\n"
+                    "│  worker  │ ─────────▶ │  store   │\n"
+                    "└──────────┘            └────┬─────┘\n"
+                    "                             │ token\n"
+                    "                        ┌────▼─────┐\n"
+                    "                        │   page   │\n"
+                    "                        └──────────┘\n"
+                    "\n"
+                    "  ✓ survives a morph        ✗ fires once\n"
+                    "```\n"
                 )
             )
         ],

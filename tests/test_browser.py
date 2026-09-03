@@ -604,6 +604,140 @@ class TestTheShapeOfANarrowWindow:
         assert columns.split() == [f"{PHONE['width']}px"]
 
 
+# Where a conversation draws monospace, which is the fenced blocks a model answers in and the body of
+# every tool call it makes. Both are on one grid, and both have to be, because a read's gutter is a
+# column of box drawing and it arrives in the second.
+MONOSPACE = (".text pre code", ".tool__body pre")
+
+# Three rows of box drawing, which is a corner reaching down, a bar reaching both ways, and a corner
+# reaching up. The corners are here because they reach one way only and so have the least ink to
+# join with; the run is drawn as one column because that is what a read's gutter is.
+JOINING = ("┌", "│", "└")
+
+
+class TestTheGridMonospaceIsDrawnOn:
+    """
+    Box drawing joins into lines rather than into dashes.
+
+    A model answers in tables and trees, and every `read` comes back as lines behind a `│` gutter, so
+    this is most of what a panel in this console ever shows. Two rows of it join on two conditions:
+    the row pitch is no more than the span of the glyph's own ink, and the pitch is a whole number of
+    pixels, or each row lands on a different subpixel phase and the joins falling between two device
+    rows draw as two half-lit ones.
+
+    A browser, because neither is visible to a markup assertion and neither is visible in a still
+    either: every one of these renderings is a correct picture of *some* grid, and what is wrong with
+    the broken one is a hairline.
+
+    The join is asked by drawing it and reading the pixels back, rather than by comparing the pitch
+    against a number. `measureText` looks like the number to compare against and is not: it reports
+    a box Chromium clamps to the line, 16px where the same glyph rasterises 20px of ink, so an
+    assertion built on it demands a pitch four pixels tighter than the one that actually joins.
+    """
+
+    async def test_the_vendored_face_is_what_a_conversation_is_drawn_in(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.evaluate("() => document.fonts.ready")
+        # `check` asks whether the face is loaded and usable, which a stack naming it cannot: with
+        # the file missing every assertion below still passes against whatever the reader has.
+        assert await page.evaluate("""() => document.fonts.check('13px "Fira Code"')""") is True
+        drawn = await page.evaluate(
+            "(where) => where.map(one => getComputedStyle(document.querySelector(one)).fontFamily)", list(MONOSPACE)
+        )
+        assert [family.split(",")[0] for family in drawn] == ['"Fira Code"'] * len(MONOSPACE)
+
+    @pytest.mark.parametrize("where", MONOSPACE)
+    async def test_a_run_of_box_drawing_has_no_gap_in_it(self, page: Page, gallery: str, where: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.evaluate("() => document.fonts.ready")
+        assert (await self.rasterised(page, where))["gaps"] == 0
+
+    @pytest.mark.parametrize("where", MONOSPACE)
+    async def test_the_pitch_stays_inside_the_ink_it_joins_with(self, page: Page, gallery: str, where: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.evaluate("() => document.fonts.ready")
+        measured = await self.rasterised(page, where)
+        # Strictly inside, which is the stylesheet's own rule: the pitch is a pixel under the span,
+        # so that the two ways of being wrong are not equally likely. The gap check above is the
+        # coarse half and this is the exact one - a canvas rasterises a glyph about a pixel longer
+        # than the same text laid out in the document, so a run can still draw joined at a pitch the
+        # page itself breaks at, and only the comparison catches that.
+        assert measured["pitch"] < measured["span"]
+
+    @staticmethod
+    async def rasterised(page: Page, where: str) -> dict[str, float]:
+        """
+        A run of box drawing drawn at `where`'s own grid: the gaps in it, and one glyph's ink.
+
+        Rows rather than a column, because the stroke is a pixel wide and lands across two columns of
+        which each is half lit, so the inkiest single column misses whichever glyph sits a fraction
+        the other way and reports joins that are there as gaps.
+        """
+        return await page.evaluate(
+            """([where, glyphs]) => {
+              const style = getComputedStyle(document.querySelector(where));
+              const size = parseFloat(style.fontSize), pitch = parseFloat(style.lineHeight);
+              const draw = (run, apart) => {
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.ceil(size * 2);
+                canvas.height = Math.ceil(apart * (run.length + 2));
+                const ink = canvas.getContext('2d', {willReadFrequently: true});
+                ink.font = `${style.fontSize} ${style.fontFamily}`;
+                ink.textBaseline = 'alphabetic';
+                run.forEach((glyph, row) => ink.fillText(glyph, 0, apart * (row + 1)));
+                const pixels = ink.getImageData(0, 0, canvas.width, canvas.height).data;
+                const lit = [];
+                for (let y = 0; y < canvas.height; y++) {
+                  let total = 0;
+                  for (let x = 0; x < canvas.width; x++) total += pixels[(y * canvas.width + x) * 4 + 3];
+                  lit.push(total > 24);
+                }
+                return {first: lit.indexOf(true), last: lit.lastIndexOf(true), lit};
+              };
+              // The run at the page's own pitch, and then the tallest glyph alone, far enough from
+              // anything else that what is measured is its ink and not a join.
+              const run = draw(glyphs, pitch);
+              const alone = draw(["│"], size * 4);
+              return {pitch, gaps: run.lit.slice(run.first, run.last + 1).filter(on => !on).length,
+                      span: alone.last - alone.first + 1};
+            }""",
+            [where, list(JOINING)],
+        )
+
+    @pytest.mark.parametrize("where", MONOSPACE)
+    async def test_every_row_lands_on_the_same_subpixel_phase(self, page: Page, gallery: str, where: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        grid = await page.evaluate(
+            "(where) => { const s = getComputedStyle(document.querySelector(where));"
+            "return [parseFloat(s.fontSize), parseFloat(s.lineHeight)]; }",
+            where,
+        )
+        # The pitch is what phase depends on; the size is here because it is what a pitch stated as a
+        # ratio would be multiplied by, which is how a fractional one gets in.
+        assert [value % 1 for value in grid] == [0, 0]
+
+
+class TestHowReasoningIsSet:
+    """
+    A reasoning panel is set in italic, and the code a model quotes inside it is not.
+
+    A browser rather than a markup assertion, because a `font-style` on the panel is inherited by
+    everything in it: the rule that stops it is one the cascade has to win, and what is on the page
+    is what the two elements each *end up* with rather than what any one rule says.
+    """
+
+    async def test_code_a_model_quotes_while_reasoning_is_not_slanted(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        drawn = await page.evaluate(
+            """() => {
+              const block = document.querySelector('.block--thinking');
+              const style = one => getComputedStyle(block.querySelector(one)).fontStyle;
+              return [getComputedStyle(block).fontStyle, style('p code'), style('pre code')];
+            }"""
+        )
+        assert drawn == ["italic", "normal", "normal"]
+
+
 # One response of a turn, as the capability records it partway through: the model reasoned and asked
 # for two files at once. Two calls because that is the state worth watching arrive - they run
 # together, so one comes back while the other is still out.

@@ -12,6 +12,27 @@
  * than from a colour picked for it.
  */
 
+/* Fira Code, vendored beside this file, upstream 6.2 unmodified and under the OFL that ships with
+ * it. Vendored rather than named in a stack, because the two things that decide whether a table, a
+ * tree or a read's gutter draws as lines rather than as dashes are facts about the font, and named
+ * in a stack they are facts about whatever the reader happens to have installed. `│` spans 1.54em
+ * here, against 1.19em in DejaVu Sans Mono and 1.13em in Liberation Mono and Courier New, which is
+ * what pays for the row pitch below being comfortable rather than cramped.
+ *
+ * One variable face for the whole 300-700 range, so a bold panel role interpolates rather than
+ * being synthesised, and one file rather than five statics.
+ *
+ * `block` rather than `swap`, because every metric in `--mono-size` and `--mono-line` is chosen
+ * against this face: swapping would draw the console in a fallback whose grid is a different size
+ * and then reflow it. It is served from the same origin as the page that asks for it. */
+@font-face {
+    font-family: "Fira Code";
+    src: url("FiraCode-VF.woff2") format("woff2-variations");
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: block;
+}
+
 :root {
     color-scheme: light dark;
 
@@ -75,7 +96,35 @@
        cards across, and held to the reading measure it never reaches a third column. */
     --wide: 68rem;
 
-    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    /* The vendored face first, and the rest behind it for the characters it does not carry: Fira
+       Code holds 4 of the 192 Dingbats, so a reply that draws `✗` reaches past it. */
+    --mono: "Fira Code", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+        monospace;
+
+    /* The grid every block of monospace text is drawn on. Both numbers are about box drawing rather
+       than about taste in spacing, because a model answers in tables, in trees and in reads, and a
+       read's gutter is a column of `│` down the whole panel.
+
+       Two rows of box drawing join on two conditions, and missing either draws that column as a
+       dashed line. The pitch must be no more than the glyph's own span, which is why the face is
+       vendored: Fira Code draws `│` over 1.54em, which at 13px is 20px exactly, where the fonts a
+       stack would have reached instead cap out between 1.13em and 1.35em. Measured rather than
+       taken from the outline, since a rendered glyph is hinted: a run of bar joins at a 20px pitch
+       and breaks at 21. And the pitch must be a whole number of pixels, or every row lands on a
+       different subpixel phase and the joins falling between two device rows render as two half-lit
+       ones, which is a hairline on some rows of a figure and not others.
+
+       So the pitch is one pixel under the span. That is as much air as box drawing can be given,
+       which is what stops a table reading as cramped, and the pixel of overlap it keeps back is
+       there because the two ways to be wrong are not equal: overlapping ink draws the line the
+       figure means, and a gap draws a line the figure does not.
+
+       Both are stated in pixels, which is what a grid of cells is, and 13 is where this face's cell
+       comes out at exactly 8. The cost is that a reader who has raised their browser's default font
+       size does not raise this with it, where every other size on this page is in `rem` and does.
+       Browser zoom still scales it, being a scale on the pixel rather than on the root. */
+    --mono-size: 13px;
+    --mono-line: 19px;
 }
 
 /* The toggle forces one side of every pair by pinning `color-scheme`; with no attribute (or
@@ -469,6 +518,7 @@ main > * {
 
 .text pre {
     margin: var(--space-4) 0;
+    line-height: var(--mono-line);
     padding: var(--space-4) var(--space-5);
     border: 1px solid var(--edge-soft);
     border-radius: var(--radius);
@@ -480,7 +530,7 @@ main > * {
 .text pre code {
     padding: 0;
     background: none;
-    font-size: 0.82rem;
+    font-size: var(--mono-size);
 }
 
 /* --- Highlighting ----------------------------------------------------- */
@@ -634,6 +684,16 @@ main > * {
     font-style: italic;
 }
 
+/* Reasoning is set in italic, and code inside it is not. A model reasons *about* code, so a block
+   in there is a quotation of something that exists, and slanting it makes the quotation differ from
+   the thing quoted. It costs alignment as well as honesty: there is no italic Fira Code, so an
+   oblique is synthesised by shearing every glyph, which leans the gutter of a read and the sides of
+   a box while leaving the horizontals flat. */
+.block--thinking code,
+.block--thinking pre {
+    font-style: normal;
+}
+
 /* --- Tool calls ------------------------------------------------------- */
 
 /* Folded by default: what a tool was handed and what it gave back is context a reader reaches
@@ -732,6 +792,13 @@ main > * {
 
 .tool__body pre {
     margin: 0;
+    /* On the same grid as a fenced block, because a read's gutter is the longest column of box
+       drawing this console ever draws and it is here rather than in a fence. The family is said
+       again rather than inherited from `.tool`: a browser's own sheet sets `pre` to `monospace`
+       directly, and a rule on the element beats a value inherited from an ancestor. */
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
     padding: var(--space-3) var(--space-4);
     border-radius: calc(var(--radius) / 1.5);
     background: var(--sunk);
