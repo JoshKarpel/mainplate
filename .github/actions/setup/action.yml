@@ -25,3 +25,25 @@ runs:
     - name: Install the browser the suite drives
       shell: bash
       run: uv run playwright install --with-deps chromium
+
+    # The sandbox is toolchain for the same reason the browser is: `tests/test_sandbox.py` fails
+    # loudly without `bwrap` rather than skipping, because every assertion there is about what a
+    # mount namespace actually does and a skipped one catches nothing.
+    #
+    # The sysctl is the other half of installing it. Ubuntu 24.04 restricts unprivileged user
+    # namespaces through AppArmor, and neither the runner image nor noble's `bubblewrap` package
+    # carries a profile granting `bwrap` the exception, so the installed binary cannot map a uid
+    # and every one of those tests errors exactly as it does with nothing installed at all. A
+    # real machine answers that with a profile naming `bwrap` alone; a runner is one throwaway VM
+    # running one job, so it can spend the machine-wide relaxation instead of keeping a policy
+    # file correct. Guarded on the knob existing, so an image that needs no relaxation is a step
+    # that does nothing rather than a step that fails.
+    - name: Install the sandbox the suite confines commands with
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends bubblewrap
+        if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
