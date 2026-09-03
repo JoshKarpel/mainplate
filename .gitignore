@@ -1,3 +1,7 @@
+# The screenshot toolchain, which is a dev tool rather than part of the package: the console's own
+# script is served from `src/mainplate/assets` and depends on nothing.
+node_modules/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -195,9 +199,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#   and can be added to the global gitignore or merged into this file. However, if you prefer,
 #   you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 # Temporary file for partial code execution
@@ -216,3 +220,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# The store a local console writes to, and the two files WAL leaves beside it. A session's whole
+# contents are in here, which is reason enough on its own not to commit one.
+*.db
+*.db-wal
+*.db-shm
+
+# The other half of those sessions: the bare clones and the worktree each session works in, which
+# land beside the database by default. `just serve` and `just demo` name a database in this
+# directory, so they put this one here too.
+workspaces/

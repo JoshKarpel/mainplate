@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check
+    # One platform, and now for a reason rather than for want of one: `install.py` renders a
+    # systemd unit, so its tests are Linux's and there is nothing for a macOS or Windows runner
+    # to run a meaningful version of. The console itself is portable, which is what would make a
+    # matrix worth adding later; the other thing that would is the SQLite the interpreter links
+    # against, which differs per platform and has a floor this store needs (3.42, for
+    # `unixepoch`'s `subsec`). Neither is asserted by a test yet.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
+
+      - name: Run pre-commit checks
+        run: uv run pre-commit run --all-files --show-diff-on-failure --color=always
+
+      - name: Run type checking and tests
+        run: just test --cov --durations 20 -vvv
