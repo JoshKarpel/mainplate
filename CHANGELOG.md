@@ -30,10 +30,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and their own colour beside the answer they belong to. Messages are rendered as Markdown and
   sanitised before they reach the page, and a tool's arguments are laid out rather than shown as
   the one line the model sent. A call carries how long it ran beside its name, so a folded turn
-  says where its time went without being opened. Everything monospace is drawn in a vendored Fira
-  Code on a grid stated in whole pixels, so the tables and trees a model answers in, and the gutter
-  down every file it reads, join into lines rather than into dashes on whatever the reader happens
-  to have installed. Reasoning is set in italic, and the code a model quotes while reasoning is not.
+  says where its time went without being opened. Everything monospace is drawn in a vendored
+  JuliaMono on a grid stated in whole pixels, so the tables and trees a model answers in, the gutter
+  down every file it reads, and the arrows, dingbats and symbols it reaches for are all on one cell
+  and join into lines rather than into dashes, instead of depending on what the reader happens to
+  have installed. Reasoning is set in italic, and the code a model quotes while reasoning is not.
 - A turn drawn as it happens, rather than all at once when it finishes. The responses and tool
   results behind a running turn are already in the checkpoint, recorded step by step so a resumed
   pass does not pay for them twice, so the page reads those instead of waiting for the turn's

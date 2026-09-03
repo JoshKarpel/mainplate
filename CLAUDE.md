@@ -1581,32 +1581,41 @@ an imported Pygments theme with its own opinion about light and dark.
 tables and trees, and every `read` comes back as lines behind a `│` gutter, so most of what a panel
 here shows is box drawing. Two rows of it join on two conditions, and missing either draws that
 column as a dashed line rather than as a line. The row pitch must be no more than the glyph's own
-ink, which is a fact about the font: `│` is drawn over 1.54em in Fira Code, 1.35em in Cascadia
-Code, 1.19em in DejaVu Sans Mono and 1.13em in Liberation Mono and Courier New, so a stack of names
-makes the console's spacing depend on which of those the reader happens to have. And the pitch must
-be a **whole number of pixels**, or every row lands on a different subpixel phase and the joins
-falling between two device rows draw as two half-lit ones - a hairline on some rows of a figure and
-not others, which is the failure that survives getting the first condition right.
+ink, which is a fact about the font: `│` is drawn over 22px at 13px in JuliaMono, against 20px in
+Fira Code, 18px in Cascadia Code, 15px in DejaVu Sans Mono and 15px in Liberation Mono and Courier
+New, so a stack of names makes the console's spacing depend on which of those the reader happens to
+have. And the pitch must be a **whole number of pixels**, or every row lands on a different subpixel
+phase and the joins falling between two device rows draw as two half-lit ones - a hairline on some
+rows of a figure and not others, which is the failure that survives getting the first condition
+right.
 
-So `assets/FiraCode-VF.woff2` is upstream 6.2 unmodified, under the OFL beside it, and `--mono-size`
-and `--mono-line` are stated in pixels: 13, where this face's cell comes out at exactly 8, and 19,
-which is one under the 20 its ink actually spans. **Measured rather than taken from the outline**,
-because a rendered glyph is hinted: a run of bar joins at a 20px pitch and breaks at 21, where the
-outline says 1.538em and `measureText` says 16px, and neither is the number to build on. The pixel
-held back is not symmetry: overlapping ink still draws the line the figure means, and a gap draws a
-line the figure does not. Both the size and the pitch have to move together, and both belong to
-every monospace block at once - `.text pre` for a fence and `.tool__body pre` for a read, whose
-family is said again there rather than inherited, since a browser's own sheet sets `pre` to
-`monospace` and a rule on the element beats a value inherited from an ancestor.
+So `assets/JuliaMono-Regular.woff2` and its bold are upstream unmodified, under the OFL beside them,
+and `--mono-size` and `--mono-line` are stated in pixels: 13, where this face's cell comes out at 8,
+and 19, chosen for reading with three pixels in hand under the 22 its ink spans. **Measured rather
+than taken from the outline**, because a rendered glyph is hinted: a run of bar joins at a 22px pitch
+and breaks at 23, where the outline says 1.70em and `measureText` says less again, and neither is the
+number to build on. The margin is not symmetry: overlapping ink still draws the line the figure
+means, and a gap draws a line the figure does not. Both the size and the pitch have to move together,
+and both belong to every monospace block at once - `.text pre` for a fence and `.tool__body pre` for
+a read, whose family is said again there rather than inherited, since a browser's own sheet sets
+`pre` to `monospace` and a rule on the element beats a value inherited from an ancestor.
 
-**What vendoring does not buy is coverage.** Fira Code holds 4 of the 192 Dingbats, so a reply that
-draws `✗` reaches past it into whatever the reader has, and that fallback's cell is its own: 7.83px
-against this grid's 8. A *nerd font* is the wrong answer to that and the numbers say why - patching
-Cascadia Code adds 9,219 private-use icons and takes it from 598 KB to 3.35 MB while leaving
-Dingbats at 8 of 192, because what it fills is the private-use area a shell prompt draws from and
-not the block `✗` lives in. What would fix it is a second face carrying those blocks, under a
-`unicode-range` so it is fetched only by a session that shows one, and `size-adjust` to put its cell
-on this one. That is worth doing when a diagram drifts, and not before.
+**A megabyte a weight is what completeness costs, and completeness is what is being bought.** A model
+draws with far more than box drawing, and the gaps in an otherwise good font are exactly what a
+fallback fills, one character at a time, on a cell of its own. Measured as the share of each block a
+face carries: JuliaMono has all of box drawing, block elements, geometric shapes, arrows,
+mathematical operators, miscellaneous symbols, dingbats and braille, every glyph on the cell, where
+Fira Code has 2% of dingbats and no braille, Cascadia Code 8% of arrows, Iosevka 361 symbols at the
+wrong advance, and Roboto Mono no box drawing at all. Two static weights rather than one variable
+file, 400 and 700, so the 600 a panel role asks for resolves to the bold instead of being synthesised
+by smearing the regular.
+
+A *nerd font* is not the answer to a missing `✗` and the numbers say why: patching Cascadia Code adds
+9,219 private-use icons and takes it from 598 KB to 3.35 MB while leaving dingbats at 8 of 192,
+because what it fills is the private-use area a shell prompt draws from and not the block `✗` lives
+in. The lighter alternative to a whole face, if the megabyte ever has to go, is a face cut to the
+symbol blocks under a `unicode-range` so it is fetched only by a session that shows one, with
+`size-adjust` to put its cell on this grid: JuliaMono cut to arrows through braille is 115 KB.
 
 `TestTheGridMonospaceIsDrawnOn` is what fails when any of this breaks, and it has to be a browser
 twice over: every one of these renderings is a correct picture of *some* grid, so what is wrong with
@@ -1619,8 +1628,8 @@ the exact one.
 
 **Reasoning is set in italic and the code inside it is not.** A model reasons *about* code, so a
 block in a reasoning panel is a quotation of something that exists, and slanting it makes the
-quotation differ from the thing quoted. It costs alignment as well: there is no italic Fira Code, so
-an oblique is synthesised by shearing every glyph, which leans a gutter and the sides of a box while
+quotation differ from the thing quoted. It costs alignment as well: no italic face is vendored, so an
+oblique is synthesised by shearing every glyph, which leans a gutter and the sides of a box while
 leaving the horizontals flat.
 
 A turn is read out of the checkpoint as **panels of blocks**, not as a question-and-answer pair.

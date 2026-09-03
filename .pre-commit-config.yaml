@@ -3,6 +3,12 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-added-large-files
+        # The vendored faces are a deliverable and are a megabyte each, for the coverage the
+        # stylesheet explains. Named here rather than answered by raising the limit, so the guard
+        # still holds at its default for everything else: a large file in this repository is
+        # otherwise an accident, and one exception that says what it is beats a threshold nobody
+        # can read a reason off.
+        exclude: ^src/mainplate/assets/.*\.woff2$
       - id: check-case-conflict
       - id: check-merge-conflict
       - id: check-toml

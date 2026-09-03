@@ -12,23 +12,38 @@
  * than from a colour picked for it.
  */
 
-/* Fira Code, vendored beside this file, upstream 6.2 unmodified and under the OFL that ships with
- * it. Vendored rather than named in a stack, because the two things that decide whether a table, a
- * tree or a read's gutter draws as lines rather than as dashes are facts about the font, and named
- * in a stack they are facts about whatever the reader happens to have installed. `│` spans 1.54em
- * here, against 1.19em in DejaVu Sans Mono and 1.13em in Liberation Mono and Courier New, which is
- * what pays for the row pitch below being comfortable rather than cramped.
+/* JuliaMono, vendored beside this file, upstream unmodified and under the OFL that ships with it.
  *
- * One variable face for the whole 300-700 range, so a bold panel role interpolates rather than
- * being synthesised, and one file rather than five statics.
+ * Vendored rather than named in a stack, because everything that decides whether a table, a tree or
+ * a read's gutter draws as lines rather than as dashes is a fact about the font, and named in a
+ * stack those are facts about whatever the reader happens to have installed.
+ *
+ * This face rather than a smaller one, because a model draws with more than box drawing and the
+ * gaps in an otherwise good font are what a fallback fills, one character at a time, on its own
+ * cell. Measured over the blocks that get used: JuliaMono carries all of box drawing, block
+ * elements, geometric shapes, arrows, mathematical operators, miscellaneous symbols, dingbats and
+ * braille, every one of them on the cell, where Fira Code carries 2% of dingbats and no braille,
+ * Cascadia Code 8% of arrows, and Roboto Mono no box drawing whatever. It is 1 MB a weight, which
+ * is what completeness costs and is the whole of what is being bought.
+ *
+ * Two weights rather than a variable face, because this one ships statics: 400 and 700, so the 600
+ * a panel role asks for resolves to the bold rather than being synthesised by smearing the regular.
  *
  * `block` rather than `swap`, because every metric in `--mono-size` and `--mono-line` is chosen
  * against this face: swapping would draw the console in a fallback whose grid is a different size
  * and then reflow it. It is served from the same origin as the page that asks for it. */
 @font-face {
-    font-family: "Fira Code";
-    src: url("FiraCode-VF.woff2") format("woff2-variations");
-    font-weight: 300 700;
+    font-family: "JuliaMono";
+    src: url("JuliaMono-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: "JuliaMono";
+    src: url("JuliaMono-Bold.woff2") format("woff2");
+    font-weight: 700;
     font-style: normal;
     font-display: block;
 }
@@ -96,9 +111,10 @@
        cards across, and held to the reading measure it never reaches a third column. */
     --wide: 68rem;
 
-    /* The vendored face first, and the rest behind it for the characters it does not carry: Fira
-       Code holds 4 of the 192 Dingbats, so a reply that draws `✗` reaches past it. */
-    --mono: "Fira Code", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+    /* The vendored face first. The rest is what a reader sees only if it fails to load, so the
+       stack is a fallback rather than a plan: nothing behind the first name draws this console's
+       symbols on one cell. */
+    --mono: "JuliaMono", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
         monospace;
 
     /* The grid every block of monospace text is drawn on. Both numbers are about box drawing rather
@@ -107,21 +123,21 @@
 
        Two rows of box drawing join on two conditions, and missing either draws that column as a
        dashed line. The pitch must be no more than the glyph's own span, which is why the face is
-       vendored: Fira Code draws `│` over 1.54em, which at 13px is 20px exactly, where the fonts a
-       stack would have reached instead cap out between 1.13em and 1.35em. Measured rather than
-       taken from the outline, since a rendered glyph is hinted: a run of bar joins at a 20px pitch
-       and breaks at 21. And the pitch must be a whole number of pixels, or every row lands on a
-       different subpixel phase and the joins falling between two device rows render as two half-lit
-       ones, which is a hairline on some rows of a figure and not others.
+       vendored: this one draws `│` over 22px at 13px, where the fonts a stack would have reached
+       instead cap out between 15px and 18px. Measured rather than taken from the outline, since a
+       rendered glyph is hinted: a run of bar joins at a 22px pitch and breaks at 23, where the
+       outline says 1.70em and `measureText` says less again. And the pitch must be a whole number
+       of pixels, or every row lands on a different subpixel phase and the joins falling between two
+       device rows render as two half-lit ones, which is a hairline on some rows of a figure and not
+       others.
 
-       So the pitch is one pixel under the span. That is as much air as box drawing can be given,
-       which is what stops a table reading as cramped, and the pixel of overlap it keeps back is
-       there because the two ways to be wrong are not equal: overlapping ink draws the line the
-       figure means, and a gap draws a line the figure does not.
+       So 19 is chosen for reading rather than forced by the join, with three pixels in hand. What
+       the margin is for is that the two ways to be wrong are not equal: overlapping ink still draws
+       the line the figure means, and a gap draws a line the figure does not.
 
        Both are stated in pixels, which is what a grid of cells is, and 13 is where this face's cell
-       comes out at exactly 8. The cost is that a reader who has raised their browser's default font
-       size does not raise this with it, where every other size on this page is in `rem` and does.
+       comes out at 8. The cost is that a reader who has raised their browser's default font size
+       does not raise this with it, where every other size on this page is in `rem` and does.
        Browser zoom still scales it, being a scale on the pixel rather than on the root. */
     --mono-size: 13px;
     --mono-line: 19px;
@@ -686,7 +702,7 @@ main > * {
 
 /* Reasoning is set in italic, and code inside it is not. A model reasons *about* code, so a block
    in there is a quotation of something that exists, and slanting it makes the quotation differ from
-   the thing quoted. It costs alignment as well as honesty: there is no italic Fira Code, so an
+   the thing quoted. It costs alignment as well as honesty: no italic face is vendored, so an
    oblique is synthesised by shearing every glyph, which leans the gutter of a read and the sides of
    a box while leaving the horizontals flat. */
 .block--thinking code,

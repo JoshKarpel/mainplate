@@ -640,11 +640,12 @@ class TestTheGridMonospaceIsDrawnOn:
         await page.evaluate("() => document.fonts.ready")
         # `check` asks whether the face is loaded and usable, which a stack naming it cannot: with
         # the file missing every assertion below still passes against whatever the reader has.
-        assert await page.evaluate("""() => document.fonts.check('13px "Fira Code"')""") is True
+        assert await page.evaluate("""() => document.fonts.check('13px "JuliaMono"')""") is True
         drawn = await page.evaluate(
             "(where) => where.map(one => getComputedStyle(document.querySelector(one)).fontFamily)", list(MONOSPACE)
         )
-        assert [family.split(",")[0] for family in drawn] == ['"Fira Code"'] * len(MONOSPACE)
+        # Unquoted, because a computed `font-family` quotes a name only where one is needed.
+        assert [family.split(",")[0].strip('"') for family in drawn] == ["JuliaMono"] * len(MONOSPACE)
 
     @pytest.mark.parametrize("where", MONOSPACE)
     async def test_a_run_of_box_drawing_has_no_gap_in_it(self, page: Page, gallery: str, where: str) -> None:
@@ -935,14 +936,20 @@ class TestOpeningTheRecordBehindARequest:
         await expect(record).to_be_hidden()
         await summary.click()
         await expect(record).to_be_visible()
-        above = await summary.bounding_box()
-        below = await record.bounding_box()
-        rule = await page.locator(".rule").first.bounding_box()
-        assert above is not None
-        assert below is not None
-        assert rule is not None
-        assert below["y"] >= above["y"] + above["height"]
-        assert below["width"] > rule["width"] / 2
+        # All three boxes in one go, because the page follows the end: a record opening at the
+        # bottom scrolls the transcript under it, so two measurements taken a call apart are two
+        # measurements of different scroll positions and their difference means nothing.
+        placed = await tag.evaluate(
+            """(tag) => {
+                const box = one => { const {x, y, width, height} = one.getBoundingClientRect();
+                                     return {x, y, width, height}; };
+                return { summary: box(tag.querySelector('summary')),
+                         record: box(tag.querySelector('.record__json')),
+                         rule: box(tag.closest('.rule')) };
+            }"""
+        )
+        assert placed["record"]["y"] >= placed["summary"]["y"] + placed["summary"]["height"]
+        assert placed["record"]["width"] > placed["rule"]["width"] / 2
 
 
 async def a_conversation(console: tuple[str, Service], page: Page) -> str:
