@@ -928,12 +928,39 @@ main > * {
        `cols` width. This is what lets the box actually shrink with the window. */
     min-width: 0;
     padding: 0.55rem 0.7rem;
-    border: 1px solid var(--edge);
+    /* The person's own hue, which is the edge every panel of theirs is drawn down and the ground the
+       Send button is painted in. The palette runs on one axis - cool is what reached the model - so
+       the box a message is written in belongs on the same side of it as the message itself, rather
+       than reading as one more field in the neutral edge every other input takes. */
+    border: 1px solid var(--person-edge);
     border-radius: var(--radius);
     background: var(--raised);
     color: inherit;
     font: inherit;
-    resize: vertical;
+}
+
+/* A box you write a message in starts at one line, grows with what is typed, and scrolls inside
+   itself once it reaches the cap. `field-sizing: content` is the whole of the mechanism: no script,
+   and no height held anywhere a swap could take it back from. The `rows` in the markup is the floor
+   only where `field-sizing` is not supported, because a browser that has it sizes from the content
+   and ignores `rows` entirely.
+
+   The cap is whichever of fourteen lines and two fifths of the window is smaller, so a tall window
+   is bounded by lines and a short one by the room the conversation above it still needs. `lh` is the
+   box's own line height, and `border-box` means the padding comes out of the cap rather than adding
+   to it.
+
+   `resize: none` is said rather than left off, and the difference is the whole of it: a textarea's
+   own default is `resize: both`, so dropping the declaration puts the handle back rather than taking
+   it away. It goes because dragging writes an inline height that outranks the content, so the box
+   would stop growing *and* stop shrinking from the moment it was touched, and stay tall after the
+   message had gone. */
+.composer textarea,
+.forking textarea {
+    field-sizing: content;
+    max-height: min(40vh, 14lh);
+    overflow-y: auto;
+    resize: none;
 }
 
 .composer button {
@@ -950,10 +977,14 @@ main > * {
 /* --- Send, and everything else to do with what you typed ------------- */
 
 /* One control: the button, and a caret opening onto everywhere else. Joined rather than spaced, so
-   the pair reads as one thing with a second half rather than as two buttons that happen to touch. */
+   the pair reads as one thing with a second half rather than as two buttons that happen to touch.
+
+   It takes its own height and the row's `flex-end` puts it level with the bottom of the box, which
+   is where the menu hangs from anyway. Stretched, it would be exactly as tall as a box that now
+   grows to fourteen lines, and a slab of person-hue that size reads as a panel rather than a
+   button. */
 .sender {
     display: flex;
-    align-self: stretch;
 }
 
 .composer .sender > button {
@@ -2146,7 +2177,6 @@ main:has(> .forking) {
     background: var(--ground);
     color: var(--ink);
     font: inherit;
-    resize: vertical;
 }
 
 /* Which worktree this console snapshots against. On the settled note rather than in the rail,

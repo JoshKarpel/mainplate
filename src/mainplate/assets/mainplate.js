@@ -121,6 +121,7 @@
     // and undo, rather than at the end of what was said.
     let following = true;
     let signatures = new Map(); // what each panel said, so a change can be told from a repaint
+    let sentFrom = null; // the box a message has just left, so the cursor can be put back in it
 
     let shelf = []; // text kept and not sent, as {name, text}
 
@@ -824,12 +825,32 @@
         "submit",
         (event) => {
           const form = event.target;
-          if (!(form instanceof HTMLFormElement) || !form.querySelector('textarea[name="prompt"]')) return;
+          if (!(form instanceof HTMLFormElement)) return;
+          const box = form.querySelector('textarea[name="prompt"]');
+          if (!box) return;
+          sentFrom = box;
           following = true;
           paintFollow();
         },
         true,
       );
+      // And sending takes the focus off the box whichever way it was sent: the button takes it on a
+      // click, and `hx-disable` blurs the box itself while the post is in flight. Either way the
+      // next thing somebody does is type again, so the box is where the cursor belongs.
+      //
+      // A turn of the event loop later, because htmx dispatches this event and re-enables what it
+      // disabled immediately afterwards: focused any sooner, the box is still disabled and takes
+      // nothing. Only where nothing else has claimed the focus in the meantime, so a reader who went
+      // to the search box while the message was in flight is left where they went.
+      document.addEventListener("htmx:finally:request", () => {
+        const box = sentFrom;
+        sentFrom = null;
+        if (!box) return;
+        setTimeout(() => {
+          const holding = document.activeElement;
+          if (holding === null || holding === document.body) box.focus();
+        }, 0);
+      });
     };
 
     // The mark comes off when the animation it drives has run, so a panel that changes again is

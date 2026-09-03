@@ -1521,6 +1521,44 @@ conversation instead. It also runs the form's own validation, so an empty box re
 keyboard exactly as it refuses from the button. The Send button names the key, because a shortcut
 nothing on the page mentions is one nobody uses.
 
+**The box is one line at rest and grows a line at a time**, to fourteen lines or two fifths of the
+window, whichever is smaller, and scrolls inside itself past that. `field-sizing: content` is the
+whole of the mechanism, so there is no script and no height kept anywhere a swap could take it back
+from;
+`rows` stays in the markup as the floor for a browser without the property, which a browser that has
+it ignores. The cap has a viewport term as well as a count of lines because the box sits under the
+conversation it belongs to: bounded only by lines, a long message on a short window would leave the
+transcript nothing. `TestTheBoxYouTypeIn` is what fails when this breaks, and it has to be a browser:
+every height here is a correct rendering of *some* box, so what is asserted is how one box changes
+across what is put in it, which no still and no markup assertion can see. A browser that ignored the
+property would draw the `rows` floor and look entirely deliberate.
+
+`resize: none` is *said* rather than left off, and that is not a style preference: a textarea's own
+default is `resize: both`, so dropping the declaration puts the handle back. It goes because a
+dragged height is an inline style that outranks the content, so the box would stop growing and stop
+shrinking from the moment it was touched, and stay tall after the message had gone.
+
+**The box is edged in the person's own hue** rather than in the neutral `--edge` every other input
+takes, which is the palette's one axis applied to the thing a message is written in: cool is what
+reached the model, so the box belongs on the same side of it as the panel a message becomes and as
+the ground Send is painted in. The gold in a screenshot is the focus ring (`--mark`) over that
+border, not the border.
+
+**The Send control takes its own height rather than the box's**, and the row's `flex-end` puts it
+level with the bottom of the box, which is where its menu hangs from anyway. Stretched to a box that
+now reaches fourteen lines, it would be a slab of person-hue reading as a panel rather than a button.
+
+**And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
+button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
+flight, so without this the cursor is on nothing at all by the time the answer swaps in. *When*
+matters as much as whether - htmx re-enables what it disabled just after dispatching
+`htmx:finally:request`, so the focus is asked for a turn of the event loop later, and asked any
+sooner it is asked of a box that is still disabled and takes nothing. Only where nothing else has
+claimed the focus meanwhile, so a reader who went to the search box while the message was in flight
+is left where they went. `TestWhereTheCursorIsAfterSending` drives both ways of sending, and it too
+has to be a browser: the focus is a live property the server never renders, and the ordering it turns
+on is htmx's rather than ours.
+
 A message is **rendered Markdown, then sanitised**, in `markup.py`. Both halves are required.
 Python-Markdown passes raw HTML through untouched and never looks at URL schemes, so
 `<script>alert(1)</script>` and `[x](javascript:alert(1))` reach the page from a plain `convert`;

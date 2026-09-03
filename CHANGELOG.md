@@ -109,7 +109,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   since what a reader wants to see after typing is the answer to what they just sent.
 - Shift-Enter sends a message and plain Enter breaks the line, which is that way round because a
   message here is prose that often wants a second paragraph and a fenced block. An empty box refuses
-  from the keyboard exactly as it refuses from the button.
+  from the keyboard exactly as it refuses from the button, and the cursor goes back into the box
+  once the message has gone, whichever way it was sent.
+- A message box that is one line at rest and grows a line at a time with what is typed, to fourteen
+  lines or two fifths of the window, whichever is smaller, and scrolls inside itself past that. Send
+  keeps its own height beside it rather than growing into a slab, and the box is edged in the
+  person's own hue, so what a message is written in sits on the same side of the palette as the
+  panel it becomes.
 - A console that reads on a phone. Under 48rem the session list stops being a 17rem column and
   becomes a strip of chips across the top that scrolls sideways, which gives the conversation all
   but about a twentieth of the height and keeps every session one swipe away with no control to

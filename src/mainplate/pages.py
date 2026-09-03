@@ -2173,6 +2173,9 @@ def composer(
             div(
                 cls="row",
                 children=[
+                    # `rows` is the floor only where `field-sizing` is not supported: the box sizes
+                    # itself from what is typed, and a browser that can do that ignores `rows`
+                    # entirely. See the growth rule in `mainplate.css`.
                     textarea(
                         attrs={
                             "name": "prompt",

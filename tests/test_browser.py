@@ -395,6 +395,69 @@ class TestSendingFromTheKeyboard:
         assert await page.evaluate("() => window.submitted") == []
 
 
+BOX = "textarea[name=prompt]"
+
+
+async def box_height(page: Page, text: str) -> float:
+    """How tall the box is drawn with that text in it, typed rather than assigned."""
+    await page.fill(BOX, text)
+    return float(await page.evaluate(f"() => document.querySelector({BOX!r}).getBoundingClientRect().height"))
+
+
+async def box_cap(page: Page) -> float:
+    """The height the box stops growing at, in pixels, asked of the browser rather than restated."""
+    return float(await page.evaluate(f"() => parseFloat(getComputedStyle(document.querySelector({BOX!r})).maxHeight)"))
+
+
+async def box_scrolls(page: Page) -> bool:
+    return bool(
+        await page.evaluate(
+            f"() => {{ const box = document.querySelector({BOX!r}); return box.scrollHeight > box.clientHeight; }}"
+        )
+    )
+
+
+class TestTheBoxYouTypeIn:
+    """
+    One line at rest, a line taller for each line typed, and a cap it scrolls inside rather than
+    passes.
+
+    A still cannot show any of this: every height here is a correct rendering of *some* box, and what
+    is asserted is how one box changes across what is put in it. The growth is `field-sizing:
+    content`, which makes it the browser's behaviour rather than ours - the other reason to drive it,
+    since `rows` is still in the markup as the floor for a browser without the property, so one that
+    ignored it would render a three-line box and look entirely deliberate.
+    """
+
+    @pytest.mark.parametrize("name", [name for name, _ in BOXES])
+    async def test_the_box_starts_at_one_line_and_grows_a_line_at_a_time(
+        self, page: Page, gallery: str, name: str
+    ) -> None:
+        await page.goto(f"{gallery}/{name}", wait_until="load")
+        empty = await box_height(page, "")
+        one, two, three = [await box_height(page, "\n".join(f"line {n}" for n in range(lines))) for lines in (1, 2, 3)]
+
+        assert empty == pytest.approx(one), "a box with nothing in it is a box with one line in it"
+        # Equal steps are what say the first line is the *first*: a three-line floor would swallow
+        # two of these and only start growing at the third, so the steps would not match.
+        assert two - one == pytest.approx(three - two)
+        assert three > two > one
+
+    @pytest.mark.parametrize("name", [name for name, _ in BOXES])
+    async def test_a_long_message_stops_at_the_cap_and_scrolls_inside_the_box(
+        self, page: Page, gallery: str, name: str
+    ) -> None:
+        await page.goto(f"{gallery}/{name}", wait_until="load")
+        cap = await box_cap(page)
+        tall = await box_height(page, "\n".join(f"line {n}" for n in range(60)))
+
+        assert tall == pytest.approx(cap)
+        assert await box_scrolls(page), "past the cap the box scrolls rather than the page"
+        # And the cap leaves the window to whatever it is under, which is the half of it a viewport
+        # term rather than a count of lines is there to promise.
+        assert cap < VIEWPORT["height"] / 2
+
+
 SHOWING = "(selector) => [...document.querySelectorAll(selector)].filter((each) => each.offsetParent !== null).length"
 
 # The narrowing box of the thinking group, which is the one used to drive these: eight short names
@@ -748,6 +811,15 @@ class TestOpeningTheRecordBehindARequest:
         assert below["width"] > rule["width"] / 2
 
 
+async def a_conversation(console: tuple[str, Service], page: Page) -> str:
+    """One session with one message in it, on the page, as the id to write further steps against."""
+    url, service = console
+    session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+    await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+    await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+    return session.id
+
+
 class TestWhereTheComposerSendsTo:
     """
     That pressing Fork lands the reader in a *different* session, driven by a real htmx.
@@ -758,15 +830,8 @@ class TestWhereTheComposerSendsTo:
     every in-memory test, and shows up only as a button that quietly sends to the wrong place.
     """
 
-    async def a_conversation(self, console: tuple[str, Service], page: Page) -> str:
-        url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
-        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
-        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
-        return session.id
-
     async def test_forking_navigates_to_a_new_session(self, page: Page, console: tuple[str, Service]) -> None:
-        session = await self.a_conversation(console, page)
+        session = await a_conversation(console, page)
         await page.fill(".composer textarea", "try it another way")
         await page.click(".sender__caret")
         await page.click('.sender__option[value="fork"]')
@@ -783,7 +848,7 @@ class TestWhereTheComposerSendsTo:
         The whole round trip, which no single request shows: two navigations and a message that ends
         up in the conversation the reader left rather than the one they were in.
         """
-        session = await self.a_conversation(console, page)
+        session = await a_conversation(console, page)
         await page.fill(".composer textarea", "let me check something")
         await page.click(".sender__caret")
         await page.click('.sender__option[value="aside"]')
@@ -804,14 +869,14 @@ class TestWhereTheComposerSendsTo:
         A `<details>` closes only on its own summary, which is right for a fold and wrong for a menu:
         left open it lies over the conversation until the reader finds the one press that works.
         """
-        await self.a_conversation(console, page)
+        await a_conversation(console, page)
         await page.click(".sender__caret")
         await expect(page.locator(".sender__more")).to_have_attribute("open", "")
         await page.click(".composer textarea")
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
 
     async def test_escape_shuts_the_menu(self, page: Page, console: tuple[str, Service]) -> None:
-        await self.a_conversation(console, page)
+        await a_conversation(console, page)
         await page.click(".sender__caret")
         await expect(page.locator(".sender__more")).to_have_attribute("open", "")
         await page.keyboard.press("Escape")
@@ -823,7 +888,7 @@ class TestWhereTheComposerSendsTo:
         than left to the in-memory tests because what makes the two differ is which button htmx
         treats as the submitter, and that is a browser behaviour.
         """
-        session = await self.a_conversation(console, page)
+        session = await a_conversation(console, page)
         await page.fill(".composer textarea", "and another thing")
         await page.click(".sender > button")
 
@@ -843,7 +908,7 @@ class TestWhereTheComposerSendsTo:
         as long as the reply took.
         """
         _, service = console
-        session = await self.a_conversation(console, page)
+        session = await a_conversation(console, page)
         await page.fill(".composer textarea", "actually, be brief")
         await page.click(".sender > button")
 
@@ -861,7 +926,7 @@ class TestWhereTheComposerSendsTo:
         be a second way to ask one question - which is what this console removes wherever it finds it.
         """
         _, service = console
-        session = await self.a_conversation(console, page)
+        session = await a_conversation(console, page)
         await page.click(".sender__caret")
         await expect(page.locator('.sender__option[value="next"]')).to_have_count(1)
 
@@ -871,6 +936,42 @@ class TestWhereTheComposerSendsTo:
         await page.reload(wait_until="load")
         await page.click(".sender__caret")
         await expect(page.locator('.sender__option[value="next"]')).to_have_count(0)
+
+
+class TestWhereTheCursorIsAfterSending:
+    """
+    Back in the box, whichever way the message left it.
+
+    Both ways lose the focus, for reasons no markup assertion can see. Pressing Send moves it to the
+    button, and `hx-disable` blurs the box itself while the post is in flight, so by the time the
+    answer swaps in the cursor is on nothing at all. Since the next thing anybody does in a
+    conversation is type again, that is a click or a Tab of finding the box before every message
+    after the first.
+
+    It is also a matter of *when*: htmx re-enables what it disabled just after the event this is
+    driven from, so a focus asked for any sooner is asked of a box that is still disabled and takes
+    nothing. That failure looks exactly like no focus rule at all.
+    """
+
+    async def test_the_cursor_returns_to_the_box_after_the_button_sends(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        await a_conversation(console, page)
+        await page.fill(".composer textarea", "and another thing")
+        await page.click(".sender > button")
+
+        await expect(page.locator("#transcript")).to_contain_text("and another thing")
+        await expect(page.locator(".composer textarea")).to_be_focused()
+
+    async def test_the_cursor_stays_in_the_box_when_the_keyboard_sends(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        await a_conversation(console, page)
+        await page.fill(".composer textarea", "one more thing")
+        await page.press(".composer textarea", "Shift+Enter")
+
+        await expect(page.locator("#transcript")).to_contain_text("one more thing")
+        await expect(page.locator(".composer textarea")).to_be_focused()
 
 
 class TestTheShelf:
