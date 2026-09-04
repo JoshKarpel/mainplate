@@ -27,7 +27,9 @@ from without_durability.interfaces import claimed
 from without_durability.memory import MemoryCheckpointer
 from without_durability.stepwise import Run
 
+from mainplate import records
 from mainplate.conversation import CLOSED
+from mainplate.conversation import recorded_steer
 from mainplate.conversation import steer_key
 from mainplate.conversation import steers_closing
 from mainplate.conversation import steers_in
@@ -39,8 +41,9 @@ from mainplate.durability import Stepping
 from mainplate.durability import StepwiseDurability
 from mainplate.durability import StreamingNotRecorded
 from mainplate.durability import current_stepping
+from mainplate.durability import parse_heard
 from mainplate.durability import parse_model_response
-from mainplate.durability import parse_took
+from mainplate.durability import parse_returned
 from mainplate.durability import stepping
 
 WORKFLOW = "a-workflow"
@@ -78,7 +81,9 @@ def steered(run: Run, *, when: Callable[[], bool], said: str = "one more thing")
         if when() and not sent:
             sent.append(said)
             await run.checkpointer.supply(
-                run.workflow, steer_key(0, len(steers_in(await run.checkpointer.load(run.workflow), 0))), said
+                run.workflow,
+                steer_key(0, len(steers_in(await run.checkpointer.load(run.workflow), 0))),
+                recorded_steer(said),
             )
         return ()
 
@@ -295,10 +300,13 @@ class TestTimingWhatAPassDid:
             Stepping(run=run, prefix="turn:0").stamp(answered, timedelta(seconds=2))
         assert answered.metadata == {"something": "else", TOOK: 2.0}
 
-    async def test_a_call_is_timed_under_the_id_its_return_is(self, checkpointer: MemoryCheckpointer) -> None:
+    async def test_a_call_is_timed_in_the_record_that_says_what_it_returned(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
         """
-        Named by the call rather than by position, for the reason the return is: a batch runs at
-        once, so a counter would hand a pass somebody else's figure.
+        One record and one write, where this was a key of its own for as long as a tool's return was
+        stored bare: a duration beside somebody else's value would have been indistinguishable from a
+        tool that returned a field of that name, and the envelope is what removes the objection.
         """
         scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
         async with a_pass(checkpointer) as run:
@@ -306,8 +314,8 @@ class TestTimingWhatAPassDid:
                 await calling(scripted, Noting()).run("go")
 
         recorded = await checkpointer.load(WORKFLOW)
-        assert isinstance(recorded["turn:0:took:call-note-0"], float)
-        assert parse_took(recorded["turn:0:took:call-note-0"]) is not None
+        assert not [key for key in recorded if ":took:" in key], "a duration has no key of its own"
+        assert parse_returned(recorded["turn:0:tool:call-note-0"]).took is not None
 
     async def test_a_replayed_call_keeps_the_time_the_first_pass_took(self, checkpointer: MemoryCheckpointer) -> None:
         """
@@ -319,13 +327,13 @@ class TestTimingWhatAPassDid:
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0"):
                 await calling(scripted, tools).run("go")
-        first = (await checkpointer.load(WORKFLOW))["turn:0:took:call-note-0"]
+        first = (await checkpointer.load(WORKFLOW))["turn:0:tool:call-note-0"]
 
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0"):
                 await calling(scripted, tools).run("go")
 
-        assert (await checkpointer.load(WORKFLOW))["turn:0:took:call-note-0"] == first
+        assert (await checkpointer.load(WORKFLOW))["turn:0:tool:call-note-0"] == first
 
     async def test_a_tool_that_raised_is_timed_no_more_than_it_is_recorded(
         self, checkpointer: MemoryCheckpointer
@@ -373,7 +381,8 @@ class TestPuttingAMessageIntoARunningTurn:
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0", pending=waiting):
                 await provider.agent().run("hello")
-        assert (await checkpointer.load(WORKFLOW))["turn:0:heard:0"] == ["actually, check the tests too"]
+        told = parse_heard((await checkpointer.load(WORKFLOW))["turn:0:heard:0"])
+        assert told == ("actually, check the tests too",)
 
     async def test_a_steer_reaches_the_request_it_was_read_for(self, checkpointer: MemoryCheckpointer) -> None:
         """
@@ -403,7 +412,8 @@ class TestPuttingAMessageIntoARunningTurn:
 
         assert scripted.asked == 2, "a steer read at a request must not cost an extra one"
         recorded = await checkpointer.load(WORKFLOW)
-        assert recorded["turn:0:heard:1"] == ["be brief"], "the request it was read for is the one that heard it"
+        told = parse_heard(recorded["turn:0:heard:1"])
+        assert told == ("be brief",), "the request it was read for is the one that heard it"
         assert [type(message).__name__ for message in answered.new_messages()] == [
             "ModelRequest",
             "ModelResponse",
@@ -428,8 +438,10 @@ class TestPuttingAMessageIntoARunningTurn:
                 answered = await agent.run("hello")
 
         recorded = await checkpointer.load(WORKFLOW)
-        assert recorded["turn:0:heard:0"] == [], "nothing had been said when the only request was made"
-        assert recorded["turn:0:late:0"] == ["one more thing"]
+        assert parse_heard(recorded["turn:0:heard:0"]) == (), "nothing had been said when the only request was made"
+        # Parsed as a `Late` and not as a `Heard`, which is the tag doing its job: the two records
+        # have the same field and only the kind says which boundary wrote it.
+        assert records.Late.model_validate(recorded["turn:0:late:0"]).said == ("one more thing",)
         assert provider.asked == 2, "the run was redirected into one more request to carry it"
         assert [type(message).__name__ for message in answered.new_messages()] == [
             "ModelRequest",
@@ -455,7 +467,7 @@ class TestPuttingAMessageIntoARunningTurn:
 
         recorded = await checkpointer.load(WORKFLOW)
         assert steer_key(0, 0) in recorded, "the slot is claimed rather than left free"
-        assert recorded[steer_key(0, 0)] is CLOSED
+        assert recorded[steer_key(0, 0)] == CLOSED.recorded()
         assert steers_in(recorded, 0) == (), "and it is not something anybody said"
 
     async def test_the_two_kinds_of_record_stay_one_per_request_and_one_per_ending(
@@ -490,7 +502,7 @@ class TestPuttingAMessageIntoARunningTurn:
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0", pending=waiting):
                 await provider.agent().run("hello")
-        assert (await checkpointer.load(WORKFLOW))["turn:0:heard:0"] == []
+        assert parse_heard((await checkpointer.load(WORKFLOW))["turn:0:heard:0"]) == ()
 
     async def test_a_resumed_pass_says_what_the_first_one_said_and_not_what_is_queued_now(
         self, checkpointer: MemoryCheckpointer, provider: Provider
@@ -521,7 +533,7 @@ class TestPuttingAMessageIntoARunningTurn:
             with stepping(run, "turn:0", pending=waiting):
                 await provider.agent().run("hello")
 
-        assert (await checkpointer.load(WORKFLOW))["turn:0:heard:0"] == ["the first thing"]
+        assert parse_heard((await checkpointer.load(WORKFLOW))["turn:0:heard:0"]) == ("the first thing",)
         assert len(asked) == first, "the second pass replayed the record rather than reading the queue"
 
     async def test_outside_a_scope_nothing_is_steered(self, provider: Provider) -> None:
@@ -593,7 +605,8 @@ class TestRecordingAToolCall:
             with stepping(run, "turn:0"):
                 await calling(scripted, Noting()).run("go")
 
-        assert (await checkpointer.load(WORKFLOW))["turn:0:tool:call-note-0"] == "noted alpha"
+        held = parse_returned((await checkpointer.load(WORKFLOW))["turn:0:tool:call-note-0"])
+        assert held.returned == "noted alpha"
 
     async def test_several_calls_in_one_response_keep_their_results_apart(
         self, checkpointer: MemoryCheckpointer
@@ -613,7 +626,7 @@ class TestRecordingAToolCall:
 
         recorded = await checkpointer.load(WORKFLOW)
         assert sorted(tools.ran) == ["alpha", "beta", "gamma"]
-        assert [recorded[f"turn:0:tool:call-note-{at}"] for at in range(3)] == [
+        assert [parse_returned(recorded[f"turn:0:tool:call-note-{at}"]).returned for at in range(3)] == [
             "noted alpha",
             "noted beta",
             "noted gamma",

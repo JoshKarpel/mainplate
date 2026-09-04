@@ -25,7 +25,6 @@ from decimal import Decimal
 from pathlib import Path
 
 from pydantic_ai.messages import ModelMessage
-from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
@@ -35,18 +34,24 @@ from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.usage import RequestUsage
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.console import LINKS
+from mainplate.conversation import Result
 from mainplate.conversation import command_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import prompt_key
+from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_messages
+from mainplate.conversation import recorded_prompt
+from mainplate.conversation import recorded_result
+from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
 from mainplate.conversation import steer_key
-from mainplate.conversation import took_key
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
@@ -369,19 +374,39 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
     recorded it, because a pass writes both: the step is what the rule at that request's boundary
     opens, so a fixture with only the messages renders a fold that answers 404 for every request.
 
-    A call's duration is a key of its own, written for the calls `TIMINGS` names, because that is
-    what a pass writes: a return and, beside it, how long the call took.
+    A call's own record carries what it returned and how long it took, written for the calls
+    `TIMINGS` names, because that is what a pass writes. What it returned is read back out of the
+    turn's messages rather than restated, for the reason `opening` reads the prompt back out: a
+    fixture that said one thing in the step and another in the messages would draw a turn this
+    console cannot produce.
     """
     written: dict[str, object] = {}
     for turn, messages in enumerate(turns):
-        written[prompt_key(turn)] = opening(messages)
-        written[messages_key(turn)] = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
+        came_back = returns(messages)
+        written[prompt_key(turn)] = recorded_prompt(opening(messages))
+        written[messages_key(turn)] = recorded_messages(messages)
         for at, response in enumerate(message for message in messages if isinstance(message, ModelResponse)):
-            written[model_key(turn, at)] = ModelResponseTypeAdapter.dump_python(response, mode="json")
+            written[model_key(turn, at)] = records.Response(
+                response=ModelResponseTypeAdapter.dump_python(response, mode="json")
+            ).recorded()
             for part in response.parts:
                 if isinstance(part, ToolCallPart) and part.tool_call_id in TIMINGS:
-                    written[took_key(turn, part.tool_call_id)] = TIMINGS[part.tool_call_id]
+                    written[tool_key(turn, part.tool_call_id)] = records.Returned(
+                        returned=came_back.get(part.tool_call_id),
+                        took=timedelta(seconds=TIMINGS[part.tool_call_id]),
+                    ).recorded()
     return written
+
+
+def returns(messages: Sequence[ModelMessage]) -> dict[str, object]:
+    """What each call in a turn came back with, by the id that names which call it answers."""
+    return {
+        part.tool_call_id: part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    }
 
 
 # A stand-in repository and one session's worktree of it, so the pages show what a console with
@@ -416,7 +441,11 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
     """The same checkpoint with a tree recorded before each of a turn's model requests."""
     return {
         **written,
-        **{tree_key(turn, at): tree for turn, taken in enumerate(TREES) for at, tree in enumerate(taken)},
+        **{
+            tree_key(turn, at): records.Tree(tree=tree).recorded()
+            for turn, taken in enumerate(TREES)
+            for at, tree in enumerate(taken)
+        },
     }
 
 
@@ -446,27 +475,38 @@ def pages() -> dict[str, str]:
     # beside what was said. All three states, because they are drawn differently and the differences
     # are exactly what a screenshot is for: an exit of zero, an exit that is not a failure - `git
     # diff --quiet` exits 1 to say there *are* changes - and one still running.
-    settled[command_key(1, 0)] = "git status --short"
-    settled[result_key(1, 0)] = {"status": 0, "output": " M src/mainplate/pages.py\n", "took": 0.11}
-    settled[command_key(1, 1)] = "git diff --quiet"
-    settled[result_key(1, 1)] = {"status": 1, "output": "", "took": 0.08}
-    settled[command_key(1, 2)] = "just test"
+    settled[command_key(1, 0)] = recorded_command("git status --short")
+    settled[result_key(1, 0)] = recorded_result(
+        Result(status=0, output=" M src/mainplate/pages.py\n", took=timedelta(seconds=0.11))
+    )
+    settled[command_key(1, 1)] = recorded_command("git diff --quiet")
+    settled[result_key(1, 1)] = recorded_result(Result(status=1, output="", took=timedelta(seconds=0.08)))
+    settled[command_key(1, 2)] = recorded_command("just test")
+    # And a turn that opens on a clean history, so the boundary is drawn somewhere it can be looked
+    # at. Turn 1 rather than a turn of its own, because what a screenshot has to show is the rule
+    # standing *between* two turns with the first still on the page above it: a boundary at the top
+    # of a conversation would draw the same markup and prove nothing about what it says.
+    settled[prompt_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
     waiting = dict(settled)
-    waiting[prompt_key(2)] = "And what about a turn still being answered?"
+    waiting[prompt_key(2)] = recorded_prompt("And what about a turn still being answered?")
 
     # A turn part way through, read from the steps behind it rather than from messages it has not
     # written yet. The state exists only while a pass is actually running, so a fixture is the one
     # way to look at it - and looking at it is the point, since what it has to prove is that a
     # half-drawn turn reads as a turn in progress rather than as a broken one.
     answering = dict(waiting)
-    answering[model_key(2, 0)] = ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
-    answering[tool_key(2, "call-7")] = "# The one connection a page holds open, and what goes down it."
-    answering[took_key(2, "call-7")] = TIMINGS["call-7"]
+    answering[model_key(2, 0)] = records.Response(
+        response=ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
+    ).recorded()
+    answering[tool_key(2, "call-7")] = records.Returned(
+        returned="# The one connection a page holds open, and what goes down it.",
+        took=timedelta(seconds=TIMINGS["call-7"]),
+    ).recorded()
     # A steer sent into that turn and not yet put to any model, which is the state Send now reaches
     # every time somebody types while a reply is coming. It is drawn from `turn:{n}:steer:{k}` rather
     # than from messages that do not exist yet, so a screenshot is where you find out whether a
     # message that has been sent and not yet heard reads as one.
-    answering[steer_key(2, 0)] = "and while you are there, check the phone width"
+    answering[steer_key(2, 0)] = recorded_steer("and while you are there, check the phone width")
 
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
 

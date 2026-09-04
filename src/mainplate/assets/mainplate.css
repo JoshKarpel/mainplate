@@ -2450,11 +2450,12 @@ mark.hit.current {
     gap: var(--space-2);
 }
 
-/* Three columns of up/down arrows: a turn column stepping whole exchanges and an assistant column
-   seeking one side of them, flanking a middle column that steps every panel in play. */
+/* Four columns of up/down arrows, widest first, which is the picker's own ordering: where the
+   model's history starts again, then whole exchanges, then every panel in play, then one side of
+   them. */
 .dock__nav {
     display: grid;
-    grid-template-columns: repeat(3, 2.1rem);
+    grid-template-columns: repeat(4, 2.1rem);
     gap: var(--space-1);
 }
 
@@ -2489,6 +2490,12 @@ mark.hit.current {
 
 .dock__btn--assistant {
     --dock-hue: var(--assistant-edge);
+}
+
+/* The one column that takes no side's hue, because what it steps belongs to neither: a boundary is
+   not something the person said or the model produced. The rule ink it steps to is the same. */
+.dock__btn--forget {
+    --dock-hue: var(--ink-soft);
 }
 
 /* Following lights up, so a live "tailing" reads at a glance and is told apart from the plain
@@ -2571,6 +2578,29 @@ mark.hit.current {
    different sizes and a run of evenly spaced hairlines says they are the same. */
 .rule--turn {
     margin-top: var(--space-5);
+}
+
+/* Where the model's history starts again. Drawn in a stronger ink rather than a hue of its own,
+   because the palette runs on one axis - cool for what the person produced, warm for what the model
+   did - and a boundary belongs to neither side of it. The colour and not the width, so a rule
+   carrying one sits on the same baseline as every rule above and below it.
+
+   It wraps, and it is the only rule that does so unprompted: it is the only one that says something
+   in words, and a phrase this long would otherwise squeeze the figures beside it on a narrow window.
+   What wraps is the phrase and the figures after it, never the `#N` and the fork link a reader
+   presses - the rule every control that toggles already follows. */
+.rule--forget {
+    flex-wrap: wrap;
+    border-top-color: var(--ink-soft);
+}
+
+/* The one thing on any rule that is a sentence rather than a figure, so it takes the full ink and
+   the bold face while everything around it stays faint. A boundary is the rarest and most
+   consequential thing this transcript draws, and set in the same weight as a tree hash it reads as
+   one more piece of chrome to skip. */
+.rule__forget {
+    color: var(--ink);
+    font-weight: 600;
 }
 
 /* The gap that pushes what a turn spent to the far end, so the counts line up down the page
@@ -3038,7 +3068,7 @@ main:has(> .forking) {
     }
 
     .dock__nav {
-        grid-template-columns: repeat(3, 2.6rem);
+        grid-template-columns: repeat(4, 2.6rem);
     }
 
     .dock__btn {

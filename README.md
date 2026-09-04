@@ -429,9 +429,9 @@ scrolling back to the bottom re-enters it, and so does sending a message: whatev
 up to check, what you want to see now is the answer to what you just sent.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
-the colour legend, a dock that steps whole turns, every panel, or only what the model said and folds
-every call at once, a shelf for text you have written and not sent, a follow-the-end toggle, and a
-light/dark/system theme. All of it is an enhancement. With JavaScript
+the colour legend, a dock that steps where the model's history starts again, whole turns, every
+panel, or only what the model said, and folds every call at once, a shelf for text you have written
+and not sent, a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
 off the console still renders, still posts messages, and every tool call is still a fold that
 opens; what goes is the rail and the keyboard send.
 
@@ -454,6 +454,14 @@ and your message becomes the next turn instead.
 The caret beside Send opens everything else you can do with what you typed. **Next** is the one thing
 the record cannot decide for you: it queues the message behind the reply that is coming instead of
 putting it to the model now.
+
+**Forget** asks the message with nothing above it told to the model, which is what to reach for when
+a conversation has wandered and the backlog is costing you more than it is worth. It is not a clear:
+everything said so far stays on the page, keeps counting toward what the session has cost, and still
+comes across if you fork. What starts again is only what the model is handed. The transcript draws a
+line where it happened saying so, and the dock's leftmost column steps between those lines. To carry
+on the conversation one of them closed, press `fork` on that line: the branch takes the whole backlog
+with it and leaves the boundary behind.
 
 **Aside** steps out into a side conversation you mean to come back from, and **Fork** starts one you
 do not. Both carry the whole conversation and leave the original where it is; the only difference is

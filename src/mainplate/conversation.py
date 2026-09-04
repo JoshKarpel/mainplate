@@ -10,7 +10,7 @@
 # been said is what has been recorded, so the page renders the checkpoint, a crash resumes from
 # it, and a second process reading the same file sees exactly what the first one did.
 #
-# One key for the session, and eleven per turn. The whole scheme is here so that the code that
+# One key for the session, and ten per turn. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
 #     choice               the endpoint, model, repository, isolation and thinking level this
@@ -25,16 +25,24 @@
 #     turn:{n}:heard:{i}   which steers were appended to that request
 #     turn:{n}:late:{k}    which steers were found where the run would have ended, redirecting it
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
-#     turn:{n}:tool:{id}   what one tool call returned, named by the call's own id
-#     turn:{n}:took:{id}   how long that call ran, named by the same id and written after it
+#     turn:{n}:tool:{id}   what one tool call returned and how long it took, named by the call's
+#                          own id
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
+#
+# **Every one of those holds a record from `records.py` rather than a bare value**, which is what
+# lets any of them grow a field without a migration. `turn:{n}:took:{id}` is the key that no longer
+# exists because of it: a duration could not sit beside a tool's return while that return was stored
+# bare, since the pair would have been indistinguishable from a tool that returned two fields of
+# those names, and an envelope removes the objection. Each record also carries its own `kind`, so a
+# value written under the wrong key fails to parse rather than being read as whatever that key
+# expects.
 #
 # `prompt`, `steer` and `command` are the three a person writes, and they are written from *outside*
 # a pass, because somebody acting on a turn that is already running cannot be a step of it.
 #
 # **`command` is recorded and not told**, which is the whole of what a command is here. Those two
-# questions are separate and this console already keeps them apart everywhere else: `tree:{i}`,
-# `heard:{i}` and `took:{id}` are all records the page draws and no model ever sees. So a command is
+# questions are separate and this console already keeps them apart everywhere else: `tree:{i}` and
+# `heard:{i}` are both records the page draws and no model ever sees. So a command is
 # in the checkpoint - it renders, it survives a reload, a fork carries it - and it is not in the
 # message history, so it costs the conversation no context and reaches no provider. Telling the model
 # is a message somebody writes, which is what the box above it is already for.
@@ -49,10 +57,9 @@
 # won a race. A call already carries an id, and that id is part of the model response this
 # conversation recorded, so a replay is handed the same one for free.
 #
-# A model request needs no `took` of its own: a `ModelResponse` carries `metadata`, so how long the
-# round trip took rides into `model:{i}` and `messages` alike in the record that already exists. A
-# tool return is a value of the tool's own shape with nowhere to put a fact about the call, which is
-# what the extra key is for.
+# A model request needs no `took` field of its own: a `ModelResponse` carries `metadata`, so how long
+# the round trip took rides into `model:{i}` and `messages` alike in the record that already exists,
+# where a tool call's duration is a field on the record that holds what it returned.
 #
 # `choice` is in the checkpoint rather than beside the session's row for the reason everything else
 # is: it has to be the same on every pass and after every restart, and the checkpoint is the thing
@@ -105,13 +112,15 @@ from without_durability.interfaces import Checkpointer
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
 from mainplate.durability import TOOK
 from mainplate.durability import Pending
+from mainplate.durability import parse_heard
 from mainplate.durability import parse_model_response
-from mainplate.durability import parse_steers
+from mainplate.durability import parse_returned
 from mainplate.durability import parse_took
 from mainplate.durability import parse_tree
 from mainplate.durability import stepping
@@ -185,6 +194,24 @@ class Disposition(Enum):
     message meant to be taken up once the current reply lands is a different question from the one
     being answered now, and nothing in the checkpoint can tell the two apart."""
 
+    FORGET = "forget"
+    """`Service.say` at the next free turn, with nothing above it told to the model.
+
+    The one answer here that changes what the *model* is handed rather than where the message goes.
+    Nothing is deleted and nothing is hidden: every turn above it still renders, still counts toward
+    what the session cost, and still comes across on a fork. What starts again is only the history,
+    which is why the word is `forget` and not `clear` - a control saying `clear` beside a transcript
+    that keeps all of it would be describing something this does not do.
+
+    Never a steer, because a boundary between turns is the only place one can go: it is asked for by
+    name and always opens a turn of its own. It carries a message for the same reason - a marker with
+    no turn under it would be a rule with nothing below it and a slot nobody had claimed - and there
+    is no reason to forget without going on to say something.
+
+    Continuing the conversation it closed is `fork` at that turn, which the rule already offers: the
+    branch carries every turn above the boundary and leaves the marker behind, since `before` copies
+    the turns below `at` and the record lives on the turn that opens."""
+
     FORK = "fork"
     """`Service.fork` at the end, carrying the whole conversation, with this message asked there.
     The turns are settled by definition, since the branch point is past all of them.
@@ -238,12 +265,6 @@ def parse_disposition(named: str) -> Disposition | None:
     except ValueError:
         return None
 
-
-# A value no checkpoint can hold, so that "no such key" stays distinguishable from a step that
-# recorded `None`. The store keeps those apart deliberately - its `value` column is `NOT NULL` - and
-# a tool that returns nothing is an ordinary tool, so a reader that ran both together would draw a
-# finished call as one still out for as long as the turn lasted.
-NOTHING: Final = object()
 
 # Which endpoint the session is answered on, inside the recorded choice and on the form that starts
 # one. Named once here for the reason the turn keys are: the code that writes it and the code that
@@ -328,25 +349,13 @@ def steer_key(turn: int, said: int) -> StepKey:
     return f"{turn_prefix(turn)}:steer:{said}"
 
 
-CLOSED: Final = None
+CLOSED: Final = records.Closed()
 """
 What the pass writes into the next free steer slot when it is about to stop listening.
 
-**This is the whole of how a message cannot be lost at the end of a turn**, and it works because
-`supply` is a compare-and-set: it keeps the value a key was first given and hands the loser the
-winner's. So the pass and whoever is typing contend for one key and exactly one of them wins it.
-
-- The pass wins: nothing can ever be written at that slot, so a message arriving afterwards is told
-  the turn is closed and becomes a turn of its own instead.
-- The person wins: the pass is handed their text rather than its own marker, and redirects the run
-  into one more request to carry it.
-
-Without it the two decisions are separate reads and there is a window at the end of every turn where
-the store still says a turn is being answered and the pass has already stopped reading. A message
-sent into that window is written to a key nothing will ever look at again.
-
-`None` rather than a string, so no message anybody could type is mistakable for it: a steer is always
-text, so the shape alone tells them apart. That is `turn_of`'s trick, one level down.
+The one constant this console keeps for a record, because it is the same value every time and every
+docstring that explains the end of a turn names it. See `records.Closed` for what it settles and why
+nothing anybody types can be mistaken for it.
 """
 
 
@@ -378,11 +387,9 @@ def result_key(turn: int, at: int) -> StepKey:
     posted, and this landing is what fills in the result. Absent is "still running", which is exactly
     how `ToolUse.returned` reads and needs no flag beside it.
 
-    The duration is **in** this record rather than in a key of its own, and that is the difference
-    between a command and a tool call rather than an inconsistency with it. `turn:{n}:took:{id}`
-    exists because a tool returns somebody else's value of an unknown shape, so a duration beside it
-    would be indistinguishable from a tool that returned a field of that name. This record's shape is
-    ours, so it has somewhere to put one.
+    The duration is **in** this record rather than in a key of its own, which is what a tool call's is
+    now too: a record's shape is ours, so it has somewhere to put one. A bare tool return did not, and
+    that is the whole reason `turn:{n}:took:{id}` used to exist.
     """
     return f"{turn_prefix(turn)}:result:{at}"
 
@@ -429,7 +436,7 @@ def model_key(turn: int, at: int) -> StepKey:
 
 def tool_key(turn: int, call: str) -> StepKey:
     """
-    What one call of this turn came back with, named by the call's own id.
+    What one call of this turn came back with and how long it took, named by the call's own id.
 
     By id and not by position, because a batch of calls runs concurrently and counting them would
     name a record by whichever won a race. The id is asked for here rather than searched for: it is
@@ -439,23 +446,6 @@ def tool_key(turn: int, call: str) -> StepKey:
     The counterpart of `Stepping.identified("tool", id)`, with the same drift hazard as `model_key`.
     """
     return f"{turn_prefix(turn)}:tool:{call}"
-
-
-def took_key(turn: int, call: str) -> StepKey:
-    """
-    How long one call of this turn took to come back, named by the same call id its return is.
-
-    A key of its own rather than a field beside the return, because a tool returns a value of its
-    own shape and a record that carried both would be indistinguishable from a tool returning a pair
-    of fields with these names. It is written after the return, so a call can have one and not the
-    other; a call with no record here is one nothing timed, which is what a page draws as no figure.
-
-    A model request needs none of this and has none: a response has `metadata`, so what a round trip
-    took rides along in the record that already exists. See `Stepping.stamp`.
-
-    The counterpart of `Stepping.identified("took", id)`, with the same drift hazard as `tool_key`.
-    """
-    return f"{turn_prefix(turn)}:took:{call}"
 
 
 def opening_tree_key(turn: int) -> StepKey:
@@ -470,21 +460,46 @@ def opening_tree_key(turn: int) -> StepKey:
     return tree_key(turn, 0)
 
 
-def parse_prompt(recorded: object) -> str:
+def recorded_prompt(said: str, forget: bool = False) -> dict[str, object]:
     """
-    What somebody typed, or a loud failure if the checkpoint holds something else under that key.
+    What opens a turn, as the JSON-native value the store's codec will take.
 
-    The one value here that crossed a trust boundary: a step's result was produced by code in
-    this process, where this was written into the checkpoint by an HTTP handler on behalf of
-    whoever posted the form.
+    `forget` is what makes this turn the start of the model's history; see `records.Prompt.forget`
+    for why it rides here rather than in a key of its own.
     """
-    if not isinstance(recorded, str):
-        raise TypeError(f"a prompt must be text, not {recorded!r}")
-    return recorded
+    return records.Prompt(said=said, forget=forget).recorded()
+
+
+def recorded_steer(said: str) -> dict[str, object]:
+    """
+    What somebody said into a running turn, as the value the store's codec will take.
+
+    Its own function beside `recorded_prompt` rather than one taking a kind, because the two land in
+    different slots under different rules and a caller that could pass the wrong word would be a way
+    to write a prompt into a steer slot.
+    """
+    return records.Steer(said=said).recorded()
+
+
+def parse_prompt(recorded: object) -> records.Prompt:
+    """
+    What opens a turn: what somebody typed, and what history it opens on.
+
+    The whole record rather than its text, because a turn's opening now says two things and the
+    second decides what the model is told. The one value here that crossed a trust boundary: a step's
+    result was produced by code in this process, where this was written into the checkpoint by an
+    HTTP handler on behalf of whoever posted the form.
+    """
+    return records.Prompt.model_validate(recorded)
+
+
+def recorded_messages(said: Sequence[ModelMessage]) -> dict[str, object]:
+    """What a turn's agent run produced, as the value the store's codec will take."""
+    return records.Messages(messages=ModelMessagesTypeAdapter.dump_python(list(said), mode="json")).recorded()
 
 
 def parse_messages(recorded: object) -> tuple[ModelMessage, ...]:
-    return tuple(ModelMessagesTypeAdapter.validate_python(recorded))
+    return tuple(ModelMessagesTypeAdapter.validate_python(records.Messages.model_validate(recorded).messages))
 
 
 def parse_thinking(recorded: object) -> ThinkingLevel | None:
@@ -583,6 +598,11 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
     were.
     """
     return {
+        # The tag every record carries, so a bag of records still says what this one is. The choice
+        # is not a `records` model, and deliberately: it is already a record this console owns and has
+        # grown fields twice with no migration, and its parser encodes things a schema cannot say.
+        # See `records.Step`.
+        "kind": "choice",
         ENDPOINT_FIELD: chosen.endpoint,
         "model": chosen.model,
         REPOSITORY_FIELD: chosen.repository,
@@ -627,20 +647,45 @@ class Reached:
     history: tuple[ModelMessage, ...]
 
 
+def forgets(recorded: Mapping[str, object], turn: int) -> bool:
+    """
+    Whether this turn opens on a clean history, which is what `/forget` records.
+
+    A turn nobody has asked anything in forgets nothing, so an absent prompt is `False` rather than a
+    failure: `reached` asks this about the turn it is about to return, which is often one that has no
+    prompt yet.
+    """
+    asked = recorded.get(prompt_key(turn))
+    return asked is not None and parse_prompt(asked).forget
+
+
 def reached(recorded: Mapping[str, object]) -> Reached:
     """
-    The first turn with no answer, and every message from the turns before it.
+    The first turn with no answer, and every message the model is to be told before it.
 
     Consecutive by construction: turn *n* is only reached once turn *n-1* recorded its messages,
     so the scan stops at the first gap rather than searching for the highest key. A checkpoint
     with a hole in it is not a state this body can produce.
+
+    **A turn that forgets empties the history rather than truncating the walk**, so what is recorded
+    above it is still read and still rendered - the checkpoint is still the whole conversation - and
+    only what the model is handed starts again here. That is the same split `command` makes, applied
+    to turns rather than to one kind of record.
+
+    The **last** turn is asked too, outside the loop, and that is the half this can be quietly wrong
+    about: the walk is conditioned on a turn having *answered*, so a forget on the turn about to run
+    has not been seen by it. Missed, the first pass would answer that turn on the whole conversation
+    and a resumed pass would answer it on nothing, which is the one disagreement between two passes
+    this whole mechanism exists not to have.
     """
     history: list[ModelMessage] = []
     turn = 0
     while (answered := recorded.get(messages_key(turn))) is not None:
+        if forgets(recorded, turn):
+            history.clear()
         history.extend(parse_messages(answered))
         turn += 1
-    return Reached(turn=turn, history=tuple(history))
+    return Reached(turn=turn, history=() if forgets(recorded, turn) else tuple(history))
 
 
 # What became of a call, as Pydantic AI's own `ToolReturnPart` states it. Carried rather than
@@ -809,6 +854,18 @@ class Panel:
 
     Absent on every other panel, and absent altogether where no worktree is configured, since a hash
     for a directory nobody chose would be a fact about nothing.
+    """
+
+    forget: bool = False
+    """
+    Whether the turn this panel opens was asked with nothing above it told to the model.
+
+    Carried on the turn's first panel beside `tree`, and for the same reason: it is a fact about the
+    turn rather than about the message, and the rule that opens the turn is what draws it. Where a
+    turn begins is decided once, by the panels, rather than by a second list beside them.
+
+    `False` on every other panel, which is not a claim about them: only the panel that opens a turn
+    is ever asked.
     """
 
     asked: int | None = None
@@ -1146,10 +1203,10 @@ def parted(messages: Sequence[ModelMessage], took: Mapping[str, timedelta]) -> t
     what puts its panel below the tool results it travelled beside instead of above them.
 
     How long each call took is the one thing a settled turn cannot say for itself, so it arrives from
-    the caller: a result is a `ToolReturnPart` in the message list and a duration is a step beside
-    it, under `turn:{n}:took:{id}`. Asked for rather than defaulted, because a reading that quietly
-    dropped it would differ from the running turn's reading of the same call, which is the one
-    difference this pair of walks exists not to have.
+    the caller: a result is a `ToolReturnPart` in the message list, where a duration is recorded under
+    `turn:{n}:tool:{id}` beside what the call returned. Asked for rather than defaulted, because a
+    reading that quietly dropped it would differ from the running turn's reading of the same call,
+    which is the one difference this pair of walks exists not to have.
     """
     returned = returns_in(messages)
     blocks: list[Sourced] = []
@@ -1168,7 +1225,7 @@ def blocks_of(messages: Sequence[ModelMessage], took: Mapping[str, timedelta]) -
     return tuple(block for block, _ in parted(messages, took))
 
 
-def returned_step(recorded: object) -> Returned:
+def returned_step(held: records.Returned) -> Returned:
     """
     What one recorded tool step is as a reader sees it, in the words the settled reading would use.
 
@@ -1184,24 +1241,26 @@ def returned_step(recorded: object) -> Returned:
     reading and not by this one, which is a difference to fix in the tool rather than here if one
     is ever written.
     """
-    if recorded is None:
+    if held.returned is None:
         return Returned(outcome="success", content="")
-    said = recorded if isinstance(recorded, str) else to_json(recorded).decode()
+    said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
     return Returned(outcome="success", content=said)
 
 
-STATUS_FIELD: Final = "status"
-OUTPUT_FIELD: Final = "output"
-TOOK_FIELD: Final = "took"
+def recorded_command(said: str) -> dict[str, object]:
+    """What the person ran, as the JSON-native value the store's codec will take."""
+    return records.Command(said=said).recorded()
 
 
 def recorded_result(result: Result) -> dict[str, object]:
-    """What a finished command is as the JSON-native value the store's codec will take."""
-    return {
-        STATUS_FIELD: result.status,
-        OUTPUT_FIELD: result.output,
-        TOOK_FIELD: None if result.took is None else result.took.total_seconds(),
-    }
+    """
+    What a finished command is as the JSON-native value the store's codec will take.
+
+    Field by field rather than through a splat, because these are two types that happen to agree
+    today: one is what a reader sees and one is what the store holds, and a field added to either
+    should fail here rather than arrive silently.
+    """
+    return records.Result(status=result.status, output=result.output, took=result.took).recorded()
 
 
 def parse_result(recorded: object) -> Result:
@@ -1212,12 +1271,8 @@ def parse_result(recorded: object) -> Result:
     `parse_choice` makes: a status and an output are what this record *is*, where a run nothing timed
     is an ordinary state a reader already has a rendering for.
     """
-    if not isinstance(recorded, dict):
-        raise TypeError(f"a command's result must be a mapping, not {recorded!r}")
-    status, output = recorded.get(STATUS_FIELD), recorded.get(OUTPUT_FIELD)
-    if not isinstance(status, int) or isinstance(status, bool) or not isinstance(output, str):
-        raise TypeError(f"a command's result must name a status and its output, not {recorded!r}")
-    return Result(status=status, output=output, took=parse_took(recorded.get(TOOK_FIELD)))
+    held = records.Result.model_validate(recorded)
+    return Result(status=held.status, output=held.output, took=held.took)
 
 
 def commands_in(recorded: Mapping[str, object], turn: int) -> tuple[Command, ...]:
@@ -1234,9 +1289,14 @@ def commands_in(recorded: Mapping[str, object], turn: int) -> tuple[Command, ...
     something nobody observed.
     """
     ran: list[Command] = []
-    while isinstance(said := recorded.get(command_key(turn, len(ran))), str):
+    while (said := recorded.get(command_key(turn, len(ran)))) is not None:
         came = recorded.get(result_key(turn, len(ran)))
-        ran.append(Command(text=said, result=None if came is None else parse_result(came)))
+        ran.append(
+            Command(
+                text=records.Command.model_validate(said).said,
+                result=None if came is None else parse_result(came),
+            )
+        )
     return tuple(ran)
 
 
@@ -1248,14 +1308,16 @@ def steers_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
     `reached` walks turns and `responded` walks requests. `Service.steer` never leaves a gap, which
     is what its clash check costs it.
 
-    It stops at `CLOSED` as well as at a gap, and by shape rather than by value: a steer is text, so
-    anything else in a slot is the pass having claimed it to say the turn stopped listening. Nothing
-    downstream has to know that marker exists - it is not something anybody said, so it is not part
-    of what was said.
+    It stops at `CLOSED` as well as at a gap, and it is `records.Said` that says a slot holds one or
+    the other. Nothing downstream has to know the marker exists - it is not something anybody said,
+    so it is not part of what was said.
     """
     said: list[str] = []
-    while isinstance(typed := recorded.get(steer_key(turn, len(said))), str):
-        said.append(typed)
+    while (held := recorded.get(steer_key(turn, len(said)))) is not None:
+        slot = records.SAID.validate_python(held)
+        if not isinstance(slot, records.Steer):
+            break
+        said.append(slot.said)
     return tuple(said)
 
 
@@ -1294,8 +1356,8 @@ def steers_closing(checkpointer: Checkpointer, session: str, turn: int) -> Pendi
     """
 
     async def closing(already: int) -> Sequence[str]:
-        claimed = await checkpointer.supply(session, steer_key(turn, already), CLOSED)
-        if not isinstance(claimed, str):
+        claimed = await checkpointer.supply(session, steer_key(turn, already), CLOSED.recorded())
+        if not isinstance(records.SAID.validate_python(claimed), records.Steer):
             return ()
         return steers_in(await checkpointer.load(session), turn)[already:]
 
@@ -1312,7 +1374,7 @@ def heard_in(recorded: Mapping[str, object], turn: int) -> tuple[tuple[str, ...]
     """
     told: list[tuple[str, ...]] = []
     while (said := recorded.get(heard_key(turn, len(told)))) is not None:
-        told.append(parse_steers(said))
+        told.append(parse_heard(said))
     return tuple(told)
 
 
@@ -1342,23 +1404,37 @@ def called_in(responses: Sequence[ModelResponse]) -> Iterator[str]:
                 yield part.tool_call_id
 
 
+def calls_in(
+    recorded: Mapping[str, object], turn: int, responses: Sequence[ModelResponse]
+) -> dict[str, records.Returned]:
+    """
+    Every recorded call of a turn, by the call id that names which one it is about.
+
+    Asked of the ids the responses already carry, the way `tool_key` is: the writer and the reader
+    are handed the same id, so nothing scans the checkpoint for keys of a shape. A call still out is
+    simply absent, which needs no sentinel now that a recorded return is a record: a tool that
+    returns nothing records `returned` of `None` inside one, where it used to be a bare `None`
+    indistinguishable from a key nobody had written.
+    """
+    return {
+        call: parse_returned(held)
+        for call in called_in(responses)
+        if (held := recorded.get(tool_key(turn, call))) is not None
+    }
+
+
 def tooks_in(recorded: Mapping[str, object], turn: int, responses: Sequence[ModelResponse]) -> dict[str, timedelta]:
     """
     How long each of a turn's calls took, by the call id that names which one it is about.
 
-    Asked of the ids the responses already carry, the way `tool_key` is: the writer and the reader
-    are handed the same id, so nothing scans the checkpoint for keys of a shape. A call nothing timed
-    is simply absent, which `ToolUse.took` reads as no figure rather than as none of it.
+    A call nothing timed is simply absent, which `ToolUse.took` reads as no figure rather than as
+    none of it.
 
     The same mapping serves both readings of a turn - the one built from `turn:{n}:messages` and the
-    one built from the model steps - because a duration is recorded in neither of them and in a key
-    of its own beside both.
+    one built from the model steps - because a duration is recorded in neither of them and beside
+    both, in the record that holds what the call came back with.
     """
-    return {
-        call: took
-        for call in called_in(responses)
-        if (took := parse_took(recorded.get(took_key(turn, call)))) is not None
-    }
+    return {call: held.took for call, held in calls_in(recorded, turn, responses).items() if held.took is not None}
 
 
 def responses_in(messages: Sequence[ModelMessage]) -> tuple[ModelResponse, ...]:
@@ -1400,14 +1476,11 @@ def blocks_from(recorded: Mapping[str, object], turn: int, responses: Sequence[M
     answer lands, which is the one reorder this reading performs and the reason `late` is not walked
     here.
     """
-    returned = {
-        part.tool_call_id: returned_step(held)
-        for response in responses
-        for part in response.parts
-        if isinstance(part, ToolCallPart)
-        and (held := recorded.get(tool_key(turn, part.tool_call_id), NOTHING)) is not NOTHING
-    }
-    took = tooks_in(recorded, turn, responses)
+    # One walk of the recorded calls, read twice: what each came back with and how long it took. Two
+    # walks would eventually disagree about which calls a turn has heard from.
+    called = calls_in(recorded, turn, responses)
+    returned = {call: returned_step(held) for call, held in called.items()}
+    took = {call: held.took for call, held in called.items() if held.took is not None}
     told = heard_in(recorded, turn)
     blocks: list[Sourced] = []
     for at, response in enumerate(responses):
@@ -1447,9 +1520,9 @@ def panelled(turn: int, sourced: Sequence[Sourced]) -> Iterator[Panel]:
         yield Panel(turn=turn, at=at, kind=kind, blocks=tuple(block for block, _ in run), asked=asked)
 
 
-def said_by(turn: int, prompt: str, tree: str | None = None) -> Panel:
+def said_by(turn: int, prompt: records.Prompt, tree: str | None = None) -> Panel:
     """A turn's opening panel, which is the person's own message and is always its first."""
-    return Panel(turn=turn, at=0, kind="person", blocks=(Prose(text=prompt),), tree=tree)
+    return Panel(turn=turn, at=0, kind="person", blocks=(Prose(text=prompt.said),), tree=tree, forget=prompt.forget)
 
 
 def ran_by(recorded: Mapping[str, object], turn: int, at: int) -> tuple[Panel, ...]:
@@ -1572,7 +1645,7 @@ def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
     """
 
     async def record() -> object:
-        return ModelMessagesTypeAdapter.dump_python(answered.new_messages(), mode="json")
+        return recorded_messages(answered.new_messages())
 
     return record
 
@@ -1674,7 +1747,13 @@ def conversing(
         pricer = None if prices is None else prices.pricer(chosen)
         at = reached(run.recorded)
         while True:
-            prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
+            asked = await run.awaiting(prompt_key(at.turn), parse_prompt)
+            # Read off the prompt this pass just parked on rather than by asking the store again,
+            # which is the whole reason the boundary rides on the opening record: a pass carries its
+            # history forward between turns, so a marker written beside the prompt while it was
+            # waiting here would be invisible to it and seen by the pass that resumed.
+            if asked.forget:
+                at = Reached(turn=at.turn, history=())
             # Cloning and checking out happen *here* rather than when the session was created,
             # because creating one is a request somebody is waiting on and a clone is a network
             # fetch that can take minutes. A pass is where slow work already lives and where a
@@ -1703,7 +1782,7 @@ def conversing(
             waiting = steers_waiting(run.checkpointer, run.workflow, at.turn)
             shutting = steers_closing(run.checkpointer, run.workflow, at.turn)
             with stepping(run, turn_prefix(at.turn), worktree, pricer, waiting, shutting):
-                answered = await agent.run(prompt, message_history=list(at.history))
+                answered = await agent.run(asked.said, message_history=list(at.history))
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             at = Reached(turn=at.turn + 1, history=(*at.history, *said))
 

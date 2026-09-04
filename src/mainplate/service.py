@@ -29,6 +29,7 @@ from without_durability_sqlite import Database
 from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
@@ -42,6 +43,9 @@ from mainplate.conversation import commands_in
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
+from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_prompt
+from mainplate.conversation import recorded_steer
 from mainplate.conversation import requested_at
 from mainplate.conversation import steer_key
 from mainplate.conversation import steers_in
@@ -424,11 +428,12 @@ class Service:
         it to write at the number above would put the message exactly where it could not be seen. The
         caller answers by saying it into a turn of its own; see `CLOSED` and `Service.send`.
         """
+        written = recorded_steer(said)
         for said_at in count(len(steers_in(await self.checkpointer.load(session), turn))):
-            stored = await self.checkpointer.supply(session, steer_key(turn, said_at), said)
-            if stored == said:
+            stored = await self.checkpointer.supply(session, steer_key(turn, said_at), written)
+            if stored == written:
                 return said_at
-            if not isinstance(stored, str):
+            if not isinstance(records.SAID.validate_python(stored), records.Steer):
                 return None
         raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
 
@@ -466,14 +471,15 @@ class Service:
         if turn < 0:  # pragma: no cover - a session is created with its first message
             return None
         where = self.workspaces.at(session)
+        written = recorded_command(said)
         for ran_at in count(len(commands_in(await self.checkpointer.load(session), turn))):
-            stored = await self.checkpointer.supply(session, command_key(turn, ran_at), said)
-            if stored == said:
+            stored = await self.checkpointer.supply(session, command_key(turn, ran_at), written)
+            if stored == written:
                 self.commands.start(Slot(session=session, turn=turn, at=ran_at), said, where)
                 return ran_at
         raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
 
-    async def say(self, session: str, *, turn: int, said: str) -> None:
+    async def say(self, session: str, *, turn: int, said: str, forget: bool = False) -> None:
         """
         Put a message into a session's checkpoint, and ask for the session to be looked at.
 
@@ -481,8 +487,12 @@ class Service:
         single commit: over one file there is no window where a session holds a message with
         nothing scheduled to answer it. Whichever worker takes it next is the one that answers,
         and this returns without waiting for any of that.
+
+        `forget` opens this turn on a clean history, and it is a field of the record this already
+        writes rather than a second call: one write, so a worker cannot take the turn between the two
+        and answer it on a history the record was about to contradict. See `records.Prompt.forget`.
         """
-        await self.durable.arrive(session, prompt_key(turn), said)
+        await self.durable.arrive(session, prompt_key(turn), recorded_prompt(said, forget=forget))
 
     async def send(self, session: str, said: str) -> int | None:
         """

@@ -9,7 +9,9 @@ from calling import calling
 from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
 from conftest import already
+from conftest import recorded_turn
 from conftest import run
+from pydantic import ValidationError
 from without_asgi import ASGIApp
 
 from mainplate.agent import Choice
@@ -25,6 +27,8 @@ from mainplate.conversation import messages_key
 from mainplate.conversation import parse_result
 from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
+from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
 from mainplate.conversation import transcript
@@ -118,15 +122,18 @@ class TestWhatTheStoreHolds:
         ],
     )
     def test_a_record_that_is_not_a_result_fails_loudly(self, held: object) -> None:
-        with pytest.raises(TypeError):
+        with pytest.raises(ValidationError):
             parse_result(held)
 
     def test_a_command_with_no_result_beside_it_is_one_still_running(self) -> None:
-        assert commands_in({command_key(0, 0): "sleep 30"}, 0) == (Command(text="sleep 30"),)
+        assert commands_in({command_key(0, 0): recorded_command("sleep 30")}, 0) == (Command(text="sleep 30"),)
 
     def test_the_walk_stops_at_the_first_slot_nobody_claimed(self) -> None:
         """Consecutive from zero, like every other numbered kind: `Service.run` leaves no gap."""
-        recorded = {command_key(0, 0): "git status", command_key(0, 2): "never written by this console"}
+        recorded = {
+            command_key(0, 0): recorded_command("git status"),
+            command_key(0, 2): recorded_command("never written by this console"),
+        }
         assert [ran.text for ran in commands_in(recorded, 0)] == ["git status"]
 
 
@@ -141,17 +148,22 @@ class TestWhereACommandIsDrawn:
 
     def test_a_command_run_during_a_settled_turn_sits_after_that_turn_s_panels(self) -> None:
         recorded: dict[str, object] = {
-            prompt_key(0): "have a look",
-            messages_key(0): [],
-            command_key(0, 0): "git status",
-            result_key(0, 0): {"status": 0, "output": "nothing to commit\n", "took": 0.1},
+            prompt_key(0): recorded_prompt("have a look"),
+            messages_key(0): recorded_turn(),
+            command_key(0, 0): recorded_command("git status"),
+            result_key(0, 0): recorded_result(
+                Result(status=0, output="nothing to commit\n", took=timedelta(seconds=0.1))
+            ),
         }
         said = transcript(recorded)
 
         assert [(panel.kind, panel.at) for panel in said.panels] == [("person", 0), ("command", 1)]
 
     def test_a_command_run_while_a_turn_is_being_answered_is_drawn_before_it_lands(self) -> None:
-        running: dict[str, object] = {prompt_key(0): "have a look", command_key(0, 0): "git status"}
+        running: dict[str, object] = {
+            prompt_key(0): recorded_prompt("have a look"),
+            command_key(0, 0): recorded_command("git status"),
+        }
         assert transcript(running).panels[-1] == Panel(
             turn=0, at=1, kind="command", blocks=(Command(text="git status"),)
         )
@@ -162,9 +174,13 @@ class TestWhereACommandIsDrawn:
         which request was in flight, so anywhere else would be a position one reading could not
         reconstruct and the panel would jump as the turn settled.
         """
-        ran = {command_key(0, 0): "git status"}
-        running: dict[str, object] = {prompt_key(0): "have a look", **ran}
-        landed: dict[str, object] = {prompt_key(0): "have a look", messages_key(0): [], **ran}
+        ran = {command_key(0, 0): recorded_command("git status")}
+        running: dict[str, object] = {prompt_key(0): recorded_prompt("have a look"), **ran}
+        landed: dict[str, object] = {
+            prompt_key(0): recorded_prompt("have a look"),
+            messages_key(0): recorded_turn(),
+            **ran,
+        }
 
         assert transcript(running).panels[-1] == transcript(landed).panels[-1]
 
@@ -175,10 +191,12 @@ class TestWhereACommandIsDrawn:
         wrote to the model.
         """
         recorded: dict[str, object] = {
-            prompt_key(0): "have a look",
-            messages_key(0): [],
-            command_key(0, 0): "echo do not tell the model",
-            result_key(0, 0): {"status": 0, "output": "do not tell the model\n", "took": 0.1},
+            prompt_key(0): recorded_prompt("have a look"),
+            messages_key(0): recorded_turn(),
+            command_key(0, 0): recorded_command("echo do not tell the model"),
+            result_key(0, 0): recorded_result(
+                Result(status=0, output="do not tell the model\n", took=timedelta(seconds=0.1))
+            ),
         }
         assert reached(recorded).history == ()
 
@@ -194,9 +212,11 @@ class TestHowACommandIsDrawn:
 
     async def test_the_output_is_open_rather_than_folded_away(self, app: ASGIApp, service: Service) -> None:
         session = await service.start("have a look", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), "git status --short")
+        await service.checkpointer.supply(session.id, command_key(0, 0), recorded_command("git status --short"))
         await service.checkpointer.supply(
-            session.id, result_key(0, 0), {"status": 0, "output": " M pages.py\n", "took": 0.1}
+            session.id,
+            result_key(0, 0),
+            recorded_result(Result(status=0, output=" M pages.py\n", took=timedelta(seconds=0.1))),
         )
 
         async with calling(app) as caller:
@@ -209,8 +229,10 @@ class TestHowACommandIsDrawn:
         self, app: ASGIApp, service: Service
     ) -> None:
         session = await service.start("have a look", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), "git diff --quiet")
-        await service.checkpointer.supply(session.id, result_key(0, 0), {"status": 1, "output": "", "took": 0.08})
+        await service.checkpointer.supply(session.id, command_key(0, 0), recorded_command("git diff --quiet"))
+        await service.checkpointer.supply(
+            session.id, result_key(0, 0), recorded_result(Result(status=1, output="", took=timedelta(seconds=0.08)))
+        )
 
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
@@ -224,7 +246,7 @@ class TestHowACommandIsDrawn:
         console that made it about a running one would be reporting an absence it cannot know about.
         """
         session = await service.start("have a look", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), "just test")
+        await service.checkpointer.supply(session.id, command_key(0, 0), recorded_command("just test"))
 
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
@@ -336,7 +358,7 @@ class TestRunningOne:
         assert await running.run(session, "echo late") == 0
 
         recorded = await running.checkpointer.load(session)
-        assert recorded.get(command_key(1, 0)) == "echo late"
+        assert recorded.get(command_key(1, 0)) == recorded_command("echo late")
         assert recorded.get(command_key(0, 0)) is None
 
     async def test_a_command_before_the_first_turn_says_the_worktree_is_not_there_yet(
@@ -411,7 +433,7 @@ class TestThroughTheConsole:
             answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "echo hello", "disposition": "run"})
 
         assert answer.status == 200
-        assert (await running.checkpointer.load(session)).get(command_key(0, 0)) == "echo hello"
+        assert (await running.checkpointer.load(session)).get(command_key(0, 0)) == recorded_command("echo hello")
         assert (await settled(running, session)).output.strip() == "hello"
 
     async def test_the_command_is_drawn_rather_than_sent_as_a_message(

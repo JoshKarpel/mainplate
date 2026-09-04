@@ -633,8 +633,16 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
             return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
-        case Disposition.NEXT:
-            await service.say(session, turn=found.said.turns, said=sending.said)
+        case Disposition.NEXT | Disposition.FORGET:
+            # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
+            # next free turn and differ only in what that turn opens on. A forget never reaches
+            # `send`, because a boundary between turns is the only place one can be.
+            await service.say(
+                session,
+                turn=found.said.turns,
+                said=sending.said,
+                forget=sending.where is Disposition.FORGET,
+            )
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))

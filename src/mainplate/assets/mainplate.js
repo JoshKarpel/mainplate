@@ -212,17 +212,26 @@
       );
     };
 
+    const shown = (element) => element.getClientRects().length > 0;
+
     // What one arrow steps over, which the button says rather than this inferring. Panels are
-    // narrowed by the key and by side; the rules that open each turn are not, because a turn is not
-    // one of the kinds the key switches off - it is the thing those kinds are inside of.
+    // narrowed by the key and by side; the rules are not, because a turn is not one of the kinds the
+    // key switches off - it is the thing those kinds are inside of.
     //
     // `.rule--turn` and not every rule: a rule now stands at every model request, so a turn with
     // four round trips in it would otherwise give the turn arrows four stops and stop meaning turns.
+    //
+    // A rule declares its own `data-stop`, so the forget column finds its stops in the live
+    // transcript rather than the dock being told which sessions have any. That is why the column can
+    // be drawn in every session and be right in all of them: one that has never forgotten simply has
+    // nothing to step to, and the leap to the top is what "before any forget" already means.
     const stopsFor = (button) => {
       const box = transcript();
       if (!box) return [];
-      if (button.dataset.stop !== "turn") return panelsIn(button.dataset.side);
-      return Array.from(box.querySelectorAll(".rule--turn")).filter((rule) => rule.getClientRects().length > 0);
+      const stop = button.dataset.stop;
+      if (stop === "turn") return Array.from(box.querySelectorAll(".rule--turn")).filter(shown);
+      if (stop === "forget") return Array.from(box.querySelectorAll('.rule[data-stop="forget"]')).filter(shown);
+      return panelsIn(button.dataset.side);
     };
 
     const atEnd = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 8;

@@ -39,6 +39,7 @@ from datetime import timedelta
 from decimal import Decimal
 from time import monotonic
 from typing import Any
+from typing import Literal
 
 from pydantic import TypeAdapter
 from pydantic_ai.capabilities import AbstractCapability
@@ -69,44 +70,49 @@ from without_durability.stepwise import Parse
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
+from mainplate import records
+from mainplate.records import StepKind
 from mainplate.snapshots import Worktree
 
 ModelResponseTypeAdapter: TypeAdapter[ModelResponse] = TypeAdapter(ModelResponse)
 
 TOOK = "took"
 """
-What a duration is called, in a response's `metadata` and as the kind of a tool call's own step.
+What a duration is called inside a response's `metadata`.
 
-One word for one thing, in the two places a duration is recorded. They are two places rather than
-one because the values are: a `ModelResponse` is a thing this console fills in before recording it
-and has a slot for exactly this, where a tool's return is somebody else's value of an unknown shape
-with nowhere to put a fact about the call.
+A `ModelResponse` is a thing this console fills in before recording it and has a slot for exactly
+this, so a round trip's duration needs no key of its own and rides into `turn:{n}:model:{i}` and
+`turn:{n}:messages` alike. A tool call's duration is a field on `records.Returned` instead, which is
+the same word in the record that holds what the call came back with.
 """
 
 
 def parse_model_response(recorded: object) -> ModelResponse:
     """A recorded model response, back as the type the agent expects to receive."""
-    return ModelResponseTypeAdapter.validate_python(recorded)
+    return ModelResponseTypeAdapter.validate_python(records.Response.model_validate(recorded).response)
 
 
 def parse_tree(recorded: object) -> str | None:
-    """A recorded tree hash, or nothing at all for a turn taken with no workspace configured."""
-    if recorded is None or isinstance(recorded, str):
-        return recorded
-    raise TypeError(f"a tree must be a hash or nothing, not {recorded!r}")
-
-
-def parse_steers(recorded: object) -> tuple[str, ...]:
     """
-    What one `heard` or `late` step holds, which is the messages it put to the model and nothing else.
+    A recorded tree hash, or nothing at all for a turn taken with no workspace configured.
 
-    A list even when empty, because a request that was told nothing is a request that ran: the
-    distinction this keeps is the one `parse_tree` keeps between `None` and a hash, and the store
-    already tells a recorded `[]` from a key nobody wrote.
+    Absent reads the same as recorded-with-no-hash, which is what every caller wants: they all reach
+    this through `recorded.get(...)`, and a request nobody has made yet and one made with no worktree
+    are both drawn as no tree. The two are still *told apart in the store*, which is what the record
+    is for - a `Tree` holding nothing says a snapshot was taken and there was nothing to take.
     """
-    if not isinstance(recorded, list):
-        raise TypeError(f"what a request was told must be a list, not {recorded!r}")
-    return tuple(said if isinstance(said, str) else str(said) for said in recorded)
+    return None if recorded is None else records.Tree.model_validate(recorded).tree
+
+
+def parse_heard(recorded: object) -> tuple[str, ...]:
+    """
+    What one `heard` step holds, which is the messages it put to the model and nothing else.
+
+    Empty even when there were none, because a request that was told nothing is a request that ran:
+    the distinction this keeps is the one `parse_tree` keeps between `None` and a hash, and the store
+    already tells a recorded empty record from a key nobody wrote.
+    """
+    return records.Heard.model_validate(recorded).said
 
 
 def parse_took(recorded: object) -> timedelta | None:
@@ -124,17 +130,17 @@ def parse_took(recorded: object) -> timedelta | None:
     raise TypeError(f"how long something took must be seconds or nothing, not {recorded!r}")
 
 
-def parse_returned(recorded: object) -> object:
+def parse_returned(recorded: object) -> records.Returned:
     """
-    What a tool call came back with, which is whatever the codec held onto.
+    What a tool call came back with and how long it took, as the record holding both.
 
-    No narrowing, and deliberately none available: a toolset is a set of unrelated functions with
-    unrelated return types, so there is no one type to validate against the way there is for a
-    model response. What a caller receives is the JSON round trip of what the tool returned, on the
-    pass that ran it exactly as on the pass that replayed it, which is the same bargain every step
-    makes and the reason both passes agree.
+    The return itself is not narrowed, and deliberately cannot be: a toolset is a set of unrelated
+    functions with unrelated return types, so there is no one type to validate against the way there
+    is for a model response. What a caller receives is the JSON round trip of what the tool returned,
+    on the pass that ran it exactly as on the pass that replayed it, which is the same bargain every
+    step makes and the reason both passes agree.
     """
-    return recorded
+    return records.Returned.model_validate(recorded)
 
 
 def snapshotting(worktree: Worktree | None, why: str) -> Callable[[], Awaitable[object]]:
@@ -151,7 +157,7 @@ def snapshotting(worktree: Worktree | None, why: str) -> Callable[[], Awaitable[
     """
 
     async def capture() -> object:
-        return None if worktree is None else await worktree.capture(why)
+        return records.Tree(tree=None if worktree is None else await worktree.capture(why)).recorded()
 
     return capture
 
@@ -242,13 +248,19 @@ class Stepping:
     by replaying the same steps, which is what keeps the two passes asking identical questions.
     """
 
-    def key(self, kind: str) -> StepKey:
-        """The next key of this kind, numbered by position within the turn."""
+    def key(self, kind: StepKind) -> StepKey:
+        """
+        The next key of this kind, numbered by position within the turn.
+
+        `StepKind` and not a bare string, so the word this builds a key from is the same word the
+        record written under it tags itself with. The two used to be independent strings written at
+        opposite ends of the console with nothing enforcing that they agreed.
+        """
         nth = self.taken[kind]
         self.taken[kind] += 1
         return f"{self.prefix}:{kind}:{nth}"
 
-    def identified(self, kind: str, identity: str) -> StepKey:
+    def identified(self, kind: StepKind, identity: str) -> StepKey:
         """A key named by something already stable, for steps whose order is not fixed."""
         return f"{self.prefix}:{kind}:{identity}"
 
@@ -271,7 +283,7 @@ class Stepping:
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
 
-    async def steering(self, pending: Pending, kind: str = "heard") -> tuple[str, ...]:
+    async def steering(self, pending: Pending, kind: Literal["heard", "late"] = "heard") -> tuple[str, ...]:
         """
         The steers to put to the model now, recorded so a later pass says the same thing.
 
@@ -295,11 +307,14 @@ class Stepping:
         keys it is supposed to name one request alongside.
         """
         already = sum(len(said) for said in self.told)
+        # One class decides both halves, so the key's word and the record's tag cannot disagree about
+        # which boundary this was. A mapping beside them would be a third place to keep in step.
+        told = records.Late if kind == "late" else records.Heard
 
         async def take() -> object:
-            return list(await pending(already))
+            return told(said=tuple(await pending(already))).recorded()
 
-        said = await self.step(self.key(kind), take, parse_steers)
+        said = await self.step(self.key(kind), take, lambda held: told.model_validate(held).said)
         self.told.append(said)
         return said
 
@@ -426,7 +441,7 @@ class CheckpointedModel(WrapperModel):
             answered = await self.wrapped.request(messages, model_settings, model_request_parameters)
             self.scope.stamp(answered, timedelta(seconds=monotonic() - started))
             self.scope.price(answered)
-            return ModelResponseTypeAdapter.dump_python(answered, mode="json")
+            return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
 
         return await self.scope.step(self.scope.key("model"), ask, parse_model_response)
 
@@ -597,30 +612,25 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         round trip, and the failure it produces is the mild one, because an anchored edit whose
         anchors no longer resolve is refused rather than applied somewhere wrong.
 
-        **How long it took is a second step rather than part of the first**, and that is what the
-        recorded value forces: a tool return is an arbitrary value of the tool's own shape, so a
-        record that wrapped it to carry a duration beside it would be indistinguishable from a tool
-        that happened to return those two fields. `turn:{n}:took:{id}` is named by the call the way
-        the return is, so a replay pairs them for free. It is written after the return, so the same
-        crash window that makes a tool at-least-once leaves a call whose duration nobody can say;
-        that records as nothing, which is what the page draws where a tool went untimed.
+        **How long it took is a field of the same record**, written by the same step. It was a
+        `turn:{n}:took:{id}` of its own for as long as a tool return was stored bare, because a
+        duration beside somebody else's value would have been indistinguishable from a tool that
+        happened to return a field of that name. An envelope removes that objection, and with it the
+        window where a return was recorded and its duration was not.
+
+        Timed around the handler alone, so what is recorded is the call rather than the store write
+        after it. A tool that raises records nothing at all - the `ModelRetry` propagates out of the
+        step and the call stays out until a retry lands - so a failed call has no duration for the
+        same reason it has no return.
         """
         scope = current_stepping.get()
         if scope is None:
             return await handler(args)
 
-        timing: list[float] = []
-
         async def perform() -> object:
             started = monotonic()
-            try:
-                return to_jsonable_python(await handler(args))
-            finally:
-                timing.append(monotonic() - started)
+            came_back = to_jsonable_python(await handler(args))
+            return records.Returned(returned=came_back, took=timedelta(seconds=monotonic() - started)).recorded()
 
-        async def taken() -> object:
-            return timing[0] if timing else None
-
-        came_back = await scope.step(scope.identified("tool", call.tool_call_id), perform, parse_returned)
-        await scope.step(scope.identified(TOOK, call.tool_call_id), taken, parse_took)
-        return came_back
+        recorded = await scope.step(scope.identified("tool", call.tool_call_id), perform, parse_returned)
+        return recorded.returned

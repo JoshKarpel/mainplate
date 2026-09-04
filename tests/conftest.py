@@ -27,6 +27,7 @@ from pydantic_ai.models.function import FunctionModel
 from without_asgi import ASGIApp
 from without_durability.stepwise import Run
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.agent import Wires
@@ -227,6 +228,42 @@ def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:
             for at, (tool, arguments) in enumerate(wanted)
         ]
     )
+
+
+# Checkpoint values, as the records this console actually writes. A test that wrote a bare string
+# under a key would be asserting against a shape the store no longer holds, so these are built with
+# the console's own records: a change to one fails here rather than passing quietly.
+
+
+def recorded_turn(*said: object) -> dict[str, object]:
+    """Message dicts written out by hand, as the record a turn keeps them in."""
+    return records.Messages(messages=list(said)).recorded()
+
+
+def answered_with(response: object) -> dict[str, object]:
+    """One response dict, as the record the step that made that request keeps it in."""
+    return records.Response(response=response).recorded()
+
+
+def came_back(returned: object, took: float | None = None) -> dict[str, object]:
+    """
+    What one call returned and how long it took, as the one record holding both.
+
+    Both in one record rather than two keys, which is what the envelope bought: a duration could not
+    sit beside a bare tool return without being indistinguishable from a tool that returned a field
+    of that name.
+    """
+    return records.Returned(returned=returned, took=None if took is None else timedelta(seconds=took)).recorded()
+
+
+def heard(*said: str) -> dict[str, object]:
+    """What one request was told, as the record saying so."""
+    return records.Heard(said=said).recorded()
+
+
+def snapshotted(tree: str | None) -> dict[str, object]:
+    """What the worktree held before one request, as the record of that snapshot."""
+    return records.Tree(tree=tree).recorded()
 
 
 @pytest.fixture

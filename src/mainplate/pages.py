@@ -1852,6 +1852,7 @@ def rule_element(
     tree: str | None = None,
     spent: Spent | None = None,
     opens: bool = False,
+    forget: bool = False,
 ) -> Element:
     """
     A line across the conversation where one round trip to the model began.
@@ -1881,12 +1882,29 @@ def rule_element(
 
     `rule--turn` is what the dock's turn arrows step, so that column keeps stepping turns now that
     there are rules between them as well as before them.
+
+    **`rule--forget` is the one rule that describes what is *above* it**, and that is what lets the
+    sentence be short: every other rule looks forward at the request or the turn it opens, so there is
+    no ambiguity about which direction this one means. It is drawn in a heavier line rather than a
+    colour of its own, because the palette runs on one axis - cool for what the person produced, warm
+    for what the model did - and a boundary is neither. The panels above are left exactly as they
+    were: what changed is who was told, not what is worth reading, and fading them would say the
+    second thing while colliding with `muted`, which is the reader's own decision and already drawn
+    that way.
+
+    The fork link says something extra here and is the *same link*, at the same turn, posting the same
+    thing. Continuing the conversation a forget closed is `fork` at that turn: `before` copies the
+    turns below the branch point and the marker lives on the turn that opens, so the branch carries
+    the whole backlog and no boundary. A control of its own would be a second name for one call.
     """
     return div(
-        cls=("rule", "rule--turn" if opens else None),
+        cls=("rule", "rule--turn" if opens else None, "rule--forget" if forget else None),
         attrs={
             "id": f"rule-{turn}" if opens else f"rule-{turn}-{asked}",
             "data-turn": str(turn),
+            # Declared rather than inferred from the modifier, so the dock's column steps stops it is
+            # told about the way every other arrow does. See `dock_card`.
+            "data-stop": "forget" if forget else None,
         },
         children=[
             *(
@@ -1898,13 +1916,21 @@ def rule_element(
                 (
                     a(
                         cls="rule__fork",
-                        attrs={"href": links.to_fork_form(session, turn), "title": f"Fork from turn {turn}"},
+                        attrs={
+                            "href": links.to_fork_form(session, turn),
+                            "title": (
+                                f"Fork from turn {turn}, carrying everything above this line"
+                                if forget
+                                else f"Fork from turn {turn}"
+                            ),
+                        },
                         children="fork",
                     ),
                 )
                 if opens and session
                 else ()
             ),
+            *((span(cls="rule__forget", children="the model was told nothing above this line"),) if forget else ()),
             # Only where there is a session to ask, which the gallery's pages are rendered without: a
             # control pointed at no conversation is a dead button rather than an offer, the same
             # reason the fork link is conditional.
@@ -2032,6 +2058,9 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
                 tree=within[0].tree,
                 spent=said.spent.get(turn),
                 opens=True,
+                # Off the turn's first panel beside its tree, which is where both facts about a turn
+                # rather than about a request are carried.
+                forget=within[0].forget,
             )
         )
         at = 0
@@ -2157,9 +2186,16 @@ def dock_card() -> Element:
     """
     Stepping, leaping, folding, and following: everything that moves a reader through a session.
 
-    Three columns of arrows, at the two granularities a reader moves in: the left one steps whole
-    turns, landing on the rule that opens each, the middle one steps every panel the key leaves in
-    play, and the right one steps only what the model produced.
+    Four columns of arrows, widest first, which is the picker's own ordering: the left one steps the
+    points where the model's history starts again, the next steps whole turns, landing on the rule
+    that opens each, the third steps every panel the key leaves in play, and the right one steps only
+    what the model produced.
+
+    The forget column is drawn in every session and steps nothing in most of them, which is right
+    rather than a gap: the rail lives outside the region that swaps, so a column that appeared with
+    the first forget would not appear until a reload. Its stops are found in the live transcript the
+    way every other column's are, so one added mid-session is reachable at once, and its upper
+    terminus is the top - which is what "before any forget" means.
 
     Every arrow says what it steps over rather than being told apart by what it lacks. A button
     identified as "the one with no side" stops being identifiable the instant a second kind of stop
@@ -2178,6 +2214,12 @@ def dock_card() -> Element:
                 cls="dock__nav",
                 children=[
                     dock_button(
+                        "dock__btn--forget",
+                        "Previous forget",
+                        "\N{UPWARDS ARROW}",
+                        {"data-step": "-1", "data-stop": "forget"},
+                    ),
+                    dock_button(
                         "dock__btn--turn",
                         "Previous turn",
                         "\N{UPWARDS ARROW}",
@@ -2189,6 +2231,12 @@ def dock_card() -> Element:
                         "Previous panel from the model",
                         "\N{UPWARDS ARROW}",
                         {"data-step": "-1", "data-stop": "panel", "data-side": "model"},
+                    ),
+                    dock_button(
+                        "dock__btn--forget",
+                        "Next forget",
+                        "\N{DOWNWARDS ARROW}",
+                        {"data-step": "1", "data-stop": "forget"},
                     ),
                     dock_button(
                         "dock__btn--turn",
@@ -2357,9 +2405,10 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
     three cannot disagree about what is on offer, what it is called or what it posts, which is the
     same bargain the branch field takes in rendering one list as a `<datalist>` and a narrowed list.
 
-    Ordered by how far the text travels: waiting for the next turn keeps it here and merely later, an
-    `Aside` is a step out you mean to come back from, a `Fork` is a conversation of its own, `Parent`
-    reaches the one this came out of, `Run` is not a message at all, and `Keep` sends it nowhere.
+    Ordered by how far the text travels: waiting for the next turn keeps it here and merely later,
+    `Forget` keeps it here and drops what the model was told, an `Aside` is a step out you mean to
+    come back from, a `Fork` is a conversation of its own, `Parent` reaches the one this came out of,
+    `Run` is not a message at all, and `Keep` sends it nowhere.
     """
     return (
         *(
@@ -2371,6 +2420,10 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
             )
             if answering
             else ()
+        ),
+        dispatched(
+            Disposition.FORGET,
+            "Ask it with nothing above it told to the model, leaving the conversation on the page",
         ),
         dispatched(Disposition.ASIDE, "Step out into a side conversation you mean to come back from"),
         dispatched(Disposition.FORK, "Ask it in a new session carrying this whole conversation"),
