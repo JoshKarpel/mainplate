@@ -382,8 +382,8 @@ conversation down it whenever the session records anything. Every message is a w
 rather than a delta, which is what makes a dropped connection cost nothing and a reconnect need no
 replay, and each names the region it is for, so a second region joins the same connection rather
 than opening another. A render is *morphed* into the page rather than replacing it, so what a reader
-has done to the conversation, an unfolded tool call, a search, the place they had scrolled to,
-survives an update arriving.
+has done to the conversation, a tool call they unfolded, a command they put away, a search, the place
+they had scrolled to, survives an update arriving.
 
 **A turn is drawn as it happens.** The responses and tool results behind a running turn are already
 in the checkpoint, recorded step by step so that a resumed pass does not pay for them twice, so the
@@ -477,8 +477,11 @@ read-only, so no tool can write a history no panel shows, and `git commit` and `
 the things that boundary is meant to keep for you. Nothing about the run enters the conversation the
 model is given, so committing at the end of a session costs it no context and reaches no provider.
 The run is still recorded, though, so it draws as a `you (ran)` panel with the command, how long it
-took and what it exited with, it survives a reload, and a fork carries it. The exit status is shown
-as the number rather than as "failed", because `git diff --quiet` exits 1 to say there *are* changes.
+took and what it exited with, it survives a reload, and a fork carries it. What it said is drawn
+open, where a tool call's output is folded: you asked for this one, so reading it should cost no
+clicks, and a command whose whole answer was its exit status says `said nothing` rather than showing
+an empty pane. The status is shown as the number rather than as "failed", because `git diff --quiet`
+exits 1 to say there *are* changes.
 
 Typing `!` into an empty box is the shortcut: the box becomes a command box, set in the terminal's
 own face, and the button next to it says `Run`. Escape puts it back. Nothing is ever inferred from

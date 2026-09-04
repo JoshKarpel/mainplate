@@ -24,9 +24,9 @@
   const THEMES = ["system", "light", "dark"];
 
   // Everything in the transcript that folds: a tool call, and a command the person ran. Named once
-  // because two places act on the set - putting a reader's folds back after a swap, and the dock's
-  // fold-everything buttons - and a kind added to one and not the other is a fold that reopens
-  // itself on the next render.
+  // because three places act on the set - noting what the reader decided, putting that back after a
+  // swap, and the dock's fold-everything buttons - and a kind added to one and not the others is a
+  // fold that reopens itself on the next render.
   const FOLDS = "details.tool, details.ran";
 
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
@@ -114,7 +114,7 @@
 
     let muted = new Set(); // kinds the key has switched off
     let landed = null; // the panel the console last put the reader on
-    let opened = new Set(); // tool calls the reader has unfolded
+    let folds = new Map(); // what the reader decided about a fold, where they have decided anything
     let query = "";
     let hits = [];
     let at = -1;
@@ -318,11 +318,14 @@
     const paintFolds = () => {
       const box = transcript();
       if (!box) return;
-      // Only what the reader opened is forced. A call still waiting on its result is rendered open
-      // by the server, and leaving that alone is what lets the server say so. A command reads the
-      // same way and folds the same way, which is why one selector answers for both.
+      // Only a fold the reader has actually acted on is forced, and it is forced *either* way. The
+      // server renders a call shut and a command open, so one set of ids to reopen would put back
+      // every command a reader had put away; what has to survive a swap is the decision, whichever
+      // way it went. A fold nobody has touched is left alone, which is what lets the server say a
+      // call is still out.
       box.querySelectorAll(FOLDS).forEach((fold) => {
-        if (opened.has(fold.id)) fold.open = true;
+        const decided = folds.get(fold.id);
+        if (decided !== undefined) fold.open = decided;
       });
     };
 
@@ -870,8 +873,7 @@
           const open = button.dataset.fold === "open";
           box.querySelectorAll(FOLDS).forEach((fold) => {
             fold.open = open;
-            if (open) opened.add(fold.id);
-            else opened.delete(fold.id);
+            folds.set(fold.id, open);
           });
         });
       });
@@ -910,14 +912,15 @@
       );
     };
 
-    // Which tool calls the reader has open, kept as they press rather than read back later: a
-    // `<details>` closed by the next swap would otherwise look to this file like one they shut.
+    // What the reader decided about each fold they have touched, kept as they press rather than read
+    // back later: a `<details>` closed by the next swap would otherwise look to this file like one
+    // they shut. Every kind that folds, since a command opens by default and a call does not, so
+    // reading a set of ids back off the page could not tell a decision from a default.
     const wireFolds = () => {
       document.addEventListener("toggle", (event) => {
         const fold = event.target;
-        if (!(fold instanceof HTMLDetailsElement) || !fold.classList.contains("tool")) return;
-        if (fold.open) opened.add(fold.id);
-        else opened.delete(fold.id);
+        if (!(fold instanceof HTMLDetailsElement) || !fold.matches(FOLDS)) return;
+        folds.set(fold.id, fold.open);
       }, true);
     };
 

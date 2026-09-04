@@ -1011,6 +1011,24 @@ class TestWatchingATurnArrive:
         await expect(marked).to_have_count(1)
         assert await marked.first.get_attribute("data-kind") == "tool"
 
+    async def test_a_reader_keeps_a_command_they_shut_while_the_turn_goes_on(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The other direction of the same decision, and the one a command needs. The server renders a
+        command open, so a script that only remembered what a reader *unfolded* would reopen one
+        they had just put away on the very next thing the turn recorded.
+        """
+        service = await self.started(console, page)
+        await service.checkpointer.supply(self.session, command_key(0, 0), "git status")
+        shut = page.locator("details.ran").first
+        await expect(shut).to_have_attribute("open", "")
+        await shut.locator("summary").click()
+        await expect(shut).not_to_have_attribute("open", "")
+        await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
+        await expect(shut).not_to_have_attribute("open", "")
+
     async def test_a_conversation_is_not_marked_top_to_bottom_when_it_is_opened(
         self, page: Page, console: tuple[str, Service]
     ) -> None:

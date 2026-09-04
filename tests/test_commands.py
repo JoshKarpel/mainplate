@@ -183,6 +183,57 @@ class TestWhereACommandIsDrawn:
         assert reached(recorded).history == ()
 
 
+class TestHowACommandIsDrawn:
+    """
+    Open, and saying what it said - which for plenty of commands is nothing at all.
+
+    The panel is the whole of what a person gets back from `Run`, so what these pin is that reading
+    one costs no clicks and that a command whose only answer was its exit status says so rather than
+    drawing an empty pane.
+    """
+
+    async def test_the_output_is_open_rather_than_folded_away(self, app: ASGIApp, service: Service) -> None:
+        session = await service.start("have a look", DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, command_key(0, 0), "git status --short")
+        await service.checkpointer.supply(
+            session.id, result_key(0, 0), {"status": 0, "output": " M pages.py\n", "took": 0.1}
+        )
+
+        async with calling(app) as caller:
+            drawn = await caller.get(f"/sessions/{session.id}")
+
+        assert '<details class="ran" id="ran-0-0" open>' in drawn.text
+        assert " M pages.py" in drawn.text
+
+    async def test_a_command_that_said_nothing_says_so_rather_than_drawing_an_empty_box(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await service.start("have a look", DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, command_key(0, 0), "git diff --quiet")
+        await service.checkpointer.supply(session.id, result_key(0, 0), {"status": 1, "output": "", "took": 0.08})
+
+        async with calling(app) as caller:
+            drawn = await caller.get(f"/sessions/{session.id}")
+
+        assert "said nothing" in drawn.text
+        assert "<pre>" not in drawn.text
+
+    async def test_a_command_still_running_has_no_body_at_all(self, app: ASGIApp, service: Service) -> None:
+        """
+        Nothing to say either way yet: `said nothing` is a claim about a finished command, and a
+        console that made it about a running one would be reporting an absence it cannot know about.
+        """
+        session = await service.start("have a look", DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, command_key(0, 0), "just test")
+
+        async with calling(app) as caller:
+            drawn = await caller.get(f"/sessions/{session.id}")
+
+        assert "just test" in drawn.text
+        assert "said nothing" not in drawn.text
+        assert 'class="ran__body"' not in drawn.text
+
+
 class TestRunningOne:
     async def test_a_command_runs_in_the_session_s_own_worktree(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice

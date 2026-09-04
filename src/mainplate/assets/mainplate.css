@@ -906,10 +906,11 @@ pre > .copy {
 
 /* --- Commands the person ran ------------------------------------------- */
 
-/* The same shape as a tool call, because a reader is doing the same thing with it: the line is what
-   they scan and the output is what they open. Its own rules rather than a second class on `.tool`,
-   since what is inside differs - a command has a status a program chose where a call has one of four
-   words - and sharing the block would have meant a selector list growing every time either moved.
+/* The same shape as a tool call - a line to scan and a body under it - drawn open where a call is
+   drawn shut, because the person asked for this one and a call is the model reaching for context.
+   Its own rules rather than a second class on `.tool`, since what is inside differs - a command has
+   a status a program chose where a call has one of four words - and sharing the block would have
+   meant a selector list growing every time either moved.
 
    The hue is the person's throughout. What says no model was told is the panel's label and the
    sentence under the box, not a colour: the palette answers who wrote it. */
@@ -998,6 +999,14 @@ pre > .copy {
 
 .ran__body {
     padding: 0 var(--space-4) var(--space-4);
+}
+
+/* A command whose whole answer was its exit status. Faint and italic, which is how `unfinished`
+   beside it already says a thing this console knows rather than a thing the command said. */
+.ran__silent {
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    font-style: italic;
 }
 
 .ran__body pre {

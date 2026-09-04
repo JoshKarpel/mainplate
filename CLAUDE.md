@@ -889,6 +889,27 @@ run that *did* get to say something for itself, with the partial output it manag
 *are* changes and `grep` exits 1 to mean no match, so flattening it would have this console report a
 command doing its job as one that broke.
 
+**The output is drawn open where a tool call's is folded, and the axis is who asked.** A call is the
+model reaching for context, so what it returned is something a reader opens to check the work; a
+command is a line the person typed, and what it said is the whole of why they typed it. It is still a
+`<details>` - it folds, the dock's fold controls reach it, a reader who has read one can put it away
+- and it simply does not have to be opened to be read.
+
+**And a command that said nothing says so**, rather than drawing the empty pane that being open
+exposed. Plenty of them do - `git diff --quiet` is the gallery's own example, and so is every command
+whose whole answer is its exit status - and a blank rectangle under one reads as output that failed
+to arrive. It is a stated absence for the same reason `no reference record` is. A command still
+*running* gets no body at all, since "said nothing" is a claim about a finished one.
+
+**That is what makes the fold a decision in two directions, and the script keeps both.** A call the
+server renders shut can be opened and a command it renders open can be shut, so `mainplate.js` holds
+what the reader decided about each fold rather than a set of the ones they unfolded, and a fold nobody
+has touched is left to the server. And the id it keeps that under has to be one that does not move:
+a command's is the turn and its own `turn:{n}:command:{k}` slot, deliberately not the panel anchor a
+call's is built on, because a turn's commands are drawn at the end and so every panel the model
+produces lands in front of them, renumbering the panel they sit in on the very next response.
+`test_browser.py` pins the two directions beside each other.
+
 **`!` is an affordance over the menu row and never a parse of the message.** If the server stripped a
 leading `!` out of what was posted, a paragraph that legitimately opens with one would silently be a
 command, and it would have run by the time anybody noticed - which is exactly the `Send` that forks

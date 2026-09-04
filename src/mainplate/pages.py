@@ -1585,11 +1585,13 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     prose they read through, and a real `<details>` because that is what works with no script at
     all and what the dock's fold controls act on.
 
-    The id is the panel's own plus this block's place in it, which is stable because a panel's
-    blocks only ever grow at the end: a call keeps its place in the panel once made, whether or not
-    it has come back yet. The script needs it to put a reader's unfolded calls back after a swap,
-    since the server renders `open` for one state only and morphing removes an attribute the new
-    markup does not carry.
+    The id is the panel's own plus this block's place in it, which is stable in both halves: a
+    panel's blocks only ever grow at the end, so a call keeps its place once made whether or not it
+    has come back, and everything a turn draws after a response - a later response, a command -
+    lands after the panel rather than in front of it, so the panel's own `at` does not move either.
+    A command's fold cannot be named this way for exactly that reason; see `command_block`. The
+    script needs it to put a reader's unfolded calls back after a swap, since the server renders
+    `open` for one state only and morphing removes an attribute the new markup does not carry.
 
     A call with no result is drawn open and working, which is what a call still out looks like
     while the turn that made it runs, and what a turn whose run ended between the call and its
@@ -1668,13 +1670,27 @@ def status_element(status: int) -> Element:
     )
 
 
-def command_block(ran: Command, anchor: str, at: int) -> Element:
+def command_block(ran: Command, turn: int, at: int) -> Element:
     """
-    One command the person ran, with what it said folded under it.
+    One command the person ran, with what it said open under it.
 
-    Folded like a tool call and open while it is still running, for the same reasons: the output is
-    context somebody reaches for rather than prose they read through, and a run with nothing under it
-    yet is the one thing on the page actually in flight.
+    **Open, where a tool call is folded, and the difference is who asked.** A call is the model
+    reaching for context, so its output is something a reader opens when they want to check the
+    work; a command is something the person typed themselves, and what it said is the whole of why
+    they typed it. So it is still a `<details>` - it folds, the dock's fold controls act on it, and
+    a reader who has read one can shut it - but it does not have to be opened to be read.
+
+    Which means the fold is now a `<details>` the server renders *open* and the reader may shut,
+    where a call is one it renders shut and the reader may open. `mainplate.js` therefore keeps
+    what the reader decided rather than only what they unfolded, or a morph mid-turn would reopen
+    a command they had just put away.
+
+    **The id is the turn and the command's own slot, and deliberately not the panel's anchor** as a
+    call's is. A turn's commands are drawn at the end of it, so every panel the model produces lands
+    *before* them: the panel a command sits in is the one whose `at` moves while the turn is
+    answered, and a fold identified by it is a decision the script loses on the next response. The
+    slot is `turn:{n}:command:{k}`'s own `k`, since a turn's commands are one run in the order they
+    were run, so this is the record's name for the thing rather than a second numbering of it.
 
     The command itself is shown verbatim and never as Markdown. It is a shell line, so the
     backticks, asterisks and underscores in it are characters rather than emphasis, and rendering it
@@ -1682,10 +1698,17 @@ def command_block(ran: Command, anchor: str, at: int) -> Element:
 
     No `data-markdown`, for the same reason `tool_block` carries none: what is on the page is already
     the source, so an attribute repeating it would be the second copy that one is not.
+
+    **A command that said nothing says so, rather than drawing an empty box.** Plenty of them do -
+    `git diff --quiet` is the fixture's own example, and every command whose whole answer is its exit
+    status - and a blank pane under one reads as output that failed to arrive. It is a stated absence
+    for the same reason `no reference record` is: a reader's next question is what happened, and an
+    empty rectangle makes them ask it.
     """
+    said = None if ran.result is None else ran.result.output
     return details(
         cls="ran",
-        attrs={"id": f"{anchor}-ran-{at}", "open": ran.result is None},
+        attrs={"id": f"ran-{turn}-{at}", "open": True},
         children=[
             summary(
                 children=[
@@ -1706,8 +1729,15 @@ def command_block(ran: Command, anchor: str, at: int) -> Element:
             ),
             *(
                 ()
-                if ran.result is None
-                else (div(cls="ran__body", children=pre(children=code(children=ran.result.output))),)
+                if said is None
+                else (
+                    div(
+                        cls="ran__body",
+                        children=pre(children=code(children=said))
+                        if said
+                        else span(cls="ran__silent", children="said nothing"),
+                    ),
+                )
             ),
         ],
     )
@@ -1730,18 +1760,26 @@ def written_block(kind: str, text: str) -> Element:
     return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text))
 
 
-def block_element(block: Block, anchor: str, at: int) -> Element:
+def block_element(block: Block, panel: Panel, at: int) -> Element:
+    """
+    One block, told where it is by the panel holding it.
+
+    The panel rather than its anchor, because the two kinds that fold are named from different
+    halves of it: a call is addressed by the panel it is in, which never moves once made, and a
+    command by the turn and its own slot, because the panel a command is in does move. See
+    `command_block`.
+    """
     match block:
         case Prose(text=text):
             return written_block("block--text", text)
         case Steering(text=text):
             return written_block("block--text", text)
         case Command():
-            return div(cls=("block", "block--ran"), children=command_block(block, anchor, at))
+            return div(cls=("block", "block--ran"), children=command_block(block, panel.turn, at))
         case Reasoning(text=text):
             return written_block("block--thinking", text)
         case ToolUse():
-            return div(cls=("block", "block--tool"), children=tool_block(block, anchor, at))
+            return div(cls=("block", "block--tool"), children=tool_block(block, panel.anchor, at))
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -1938,7 +1976,7 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                     ),
                 ],
             ),
-            *(block_element(block, panel.anchor, at) for at, block in enumerate(panel.blocks)),
+            *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
         ],
     )
 

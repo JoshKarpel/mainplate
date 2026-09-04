@@ -786,6 +786,11 @@ class Panel:
     nothing else. That is what a permalink can be built on: a turn's panels only ever grow at the
     end, where a position in the whole transcript would shift under a reader whenever an earlier
     turn they had typed past was answered.
+
+    The command panel is the one exception, and it is worth knowing before building on the address.
+    A turn's commands are drawn *after* its model panels, so a response arriving renumbers the panel
+    they sit in while everything before it stays put. Anything that has to survive a running turn is
+    named from the turn and the record's own slot instead; see `command_block` in `pages.py`.
     """
 
     turn: int
