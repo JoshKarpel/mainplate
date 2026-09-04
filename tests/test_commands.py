@@ -29,6 +29,7 @@ from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
 from mainplate.conversation import transcript
 from mainplate.forge import Workspaces
+from mainplate.pages import BASIS_ID
 from mainplate.pages import BRANCHES_ID
 from mainplate.service import Service
 from mainplate.snapshots import Worktree
@@ -36,11 +37,6 @@ from mainplate.snapshots import Worktree
 # Nothing here is slow on purpose, so a bound well under the suite's own is what a runaway command
 # hits rather than the test timeout.
 PATIENCE = timedelta(seconds=20)
-
-# A branch list with nothing in it, asserted as the whole element rather than as the absence of any
-# `<option>` on the page: the cards above carry a completion list of their own over the card names,
-# so "no options anywhere" is a question about that one.
-EMPTY_BRANCHES = f'<datalist id="{BRANCHES_ID}"></datalist>'
 
 
 @pytest.fixture
@@ -488,18 +484,20 @@ class TestOfferingWhereToStart:
         assert 'value="main"' in answer.text
         assert 'value="release/2.1"' in answer.text
 
-    async def test_a_workspace_that_is_not_a_repository_offers_nothing(self, app: ASGIApp) -> None:
+    async def test_a_workspace_that_is_not_a_repository_has_no_fields_to_offer_for(self, app: ASGIApp) -> None:
         """
-        And still answers with the block, so picking `no files` after a repository takes the previous
-        repository's branches back off the page rather than leaving them to complete a field they no
-        longer describe.
+        A base and a branch are answers about a repository, so `no files` takes the fields themselves
+        off rather than leaving two boxes asking a question the session does not have. Answered with
+        the block all the same, since the previous repository's fields are on the page until this
+        swap replaces them.
         """
         async with calling(app) as caller:
             answer = await caller.get("/fragments/branches?workspace=nothing")
 
         assert answer.status == 200
-        assert 'name="base"' in answer.text
-        assert EMPTY_BRANCHES in answer.text
+        assert 'name="base"' not in answer.text
+        assert 'name="branch"' not in answer.text
+        assert f'id="{BASIS_ID}"' in answer.text
 
     async def test_a_workspace_this_console_does_not_know_is_refused(self, app: ASGIApp) -> None:
         """
@@ -511,17 +509,20 @@ class TestOfferingWhereToStart:
 
         assert answer.status == 422
 
-    async def test_the_page_offers_none_until_a_repository_is_picked(
+    async def test_the_page_asks_where_to_start_only_once_a_repository_is_picked(
         self, app: ASGIApp, caller_form: dict[str, str]
     ) -> None:
         """
-        A first render asks no repository anything. Reaching every one of them to draw a page on
-        which all but one of those lists is never looked at is several network calls for nothing.
+        A new session starts on no repository, so a first render has nothing for those fields to be
+        about and draws neither them nor any completions. Picking a card is what fetches the one list
+        that matters: reaching every reachable repository to draw a page on which all but one of
+        those lists is never looked at is several network calls for nothing.
         """
         async with calling(app) as caller:
             answer = await caller.get("/")
 
-        assert 'name="base"' in answer.text
+        assert 'name="base"' not in answer.text
+        assert 'name="branch"' not in answer.text
         # The *branches* list specifically: the group above it has a completion list of its own, over
         # the card names, so asking whether the page holds any `<option>` at all answers about that.
-        assert EMPTY_BRANCHES in answer.text
+        assert f'id="{BRANCHES_ID}"' not in answer.text

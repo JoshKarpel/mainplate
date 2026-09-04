@@ -1497,6 +1497,12 @@ pre > .copy {
        above it with model cards sliding through - which is what a phone shows, where `.setup` is
        the box that scrolls. Here the padding scrolls away with the content, as it should. */
     padding-block: var(--gap);
+    /* And inline, because a scroller clips: `overflow-y: auto` on `.setup` computes `overflow-x` to
+       `auto` as well, so a control flush with its edge has its focus ring cut off on that side -
+       the base and the branch boxes, which fill their grid columns, and every card when its group is
+       open. This is the room that ring reaches into, so it is the widest of them: 4px against a
+       card's 2px outline at a 2px offset, and an input's 2px at 1px. */
+    padding-inline: var(--space-2);
 }
 
 .picker__part {

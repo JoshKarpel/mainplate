@@ -69,11 +69,12 @@ tools may touch. The endpoint is what carries the API format, which is why it is
 looked up later: the same model id genuinely does sit behind two formats, and the two serialize a
 conversation differently.
 
-Under the repository you can say **where in it to start** and **what branch to start there**. Both are
-optional. Left blank, the worktree is checked out at the repository's default branch as it stands
-now, on a branch named after the session (`mainplate/349e2f1e`), so a `git commit` from the box under
-the conversation has somewhere to live and `git push origin HEAD` does the obvious thing. Name one
-yourself and that wins.
+Once you have picked a repository, you can say **where in it to start** and **what branch to start
+there**. The two fields appear with the repository and are not there before it, because neither is a
+question a session on no files has. Both are optional. Left blank, the worktree is checked out at the
+repository's default branch as it stands now, on a branch named after the session
+(`mainplate/349e2f1e`), so a `git commit` from the box under the conversation has somewhere to live
+and `git push origin HEAD` does the obvious thing. Name one yourself and that wins.
 
 They are two questions rather than one because **starting at `main` cannot put the worktree on
 `main`**: git refuses a branch another worktree already holds, so the second session you started

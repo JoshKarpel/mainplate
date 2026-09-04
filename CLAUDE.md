@@ -1002,8 +1002,16 @@ Five things there are decided rather than incidental:
   than a rule per field. A base and a branch are answers *about* a repository, so with none picked
   all three collapse together. That is the same stance `Isolation.settled` already took and it now
   lives in one place with it, applied by `Service.start`, by `Service.fork`, and by `scripts/seed.py`,
-  which is the one writer that is not the service. The controls are therefore drawn always, never
-  greyed: two controls kept in step is the mistake `workspace_cards` was written to undo.
+  which is the one writer that is not the service.
+- **With no repository the two controls are not drawn at all**, so a page never asks a question the
+  session does not have, and the record `settled` would drop is never posted in the first place. That
+  is not the greying `workspace_cards` was written to undo, and the difference is that nothing is kept
+  in step: which fields exist and which branches complete them are one answer, decided in one call
+  from the same `repository`, delivered by the one swap picking a card already makes. The block stays
+  as an empty anchor, since it is what the next pick targets. What it costs with `mainplate.js` and
+  htmx absent is naming a base by hand: a card cannot then reveal the fields, and such a session
+  starts on the repository's default branch under the name this console gives it. The completions were
+  always the swap's to deliver, so that page was already the lesser half of this control.
 - **A fork carries neither**, which is `settled(forked=True)`, and is then given a branch of its own.
   A fork plants at the tree of the turn it re-asks, so a base beside that is a second answer to where
   its files come from; and `git worktree add -b` refuses a branch already in use, so an inherited one
@@ -1756,6 +1764,16 @@ value between two elements that fill each other and is not: on a phone `.setup` 
 scrolls, so padding on it parked the sticky provider heading that far down the box and left a strip
 above it with model cards sliding through. Inside, the padding scrolls away with the content, which
 is what it was always for.
+
+**And a scroller clips, so `.picker` carries inline padding too: the room a focus ring is drawn
+into.** `overflow-y: auto` computes `overflow-x` to `auto` as well, so a control flush with the
+scroller's edge has its gold cut off on that side - the base and the branch boxes, which fill their
+grid columns, and every card while its group is open. Inside the scroller for the same reason the
+block padding is. `TestTheFocusRingHasRoomToBeDrawn` is what fails when it goes, and it measures the
+gap against the ring's own `outline-width` and `outline-offset` rather than against a number written
+down twice. It sets a window narrower than the suite's own, because at 1400 the picker sits inside its
+`max-width` with room to spare and the clipping - which is every narrower window, so the common case -
+does not happen at all.
 
 The picker's controls are **associated with their form by name, not by nesting**, and that is
 load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned

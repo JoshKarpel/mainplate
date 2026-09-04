@@ -1459,16 +1459,25 @@ class TestNarrowingTheBranches:
 
         assert await page.get_attribute(".basis__box", "list") is None
 
-    async def test_a_workspace_with_no_branches_is_left_exactly_as_it_was(
+    async def test_a_workspace_that_is_not_a_repository_has_no_fields_at_all(
         self, page: Page, working: tuple[str, Service]
     ) -> None:
-        """A field that declared itself a combobox over an empty list would be offering nothing."""
-        await a_start_page(working, page, workspace="no files")
+        """
+        A base and a branch are answers *about* a repository, so `no files` has none for them to be
+        about. Driven through a repository first, because the assertion worth making is that the
+        fields somebody was already offered are taken back off.
+        """
+        await a_start_page(working, page)
+        await expect(page.locator(".basis__box")).to_be_attached()
 
-        await expect(page.locator(".basis__count")).to_have_count(0)
+        # Opened again, because picking a card shuts the group down to what was picked.
+        await page.click('label[for="open-repository"]')
+        await page.click('.repo[data-name="no files"]')
 
-        assert await page.get_attribute(".basis__box", "list") == "branches"
-        assert await page.get_attribute(".basis__box", "role") is None
+        await expect(page.locator(".basis__box")).to_have_count(0)
+        await expect(page.locator('[name="branch"]')).to_have_count(0)
+        # The block itself stays, since it is what the next pick swaps over.
+        await expect(page.locator("#basis")).to_be_attached()
 
 
 class TestWhereTheCursorIsAfterSending:
@@ -1695,3 +1704,49 @@ class TestFollowingTheEnd:
         await page.click('[data-leap="end"]')
         await expect(page.locator("[data-landed]")).to_have_count(1)
         await expect(self.toggle(page)).to_have_attribute("aria-pressed", "false")
+
+
+class TestTheFocusRingHasRoomToBeDrawn:
+    """
+    A scroller clips, so a control flush with its edge loses its focus ring on that side.
+
+    `.setup` asks for `overflow-y: auto`, which computes `overflow-x` to `auto` as well, and the two
+    fields that fill their grid columns are where that shows: the ring is drawn *outside* the box, so
+    without room inside the scroller the gold is cut off at the left of one field and the right of the
+    other. The room is `.picker`'s inline padding, inside the scroller for the reason its block
+    padding is.
+
+    A browser, because both renderings are correct markup and each is a correct picture of some page:
+    what is wrong with the clipped one is three pixels of gold, and what it is measured against is the
+    ring's own reach rather than a number written down twice.
+    """
+
+    async def test_the_fields_are_not_flush_with_the_box_that_scrolls(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        # Narrower than the suite's own window, because that one is wide enough for the picker to sit
+        # inside its `max-width` with room to spare on either side, where every narrower window has it
+        # filling the scroller. The clipped case is the common one, so it is the one to measure.
+        await page.set_viewport_size({"width": 1100, "height": 900})
+        await a_start_page(working, page)
+        await page.focus(".basis__box")
+
+        room = await page.evaluate(
+            """() => {
+                const setup = document.querySelector('.setup');
+                const edge = setup.getBoundingClientRect().left + setup.clientLeft;
+                const focused = getComputedStyle(document.activeElement);
+                return {
+                  reach: parseFloat(focused.outlineWidth) + parseFloat(focused.outlineOffset),
+                  left: document.querySelector('.basis__box').getBoundingClientRect().left - edge,
+                  right:
+                    edge +
+                    setup.clientWidth -
+                    document.querySelector('[name="branch"]').getBoundingClientRect().right,
+                };
+            }"""
+        )
+
+        assert room["reach"] > 0, "the focused field has no ring to leave room for"
+        assert room["left"] >= room["reach"]
+        assert room["right"] >= room["reach"]

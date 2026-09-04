@@ -217,8 +217,9 @@ class Choice:
 
         With no repository there is no worktree, so there is nothing to reach, nothing to check out
         and no branch to start: all three collapse together because they are answers to one question
-        the picker asks once. That is what lets the start page be a form that *cannot* express a
-        contradiction, instead of two controls kept in step with a swap.
+        the picker asks once. The page draws no base and no branch until a repository is picked, so a
+        form cannot express the contradiction in the first place; this is what says the same of every
+        other way in, a fork and `scripts/seed.py` alike.
 
         `forked` drops the base and the branch whatever the repository is. A fork plants at the tree
         of the turn it re-asks, so a base would be a second answer to where its files come from, and

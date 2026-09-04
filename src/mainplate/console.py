@@ -515,14 +515,18 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     for every repository at once: a console reaching six repositories would make six network calls to
     render a page on which five of the lists are never looked at.
 
-    **Nothing about a repository makes this refuse.** One that is not a repository at all, one no
-    forge reaches, one whose host is not answering: every one of them is the same block with nothing
-    to complete, which is exactly the field as it was before it offered anything. That is
-    `forge.offers`'s promise rather than `catalogue.discover`'s refusal, and the difference is the
-    usual one - the field takes free text either way, so having no completions costs a suggestion and
-    not an ability. A workspace value this console does not recognise is the one refusal, because
-    that is a malformed request rather than an answer about an environment, and the card's own
-    `hx-status:4xx` leaves the block standing.
+    **Nothing about a repository makes this refuse.** One no forge reaches and one whose host is not
+    answering are the same block with nothing to complete, which is exactly the field as it was
+    before it offered anything. That is `forge.offers`'s promise rather than `catalogue.discover`'s
+    refusal, and the difference is the usual one - the field takes free text either way, so having no
+    completions costs a suggestion and not an ability. A workspace value this console does not
+    recognise is the one refusal, because that is a malformed request rather than an answer about an
+    environment, and the card's own `hx-status:4xx` leaves the block standing.
+
+    A workspace that is not a repository is answered with the empty block, which takes the fields
+    themselves off the page: a base and a branch are answers *about* a repository, and `no files` has
+    none for them to be about. Answered rather than left alone, because the previous repository's
+    fields and completions are on the page until this swap replaces them.
 
     The values it renders are *not* trusted on the way back in: `parse_form_start` re-parses whatever
     was posted, since a completion menu is a suggestion a browser was given rather than a constraint
@@ -535,7 +539,7 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
         # `ValueError` from inside a handler is a fault there, so this has to say so itself.
         return page_response(422, refusal_page(LINKS, 422, str(unknown)))
     branches = () if repository is None or service.workspaces is None else await service.workspaces.branches(repository)
-    return page_response(200, fragment(starting_at(None, None, branches)))
+    return page_response(200, fragment(starting_at(repository, None, None, branches)))
 
 
 @get(t"/sessions/{session_id}", session_id, summary="One session, whole")

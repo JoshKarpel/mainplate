@@ -1149,7 +1149,7 @@ def workspace_card(links: Links, naming: str, value: str, saying: str, chosen: b
     )
 
 
-def starting_at(base: str | None, branch: str | None, branches: Sequence[str] = ()) -> Element:
+def starting_at(repository: str | None, base: str | None, branch: str | None, branches: Sequence[str] = ()) -> Element:
     """
     Where in the repository the worktree starts, and what branch it starts there.
 
@@ -1169,11 +1169,19 @@ def starting_at(base: str | None, branch: str | None, branches: Sequence[str] = 
     call, and exactly one is ever live, because enhancing the field removes the `list` attribute that
     makes the first one work.
 
-    **Inside the worktree group and always shown, rather than greyed until a repository is picked.**
-    Two controls kept in step is the mistake `workspace_cards` was written to undo, and this is the
-    same mistake one level in. What settles it instead is `Choice.settled`, which drops both where
-    there is no repository, so a form that says `no files` and names a branch records the thing it
-    said first and no reader downstream reconciles anything.
+    **With no repository there are no fields, and the block is an empty anchor.** A base and a branch
+    are answers *about* a repository, so with `no files` or `this whole machine` picked they are two
+    boxes asking a question the session does not have - and `Choice.settled` drops whatever they hold
+    anyway, which is a form saying one thing and a record keeping another. That is not the greying
+    `workspace_cards` was written to undo, because nothing here is kept in step with anything: which
+    fields exist and which branches complete them are one answer, decided in this one call from the
+    same `repository`, and delivered by the one swap a card already makes. The anchor stays so the
+    next pick has something to target.
+
+    The cost, with htmx absent: a card cannot reveal the fields, so a session started that way begins
+    on the repository's default branch under the name this console gives it. The branches were already
+    the swap's to deliver, so what is given up is naming a base by hand on a page whose scripts did
+    not load.
 
     Both are optional and the placeholders say what leaving them does, which is the whole of what
     keeps two more fields from becoming two more steps: blank is the repository's default branch as
@@ -1184,6 +1192,8 @@ def starting_at(base: str | None, branch: str | None, branches: Sequence[str] = 
     would stop the next one planting at all. So one says where to begin and the other says what to
     begin, and the placeholder on this one has to say so rather than implying the first answers both.
     """
+    if repository is None:
+        return div(attrs={"id": BASIS_ID})
     return div(
         cls="basis",
         attrs={"id": BASIS_ID},
@@ -1334,13 +1344,14 @@ def workspace_cards(
                     ],
                 ),
                 # Under the cards rather than beside them, because they are details of the answer
-                # above: which repository comes first, and where in it comes after.
+                # above: which repository comes first, and where in it comes after. So a workspace
+                # that is not a repository has none of them, and a page nobody has picked on yet is
+                # that case.
                 #
-                # With no completions, always: on a first render nothing has been picked yet, and
-                # asking every reachable repository what branches it has to draw a page on which all
-                # but one of those lists is never looked at is several network calls for nothing.
+                # With no completions, always: asking a repository what branches it has to draw a
+                # page on which that field may never be looked at is a network call for nothing.
                 # Picking a card is what fetches the one list that matters.
-                starting_at(base, branch),
+                starting_at(repository, base, branch),
             ],
         ),
     )
