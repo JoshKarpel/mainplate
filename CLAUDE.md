@@ -662,11 +662,28 @@ the row above the message box, which is the row a phone has least of. `sending_c
 a caret opening a `<details>` whose items are submit buttons, so the whole thing needs no script:
 the fold is how everything else here folds, and a named button has always posted its own pair.
 
-It deliberately does **not** switch what the primary button does, which is where GitHub's version of
-this control goes further. Remembering a choice means a button labelled `Send` that forks, and that
-is the one failure a control like this can have that nobody notices until after it has happened.
-What closing the menu on an outside click and on Escape adds is an enhancement over a control that
-already opens, chooses and submits with the file absent.
+**Every answer is one `Answer` value, rendered three times**: as a row in that menu, as the button
+the box shows once a leader has put it in that answer's mode, and as the sentence above the box
+saying what will happen. `sending_answers` is the list and the three renderings are functions of it,
+so what is on offer, what it is called and what it posts cannot come apart between them. That is the
+same bargain the branch field takes in rendering one `branches` argument as a `<datalist>` and as the
+list the script narrows.
+
+**One word per answer, and `Answer.named` is `leader.capitalize()` rather than a second field.** The
+word is the menu row's name, the leader typed after `/`, and the value in `data-leading`; where it
+names a disposition it *is* `Disposition.value`, so the word on the page, the word on the keyboard
+and the word in the store are one string. That is what took `Wait for the next turn` back to `Next`
+and `Back to where this came from` back to `Parent`: a sentence cannot be typed, so a leader would
+have needed a second name, and a second name is a synonym to keep in step for ever. What each one
+*does* is the `saying` under it, which is where an explanation belongs anyway.
+
+It deliberately does **not** switch what the primary button does *by remembering*, which is where
+GitHub's version of this control goes further. Remembering a choice means a button labelled `Send`
+that forks, and that is the one failure a control like this can have that nobody notices until after
+it has happened. A mode is different because it is only ever entered by asking for it by name, and
+the button then says `Fork` rather than `Send`. What closing the menu on an outside click and on
+Escape adds is an enhancement over a control that already opens, chooses and submits with the file
+absent.
 
 **Send not saying whether it steers is not an exception to that.** What a button says is still what
 it does: `Send` means "into this conversation, now", and steering is *how* that is carried out when a
@@ -686,9 +703,76 @@ exception - its card in the rail shows nothing without the script either.
 
 **It is posted as the submit button's own `name`/`value`**, which is the browser's mechanism rather
 than anything scripted, so it works with `mainplate.js` absent and htmx appends the submitter's pair
-like any other field. Shift-Enter deliberately reaches none of them: `requestSubmit()` with no
-submitter posts no disposition at all, which parses as `HERE`, so the keyboard shortcut keeps meaning
-the one thing it has always meant rather than whichever button was pressed last.
+like any other field. Shift-Enter reaches whichever button the *mode* leaves standing and no other:
+`requestSubmit()` with no submitter posts no disposition at all, which parses as `HERE`, so the
+keyboard shortcut means the one thing the button beside the box says rather than whichever row was
+pressed last.
+
+### Leaders
+
+**`/fork ` in an empty box is a shortcut to a row of that menu, never a second way of saying it.**
+Typed, it puts the composer into that answer's mode: the button beside the box says `Fork`, a
+sentence above it says what will happen, and what is then written and sent goes there. `! ` is the
+same thing for `/run`, which earns a key of its own by being the mode reached oftenest.
+
+**The space is what commits it, and that is what makes a leader something a reader *finishes*.**
+Until it is pressed the word is ordinary text sitting in the box with the menu open beside it, so
+`!` is a character, `/fo` is two, and nothing has happened on a keystroke somebody was in the middle
+of. It commits only where the box names an answer *in full*, because a prefix is somebody still
+typing and taking the row the keyboard happens to be on would put the box in a mode they were
+spelling their way towards; unnamed, the space types itself, which breaks the pattern and puts the
+menu away. That is also what lets `!` be a leader rather than a key that does something: it is `run`
+written in one character, so it narrows, commits, and is undone by a backspace exactly as `/run` is.
+
+Six things there are decided rather than incidental:
+
+- **It is entered in the page, visibly, and never parsed off the message.** If the server stripped a
+  leading `/fork` out of what was posted, a paragraph that legitimately opens with one would silently
+  be a fork, and it would have happened by the time anybody noticed. So the leader is consumed by the
+  script, the mode is drawn, and both buttons are rendered by the server with their own labels and
+  their own posted values - the script toggles one attribute on the form and hands `requestSubmit`
+  whichever button that leaves standing, so it holds no label, no field name and no disposition. A
+  button whose text and `name` the script rewrote would be the failure this shape exists to avoid.
+- **Only at the start of an empty box, and only in the default mode.** Mid-message a `/` is an
+  ordinary character; in a command box it is the front of half the paths anybody types, so a palette
+  opening over one would be in the way of every command. A word no answer answers to is ordinary text
+  too, so `/etc/hosts is where it lives` is a message.
+- **The sending menu *is* the palette**, which is what keeps one list: the rows already say what each
+  answer does and already carry its word, so a second list beside them would be a copy to keep in
+  step. It opens narrowed to what still fits, by prefix rather than anywhere in the word - the
+  opposite of the branch field, because a leader is a short word typed from the front. Enter takes
+  the row the keyboard is on, which is how a word nobody finished typing is finished; plain Enter is
+  safe to swallow there where it is nowhere else in this box, because what it would otherwise do is
+  break a line in the middle of `/fo`. Two keys and not two mechanisms: the space says the word is
+  done and Enter says the *row* is, which are different things to have decided.
+- **A row pressed while a leader is being typed chooses the mode rather than sending.** The rows are
+  submit buttons, so without the capture-phase intercept a press with `/fo` in the box would post
+  `/fo` as the message: both a message nobody wrote and a session nobody asked for.
+- **`Keep` is a mode like the rest and is the one that cannot be a submitter.** It posts nothing at
+  all, so it is a `type=button` the shelf listens for, and the keyboard reaches it by pressing it
+  rather than through `requestSubmit`. It is also the one mode nothing dispatches a `submit` from, so
+  leaving it is said outright in the shelf's own listener rather than reached through the path every
+  other answer takes; what decides is still the button's own `data-staying`.
+- **Whether a mode outlives what was sent from it is the answer's own decision**, carried on the
+  button the server drew for it as `data-staying` and read there rather than kept in a list in the
+  script. `Run` stays, because a command is rarely the only one; everything else comes back to `Send`,
+  because it is a thing somebody meant once, and a `Fork` or an `Aside` has navigated away by then
+  anyway. The script leaves the mode a turn of the event loop after the `submit`, because what leaving
+  it does is hide the very button the send is attributed to.
+
+**Which modes exist is read off the buttons the server drew**, not kept in a list in the script. A
+session with no files is offered no `Run`, so there is no `/run` and no `!`, and the two cannot drift
+because there is only the one thing that decides it. What CSS lists by name is which
+`data-leading` shows which button and sentence, the same bargain the card kinds take.
+
+**A mode is left by Escape, and by a send where the answer is not one that stays.** What makes
+staying safe is what makes the mode safe at all: the button says `Run`, not `Send`.
+
+**The sentence saying what the mode does sits *above* the box.** The composer is the bottom of the
+page, so a row appearing anywhere in its column pushes everything above that row upward: under the
+box it moved the box itself out from under the cursor at the moment somebody entered the mode, where
+above it what grows is the composer's top edge. `TestNamingAModeFromTheKeyboard` measures the box
+across the press, because both layouts are correct markup and each screenshot is right on its own.
 
 An **absent** field is `HERE` and an unrecognised one is a **refusal**, which is the one place a
 default would be wrong: guessing puts a message in a conversation nobody addressed it to, and it is
@@ -841,7 +925,7 @@ when that answer lands, and is the one reorder this reading performs.
 ### Run
 
 The one answer in the menu that is not a message, and the only thing this console does that runs
-outside the sandbox everything else runs behind. `!` typed into an empty box is the shortcut to it.
+outside the sandbox everything else runs behind. `! ` typed into an empty box is the shortcut to it.
 
 **As the person and not as the agent, and that is the whole point rather than a gap.** A session's
 `isolation` bounds what a *model* asked for, and `sandbox.py` binds the clone read-only precisely so
@@ -895,6 +979,25 @@ command is a line the person typed, and what it said is the whole of why they ty
 `<details>` - it folds, the dock's fold controls reach it, a reader who has read one can put it away
 - and it simply does not have to be opened to be read.
 
+**A fold's frame shuts it, and not only its summary.** A summary is one row at the top of a box that
+may be several screens of output, so putting a long one away meant scrolling back up to the single
+place that would do it; the room around the output is at the *bottom* as well, which is where a reader
+who has just read to the end already is. It is every kind in `FOLDS` rather than a rule about
+commands, because it is one complaint: a command is drawn open so shutting is the press made oftenest
+there, and a call the reader opened to check the work is the one whose return runs to hundreds of
+lines. Two panels of the same shape answering the same press differently would be the thing to
+explain.
+
+The output is exempt, and that exemption is the whole of what makes this safe: a press in a `pre` is
+usually the start of lifting a line out, and a panel that folded under somebody selecting from it
+would cost more than the scroll it saves. A press that ended a drag is out for the same reason, since
+a browser reports one as a click on wherever the pointer came to rest. It shuts and never opens - a
+shut panel is a summary and little else - so this is the way out of a tall box rather than the toggle
+in a second place, and setting `open` dispatches `toggle`, so the decision is recorded exactly as a
+press on the summary is. `TestShuttingAFoldFromItsFrame` pins both kinds and both halves in a real
+Chromium, because where the frame stops and the output starts is a fact about the rendered layout that
+no markup assertion can see.
+
 **And a command that said nothing says so**, rather than drawing the empty pane that being open
 exposed. Plenty of them do - `git diff --quiet` is the gallery's own example, and so is every command
 whose whole answer is its exit status - and a blank rectangle under one reads as output that failed
@@ -910,20 +1013,24 @@ call's is built on, because a turn's commands are drawn at the end and so every 
 produces lands in front of them, renumbering the panel they sit in on the very next response.
 `test_browser.py` pins the two directions beside each other.
 
-**`!` is an affordance over the menu row and never a parse of the message.** If the server stripped a
-leading `!` out of what was posted, a paragraph that legitimately opens with one would silently be a
-command, and it would have run by the time anybody noticed - which is exactly the `Send` that forks
-the menu already refuses. So the mode is entered in the page, visibly, and the two buttons are *both*
-rendered by the server with their own labels and their own posted values: the script toggles one
-attribute on the form and hands `requestSubmit` whichever button that leaves standing, so it holds no
-label, no field name and no disposition of its own. A button whose text and `name` the script rewrote
-would be the failure this shape exists to avoid.
+**`! ` is `/run`'s own key and never a parse of the message**, which is the leader rule above applied
+to the mode reached oftenest; see there for why a leader is entered in the page rather than stripped
+off what was posted, and why the space is what commits it. A command box is also where "only in the
+default mode" earns its keep, since `/` is the front of half the paths anybody types.
+
+**And it is the one mode that stays once a command has gone**, which is what `data-staying` is for: a
+session that reaches for `Run` reaches for it again a line later, where every other answer in that
+menu is a thing somebody meant once.
 
 `requestSubmit(submitter)` and not `requestSubmit()` is load-bearing here and nowhere else:
 unattributed it posts no button's pair at all, so a command typed into a command box would arrive as
 an ordinary message and be said to the model. `TestTurningTheBoxIntoACommandBox` pins it in a real
 Chromium, because that is htmx's and the browser's behaviour rather than ours and looks identical in
 the markup either way.
+
+`Run` is the one mode that changes what you are *writing* rather than only where it goes, so the box
+takes the terminal's monospace and a heavier edge on top of the button and the sentence every mode
+gets.
 
 The mode is entered from the box and left from the box, both by a key pressed while it has the focus,
 and it is deliberately *not* stored: it is a mode within a visit, like following the end, rather than
@@ -1810,12 +1917,15 @@ what a shut group still posts.
 
 **Shift-Enter sends and plain Enter breaks the line**, which is that way round because a message here
 is prose that wants paragraphs and fenced blocks: a box where the obvious key sends is a box you
-cannot write one in. `wireSend` calls **`requestSubmit`** and not `submit`, and that is the whole of
+cannot write one in. `sendFrom` calls **`requestSubmit`** and not `submit`, and that is the whole of
 why one delegated listener serves every page: `submit()` posts *without* dispatching a `submit`
 event, so htmx would never see a send on a session page and the browser would navigate away from the
 conversation instead. It also runs the form's own validation, so an empty box refuses from the
 keyboard exactly as it refuses from the button. The Send button names the key, because a shortcut
 nothing on the page mentions is one nobody uses.
+
+Plain Enter is the one key a mode may take, and only while the leader palette is open: what it would
+otherwise do there is break a line in the middle of `/fo`. See the leaders section.
 
 **The box is one line at rest and grows a line at a time**, to fourteen lines or two fifths of the
 window, whichever is smaller, and scrolls inside itself past that. `field-sizing: content` is the

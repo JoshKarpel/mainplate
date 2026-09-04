@@ -869,9 +869,13 @@ pre > .copy {
     color: var(--error-edge);
 }
 
+/* The room around the return is the other way to shut the panel, which is what the cursor says. See
+   `.ran__body`, which is the same band for the same reason: a return that runs to hundreds of lines
+   is one a reader would otherwise scroll back up to the summary to put away. */
 .tool__body {
     margin: 0;
     padding: 0 var(--space-4) var(--space-4);
+    cursor: pointer;
 }
 
 .tool__body dt {
@@ -889,6 +893,9 @@ pre > .copy {
 .tool__body pre {
     position: relative;
     margin: 0;
+    /* What the call returned is not part of the band that shuts the panel, because a press here is
+       usually the start of lifting a line out. The cursor is where the frame stops saying so. */
+    cursor: auto;
     /* On the same grid as a fenced block, because a read's gutter is the longest column of box
        drawing this console ever draws and it is here rather than in a fence. The family is said
        again rather than inherited from `.tool`: a browser's own sheet sets `pre` to `monospace`
@@ -997,8 +1004,13 @@ pre > .copy {
     font-style: italic;
 }
 
+/* The room around the output is the other way to shut the panel, which is what the cursor says, and
+   it is `.tool__body`'s rule as much as this one. A command is drawn open and its output can be a
+   screen and a half, so the summary - one row, at the top - was the only way out of a box a reader
+   had just scrolled to the bottom of. This band is at the bottom, which is where they are. */
 .ran__body {
     padding: 0 var(--space-4) var(--space-4);
+    cursor: pointer;
 }
 
 /* A command whose whole answer was its exit status. Faint and italic, which is how `unfinished`
@@ -1012,6 +1024,9 @@ pre > .copy {
 .ran__body pre {
     position: relative;
     margin: 0;
+    /* What the command said is not part of the band that shuts the panel, because a press here is
+       usually the start of lifting a line out. The cursor is where the frame stops saying so. */
+    cursor: auto;
     /* On the console's own monospace grid, exactly as a tool's body is, and for the same reason: a
        command's output is where box drawing and aligned columns actually turn up. The family is said
        again rather than inherited, since a browser's own sheet sets `pre` to `monospace` directly and
@@ -1279,48 +1294,57 @@ pre > .copy {
     border-bottom-right-radius: 0;
 }
 
-/* --- The command box -------------------------------------------------- */
+/* --- The box in one of the menu's own modes ---------------------------- */
 
-/* `!` in an empty box turns the composer into one, and this is the whole of what says so. Exactly
-   one of the two buttons is ever shown, which is the point rather than a saving: both are rendered
-   by the server carrying their own label and their own posted value, so what a reader is about to
-   press is a control that says what it does. A single button whose text and name the script rewrote
-   would be the "Send that forks" this console refuses everywhere else.
+/* `/fork ` typed into an empty box - or `! `, which is `/run`'s own key - puts the composer into that
+   answer's mode, and these are the whole of what says so: the button beside the box, and the
+   sentence above it.
 
-   `Run` is not `display: none` in the sense that matters - `requestSubmit` can still be handed a
-   hidden submit button, which is how Shift-Enter posts the right pair. */
-.composer .sender__run,
-.composer[data-commanding] .sender__send {
+   Exactly one primary button is ever shown, which is the point rather than a saving: every one of
+   them is rendered by the server carrying its own label and its own posted value, so what a reader
+   is about to press is a control that says what it does. A single button whose text and name the
+   script rewrote would be the "Send that forks" this console refuses everywhere else.
+
+   Hidden is not out of reach - `requestSubmit` can still be handed a hidden submit button, which is
+   how Shift-Enter posts the right pair. */
+.composer :is(.sender__leader, .leading) {
     display: none;
 }
 
-.composer[data-commanding] .sender__run {
+.composer[data-leading] .sender__send {
+    display: none;
+}
+
+/* The one place a mode is listed by name, which is the same bargain the card kinds take: an answer
+   added without a line here is drawn as no mode at all. Spelled out because CSS cannot ask whether a
+   descendant's attribute matches an ancestor's, and the pairing is exactly that question. */
+.composer[data-leading="next"] :is(.sender__leader, .leading)[data-leader="next"],
+.composer[data-leading="aside"] :is(.sender__leader, .leading)[data-leader="aside"],
+.composer[data-leading="fork"] :is(.sender__leader, .leading)[data-leader="fork"],
+.composer[data-leading="parent"] :is(.sender__leader, .leading)[data-leader="parent"],
+.composer[data-leading="run"] :is(.sender__leader, .leading)[data-leader="run"],
+.composer[data-leading="keep"] :is(.sender__leader, .leading)[data-leader="keep"] {
     display: revert;
 }
 
-/* The other half of saying so, and the one a reader sees without looking at the button: the box
-   itself takes the terminal's monospace and a heavier edge. A command is a shell line, so setting it
-   in the face the output will come back in is the box telling the truth about what it holds. */
-.composer[data-commanding] textarea {
+/* Above the box rather than under it, and that is the composer being the bottom of the page: a row
+   appearing anywhere in this column pushes everything above that row upward, so a sentence under the
+   box moved the box itself out from under the cursor at the moment somebody entered the mode. Above
+   it, what grows is the composer's top edge. */
+.leading {
+    margin: 0;
+    color: var(--person-edge);
+    font-size: 0.72rem;
+}
+
+/* `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the
+   box takes the terminal's monospace and a heavier edge. A command is a shell line, so setting it in
+   the face the output will come back in is the box telling the truth about what it holds. */
+.composer[data-leading="run"] textarea {
     border-width: 2px;
     font-family: var(--mono);
     font-size: var(--mono-size);
     line-height: var(--mono-line);
-}
-
-/* The sentence under the box, which is rendered on every session that can run one and shown only
-   here. Out of the flow otherwise, so a composer that is not a command box is laid out exactly as it
-   always was: this is a row of the composer's own column rather than an item beside the line saying
-   what the session is on, which sharing a row would squeeze to half the width on every window. */
-.commanding {
-    display: none;
-}
-
-.composer[data-commanding] .commanding {
-    display: block;
-    margin: 0;
-    color: var(--person-edge);
-    font-size: 0.72rem;
 }
 
 .sender__more {
@@ -1384,9 +1408,35 @@ pre > .copy {
     text-align: left;
 }
 
+/* Narrowed to what a leader typed into the box still fits. `display: flex` above beats the browser's
+   own `[hidden]` rule, so the row has to be told again. */
+.composer .sender__option[hidden] {
+    display: none;
+}
+
+/* `aria-selected` is the row the keyboard is on while the box holds a leader, drawn the same as the
+   one under the pointer: there is one place to look either way. */
 .composer .sender__option:hover:not(:disabled),
-.composer .sender__option:focus-visible {
+.composer .sender__option:focus-visible,
+.composer .sender__option[aria-selected="true"] {
     background: var(--sunk);
+}
+
+.sender__option-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+/* The word that reaches this row from the keyboard, printed on it for the reason Send names
+   Shift-Enter: a shortcut nothing on the page mentions is one nobody uses. In the face it is typed
+   in, so it reads as something to type rather than as a second name for the row. */
+.sender__option-leader {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 400;
 }
 
 /* The rule separates what *sends* the text from what does not. `Keep` is last because it is the only

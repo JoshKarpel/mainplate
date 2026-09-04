@@ -2305,27 +2305,155 @@ type Placed = Element | VoidElement | None
 """One thing a caller hands the composer to put above or below the box, or nothing at all."""
 
 
-def sending_option(name: str, saying: str, attrs: Mapping[str, str | int | bool | None]) -> Element:
+@dataclass(frozen=True, slots=True)
+class Answer:
     """
-    One answer to what happens to what you typed, as a row in the menu.
+    One thing that can happen to what you typed.
+
+    **One word used three times.** `leader` is what the menu row is called, what is typed after `/`
+    to reach it from the keyboard, and what the form carries in `data-leading` while the box is in
+    its mode. Where it names a disposition it *is* that disposition's recorded value, so the word on
+    the page, the word on the keyboard and the word in the store cannot come apart; `keep` is the one
+    answer with no disposition behind it, because it sends the text nowhere.
+
+    That is also why there is no separate label. A button reading `Fork` and a leader spelled
+    `/branch` would be a synonym to keep in step for ever, so what a control says is the word itself.
+
+    `staying` is whether the box is still in this mode once what was typed has gone, and it is each
+    answer's own answer rather than one rule over all of them. A run of commands is what `Run` is for,
+    so it stays; everything else is a thing you meant once, so the box comes back to `Send` and the
+    next message goes where a message normally goes. It is carried on the button rather than kept in a
+    list in the script, for the reason every other fact about a mode is: there is one place that
+    decides what an answer is, and it is here.
+    """
+
+    leader: str
+    saying: str
+    posts: Mapping[str, str | int | bool | None]
+    staying: bool
+
+    @property
+    def named(self) -> str:
+        """What it is called, which is its own word: there is no second name to drift from."""
+        return self.leader.capitalize()
+
+
+def dispatched(disposition: Disposition, saying: str, *, staying: bool = False) -> Answer:
+    """One answer that posts a disposition, named after the value it posts."""
+    return Answer(
+        leader=disposition.value,
+        saying=saying,
+        posts={"type": "submit", "name": DISPOSITION_FIELD, "value": disposition.value},
+        staying=staying,
+    )
+
+
+def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[Answer, ...]:
+    """
+    Everything that can happen to what you typed, other than the thing Send already does.
+
+    **Declared once and rendered three times**: as a row in the menu, as the button the box shows
+    once it is in that answer's mode, and as the sentence above the box saying what will happen. The
+    three cannot disagree about what is on offer, what it is called or what it posts, which is the
+    same bargain the branch field takes in rendering one list as a `<datalist>` and a narrowed list.
+
+    Ordered by how far the text travels: waiting for the next turn keeps it here and merely later, an
+    `Aside` is a step out you mean to come back from, a `Fork` is a conversation of its own, `Parent`
+    reaches the one this came out of, `Run` is not a message at all, and `Keep` sends it nowhere.
+    """
+    return (
+        *(
+            (
+                dispatched(
+                    Disposition.NEXT,
+                    "Queue it behind the reply that is coming instead of putting it to the model now",
+                ),
+            )
+            if answering
+            else ()
+        ),
+        dispatched(Disposition.ASIDE, "Step out into a side conversation you mean to come back from"),
+        dispatched(Disposition.FORK, "Ask it in a new session carrying this whole conversation"),
+        *(
+            (dispatched(Disposition.PARENT, "Send it to the conversation this one was forked out of"),)
+            if returning
+            else ()
+        ),
+        *(
+            (
+                dispatched(
+                    Disposition.RUN,
+                    "Run it in this session's worktree, as you rather than as the agent, without telling the model",
+                    # The one answer the box stays in, because a command is rarely the only one: a
+                    # session that reaches for `Run` reaches for it again a line later, where every
+                    # other answer here is a thing somebody meant once.
+                    staying=True,
+                ),
+            )
+            if running
+            else ()
+        ),
+        Answer(
+            leader="keep",
+            saying="Put it on the shelf, unsent, and clear the box",
+            posts={"type": "button", "data-shelf": "keep"},
+            staying=False,
+        ),
+    )
+
+
+def sending_option(answer: Answer, refusing: bool) -> Element:
+    """
+    One answer as a row in the menu.
 
     What it does is written under its name rather than left to a `title`, because a control somebody
     opened a menu to find is one they have not used before, and a tooltip is not where anybody looks
-    first.
+    first. The leader is printed beside the name for the same reason the Send button names
+    Shift-Enter: a shortcut nothing on the page mentions is one nobody uses.
     """
     return button(
         cls="sender__option",
-        attrs=attrs,
+        attrs={**answer.posts, "disabled": refusing, "data-leader": answer.leader},
         children=[
-            span(cls="sender__option-name", children=name),
-            span(cls="sender__option-said", children=saying),
+            span(
+                cls="sender__option-head",
+                children=[
+                    span(cls="sender__option-name", children=answer.named),
+                    span(cls="sender__option-leader", children=f"/{answer.leader}"),
+                ],
+            ),
+            span(cls="sender__option-said", children=answer.saying),
         ],
     )
 
 
-def sending_control(
-    refusing: bool, continuing: bool, returning: bool = False, answering: bool = False, running: bool = False
-) -> Element:
+def sending_leader(answer: Answer, refusing: bool) -> Element:
+    """
+    One answer as the button the box shows while it is in that answer's mode.
+
+    The *same* control as the menu row, rendered beside Send rather than made out of it by the
+    script. One button per answer and one of them visible, because what makes a leader safe is that a
+    reader can see which one they are about to press: a single button whose name, value and label the
+    script rewrote would be exactly the `Send` that forks this console refuses everywhere else.
+
+    `data-staying` is how the script learns whether the mode outlives what was just sent, which is the
+    same bargain: the answer decides, the button carries it, and there is no second list to keep in
+    step with this one.
+    """
+    return button(
+        cls="sender__leader",
+        attrs={
+            **answer.posts,
+            "disabled": refusing,
+            "data-leader": answer.leader,
+            "data-staying": answer.staying,
+            "title": "Shift-Enter \N{MIDDLE DOT} Escape to go back to a message",
+        },
+        children=answer.named,
+    )
+
+
+def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
     """
     What happens to what you typed: send it, and everything else folded behind a caret beside it.
 
@@ -2346,40 +2474,28 @@ def sending_control(
     *after* the reply that is coming. It is offered only while something is being answered, since
     with nothing running it is what `Send` already does.
 
-    The menu is ordered by how far the text travels: waiting for the next turn keeps it here and
-    merely later, an `Aside` is a step out you mean to come back from, a `Fork` is a conversation of
-    its own, going back reaches the one this came out of, and `Keep` sends it nowhere at all and is
-    under a rule for that reason.
-
-    `returning` is offered by any fork rather than only an aside, because what it needs is
-    `Origin.session` and every fork has one. An aside is the case it is *for*, and gating it on the
-    flag would be inventing a restriction to make the flag look load-bearing.
-
     **Everything that *sends* works with no script.** The fold is a `<details>`, which is how
     everything else here folds, and each destination posts its own `name`/`value` the way the browser
     has always submitted a named button. `Keep` is the exception and is honestly the odd one out: the
     shelf is `localStorage`, so that row does nothing with `mainplate.js` absent, exactly as the
     shelf's own card in the rail shows nothing then.
 
-    It deliberately does *not* switch what the primary button does, which is where GitHub's version of
-    this control goes further. Remembering a choice would mean a button labelled `Send` that forks,
-    which is the one failure a control like this can have that nobody notices until after it has
-    happened; here what a button says is always what it does.
+    It deliberately does *not* remember what was chosen last, which is where GitHub's version of this
+    control goes further. That would mean a button labelled `Send` that forks, which is the one
+    failure a control like this can have that nobody notices until after it has happened; here what a
+    button says is always what it does, and a mode is only ever entered by asking for it by name.
 
-    `running` is whether this session has files to run a command in, which is the one answer here
-    that is not a message going somewhere. It is in this menu all the same, because the question the
-    menu asks is what happens to what you typed and running it is one more answer; a control of its
-    own would spend a slot in the row above the box, which is the row a phone has least of.
+    **A leader is a shortcut to a row and never a second way to say it.** With `mainplate.js`
+    present, typing `/fork ` into an empty box - or `! `, which is `/run`'s own key - turns the box
+    into that answer's box: the button beside it says `Fork`, and a sentence above it says what will
+    happen. **The space is what commits it**, and until it is pressed the word is ordinary text with
+    the menu open beside it, so nothing happens on a keystroke somebody was in the middle of. That is
+    the whole safety property, and it is why every mode's button is rendered here rather than made out
+    of `Send` by the script. The server parses no leader out of what was posted, so a paragraph that
+    opens with `/` is a paragraph, and the menu is what works with the file absent.
 
-    **`!` is a shortcut to that row and not a second way to say it.** With `mainplate.js` present,
-    typing `!` into an empty box turns the composer into a command box: the border takes the person's
-    hue, the placeholder says so, and this button says `Run`. That is the whole safety property - a
-    mode you can see is not the failure the paragraph above refuses, which is a button that says one
-    thing and does another. The server parses no leader out of the message, so a paragraph that opens
-    with `!` is a paragraph, and the menu below is what works with the file absent.
-
-    With no conversation yet there is no menu, only Send: nothing to fork from, and no session for a
-    shelf to belong to.
+    With no conversation yet there are no answers and so no menu, only Send: nothing to fork from,
+    and no session for a shelf to belong to.
     """
     send = button(
         # Classed rather than found by position, because the script has to name it: it is the
@@ -2392,37 +2508,13 @@ def sending_control(
         attrs={"type": "submit", "disabled": refusing, "title": "Shift-Enter"},
         children="Send",
     )
-    if not continuing:
+    if not answers:
         return send
     return div(
         cls="sender",
         children=[
             send,
-            # The *same* control in command mode, rendered beside it rather than made out of it by
-            # the script. Two buttons and one visible, because what makes `!` safe is that a reader
-            # can see which one they are about to press, and a button whose name, value and label the
-            # script rewrote would be exactly the thing that makes a `Send` that forks dangerous.
-            #
-            # It also keeps every word and every posted name in this file: the script toggles one
-            # attribute on the form and hands `requestSubmit` whichever button that leaves standing,
-            # so it holds no label, no field name and no disposition of its own.
-            *(
-                (
-                    button(
-                        cls="sender__run",
-                        attrs={
-                            "type": "submit",
-                            "disabled": refusing,
-                            "name": DISPOSITION_FIELD,
-                            "value": Disposition.RUN.value,
-                            "title": "Shift-Enter \N{MIDDLE DOT} Escape to go back to a message",
-                        },
-                        children="Run",
-                    ),
-                )
-                if running
-                else ()
-            ),
+            *(sending_leader(answer, refusing) for answer in answers),
             details(
                 cls="sender__more",
                 children=[
@@ -2433,85 +2525,7 @@ def sending_control(
                     ),
                     div(
                         cls="sender__menu",
-                        children=[
-                            *(
-                                (
-                                    sending_option(
-                                        "Wait for the next turn",
-                                        "Queue it behind the reply that is coming instead of putting"
-                                        " it to the model now",
-                                        {
-                                            "type": "submit",
-                                            "disabled": refusing,
-                                            "name": DISPOSITION_FIELD,
-                                            "value": Disposition.NEXT.value,
-                                        },
-                                    ),
-                                )
-                                if answering
-                                else ()
-                            ),
-                            sending_option(
-                                "Aside",
-                                "Step out into a side conversation you mean to come back from",
-                                {
-                                    "type": "submit",
-                                    "disabled": refusing,
-                                    "name": DISPOSITION_FIELD,
-                                    "value": Disposition.ASIDE.value,
-                                },
-                            ),
-                            sending_option(
-                                "Fork",
-                                "Ask it in a new session carrying this whole conversation",
-                                {
-                                    "type": "submit",
-                                    "disabled": refusing,
-                                    "name": DISPOSITION_FIELD,
-                                    "value": Disposition.FORK.value,
-                                },
-                            ),
-                            *(
-                                (
-                                    sending_option(
-                                        "Back to where this came from",
-                                        "Send it to the conversation this one was forked out of",
-                                        {
-                                            "type": "submit",
-                                            "disabled": refusing,
-                                            "name": DISPOSITION_FIELD,
-                                            "value": Disposition.PARENT.value,
-                                        },
-                                    ),
-                                )
-                                if returning
-                                else ()
-                            ),
-                            *(
-                                (
-                                    sending_option(
-                                        "Run",
-                                        "Run it in this session's worktree, as you rather than as the"
-                                        " agent, without telling the model",
-                                        {
-                                            "type": "submit",
-                                            "disabled": refusing,
-                                            "name": DISPOSITION_FIELD,
-                                            "value": Disposition.RUN.value,
-                                            "data-running": "run",
-                                            "title": "! in an empty box",
-                                        },
-                                    ),
-                                )
-                                if running
-                                else ()
-                            ),
-                            sending_option(
-                                "Keep",
-                                "Put it on the shelf, unsent, and clear the box",
-                                {"type": "button", "disabled": refusing, "data-shelf": "keep"},
-                            ),
-                        ],
+                        children=[sending_option(answer, refusing) for answer in answers],
                     ),
                 ],
             ),
@@ -2567,12 +2581,17 @@ def composer(
     because they mean different things - `live` is whether the answer swaps or navigates - so tying
     them together would be one of the two silently deciding the other.
 
-    `running` says this session has files a command could run in, which puts `Run` in the menu and
-    lets `!` turn the box into a command box. Declared on the form as `data-running` rather than
-    inferred by the script from the menu row, so the one thing that decides it is the one thing that
-    knows: a page for a session with no repository offers neither, and neither half can drift from
-    the other.
+    `running` says this session has files a command could run in, which is what puts `Run` among the
+    answers. Nothing else is needed to gate the mode: the script can only put the box into a mode the
+    server drew a button for, so a page for a session with no repository has no run mode to enter and
+    the two cannot drift.
+
+    **The sentence saying what the box will do sits above it.** The composer is the bottom of the
+    page, so a row appearing anywhere in its column pushes everything above that row upward - and
+    with the sentence under the box, entering a mode moved the box itself out from under the cursor.
+    Above it, what grows is the composer's top edge and the box stays exactly where it was.
     """
+    answers = sending_answers(returning, answering, running) if continuing else ()
     driving = (
         {
             "hx-post": action,
@@ -2592,9 +2611,26 @@ def composer(
     )
     return form(
         cls="composer",
-        attrs={"method": "post", "action": action, "id": identified, "data-running": running or None, **driving},
+        attrs={"method": "post", "action": action, "id": identified, **driving},
         children=[
             above,
+            # What the box will do with what is in it, said in words and only while that is not what
+            # the box normally does. One per answer, drawn by the stylesheet off the form's own
+            # `data-leading`, so the words live here and the script sets one attribute; a `title`
+            # would not do, because a mode nobody can see is the whole failure these exist to
+            # prevent.
+            #
+            # A row of the composer's own column rather than an item beside something, because this
+            # is a whole sentence: sharing a row would squeeze it to half the width on every window
+            # to make room for something that is usually not there.
+            *(
+                p(
+                    cls="leading",
+                    attrs={"data-leader": answer.leader, "role": "status"},
+                    children=f"{answer.saying}. Escape to go back to a message.",
+                )
+                for answer in answers
+            ),
             div(
                 cls="row",
                 children=[
@@ -2612,28 +2648,8 @@ def composer(
                             "aria-label": "Message",
                         }
                     ),
-                    sending_control(refusing, continuing, returning, answering, running),
+                    sending_control(refusing, answers),
                 ],
-            ),
-            # What the box will do with what is in it, said in words and only while that is not what
-            # the box normally does. Drawn by the stylesheet off the form's own `data-commanding`, so
-            # the words live here and the script sets one attribute; a `title` would not do, because
-            # a mode nobody can see is the whole failure this sentence exists to prevent.
-            #
-            # A row of its own rather than an item in the one below, because the composer is a column
-            # and this is a whole sentence: sharing that row squeezes the line saying what the session
-            # is on into half the width, on every window, to make room for something that is usually
-            # not there.
-            *(
-                (
-                    p(
-                        cls="commanding",
-                        attrs={"role": "status"},
-                        children="Runs in this session's worktree, as you. Escape to go back to a message.",
-                    ),
-                )
-                if running
-                else ()
             ),
             div(
                 cls="row",

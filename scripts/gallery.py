@@ -433,7 +433,8 @@ def showing(
         repository=REPOSITORY if working else None,
         worktree=WORKSPACE / session.id if working else None,
         # Which follows the repository, because a command runs in a session's worktree: it is what
-        # puts `Run` in the sending menu and what lets `!` turn the box into a command box.
+        # puts `Run` among the sending menu's answers, and so what makes `/run` and `!` reach a mode
+        # at all.
         runnable=working,
     )
 

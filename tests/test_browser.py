@@ -33,6 +33,7 @@ from mainplate.conversation import command_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import prompt_key
+from mainplate.conversation import result_key
 from mainplate.conversation import steers_in
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
@@ -1045,6 +1046,114 @@ class TestWatchingATurnArrive:
         await expect(page.locator(".panel[data-fresh]")).to_have_count(0)
 
 
+class TestShuttingAFoldFromItsFrame:
+    """
+    The other way out of an open fold, which is the one a long output needs.
+
+    A summary is a single row at the top of a box that may be several screens, so reading to the end
+    of an output meant scrolling back up to the one place that would put it away. The frame shuts it
+    too, for a command and for a call alike: one is drawn open so shutting is the press made oftenest
+    there, and the other is what a reader opened to check a return that runs to hundreds of lines.
+
+    A browser, because every half of this is a press landing on a particular part of a box. Where the
+    frame stops and the output starts is a fact about the rendered layout, and no markup assertion can
+    see which of the two a click reached.
+    """
+
+    async def a_command_with_output(self, console: tuple[str, Service], page: Page) -> None:
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, command_key(0, 0), "git status")
+        await service.checkpointer.supply(
+            session.id, result_key(0, 0), {"status": 0, "output": "on branch main\n", "took": 0.2}
+        )
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator("details.ran")).to_have_attribute("open", "")
+
+    async def test_pressing_the_room_under_the_output_shuts_it(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The band at the bottom of the body, which is where a reader who has just read to the end of a
+        long output already is.
+        """
+        await self.a_command_with_output(console, page)
+        box = await page.locator(".ran__body").bounding_box()
+        assert box
+
+        await page.mouse.click(box["x"] + 6, box["y"] + box["height"] - 3)
+
+        await expect(page.locator("details.ran")).not_to_have_attribute("open", "")
+
+    async def test_pressing_what_the_command_said_leaves_it_open(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The exemption the whole shape rests on: a press in the output is usually the start of lifting
+        a line out of it, and a panel that folded under somebody selecting from it would cost more
+        than the scroll it saves.
+        """
+        await self.a_command_with_output(console, page)
+
+        await page.locator(".ran__body pre").click()
+
+        await expect(page.locator("details.ran")).to_have_attribute("open", "")
+
+    async def test_shutting_it_that_way_is_a_decision_that_survives_a_swap(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        Setting `open` dispatches `toggle`, so this is recorded the way a press on the summary is
+        rather than through a second path. Without that, the next thing the turn recorded would draw
+        the command open again, because the server renders it open.
+        """
+        _, service = console
+        await self.a_command_with_output(console, page)
+        session = page.url.rsplit("/", 1)[-1]
+        box = await page.locator(".ran__body").bounding_box()
+        assert box
+        await page.mouse.click(box["x"] + 6, box["y"] + box["height"] - 3)
+        await expect(page.locator("details.ran")).not_to_have_attribute("open", "")
+
+        await service.checkpointer.supply(session, model_key(0, 0), PARTWAY)
+
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
+        await expect(page.locator("details.ran")).not_to_have_attribute("open", "")
+
+    async def a_call_a_reader_opened(self, console: tuple[str, Service], page: Page) -> Locator:
+        """A finished call, which the server renders shut, opened the way a reader opens one."""
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
+        await service.checkpointer.supply(session.id, tool_key(0, "call-1"), "the first file")
+        await service.checkpointer.supply(session.id, tool_key(0, "call-2"), "the second file")
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        opened = page.locator("details.tool").first
+        await expect(opened).not_to_have_attribute("open", "")
+        await opened.locator("summary").click()
+        await expect(opened).to_have_attribute("open", "")
+        return opened
+
+    async def test_pressing_the_room_under_a_call_shuts_it_too(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The same complaint one panel along: a return that runs to hundreds of lines is one a reader
+        would otherwise scroll back to the top of to put away. Two panels of the same shape answering
+        the same press differently would be the thing to explain.
+        """
+        opened = await self.a_call_a_reader_opened(console, page)
+        box = await opened.locator(".tool__body").bounding_box()
+        assert box
+
+        await page.mouse.click(box["x"] + 6, box["y"] + box["height"] - 3)
+
+        await expect(opened).not_to_have_attribute("open", "")
+
+    async def test_pressing_what_a_call_returned_leaves_it_open(self, page: Page, console: tuple[str, Service]) -> None:
+        opened = await self.a_call_a_reader_opened(console, page)
+
+        await opened.locator(".tool__body pre").first.click()
+
+        await expect(opened).to_have_attribute("open", "")
+
+
 class TestOpeningTheRecordBehindARequest:
     """
     The `r{i}` on a rule stays exactly where it was when it is pressed.
@@ -1271,30 +1380,66 @@ async def a_session_with_files(working: tuple[str, Service], page: Page) -> str:
 
 class TestTurningTheBoxIntoACommandBox:
     """
-    `!` in an empty box, which is a shortcut to the menu's `Run` and never a second way of saying it.
+    `! ` in an empty box, which is `/run`'s own key and never a second way of saying it.
 
-    A browser twice over. The mode is a class the script sets and nothing the server renders, so no
-    markup assertion can see it; and what the mode has to *do* is make the keyboard post a different
-    button's pair, which is `requestSubmit`'s behaviour rather than ours and looks identical either
-    way in the markup.
+    A browser twice over. The mode is an attribute the script sets and nothing the server renders, so
+    no markup assertion can see it; and what the mode has to *do* is make the keyboard post a
+    different button's pair, which is `requestSubmit`'s behaviour rather than ours and looks identical
+    either way in the markup.
 
     The point of pinning it is the one failure a control like this can have: a box that runs what was
     meant to be said, or says what was meant to be run. Both are irreversible by the time anybody
     notices, so what these ask is that the mode is visible before the press and honoured at it.
     """
 
-    async def test_a_leading_bang_in_an_empty_box_turns_it_into_a_command_box(
+    async def test_a_leading_bang_and_a_space_turn_an_empty_box_into_a_command_box(
         self, page: Page, working: tuple[str, Service]
     ) -> None:
         await a_session_with_files(working, page)
         await page.click(".composer textarea")
+        await page.keyboard.type("! ")
+
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "run")
+        # The whole safety property: what the reader is about to press says what it does.
+        await expect(page.locator('.sender__leader[data-leader="run"]')).to_be_visible()
+        await expect(page.locator(".sender__send")).to_be_hidden()
+        assert await page.input_value(".composer textarea") == "", "the leader and its space are consumed"
+
+    async def test_a_bang_on_its_own_is_a_character_and_an_offer(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        The space is what commits, so until it is pressed `!` is a character somebody typed with the
+        menu open beside it. That is what makes a mode something a reader finishes rather than
+        something that happens to them on a keystroke they were in the middle of.
+        """
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
         await page.keyboard.press("!")
 
-        await expect(page.locator(".composer")).to_have_attribute("data-commanding", "")
-        # The whole safety property: what the reader is about to press says what it does.
-        await expect(page.locator(".sender__run")).to_be_visible()
-        await expect(page.locator(".sender__send")).to_be_hidden()
-        assert await page.input_value(".composer textarea") == "", "the leader is consumed, not typed"
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "run")
+        await expect(page.locator(".sender__more")).to_have_attribute("open", "")
+        await expect(page.locator('.sender__option[value="run"]')).to_be_visible()
+        await expect(page.locator('.sender__option[value="fork"]')).to_be_hidden()
+        assert await page.input_value(".composer textarea") == "!"
+
+    async def test_a_command_box_stays_one_once_a_command_has_gone(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        The one mode that outlives what was sent from it, because a command is rarely the only one.
+        Each answer decides that for itself and carries the decision on its own button, so this is
+        `Run`'s answer rather than a rule over all of them - see `Keep`, which comes back to `Send`.
+        """
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("! ")
+        await page.keyboard.type("echo one")
+        await page.keyboard.press("Shift+Enter")
+
+        await expect(page.locator("#transcript")).to_contain_text("echo one")
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "run")
+        await expect(page.locator('.sender__leader[data-leader="run"]')).to_be_visible()
 
     async def test_a_bang_inside_a_message_is_an_ordinary_character(
         self, page: Page, working: tuple[str, Service]
@@ -1307,19 +1452,36 @@ class TestTurningTheBoxIntoACommandBox:
         await page.click(".composer textarea")
         await page.keyboard.type("wow!")
 
-        await expect(page.locator(".composer")).not_to_have_attribute("data-commanding", "")
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "run")
         assert await page.input_value(".composer textarea") == "wow!"
 
     async def test_escape_puts_it_back_to_a_message_box(self, page: Page, working: tuple[str, Service]) -> None:
         await a_session_with_files(working, page)
         await page.click(".composer textarea")
-        await page.keyboard.press("!")
-        await expect(page.locator(".composer")).to_have_attribute("data-commanding", "")
+        await page.keyboard.type("! ")
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "run")
 
         await page.keyboard.press("Escape")
 
-        await expect(page.locator(".composer")).not_to_have_attribute("data-commanding", "")
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "run")
         await expect(page.locator(".sender__send")).to_be_visible()
+
+    async def test_a_slash_in_a_command_box_is_an_ordinary_character(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        The half of "only in the default mode" that a command box makes urgent: `/` is the front of
+        half the paths anybody types, so a palette opening over one would be in the way on every
+        command.
+        """
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("! ")
+        await page.keyboard.type("/usr/bin/env")
+
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "run")
+        assert await page.input_value(".composer textarea") == "/usr/bin/env"
 
     async def test_the_keyboard_runs_what_is_in_a_command_box_rather_than_saying_it(
         self, page: Page, working: tuple[str, Service]
@@ -1332,7 +1494,7 @@ class TestTurningTheBoxIntoACommandBox:
         _, service = working
         session = await a_session_with_files(working, page)
         await page.click(".composer textarea")
-        await page.keyboard.press("!")
+        await page.keyboard.type("! ")
         await page.keyboard.type("echo from the keyboard")
         await page.keyboard.press("Shift+Enter")
 
@@ -1345,15 +1507,246 @@ class TestTurningTheBoxIntoACommandBox:
         self, page: Page, console: tuple[str, Service]
     ) -> None:
         """
-        The mode is declared by the server on the form, so a page that offers no `Run` cannot be put
-        into one: the two cannot drift, because there is only the one thing that decides it.
+        Which modes exist is read off the buttons the server drew, so a page that offers no `Run`
+        cannot be put into one: the two cannot drift, because there is only the one thing that
+        decides it.
         """
         await a_conversation(console, page)
         await page.click(".composer textarea")
-        await page.keyboard.press("!")
+        await page.keyboard.type("! ")
 
-        await expect(page.locator(".composer")).not_to_have_attribute("data-commanding", "")
-        assert await page.input_value(".composer textarea") == "!"
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "run")
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        assert await page.input_value(".composer textarea") == "! "
+
+
+class TestNamingAModeFromTheKeyboard:
+    """
+    `/fork` and the rest, which reach the sending menu's own rows without the pointer.
+
+    A browser, for the reasons the command box is one and one more: the palette *is* the menu, so
+    what these ask is that one control answers two questions without confusing them. A row pressed
+    with a message in the box sends that message; the same row pressed with `/fo` in the box chooses
+    a mode and sends nothing, and the markup is identical either way.
+    """
+
+    async def test_a_slash_in_an_empty_box_offers_the_menus_own_answers(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/")
+
+        await expect(page.locator(".sender__more")).to_have_attribute("open", "")
+        await expect(page.locator('.sender__option[value="fork"]')).to_be_visible()
+        await expect(page.locator(".sender__option[data-shelf]")).to_be_visible()
+
+    async def test_typing_narrows_the_offer_to_what_still_fits(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        A prefix rather than anywhere in the word, which is the opposite of the branch field: a
+        leader is a short word typed from the front.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/f")
+
+        await expect(page.locator('.sender__option[value="fork"]')).to_be_visible()
+        await expect(page.locator('.sender__option[value="aside"]')).to_be_hidden()
+
+    async def test_a_space_after_the_whole_word_takes_that_answer(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The whole of what a leader does: nothing is sent, nothing is recorded, and the box is in that
+        answer's mode with the button beside it saying so. The space is what commits, which is what
+        leaves every keystroke before it an ordinary character.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/fork ")
+
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "fork")
+        await expect(page.locator('.sender__leader[data-leader="fork"]')).to_be_visible()
+        await expect(page.locator(".sender__send")).to_be_hidden()
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        assert await page.input_value(".composer textarea") == "", "the leader and its space are consumed"
+
+    async def test_a_space_after_part_of_a_word_is_an_ordinary_space(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        A prefix is somebody still typing, so the key that commits a finished word cannot take the row
+        the keyboard happens to be sitting on. What is left is text, and the menu puts itself away
+        because `/fo ` is no longer a leader.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/fo ")
+
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "fork")
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        assert await page.input_value(".composer textarea") == "/fo "
+
+    async def test_enter_takes_the_row_the_keyboard_is_on(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The palette's own key, which is what a half-typed word is finished with: the space names an
+        answer in full, and Enter takes whichever row the arrows have arrived at.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/fo")
+        await page.keyboard.press("Enter")
+
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "fork")
+        await expect(page.locator('.sender__leader[data-leader="fork"]')).to_be_visible()
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        assert await page.input_value(".composer textarea") == "", "the leader is consumed, not sent"
+
+    async def test_a_word_no_answer_answers_to_is_ordinary_text(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The refusal the whole shape rests on. The server parses no leader out of what was posted, so
+        a paragraph that opens with a slash has to stay a paragraph rather than becoming a mode, a
+        refusal, or anything else the reader has to undo.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/etc/hosts is where it lives")
+
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "fork")
+        assert await page.input_value(".composer textarea") == "/etc/hosts is where it lives"
+
+    async def test_a_slash_partway_into_a_message_offers_nothing(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        Only at the start of the box, which is the same rule `!` is under: mid-message a slash is an
+        ordinary character and a menu opening over one would be in the way of writing a path.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("look in /fork")
+
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        assert await page.input_value(".composer textarea") == "look in /fork"
+
+    async def test_the_mode_decides_where_the_keyboard_sends(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The one that matters, and the one only a browser can ask: a leader is worth nothing unless the
+        send it sets up actually goes where the button says. Fork answers `HX-Redirect`, so what a
+        working one looks like is a different session's URL.
+        """
+        session = await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/fork ")
+        await page.keyboard.type("try it another way")
+        await page.keyboard.press("Shift+Enter")
+
+        await page.wait_for_url(lambda url: session not in url)
+        await expect(page.locator("#transcript")).to_contain_text("try it another way")
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+
+    async def test_pressing_a_row_while_a_leader_is_typed_chooses_the_mode_rather_than_sending(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one failure reusing the menu as the palette can have: the rows are submit buttons, so a
+        press with `/fo` in the box would post `/fo` as the message and fork on it - which is both a
+        message nobody wrote and a session nobody asked for.
+        """
+        session = await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/fo")
+        await page.click('.sender__option[value="fork"]')
+
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "fork")
+        assert await page.input_value(".composer textarea") == ""
+        assert session in page.url, "choosing a mode sends nothing, so nothing navigates"
+
+    async def test_escape_puts_the_offer_away_and_leaves_what_was_typed(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        Two presses rather than one doing both, because dismissing the offer and leaving a mode are
+        different things to want: the first leaves the text where it is to keep writing.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/f")
+        await expect(page.locator(".sender__more")).to_have_attribute("open", "")
+
+        await page.keyboard.press("Escape")
+
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "fork")
+        assert await page.input_value(".composer textarea") == "/f"
+
+    async def test_a_session_with_no_files_is_offered_no_run(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The palette is the menu, so what it offers is what the server drew: a session with nowhere to
+        run a command has no `Run` row and therefore no `/run` at all.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/run")
+
+        await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
+        assert await page.input_value(".composer textarea") == "/run"
+
+    async def test_entering_a_mode_leaves_the_box_where_it_was(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        The composer is the bottom of the page, so a row appearing anywhere in its column pushes
+        everything above that row upward - and the sentence saying what the mode does is a row that
+        appears. Under the box it moved the box itself out from under the cursor at the moment
+        somebody entered the mode; above it, what grows is the composer's top edge.
+
+        A browser, because both layouts are correct markup and each screenshot is right on its own:
+        what is wrong with the other one is one element's box across a press.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        before = await page.locator(".composer textarea").bounding_box()
+
+        await page.keyboard.type("/fork ")
+
+        await expect(page.locator('.leading[data-leader="fork"]')).to_be_visible()
+        after = await page.locator(".composer textarea").bounding_box()
+        assert before
+        assert after
+        assert after["y"] == before["y"], "entering a mode moved the box the reader is typing in"
+
+    async def test_keeping_from_the_keyboard_shelves_it_rather_than_sending_it(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one answer that posts nothing at all, so it is a `type=button` and cannot be the
+        submitter `requestSubmit` is handed. What the keyboard has to do there is press it.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/keep ")
+        await page.keyboard.type("worth remembering")
+        await page.keyboard.press("Shift+Enter")
+
+        await expect(page.locator(".shelf__take")).to_have_text("worth remembering")
+        await expect(page.locator("#transcript")).not_to_contain_text("worth remembering")
+        assert await page.input_value(".composer textarea") == ""
+
+    async def test_a_mode_that_does_not_stay_puts_the_box_back_to_a_message(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The other half of `Run` staying: what a mode does once the text has gone is the answer's own
+        decision, carried on its button, and `Keep` is one of the ones that means a thing once.
+        """
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/keep ")
+        await page.keyboard.type("worth remembering")
+        await page.keyboard.press("Shift+Enter")
+
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "keep")
+        await expect(page.locator(".sender__send")).to_be_visible()
 
 
 async def a_start_page(working: tuple[str, Service], page: Page, workspace: str = FIXTURE_NAME) -> None:
@@ -1551,10 +1944,16 @@ class TestTheShelf:
         return session.id, service
 
     async def keep(self, page: Page, said: str) -> None:
-        """Keeping is an answer in the send menu, so it is reached the way any of them is."""
+        """
+        Keeping is an answer in the send menu, so it is reached the way any of them is.
+
+        The row rather than a bare `[data-shelf]`, which now names two controls: `Keep` is also one
+        of the modes a leader reaches, and the button that stands beside the box in it carries the
+        same attribute because it is the same answer.
+        """
         await page.fill(".composer textarea", said)
         await page.click(".sender__caret")
-        await page.click('[data-shelf="keep"]')
+        await page.click('.sender__option[data-shelf="keep"]')
 
     async def test_keeping_takes_the_text_out_of_the_box_and_names_it(
         self, page: Page, console: tuple[str, Service]

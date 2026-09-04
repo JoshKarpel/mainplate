@@ -451,23 +451,35 @@ contended write that the store settles: whichever gets there first wins, and the
 the winner put there. Win it and the reply asks the model once more to carry your message; lose it
 and your message becomes the next turn instead.
 
-The caret beside Send opens everything else you can do with what you typed. **Wait for the next
-turn** is the one thing the record cannot decide for you: it queues the message behind the reply that
-is coming instead of putting it to the model now.
+The caret beside Send opens everything else you can do with what you typed. **Next** is the one thing
+the record cannot decide for you: it queues the message behind the reply that is coming instead of
+putting it to the model now.
 
 **Aside** steps out into a side conversation you mean to come back from, and **Fork** starts one you
 do not. Both carry the whole conversation and leave the original where it is; the only difference is
 what you meant, which is recorded so the sidebar can draw a digression as a digression. From either,
-**Back to where this came from** sends what is in the box into the conversation you left. That is a
-message rather than a merge, which is what makes it honest: the turns you took on the side were asked
-against a different history, and splicing them in would leave the original holding an exchange that
-never happened.
+**Parent** sends what is in the box into the conversation you left. That is a message rather than a
+merge, which is what makes it honest: the turns you took on the side were asked against a different
+history, and splicing them in would leave the original holding an exchange that never happened.
+
+Each of those has a name you can type instead of reaching for the menu. `/` at the start of an empty
+box opens the same list, narrowed as you type, and a space after the whole word takes it: `/fork `
+puts the box in that answer's mode, with the button beside it saying `Fork` rather than `Send` and a
+line above it saying what will happen. The space is what commits, so until you press it the word is
+ordinary text with the menu open beside it, and Enter takes whichever row you have arrowed to if you
+would rather not finish typing. Nothing has been sent, so what you write next is what goes there, and
+Escape puts the box back. Nothing is ever inferred from what you typed - a message that opens with a
+slash is a message, and one that names nothing is ordinary text - so what you are about to press
+always says what it does.
+
+Sending leaves the mode, except where the answer is one worth staying in: `Run` stays, because a
+command is rarely the only one, and everything else puts the box back to `Send`.
 
 **Keep** puts what is in the box on the shelf and clears it, so you can write the next thing. The
 shelf itself is in the rail; pressing a kept note adds it back to the box rather than replacing what
 is there, so several of them assemble into one message. That is also how a long aside comes home:
-keep the conclusions as you go, then send them back together. It is scoped to the conversation and a
-fork inherits its parent's. It lives in your browser, so it does not follow you to another machine
+keep the conclusions as you go, then send them back together. The shelf is scoped to the conversation and
+a fork inherits its parent's. It lives in your browser, so it does not follow you to another machine
 yet.
 
 **Run** is the one answer there that is not a message. It runs what is in the box in this session's
@@ -480,13 +492,17 @@ The run is still recorded, though, so it draws as a `you (ran)` panel with the c
 took and what it exited with, it survives a reload, and a fork carries it. What it said is drawn
 open, where a tool call's output is folded: you asked for this one, so reading it should cost no
 clicks, and a command whose whole answer was its exit status says `said nothing` rather than showing
-an empty pane. The status is shown as the number rather than as "failed", because `git diff --quiet`
+an empty pane. Being open makes putting one away the press you make most, so the frame around the
+output folds it as well as the line at the top does: reading to the end of a long output does not mean
+scrolling back up to shut it. That holds for a tool call's return too, which is the other thing here
+that runs to hundreds of lines. Pressing the output itself does nothing, since that is where you
+select from. The status is shown as the number rather than as "failed", because `git diff --quiet`
 exits 1 to say there *are* changes.
 
-Typing `!` into an empty box is the shortcut: the box becomes a command box, set in the terminal's
-own face, and the button next to it says `Run`. Escape puts it back. Nothing is ever inferred from
-what you typed, so a paragraph that opens with `!` is a paragraph, and what you are about to press
-always says what it does.
+`/run ` reaches it like any of the others, and `! ` into an empty box is its own shorter key: either
+way the box becomes a command box, set in the terminal's own face, with `Run` beside it, and stays one
+after each command runs. Escape puts it back. Inside one a slash is just a slash, since it is the
+front of half the paths anybody types.
 
 Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
 often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
