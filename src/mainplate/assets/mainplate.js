@@ -23,6 +23,12 @@
 
   const THEMES = ["system", "light", "dark"];
 
+  // Everything in the transcript that folds: a tool call, and a command the person ran. Named once
+  // because three places act on the set - noting what the reader decided, putting that back after a
+  // swap, and the dock's fold-everything buttons - and a kind added to one and not the others is a
+  // fold that reopens itself on the next render.
+  const FOLDS = "details.tool, details.ran";
+
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
   // must not leave the page in a scheme it has no rules for.
   const asTheme = (held) => (THEMES.includes(held) ? held : "system");
@@ -108,7 +114,7 @@
 
     let muted = new Set(); // kinds the key has switched off
     let landed = null; // the panel the console last put the reader on
-    let opened = new Set(); // tool calls the reader has unfolded
+    let folds = new Map(); // what the reader decided about a fold, where they have decided anything
     let query = "";
     let hits = [];
     let at = -1;
@@ -126,6 +132,17 @@
     let saying = null; // and the timer that stops it saying it
 
     let shelf = []; // text kept and not sent, as {name, text}
+
+    // Which of the sending menu's answers the box is in the mode of, by its own word, or nothing for
+    // the default. Not stored, and that is the same line `following` is on: this is a mode within a
+    // visit rather than a decision about a conversation, so carrying it across a reload would be a
+    // page that opens as something the reader has to notice and undo.
+    //
+    // Whether it survives a send is the *answer's* own decision and is read off the button the server
+    // drew for it: `Run` stays, because a command is rarely the only one, and everything else comes
+    // back to `Send`, because it is a thing somebody meant once. What makes staying safe is the same
+    // thing that makes a mode safe at all: the button says `Run`, not `Send`.
+    let leading = null;
 
     try {
       const stored = JSON.parse(held(scoped("muted")) || "[]");
@@ -307,10 +324,14 @@
     const paintFolds = () => {
       const box = transcript();
       if (!box) return;
-      // Only what the reader opened is forced. A call still waiting on its result is rendered open
-      // by the server, and leaving that alone is what lets the server say so.
-      box.querySelectorAll("details.tool").forEach((fold) => {
-        if (opened.has(fold.id)) fold.open = true;
+      // Only a fold the reader has actually acted on is forced, and it is forced *either* way. The
+      // server renders a call shut and a command open, so one set of ids to reopen would put back
+      // every command a reader had put away; what has to survive a swap is the decision, whichever
+      // way it went. A fold nobody has touched is left alone, which is what lets the server say a
+      // call is still out.
+      box.querySelectorAll(FOLDS).forEach((fold) => {
+        const decided = folds.get(fold.id);
+        if (decided !== undefined) fold.open = decided;
       });
     };
 
@@ -353,6 +374,225 @@
     const paintFollow = () => {
       const toggle = document.querySelector('[data-follow="toggle"]');
       if (toggle) toggle.setAttribute("aria-pressed", String(following));
+    };
+
+    // --- Leaders ------------------------------------------------------------
+    //
+    // `/fork ` typed into an empty box puts the composer into that answer's mode, and Escape puts it
+    // back. `! ` is the same thing for `/run`, which earns a key of its own by being the mode reached
+    // oftenest. A leader is a shortcut to a row of the sending menu and never a second way of saying
+    // it: the server parses no leader out of a message, so a paragraph that opens with `/` is a
+    // paragraph, and with this file absent the menu is still there to be opened.
+    //
+    // The space is what commits it, and until it is pressed the word is ordinary text sitting in the
+    // box with the menu open beside it. That is what makes a leader something a reader *finishes*
+    // rather than something that happens to them: `!` alone is a character, `/fo` alone is two, and
+    // the mode arrives only on a key that says the word is done.
+    //
+    // One attribute is the whole of what this sets. Which button shows, what it is called, what it
+    // posts and the sentence above the box are all in `pages.py` and drawn off `data-leading` by the
+    // stylesheet, so nothing here holds a label, a field name or a disposition. That is also what
+    // makes a mode safe rather than the failure a remembered choice would be: the button a reader is
+    // about to press is one the server rendered, saying what it does.
+    //
+    // *Which* modes exist is the server's answer too, read off the buttons it drew rather than kept
+    // in a list here. A session with no files is offered no `Run`, so there is no run mode to enter,
+    // and the two cannot drift because there is only the one thing that decides it.
+    const composerForm = () => document.querySelector(".composer");
+
+    const leaderButton = (leader) => {
+      const form = composerForm();
+      return form && leader ? form.querySelector(`.sender__leader[data-leader="${leader}"]`) : null;
+    };
+
+    const paintLeading = () => {
+      const form = composerForm();
+      if (!form) return;
+      if (leading) form.dataset.leading = leading;
+      else delete form.dataset.leading;
+    };
+
+    // Into a mode, where the server offered one by that name. The answer is `false` otherwise, so a
+    // caller can leave the key it was pressed for as the ordinary character it also is.
+    const lead = (leader) => {
+      if (!leaderButton(leader)) return false;
+      leading = leader;
+      paintLeading();
+      return true;
+    };
+
+    // Out of one, which every send but a staying answer's ends with. Whether a mode outlives what was
+    // sent from it is the answer's own decision, carried on the button the server drew: `Run` stays
+    // because a command is rarely the only one, and the rest come back to `Send`.
+    const leaveMode = () => {
+      if (leading === null || leaderButton(leading)?.dataset.staying !== undefined) return;
+      leading = null;
+      paintLeading();
+    };
+
+    // Which control a send should be attributed to, which is whichever one the mode leaves standing.
+    // `requestSubmit` with no submitter posts no name at all, so without this the keyboard would
+    // always mean Send however the box was drawn.
+    const submitter = (form) => leaderButton(leading) || form.querySelector(".sender__send");
+
+    // Sending the way the button beside the box would. `Keep` is the one answer that posts nothing at
+    // all - the shelf is this file's and the server has never heard of it - so it is a `type=button`
+    // and cannot be a submitter; the keyboard reaches it the way a finger does.
+    const sendFrom = (box) => {
+      const chosen = submitter(box.form);
+      if (chosen && chosen.type !== "submit") chosen.click();
+      else box.form.requestSubmit(chosen);
+    };
+
+    // --- Naming a mode from the keyboard ------------------------------------
+    //
+    // The sending menu doubles as the palette, which is what keeps this one list: the rows already
+    // say what each answer does and already carry its word, so a second list beside them would be a
+    // copy to keep in step. While a leader is being typed the menu is open, narrowed to what still
+    // fits, and Enter takes the row the keyboard is on.
+    //
+    // Only from an empty box and only in the default mode, and that is the whole of what makes it
+    // safe: mid-message a `/` is an ordinary character, and in a command box it is the front of half
+    // the paths anybody types.
+
+    const LEADER = /^\/([a-z]*)$/;
+
+    // The word a box holds while somebody is naming an answer, or nothing where it holds anything
+    // else. `!` is spelled here rather than handled beside the keyboard, because it is not a key that
+    // does something: it is `run` written in one character, so it narrows, commits and is undone by a
+    // backspace exactly as `/run` is.
+    const typedLeader = (value) => {
+      if (value === "!") return "run";
+      const named = LEADER.exec(value);
+      return named ? named[1] : null;
+    };
+
+    const senderMenu = () => document.querySelector(".sender__more");
+
+    let offering = false; // whether the menu is open as a palette rather than because it was pressed
+    let leaderAt = 0; // which of the rows still showing the keyboard is on
+
+    const leaderRows = () => [...(senderMenu()?.querySelectorAll(".sender__option") ?? [])];
+
+    const shutLeaders = () => {
+      const menu = senderMenu();
+      leaderRows().forEach((row) => {
+        row.hidden = false;
+        row.removeAttribute("aria-selected");
+      });
+      // Only a menu this opened, so one the reader opened by its caret is left where they put it.
+      if (offering && menu) menu.open = false;
+      offering = false;
+      leaderAt = 0;
+    };
+
+    // What is on offer for the leader typed so far, as the rows left showing. A prefix rather than
+    // anywhere in the word, which is the opposite of the branch field and for a plain reason: a
+    // leader is a short word typed from the front, where a branch is `feature/the-thing` and is
+    // remembered by its middle.
+    const narrowLeaders = () => {
+      const box = composerBox();
+      const menu = senderMenu();
+      const typed = box && leading === null ? typedLeader(box.value) : null;
+      if (typed === null || !menu) {
+        shutLeaders();
+        return [];
+      }
+      const showing = leaderRows().filter((row) => {
+        const fits = row.dataset.leader.startsWith(typed);
+        row.hidden = !fits;
+        return fits;
+      });
+      // Nothing fits, so this was not a leader after all and the box holds ordinary text.
+      if (!showing.length) {
+        shutLeaders();
+        return [];
+      }
+      menu.open = true;
+      offering = true;
+      if (leaderAt >= showing.length) leaderAt = showing.length - 1;
+      showing.forEach((row, at) => row.setAttribute("aria-selected", String(at === leaderAt)));
+      return showing;
+    };
+
+    // Taking one, which is the whole of what a leader does: the word comes out of the box and the
+    // composer is in that answer's mode, with nothing sent and nothing recorded.
+    const takeLeader = (row) => {
+      const box = composerBox();
+      if (!box || !row) return;
+      shutLeaders();
+      box.value = "";
+      lead(row.dataset.leader);
+      box.focus();
+    };
+
+    // --- Narrowing the branches -------------------------------------------
+    //
+    // The one field in the picker that is a search rather than a set of cards, because a starting
+    // point is an open question: a branch, but also a tag, a hash, or `main~3`. So the branches are
+    // drawn under the box and cut to what matches, and typing anything else is still typing.
+    //
+    // Everything here is an enhancement over a field that already works. With this file absent the
+    // box keeps its `<datalist>` and the browser completes from the same names; what enhancing adds
+    // is a list you can *see* and step through. Taking the `list` attribute off is the other half of
+    // that: two dropdowns over one box is one more than a reader can use.
+
+    const basisBox = () => document.querySelector(".basis__box");
+    const basisFound = () => document.getElementById("branches-found");
+
+    let matching = -1; // which of the shown branches the keyboard is on
+
+    const paintBranches = () => {
+      const box = basisBox();
+      const found = basisFound();
+      if (!box || !found) return;
+      // Only where there is something to narrow. A repository that offered none leaves the field
+      // exactly as it was, rather than declaring itself a combobox with an empty list behind it.
+      if (!found.querySelector("[data-branch]")) return;
+      box.removeAttribute("list");
+      box.setAttribute("role", "combobox");
+      box.setAttribute("aria-controls", found.id);
+      box.setAttribute("aria-expanded", String(!found.hidden));
+    };
+
+    const shutBranches = () => {
+      const found = basisFound();
+      if (!found) return;
+      matching = -1;
+      found.hidden = true;
+      basisBox()?.setAttribute("aria-expanded", "false");
+    };
+
+    // What is on offer for what is typed so far, as the buttons left showing. Case-insensitive and
+    // anywhere in the name rather than a prefix, because a branch is named `feature/the-thing` far
+    // more often than it is named for the word you remember about it.
+    const narrowBranches = () => {
+      const box = basisBox();
+      const found = basisFound();
+      if (!box || !found || box.getAttribute("role") !== "combobox") return [];
+      const wanted = box.value.trim().toLowerCase();
+      const showing = [];
+      found.querySelectorAll("[data-branch]").forEach((one) => {
+        const name = one.dataset.branch;
+        // An exact match is the reader having already answered, so there is nothing left to offer:
+        // a list holding only what is in the box is a menu whose one item changes nothing.
+        const fits = name.toLowerCase().includes(wanted) && name !== box.value.trim();
+        one.parentElement.hidden = !fits;
+        if (fits) showing.push(one);
+      });
+      found.hidden = !showing.length;
+      box.setAttribute("aria-expanded", String(!found.hidden));
+      if (matching >= showing.length) matching = showing.length - 1;
+      showing.forEach((one, at) => one.setAttribute("aria-selected", String(at === matching)));
+      return showing;
+    };
+
+    const takeBranch = (name) => {
+      const box = basisBox();
+      if (!box) return;
+      box.value = name;
+      shutBranches();
+      box.focus();
     };
 
     // --- Copying -----------------------------------------------------------
@@ -527,6 +767,8 @@
       paintLanded();
       paintFolds();
       paintFollow();
+      paintLeading();
+      paintBranches();
       paintCopies();
       paintCopied();
       research(false);
@@ -611,6 +853,10 @@
           shelf = [...shelf, { name: labelled(box.value), text: box.value }];
           box.value = "";
           box.focus();
+          // The one answer that sends nothing, so nothing here dispatches the `submit` every other
+          // one leaves a mode from. Said outright rather than through a second path: what decides is
+          // still the answer's own `data-staying`.
+          leaveMode();
         } else if (control.dataset.shelfTake !== undefined) {
           const slot = shelf[Number(control.dataset.shelfTake)];
           if (!box || !slot) return;
@@ -652,10 +898,98 @@
       });
       document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape") return;
+        // A menu open as a leader palette is the box's to dismiss, and putting the focus on the
+        // caret would take the cursor out of the sentence somebody is in the middle of typing.
+        if (offering) return;
         const open = document.querySelector(".sender__more[open]");
         if (!open) return;
         shut(null);
         open.querySelector("summary")?.focus();
+      });
+    };
+
+    // The palette is driven from the box: what is typed decides whether the menu is open and what is
+    // left in it. Delegated for the reason `wireSend` is - the composer is rebuilt whenever a page
+    // is - and on `input` rather than `keydown` so that pasting and deleting are read the same way
+    // as typing.
+    const wireLeaders = () => {
+      document.addEventListener("input", (event) => {
+        const box = event.target;
+        if (box instanceof HTMLTextAreaElement && box.name === "prompt") narrowLeaders();
+      });
+      // With a leader in the box the menu's rows are a palette rather than a set of destinations, so
+      // pressing one has to choose the mode instead of posting `/fo` as a message. In the capture
+      // phase, which stops both the row's own submit and the shelf's listener further down: `Keep`
+      // pressed here would otherwise shelve the leader somebody was still typing.
+      document.addEventListener(
+        "click",
+        (event) => {
+          if (!offering) return;
+          const row = event.target instanceof Element ? event.target.closest(".sender__option") : null;
+          if (!row) return;
+          // Said rather than left to the box being emptied a line later, which would also stop the
+          // send and would stop it for a reason nothing here decided: a form without a `required`
+          // box, or a shelf that read what was typed before this ran, and the press is a send again.
+          event.preventDefault();
+          event.stopPropagation();
+          takeLeader(row);
+        },
+        true,
+      );
+    };
+
+    // Delegated for the reason `wireSend` is: this block is swapped in whenever a workspace card is
+    // picked, so wiring the element at load would wire the one the page happened to start with.
+    const wireBranches = () => {
+      document.addEventListener("input", (event) => {
+        if (event.target === basisBox()) narrowBranches();
+      });
+      // Opening on focus is what makes the list a way of *reading* what is on offer rather than only
+      // of completing something already half typed.
+      document.addEventListener("focusin", (event) => {
+        if (event.target === basisBox()) narrowBranches();
+        else if (!(event.target instanceof Element) || !event.target.closest(".basis__found")) shutBranches();
+      });
+      document.addEventListener("keydown", (event) => {
+        const box = basisBox();
+        if (event.target !== box || box.getAttribute("role") !== "combobox") return;
+        if (event.key === "Escape") {
+          const found = basisFound();
+          if (found && !found.hidden) event.stopPropagation();
+          shutBranches();
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          const showing = narrowBranches();
+          if (!showing.length) return;
+          // Preventing the default is what keeps the caret still: an arrow key in a text field
+          // otherwise runs it to one end of what is typed while the selection moves behind it.
+          event.preventDefault();
+          matching = (matching + (event.key === "ArrowDown" ? 1 : -1) + showing.length) % showing.length;
+          narrowBranches();
+          showing[matching]?.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (event.key !== "Enter") return;
+        const showing = narrowBranches();
+        if (matching < 0 || !showing[matching]) return;
+        // Only where the reader is actually on one. Enter in a text field submits its form, and this
+        // field's form is the one that starts the session, so swallowing it whenever the list is
+        // open would make the obvious key do nothing on a page whose whole purpose is that form.
+        event.preventDefault();
+        takeBranch(showing[matching].dataset.branch);
+      });
+      // `mousedown` rather than `click`, and that is the whole of why pressing one works: a click
+      // takes the focus off the box first, and the `focusin` above would shut the list out from
+      // under the press. Preventing the default here means the focus never leaves at all.
+      document.addEventListener("mousedown", (event) => {
+        const pressed = event.target instanceof Element ? event.target.closest("[data-branch]") : null;
+        if (!pressed) {
+          if (event.target instanceof Element && !event.target.closest(".basis__field")) shutBranches();
+          return;
+        }
+        event.preventDefault();
+        takeBranch(pressed.dataset.branch);
       });
     };
 
@@ -704,10 +1038,9 @@
           const box = transcript();
           if (!box) return;
           const open = button.dataset.fold === "open";
-          box.querySelectorAll("details.tool").forEach((fold) => {
+          box.querySelectorAll(FOLDS).forEach((fold) => {
             fold.open = open;
-            if (open) opened.add(fold.id);
-            else opened.delete(fold.id);
+            folds.set(fold.id, open);
           });
         });
       });
@@ -746,15 +1079,47 @@
       );
     };
 
-    // Which tool calls the reader has open, kept as they press rather than read back later: a
-    // `<details>` closed by the next swap would otherwise look to this file like one they shut.
+    // What the reader decided about each fold they have touched, kept as they press rather than read
+    // back later: a `<details>` closed by the next swap would otherwise look to this file like one
+    // they shut. Every kind that folds, since a command opens by default and a call does not, so
+    // reading a set of ids back off the page could not tell a decision from a default.
     const wireFolds = () => {
       document.addEventListener("toggle", (event) => {
         const fold = event.target;
-        if (!(fold instanceof HTMLDetailsElement) || !fold.classList.contains("tool")) return;
-        if (fold.open) opened.add(fold.id);
-        else opened.delete(fold.id);
+        if (!(fold instanceof HTMLDetailsElement) || !fold.matches(FOLDS)) return;
+        folds.set(fold.id, fold.open);
       }, true);
+    };
+
+    // An open fold's summary is one row at the top of a box that may be several screens of output, so
+    // putting a long one away meant scrolling back up to the single place that would do it. The frame
+    // shuts it too: the body's own padding, the labels in it, the room around the output, anything in
+    // the box that is not the output itself. That room is at the *bottom* as well, which is where a
+    // reader who has just read to the end already is.
+    //
+    // Every kind that folds, because it is one complaint: a command is drawn open so shutting is the
+    // press made oftenest there, and a call the reader opened to check the work is the one whose
+    // return runs to hundreds of lines. A rule that held for one and not the other would be two
+    // panels of the same shape answering the same press differently.
+    //
+    // The output is the exemption, and it is the whole of what makes this safe. A click in a `pre` is
+    // usually the start of lifting a line out, and a panel that folded under somebody selecting from
+    // it would cost more than the scroll it saves. A press that *ended* a drag is out for the same
+    // reason: a browser reports one as a click on whatever the pointer came to rest over, so a
+    // selection still standing is a press that was not aimed at the frame. `said nothing` is this
+    // console's own sentence rather than the command's, so it stays part of the frame.
+    //
+    // Shutting only. Opening is the summary's, because a shut panel is a summary and little else, and
+    // this is not the toggle in another place - it is the way out of a box too tall to scroll back up.
+    // Setting `open` dispatches `toggle`, so the decision is recorded by `wireFolds` like any other.
+    const wireShutting = () => {
+      document.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element)) return;
+        const fold = event.target.closest(FOLDS);
+        if (!fold || !fold.open || event.target.closest("summary, pre")) return;
+        if (document.getSelection()?.isCollapsed === false) return;
+        fold.open = false;
+      });
     };
 
     const wireTheme = () => {
@@ -882,11 +1247,54 @@
     // box on every page rather than one wired per form at load.
     const wireSend = () => {
       document.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" || !event.shiftKey) return;
         const box = event.target;
         if (!(box instanceof HTMLTextAreaElement) || box.name !== "prompt" || !box.form) return;
+        // While the palette is open the keyboard is choosing a mode rather than writing a message.
+        // Enter is safe to take here where it is not anywhere else in this box, because what it
+        // would otherwise do is break a line in the middle of `/fo`.
+        if (offering) {
+          const showing = narrowLeaders();
+          // The space is what commits a leader, and only where the box names an answer in full:
+          // `/fork ` and `! ` are somebody who has finished the word, where `/fo ` is somebody who
+          // has not, and taking the row the keyboard happens to be on would put the box in a mode
+          // they were still spelling their way towards. Unnamed, the key types itself, which breaks
+          // the pattern and puts the menu away on the next `input`.
+          if (event.key === " ") {
+            const named = showing.find((row) => row.dataset.leader === typedLeader(box.value));
+            if (!named) return;
+            event.preventDefault();
+            takeLeader(named);
+            return;
+          }
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            leaderAt = (leaderAt + (event.key === "ArrowDown" ? 1 : -1) + showing.length) % showing.length;
+            narrowLeaders();
+            return;
+          }
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            takeLeader(showing[leaderAt]);
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            shutLeaders();
+            return;
+          }
+        }
+        if (event.key === "Escape" && leading !== null) {
+          event.preventDefault();
+          leading = null;
+          paintLeading();
+          return;
+        }
+        if (event.key !== "Enter" || !event.shiftKey) return;
         event.preventDefault();
-        box.form.requestSubmit();
+        // Attributed rather than left to the browser, because `requestSubmit()` with no submitter
+        // posts no button's pair at all: unattributed, a command typed into a command box would
+        // arrive as an ordinary message and be said to the model.
+        sendFrom(box);
       });
       // Sending is a decision to be looking at the end: whatever a reader had scrolled up to check
       // before typing, what they want to see now is the answer to what they just sent. On `submit`
@@ -900,9 +1308,18 @@
           if (!(form instanceof HTMLFormElement)) return;
           const box = form.querySelector('textarea[name="prompt"]');
           if (!box) return;
+          // A message that happens to open with `/` is an ordinary message, so sending one is
+          // allowed while the palette is up - but the box is about to be emptied, and a palette left
+          // standing over an empty box is offering to complete something nobody is typing.
+          shutLeaders();
           sentFrom = box;
           following = true;
           paintFollow();
+          // And the mode goes with the message, unless it is one that stays. A turn of the event loop
+          // later, because what leaving a mode does is hide the very button this send is attributed
+          // to: read before that, the submitter is the control the reader pressed, which is the whole
+          // of what makes a mode mean anything.
+          setTimeout(leaveMode, 0);
         },
         true,
       );
@@ -951,8 +1368,17 @@
     // was handed and what it gave back, and run together they are one unreadable line. So the pairs
     // are read off the list the server already draws them as, which keeps the labels in one place -
     // "called with" and "returned" are written in `pages.py` and nowhere here.
+    //
+    // A command is the same problem in a smaller shape: the line, the status and the output run
+    // together read as one word followed by a wall. Its line is what somebody copying almost always
+    // wants back, so it leads, and its output follows on a line of its own.
     const spoken = (block) => {
       if (block.dataset.markdown !== undefined) return block.dataset.markdown.trim();
+      const line = block.querySelector(".ran__line");
+      if (line) {
+        const output = block.querySelector(".ran__body");
+        return [line.textContent.trim(), output && wordsOf(output).trim()].filter(Boolean).join("\n");
+      }
       const body = block.querySelector(".tool__body");
       if (!body) return wordsOf(block).trim();
       const name = block.querySelector(".tool__name");
@@ -1051,10 +1477,13 @@
     wireKey();
     wireShelf();
     wireSender();
+    wireLeaders();
+    wireBranches();
     wireSearch();
     wireDock();
     wireScroll();
     wireFolds();
+    wireShutting();
     wireTheme();
     wireClasp();
     wireFolding();

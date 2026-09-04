@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -38,7 +39,13 @@ from mainplate.catalogue import Offering
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.conversation import conversing
+from mainplate.forge import Clones
+from mainplate.forge import Reachable
+from mainplate.forge import Reaching
+from mainplate.forge import Repository
+from mainplate.forge import Workspaces
 from mainplate.service import Service
+from mainplate.snapshots import Worktree
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
 # it chose rather than on the wall clock. Not midnight and not the epoch, so a formatting bug that
@@ -261,6 +268,77 @@ def app(service: Service) -> ASGIApp:
     where it can be driven a pass at a time, in `test_conversation`.
     """
     return build_app(already(service))
+
+
+async def run(*arguments: str, cwd: Path) -> str:
+    """One command, run for its effect, raising what it said if it did not work."""
+    process = await asyncio.create_subprocess_exec(
+        *arguments, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+    out, _ = await process.communicate()
+    if process.returncode:
+        raise RuntimeError(f"{arguments} failed: {out.decode()}")
+    return out.decode().strip()
+
+
+# What a stand-in forge reaches, which is the repository below. `git clone` takes a path as readily
+# as a URL, so a test needs no server to exercise the whole path a real session takes: reach a
+# repository, clone it, plant a worktree of the clone.
+FIXTURE = "test:fixture"
+
+# And what a card for it is *called*, which is what a browser test presses: the radio inside a card
+# is a pixel at zero opacity with no pointer events, so the label is the whole of the control.
+FIXTURE_NAME = "me/fixture"
+
+
+@pytest.fixture
+async def worktree(tmp_path: Path) -> Worktree:
+    """
+    A real repository, because everything worth checking against one is what git actually does.
+
+    A stand-in for git would be a second implementation of the thing under test, and the questions
+    asked of this - does a gitignored file come across, does the reader's index move, does a tree
+    survive `gc`, does a branch name resolve to today's commit - are exactly the ones only git can
+    answer.
+
+    Here rather than beside the snapshot tests because two suites need it now: what a command a
+    person runs does to a worktree is the same kind of question, asked from the other end.
+    """
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    await run("git", "init", "-q", "-b", "main", cwd=root)
+    await run("git", "config", "user.email", "probe@example.invalid", cwd=root)
+    await run("git", "config", "user.name", "probe", cwd=root)
+    (root / ".gitignore").write_text(".env\nbuilt/\n")
+    (root / "src" / "kept.txt").write_text("original\n")
+    (root / ".env").write_text("SECRET=shh\n")
+    (root / "built").mkdir()
+    (root / "built" / "artifact.bin").write_text("generated\n")
+    await run("git", "add", "-A", cwd=root)
+    await run("git", "commit", "-qm", "first", cwd=root)
+    return Worktree(root=root)
+
+
+@pytest.fixture
+async def workspaces(worktree: Worktree, tmp_path: Path) -> Workspaces:
+    """
+    Somewhere to clone the repository above and to plant each session's worktree of it.
+
+    Both outside the repository deliberately, and these tests would not notice if they were not: a
+    worktree planted *inside* it would be captured by the snapshots it exists to take, so every
+    session would hold a copy of every other session's files.
+    """
+    reaching = Reaching(
+        current=Reachable(
+            repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root)),)
+        )
+    )
+    return Workspaces(
+        clones=Clones(root=tmp_path / "clones"),
+        root=tmp_path / "worktrees",
+        scratch=tmp_path / "scratch",
+        reaching=reaching,
+    )
 
 
 def already(service: Service) -> Callable[[], AbstractAsyncContextManager[Service]]:

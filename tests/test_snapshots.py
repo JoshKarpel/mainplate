@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 from calling import calling
 from conftest import DEFAULT_CHOICE
+from conftest import FIXTURE
 from conftest import INSTRUCTIONS
 from conftest import Provider
 from conftest import Scripted
 from conftest import already
 from conftest import calls
+from conftest import run
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from test_conversation import pass_at
@@ -35,68 +37,7 @@ from mainplate.settings import Settings
 from mainplate.snapshots import SNAPSHOT_REF
 from mainplate.snapshots import NotAWorktree
 from mainplate.snapshots import Worktree
-
-
-async def run(*arguments: str, cwd: Path) -> str:
-    process = await asyncio.create_subprocess_exec(
-        *arguments, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
-    )
-    out, _ = await process.communicate()
-    if process.returncode:
-        raise RuntimeError(f"{arguments} failed: {out.decode()}")
-    return out.decode().strip()
-
-
-@pytest.fixture
-async def worktree(tmp_path: Path) -> Worktree:
-    """
-    A real repository, because everything worth checking here is what git actually does.
-
-    A stand-in for git would be a second implementation of the thing under test, and the questions
-    these tests ask - does a gitignored file come across, does the reader's index move, does a tree
-    survive `gc` - are exactly the ones only git can answer.
-    """
-    root = tmp_path / "repo"
-    (root / "src").mkdir(parents=True)
-    await run("git", "init", "-q", "-b", "main", cwd=root)
-    await run("git", "config", "user.email", "probe@example.invalid", cwd=root)
-    await run("git", "config", "user.name", "probe", cwd=root)
-    (root / ".gitignore").write_text(".env\nbuilt/\n")
-    (root / "src" / "kept.txt").write_text("original\n")
-    (root / ".env").write_text("SECRET=shh\n")
-    (root / "built").mkdir()
-    (root / "built" / "artifact.bin").write_text("generated\n")
-    await run("git", "add", "-A", cwd=root)
-    await run("git", "commit", "-qm", "first", cwd=root)
-    return Worktree(root=root)
-
-
-# What a stand-in forge reaches, which is the repository above. `git clone` takes a path as
-# readily as a URL, so a test needs no server to exercise the whole path a real session takes:
-# reach a repository, clone it, plant a worktree of the clone.
-FIXTURE = "test:fixture"
-
-
-@pytest.fixture
-async def workspaces(worktree: Worktree, tmp_path: Path) -> Workspaces:
-    """
-    Somewhere to clone the repository above and to plant each session's worktree of it.
-
-    Both outside the repository deliberately, and these tests would not notice if they were not: a
-    worktree planted *inside* it would be captured by the snapshots it exists to take, so every
-    session would hold a copy of every other session's files.
-    """
-    reaching = Reaching(
-        current=Reachable(
-            repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root)),)
-        )
-    )
-    return Workspaces(
-        clones=Clones(root=tmp_path / "clones"),
-        root=tmp_path / "worktrees",
-        scratch=tmp_path / "scratch",
-        reaching=reaching,
-    )
+from mainplate.snapshots import branch_named
 
 
 class TestWorkingFromARelativeDatabase:
@@ -353,6 +294,272 @@ class TestAWorktreePerSession:
 
         with pytest.raises(NoSuchRepository, match="long-gone"):
             await pass_at(planting, body, session.id)
+
+
+class TestStartingSomewhereInParticular:
+    """
+    Where a session's worktree begins, which is a base somebody named or the repository's own head.
+
+    A real repository throughout, for the reason every other test here uses one: what is being asked
+    is what `git worktree add` and `git rev-parse` actually do with a name, and a stand-in for git
+    would be a second implementation of the thing under test.
+    """
+
+    async def test_a_session_with_no_base_starts_at_the_repository_s_head(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
+
+        await pass_at(planting, body, session.id)
+
+        assert (workspaces.at(session.id) / "src" / "kept.txt").read_text() == "original\n"
+
+    async def test_a_session_started_at_a_tag_holds_the_files_that_tag_names(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, worktree: Worktree
+    ) -> None:
+        """
+        The point of naming one: the worktree holds what was there *then*, not what is there now.
+
+        A tag rather than a branch, so that what is asserted is a resolution git had to perform
+        rather than a name that happens to be `HEAD` anyway.
+        """
+        await run("git", "tag", "before-the-rewrite", cwd=worktree.root)
+        (worktree.root / "src" / "kept.txt").write_text("rewritten\n")
+        await run("git", "commit", "-aqm", "second", cwd=worktree.root)
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE, base="before-the-rewrite"))
+
+        await pass_at(planting, body, session.id)
+
+        assert (workspaces.at(session.id) / "src" / "kept.txt").read_text() == "original\n"
+
+    @pytest.mark.parametrize(
+        "base",
+        [
+            pytest.param(None, id="saying nothing at all"),
+            pytest.param("main", id="naming the branch"),
+        ],
+    )
+    async def test_a_new_session_starts_at_the_repository_as_it_is_now(
+        self,
+        planting: Service,
+        provider: Provider,
+        workspaces: Workspaces,
+        worktree: Worktree,
+        on_fixture: Choice,
+        base: str | None,
+    ) -> None:
+        """
+        The reason planting a worktree fetches, and why it does so whether or not a base was named.
+
+        The first session clones the repository, and nothing else here ever refreshes that copy: it
+        would answer out of whatever the repository looked like the first time anybody used it, for
+        as long as the machine lives. So starting a session is where a person gets to say when this
+        console catches up, and it has to work for the common case of naming nothing.
+
+        Saying nothing is the arm that catches the subtle half. A fetch writes
+        `refs/remotes/origin/`, so a plant that read the clone's own `HEAD` commit would refresh the
+        refs and then check out the stale commit beside them - a round trip that changes nothing.
+        Resolving the *default branch by name* through the same path a base takes is what fixes it.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        first = await planting.start("hello", on_fixture)
+        await pass_at(planting, body, first.id)
+        assert workspaces.clones.cloned(FIXTURE), "the clone is what goes stale, so it has to exist first"
+        (worktree.root / "src" / "kept.txt").write_text("moved on\n")
+        await run("git", "commit", "-aqm", "second", cwd=worktree.root)
+
+        second = await planting.start("hello", replace(on_fixture, base=base))
+        await pass_at(planting, body, second.id)
+
+        assert (workspaces.at(second.id) / "src" / "kept.txt").read_text() == "moved on\n"
+
+    async def test_a_fork_is_the_files_its_turn_saw_however_far_the_repository_has_moved(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, worktree: Worktree, on_fixture: Choice
+    ) -> None:
+        """
+        The one plant that must *not* pick up whatever the remote now says.
+
+        A fork is checked out at a tree this console recorded, which is an object it already holds, so
+        a fetch there could not change the answer - and a fork that started at the current head would
+        be re-asking its turn against files that turn never saw, which is a different question wearing
+        the same words.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
+        await pass_at(planting, body, session.id)
+        (worktree.root / "src" / "kept.txt").write_text("moved on\n")
+        await run("git", "commit", "-aqm", "second", cwd=worktree.root)
+
+        forked = await planting.fork(session.id, at=0, chosen=on_fixture, said="try it again")
+        assert forked is not None
+        await pass_at(planting, body, forked.id)
+
+        assert (workspaces.at(forked.id) / "src" / "kept.txt").read_text() == "original\n"
+
+    async def test_a_session_that_named_a_branch_is_on_it_rather_than_detached(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        What a branch buys: somewhere for a commit to go. A detached `HEAD` is fine for editing files
+        and a dead end the moment somebody runs `git commit` in the box under the conversation.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", replace(on_fixture, branch="try-it-this-way"))
+
+        await pass_at(planting, body, session.id)
+
+        assert await run("git", "branch", "--show-current", cwd=workspaces.at(session.id)) == "try-it-this-way"
+
+    async def test_a_session_that_named_no_branch_is_given_one_rather_than_left_detached(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        The default, and it changed once `Run` put `git commit` in the box under the conversation: a
+        commit on a detached `HEAD` is reachable only through the reflog, which is a way to lose work
+        that nobody should have to know about.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
+
+        await pass_at(planting, body, session.id)
+
+        assert await run("git", "branch", "--show-current", cwd=workspaces.at(session.id)) == branch_named(session.id)
+
+    async def test_two_sessions_get_branches_of_their_own_so_both_can_plant(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        Why the name is the session's id and not the repository's default branch or the session's
+        title: `git worktree add -b` refuses a name already in use, so two sessions sharing one would
+        mean the second failing to get files at all.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        one = await planting.start("first", on_fixture)
+        two = await planting.start("second", on_fixture)
+
+        await pass_at(planting, body, one.id)
+        await pass_at(planting, body, two.id)
+
+        on_one = await run("git", "branch", "--show-current", cwd=workspaces.at(one.id))
+        on_two = await run("git", "branch", "--show-current", cwd=workspaces.at(two.id))
+        assert on_one != on_two
+        assert (on_one, on_two) == (branch_named(one.id), branch_named(two.id))
+
+    async def test_a_branch_somebody_named_wins_over_the_one_this_console_would_make(
+        self, planting: Service, on_fixture: Choice
+    ) -> None:
+        session = await planting.start("hello", replace(on_fixture, branch="try-it-this-way"))
+
+        chosen = choice_of(await planting.checkpointer.load(session.id))
+        assert chosen is not None
+        assert chosen.branch == "try-it-this-way"
+
+    async def test_a_session_with_no_repository_is_given_no_branch(self, planting: Service) -> None:
+        """There is nothing for one to be a branch *of*, which `Choice.branching` answers first."""
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=None))
+
+        chosen = choice_of(await planting.checkpointer.load(session.id))
+        assert chosen is not None
+        assert chosen.branch is None
+
+    async def test_a_session_with_no_repository_records_neither_a_base_nor_a_branch(self, planting: Service) -> None:
+        """
+        `Choice.settled`, which is what makes the start form unable to express a contradiction: a
+        base and a branch are answers about a repository, so with none picked there is nothing for
+        either to be about and the record says so rather than carrying words nothing will ever read.
+        """
+        session = await planting.start(
+            "hello", replace(DEFAULT_CHOICE, repository=None, base="main", branch="somewhere")
+        )
+
+        chosen = choice_of(await planting.checkpointer.load(session.id))
+        assert chosen is not None
+        assert (chosen.base, chosen.branch) == (None, None)
+
+    async def test_a_fork_takes_a_branch_of_its_own_rather_than_the_one_it_came_from(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        Two rules meeting. The parent's base and branch are both dropped - a base is a second answer
+        to where the fork's files come from, which the recorded tree has already settled, and a
+        branch is a name `git worktree add -b` refuses outright because the parent's worktree still
+        holds it. And then a fork is given one of its own, because dropping it alone would land every
+        fork on a detached `HEAD`, and a fork is exactly where somebody carries on working.
+        """
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        started = replace(on_fixture, base="main", branch="the-parent-s-branch")
+        session = await planting.start("hello", started)
+        await pass_at(planting, body, session.id)
+
+        # With a message, because planting happens *after* the pass is told what to answer: a fork
+        # left waiting never reaches the call this is about.
+        forked = await planting.fork(session.id, at=1, chosen=started, said="try it again")
+        assert forked is not None
+        chosen = choice_of(await planting.checkpointer.load(forked.id))
+        assert chosen is not None
+        assert chosen.base is None
+        assert chosen.branch == branch_named(forked.id)
+        # Driven rather than stopped at the record, because planting is what would have failed on an
+        # inherited branch.
+        await pass_at(planting, body, forked.id)
+        assert (workspaces.at(forked.id) / "src" / "kept.txt").read_text() == "original\n"
+        assert await run("git", "branch", "--show-current", cwd=workspaces.at(forked.id)) == branch_named(forked.id)
+
+
+class TestReadingARepositorysBranches:
+    """
+    Where the start page's completions come from: the repository itself, not this console's copy.
+
+    A real repository, because what is being asked is what `git ls-remote` says about one. The
+    parsing of what it prints is pinned in `test_forge.py`, and what the *page* does with the answer
+    is pinned in `test_commands.py`; these three are the three questions, kept apart.
+    """
+
+    async def test_the_branches_are_read_without_cloning_anything(
+        self, workspaces: Workspaces, worktree: Worktree
+    ) -> None:
+        """
+        The whole reason it asks the remote. There is no clone before a session's first pass, so
+        reading one would leave the very first session on a repository - the case where you most want
+        to say where to start - as the one with nothing to offer.
+        """
+        await run("git", "branch", "release/2.1", cwd=worktree.root)
+
+        found = await workspaces.branches(FIXTURE)
+
+        assert sorted(found) == ["main", "release/2.1"]
+        assert not workspaces.clones.cloned(FIXTURE), "asking cost no clone"
+
+    async def test_a_branch_pushed_since_the_clone_is_offered(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, worktree: Worktree, on_fixture: Choice
+    ) -> None:
+        """The other half of asking the remote: the answer cannot be as old as the local copy."""
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        session = await planting.start("hello", on_fixture)
+        await pass_at(planting, body, session.id)
+        await run("git", "branch", "landed-later", cwd=worktree.root)
+
+        assert "landed-later" in await workspaces.branches(FIXTURE)
+
+    async def test_a_repository_no_forge_reaches_offers_nothing_rather_than_failing(
+        self, workspaces: Workspaces
+    ) -> None:
+        """
+        A field with no completions is the field as it was before it offered any, so this costs a
+        suggestion rather than an ability. `forge.offers`'s promise, one level down.
+        """
+        assert await workspaces.branches("test:long-gone") == ()
+
+    async def test_a_repository_that_cannot_be_reached_offers_nothing_rather_than_failing(
+        self, workspaces: Workspaces, tmp_path: Path
+    ) -> None:
+        gone = Reachable(
+            repositories=(Repository(forge="test", key="nowhere", name="me/nowhere", url=str(tmp_path / "nothing")),)
+        )
+
+        assert await replace(workspaces, reaching=Reaching(current=gone)).branches("test:nowhere") == ()
 
 
 class TestForkingTheWorktreeToo:

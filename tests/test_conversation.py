@@ -604,11 +604,20 @@ class TestTheRecordedChoice:
     """
 
     def test_a_choice_is_recorded_as_the_things_it_is(self) -> None:
-        chosen = Choice(endpoint="gateway", model="wide/steady", repository="exe-github:blog", thinking="high")
+        chosen = Choice(
+            endpoint="gateway",
+            model="wide/steady",
+            repository="exe-github:blog",
+            base="release/2.1",
+            branch="try-the-other-way",
+            thinking="high",
+        )
         assert recorded_choice(chosen) == {
             "endpoint": "gateway",
             "model": "wide/steady",
             "repository": "exe-github:blog",
+            "base": "release/2.1",
+            "branch": "try-the-other-way",
             "isolation": {"filesystem": "nothing", "network": False},
             "thinking": "high",
         }
@@ -620,6 +629,8 @@ class TestTheRecordedChoice:
             "endpoint": "here",
             "model": "ripe/fast",
             "repository": None,
+            "base": None,
+            "branch": None,
             "isolation": {"filesystem": "nothing", "network": False},
             "thinking": None,
         }

@@ -10,6 +10,7 @@ from mainplate.exe import parse_repositories
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
 from mainplate.forge import discover
+from mainplate.forge import named
 
 # The shape exe.dev's own documentation publishes, kept verbatim so a change to it is a failure
 # here rather than a picker that quietly offers nothing.
@@ -235,6 +236,36 @@ class TestNamingThemForAPicker:
 
         assert labelled[ONE] == "me/one"
         assert labelled[as_user] == "o/r (repo-as-user)"
+
+
+class TestReadingWhatBranchesARepositoryHas:
+    """
+    What `git ls-remote --heads` prints, as the completions the start page offers.
+
+    The parsing is pure and pinned against the shape git actually produces; the call around it is
+    exercised against a real repository in `test_snapshots.py`, since what it has to survive is a
+    host that answers and one that does not.
+    """
+
+    def test_a_branch_is_whatever_follows_the_prefix(self) -> None:
+        listed = "aaaa1111\trefs/heads/main\nbbbb2222\trefs/heads/release/2.1\n"
+        assert named(listed) == ("main", "release/2.1")
+
+    def test_a_name_with_slashes_in_it_is_kept_whole(self) -> None:
+        """Cut once at the prefix rather than split on every separator, or `feature/a/b` is `a`."""
+        assert named("cccc3333\trefs/heads/feature/deep/nested\n") == ("feature/deep/nested",)
+
+    @pytest.mark.parametrize(
+        "listed",
+        [
+            pytest.param("", id="a repository with no branches at all"),
+            pytest.param("dddd4444\trefs/tags/v1\n", id="a tag, which this did not ask for"),
+            pytest.param("ref: refs/heads/main\tHEAD\n", id="the symref line git prints for HEAD"),
+            pytest.param("not a line git would print\n", id="anything else"),
+        ],
+    )
+    def test_what_is_not_a_branch_contributes_nothing(self, listed: str) -> None:
+        assert named(listed) == ()
 
 
 class TestExeDevGitHub:

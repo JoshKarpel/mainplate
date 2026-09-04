@@ -31,10 +31,14 @@ from without_durability_sqlite import SqliteDurable
 
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
+from mainplate.commands import Commands
+from mainplate.commands import Slot
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
+from mainplate.conversation import command_key
+from mainplate.conversation import commands_in
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
@@ -100,6 +104,16 @@ class Conversation:
     session id, so it is worth nothing on its own.
     """
 
+    runnable: bool = False
+    """
+    Whether this session can run a command the person types, which needs somewhere to run it.
+
+    Its own field rather than `worktree is not None`, because it is two questions and only one of
+    them is about the session: whether this session has files, and whether this console was built to
+    run anything at all. A console with no `Commands` offers no `Run`, exactly as one with no sandbox
+    offers no `bash`, and neither is a session's fault.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class Service:
@@ -143,6 +157,19 @@ class Service:
     Here because a route reads it and a route is handed this and nothing else. The value is
     `Settings.watching`, put in at startup; the default is the same constant that setting defaults
     to, so a `Service` built without one behaves as a configured console does.
+    """
+
+    commands: Commands | None = None
+    """
+    What runs a command a person typed, or nothing at all for a console that runs none.
+
+    The one thing here that holds work in flight, which the module note above says this object does
+    not. Stated rather than quietly excepted: a running command belongs to this process and does not
+    survive a restart, where everything else here is a read of the store. What keeps it from
+    spreading is that the *answers* are still only in the checkpoint - the command and its result are
+    both recorded - so a page renders the same thing whichever process is asked. See `commands.py`.
+
+    Absent is a console that cannot run one, the way `workspaces` absent is a console with no files.
     """
 
     now: Callable[[], datetime] = now_utc
@@ -193,6 +220,7 @@ class Service:
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             repository=self.repository_of(chosen),
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
+            runnable=self.commands is not None and self.workspaces is not None and working,
         )
 
     async def token(self, session: str) -> int:
@@ -254,13 +282,20 @@ class Service:
         not alter that, because this is still the one moment it is decided.
         """
         named = name_from(title) if title else ""
-        # The isolation is settled here rather than taken as posted, which is the same stance that
-        # stops a form with no repository field moving a branch out of its repository. A session
-        # working in a repository reaches its worktree and nothing else, and one working in none
-        # cannot reach a worktree there is none of, so the pair is never recorded contradicting
-        # itself and no reader downstream has to reconcile the two.
-        chosen = replace(chosen, isolation=chosen.isolation.settled(chosen.repository))
+        # Settled here rather than taken as posted, which is the same stance that stops a form with
+        # no repository field moving a branch out of its repository. Everything that depends on the
+        # repository is made to agree with it in one place: a session working in one reaches its
+        # worktree and nothing else, and one working in none cannot reach a worktree there is none
+        # of, be checked out at a commit, or start a branch. So no reader downstream reconciles
+        # anything, and the form cannot record a contradiction. See `Choice.settled`.
+        chosen = chosen.settled()
         session = Session(id=mint_session_id(), created_at=self.now(), title=named or name_from(said))
+        # A branch of its own where nobody named one, which is what stops a session working in a
+        # repository landing on a detached `HEAD`. That was the default until `Run` put `git commit`
+        # in the box under the conversation, and a commit on a detached `HEAD` is reachable only
+        # through the reflog. Filled *here* rather than in `settled`, because it takes the session's
+        # own id and `settled` is a rule about a choice rather than about a session.
+        chosen = chosen.branching(session.id)
         await enrol(self.database, session)
         # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
@@ -325,7 +360,12 @@ class Service:
         # Settled *after* the repository is decided, and the order is the whole of it: a fork that
         # inherits its parent's repository reaches that worktree whatever the form said, and one
         # attaching a repository to a session that had none moves to `WORKTREE` by the same rule.
-        chosen = replace(chosen, isolation=chosen.isolation.settled(chosen.repository))
+        #
+        # `forked` is what drops the base and the branch the parent was started with. A fork plants
+        # at the tree of the turn it re-asks, so a base beside that would be a second answer to where
+        # its files come from; and `git worktree add -b` refuses a branch already in use, so an
+        # inherited one is a worktree that cannot be planted at all.
+        chosen = chosen.settled(forked=True)
         forked = Session(
             id=mint_session_id(),
             created_at=self.now(),
@@ -334,6 +374,10 @@ class Service:
             title=parent.title,
             forked=Origin(session=session, turn=at, aside=aside),
         )
+        # And then a branch of the fork's *own*, which is the other half of `settled` dropping the
+        # parent's: dropping it alone would leave every fork on a detached `HEAD`, where a fork is
+        # exactly where somebody carries on working and therefore commits.
+        chosen = chosen.branching(forked.id)
         await enrol(self.database, forked)
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
@@ -386,6 +430,47 @@ class Service:
                 return said_at
             if not isinstance(stored, str):
                 return None
+        raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
+
+    async def run(self, session: str, said: str) -> int | None:
+        """
+        Run `said` in this session's own worktree, and say which slot recorded it, or nothing at all
+        where this session has nowhere to run one.
+
+        **The turn is the last one started**, whether or not it is still being answered, because that
+        is where the command happened: everything said so far is above it and nothing has been said
+        since. A queued turn counts as started, so a command run while a reply is coming lands under
+        the message the person typed ahead rather than above it.
+
+        The slot is claimed by trying and checking, exactly as `steer` claims its own and for the
+        same reason: `supply` keeps the value a key was first given, so two commands posted at once
+        would otherwise leave the loser's under a key nothing reads. Unlike a steer nothing else
+        competes for these, so there is no `CLOSED` to get back - the only writer is whoever is
+        typing, and the loop is against another of them.
+
+        Recorded *before* it is started, and both of those are here rather than in the handler so the
+        pair cannot come apart: a command started without a record would run with nothing on the page
+        saying it had, and a record with nothing running would be a panel that never resolves.
+
+        Nowhere to run one is `None` and not a raise, matching what `send` does with a turn that
+        stopped listening: it is a state the page can explain, not a fault.
+        """
+        if self.commands is None or self.workspaces is None:
+            return None
+        found = await self.read(session)
+        if found is None or found.chosen is None or found.chosen.repository is None:
+            return None
+        # The last turn started, which for any session this console made is at least turn 0: `start`
+        # writes the choice and then the first message, so a session with a row has a prompt.
+        turn = found.said.turns - 1
+        if turn < 0:  # pragma: no cover - a session is created with its first message
+            return None
+        where = self.workspaces.at(session)
+        for ran_at in count(len(commands_in(await self.checkpointer.load(session), turn))):
+            stored = await self.checkpointer.supply(session, command_key(turn, ran_at), said)
+            if stored == said:
+                self.commands.start(Slot(session=session, turn=turn, at=ran_at), said, where)
+                return ran_at
         raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
 
     async def say(self, session: str, *, turn: int, said: str) -> None:

@@ -40,9 +40,11 @@ from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.console import LINKS
+from mainplate.conversation import command_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import prompt_key
+from mainplate.conversation import result_key
 from mainplate.conversation import steer_key
 from mainplate.conversation import took_key
 from mainplate.conversation import tool_key
@@ -63,10 +65,16 @@ from mainplate.sandbox import Isolation
 from mainplate.service import Conversation
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
+from mainplate.snapshots import branch_named
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 
 WHEN = datetime(2031, 3, 14, 15, 9, 26, tzinfo=UTC)
+
+# The session every page below is about, named here rather than on `PARENT` because the default
+# choice needs it too: a session's branch is named after its id, so the two would otherwise be one
+# literal written twice and a page saying it is on a branch belonging to some other session.
+PARENT_ID = "aa" * 16
 
 CATALOGUE = Catalogue(
     offered={
@@ -98,9 +106,12 @@ CATALOGUE = Catalogue(
         endpoint="llm-anthropic",
         model="anthropic/claude-sonnet-4-6",
         repository="exe-github:mainplate",
-        # Settled here for the reason `Service.start` settles it: a fixture naming a repository and
-        # recording that it reaches no files would draw a page no real session can produce.
+        # Both settled here for the reason `Service.start` settles them: a fixture naming a
+        # repository while recording that it reaches no files, or that it is on no branch, would draw
+        # a page no real session can produce. Every session working in a repository is on a branch
+        # named after it, so the line under the message box says one and a screenshot has to show it.
         isolation=Isolation(filesystem=Filesystem.WORKTREE),
+        branch=branch_named(PARENT_ID),
         thinking="high",
     ),
 )
@@ -145,7 +156,7 @@ WORKING_IN = "exe-github:mainplate"
 # the second one still reads as a repository is not a thing a markup assertion can answer.
 DETACHED = "exe-github:archived"
 
-PARENT = Session(id="aa" * 16, created_at=WHEN, title="Why does the poll stop after one answer", repository=WORKING_IN)
+PARENT = Session(id=PARENT_ID, created_at=WHEN, title="Why does the poll stop after one answer", repository=WORKING_IN)
 
 # A branch, and a branch of that branch, so the sidebar's nesting is drawn at more than one depth
 # and the turn each left at is visible on the row. A fork inherits its parent's repository, so the
@@ -421,12 +432,25 @@ def showing(
         answerable=answerable,
         repository=REPOSITORY if working else None,
         worktree=WORKSPACE / session.id if working else None,
+        # Which follows the repository, because a command runs in a session's worktree: it is what
+        # puts `Run` among the sending menu's answers, and so what makes `/run` and `!` reach a mode
+        # at all.
+        runnable=working,
     )
 
 
 def pages() -> dict[str, str]:
     """Every page worth looking at, by the file it is written to."""
     settled = recorded(CONVERSATION, TOOL_IN_FLIGHT)
+    # Commands the person ran themselves, which no model was told about and which the store holds
+    # beside what was said. All three states, because they are drawn differently and the differences
+    # are exactly what a screenshot is for: an exit of zero, an exit that is not a failure - `git
+    # diff --quiet` exits 1 to say there *are* changes - and one still running.
+    settled[command_key(1, 0)] = "git status --short"
+    settled[result_key(1, 0)] = {"status": 0, "output": " M src/mainplate/pages.py\n", "took": 0.11}
+    settled[command_key(1, 1)] = "git diff --quiet"
+    settled[result_key(1, 1)] = {"status": 1, "output": "", "took": 0.08}
+    settled[command_key(1, 2)] = "just test"
     waiting = dict(settled)
     waiting[prompt_key(2)] = "And what about a turn still being answered?"
 

@@ -335,8 +335,12 @@ main > * {
    second reader of it, and a third would be a third `var(--kind)` rather than four more rules. */
 /* A steer takes the person's hue, because the axis is who produced the text and that is the same
    person. What tells it apart is the label and the key's own chip, not a colour of its own. */
+/* And a command takes it too, for exactly the same reason: the person wrote it. That it is the one
+   kind here no model ever saw is said by the panel's own label and by the key's chip, which is where
+   a fact about who was told belongs - the palette answers who produced it. */
 .panel[data-kind="person"],
-.panel[data-kind="steering"] {
+.panel[data-kind="steering"],
+.panel[data-kind="command"] {
     --kind: var(--person-edge);
 }
 
@@ -434,7 +438,8 @@ main > * {
 /* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
    tell the kinds apart without reading the word. */
 .panel[data-kind="person"] .panel__role,
-.panel[data-kind="steering"] .panel__role {
+.panel[data-kind="steering"] .panel__role,
+.panel[data-kind="command"] .panel__role {
     color: var(--person-edge);
 }
 
@@ -864,9 +869,13 @@ pre > .copy {
     color: var(--error-edge);
 }
 
+/* The room around the return is the other way to shut the panel, which is what the cursor says. See
+   `.ran__body`, which is the same band for the same reason: a return that runs to hundreds of lines
+   is one a reader would otherwise scroll back up to the summary to put away. */
 .tool__body {
     margin: 0;
     padding: 0 var(--space-4) var(--space-4);
+    cursor: pointer;
 }
 
 .tool__body dt {
@@ -884,10 +893,144 @@ pre > .copy {
 .tool__body pre {
     position: relative;
     margin: 0;
+    /* What the call returned is not part of the band that shuts the panel, because a press here is
+       usually the start of lifting a line out. The cursor is where the frame stops saying so. */
+    cursor: auto;
     /* On the same grid as a fenced block, because a read's gutter is the longest column of box
        drawing this console ever draws and it is here rather than in a fence. The family is said
        again rather than inherited from `.tool`: a browser's own sheet sets `pre` to `monospace`
        directly, and a rule on the element beats a value inherited from an ancestor. */
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* --- Commands the person ran ------------------------------------------- */
+
+/* The same shape as a tool call - a line to scan and a body under it - drawn open where a call is
+   drawn shut, because the person asked for this one and a call is the model reaching for context.
+   Its own rules rather than a second class on `.tool`, since what is inside differs - a command has
+   a status a program chose where a call has one of four words - and sharing the block would have
+   meant a selector list growing every time either moved.
+
+   The hue is the person's throughout. What says no model was told is the panel's label and the
+   sentence under the box, not a colour: the palette answers who wrote it. */
+.ran {
+    margin: 0.5rem 0;
+    border: 1px solid color-mix(in srgb, var(--person-edge) 35%, var(--edge-soft));
+    border-radius: var(--radius);
+    background: var(--raised);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+
+.ran > summary {
+    display: flex;
+    /* A command line and a status are two unbreakable runs, and on a narrow window they do not fit
+       one line. Unwrapped they push the panel, and the transcript has nowhere to overflow to but the
+       document. */
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: 0.35rem 0.6rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    list-style: none;
+}
+
+.ran > summary::-webkit-details-marker {
+    display: none;
+}
+
+/* `$` and not a triangle, which is the one place this block deliberately departs from `.tool`: what
+   a reader needs to know at a glance is that this line is a shell command and not a tool call, and
+   the prompt character is the mark every terminal already uses to say so. It turns with the fold all
+   the same, so the affordance is not lost. */
+.ran > summary::before {
+    content: "$";
+    color: var(--person-edge);
+    font-weight: 700;
+    opacity: 0.7;
+}
+
+.ran[open] > summary::before {
+    opacity: 1;
+}
+
+/* The line is the part that can be long, so it is the part that gives way. */
+.ran__line {
+    min-width: 0;
+    color: var(--person-edge);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.ran__took {
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+}
+
+/* The status as a word, out at the edge where a reader scans down a turn. `ok` and `exit 2` rather
+   than a colour alone, because a status nobody can name is one a screen reader cannot read out. */
+.ran__status {
+    margin-left: auto;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.ran__status[data-status="ok"] {
+    color: var(--ink-faint);
+}
+
+/* Anything but zero, drawn to be spotted while scanning a turn, because usually it wants looking at.
+   What it deliberately does *not* claim is that the command failed: `git diff --quiet` exits 1 to say
+   there are changes and `grep` exits 1 to say no match, so the number is printed beside the colour
+   and reading it is the reader's. That is why there is no word for this state. */
+.ran__status[data-status="other"] {
+    color: var(--error-edge);
+}
+
+/* Never learned, because the console was stopped before the command exited. Faint rather than red:
+   nothing went wrong with the command, we simply stopped watching. */
+.ran__status[data-status="unfinished"] {
+    color: var(--ink-faint);
+    font-style: italic;
+}
+
+/* The room around the output is the other way to shut the panel, which is what the cursor says, and
+   it is `.tool__body`'s rule as much as this one. A command is drawn open and its output can be a
+   screen and a half, so the summary - one row, at the top - was the only way out of a box a reader
+   had just scrolled to the bottom of. This band is at the bottom, which is where they are. */
+.ran__body {
+    padding: 0 var(--space-4) var(--space-4);
+    cursor: pointer;
+}
+
+/* A command whose whole answer was its exit status. Faint and italic, which is how `unfinished`
+   beside it already says a thing this console knows rather than a thing the command said. */
+.ran__silent {
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    font-style: italic;
+}
+
+.ran__body pre {
+    position: relative;
+    margin: 0;
+    /* What the command said is not part of the band that shuts the panel, because a press here is
+       usually the start of lifting a line out. The cursor is where the frame stops saying so. */
+    cursor: auto;
+    /* On the console's own monospace grid, exactly as a tool's body is, and for the same reason: a
+       command's output is where box drawing and aligned columns actually turn up. The family is said
+       again rather than inherited, since a browser's own sheet sets `pre` to `monospace` directly and
+       a rule on the element beats a value inherited from an ancestor. */
     font-family: var(--mono);
     font-size: var(--mono-size);
     line-height: var(--mono-line);
@@ -1151,6 +1294,59 @@ pre > .copy {
     border-bottom-right-radius: 0;
 }
 
+/* --- The box in one of the menu's own modes ---------------------------- */
+
+/* `/fork ` typed into an empty box - or `! `, which is `/run`'s own key - puts the composer into that
+   answer's mode, and these are the whole of what says so: the button beside the box, and the
+   sentence above it.
+
+   Exactly one primary button is ever shown, which is the point rather than a saving: every one of
+   them is rendered by the server carrying its own label and its own posted value, so what a reader
+   is about to press is a control that says what it does. A single button whose text and name the
+   script rewrote would be the "Send that forks" this console refuses everywhere else.
+
+   Hidden is not out of reach - `requestSubmit` can still be handed a hidden submit button, which is
+   how Shift-Enter posts the right pair. */
+.composer :is(.sender__leader, .leading) {
+    display: none;
+}
+
+.composer[data-leading] .sender__send {
+    display: none;
+}
+
+/* The one place a mode is listed by name, which is the same bargain the card kinds take: an answer
+   added without a line here is drawn as no mode at all. Spelled out because CSS cannot ask whether a
+   descendant's attribute matches an ancestor's, and the pairing is exactly that question. */
+.composer[data-leading="next"] :is(.sender__leader, .leading)[data-leader="next"],
+.composer[data-leading="aside"] :is(.sender__leader, .leading)[data-leader="aside"],
+.composer[data-leading="fork"] :is(.sender__leader, .leading)[data-leader="fork"],
+.composer[data-leading="parent"] :is(.sender__leader, .leading)[data-leader="parent"],
+.composer[data-leading="run"] :is(.sender__leader, .leading)[data-leader="run"],
+.composer[data-leading="keep"] :is(.sender__leader, .leading)[data-leader="keep"] {
+    display: revert;
+}
+
+/* Above the box rather than under it, and that is the composer being the bottom of the page: a row
+   appearing anywhere in this column pushes everything above that row upward, so a sentence under the
+   box moved the box itself out from under the cursor at the moment somebody entered the mode. Above
+   it, what grows is the composer's top edge. */
+.leading {
+    margin: 0;
+    color: var(--person-edge);
+    font-size: 0.72rem;
+}
+
+/* `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the
+   box takes the terminal's monospace and a heavier edge. A command is a shell line, so setting it in
+   the face the output will come back in is the box telling the truth about what it holds. */
+.composer[data-leading="run"] textarea {
+    border-width: 2px;
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+}
+
 .sender__more {
     position: relative;
     display: flex;
@@ -1212,9 +1408,35 @@ pre > .copy {
     text-align: left;
 }
 
+/* Narrowed to what a leader typed into the box still fits. `display: flex` above beats the browser's
+   own `[hidden]` rule, so the row has to be told again. */
+.composer .sender__option[hidden] {
+    display: none;
+}
+
+/* `aria-selected` is the row the keyboard is on while the box holds a leader, drawn the same as the
+   one under the pointer: there is one place to look either way. */
 .composer .sender__option:hover:not(:disabled),
-.composer .sender__option:focus-visible {
+.composer .sender__option:focus-visible,
+.composer .sender__option[aria-selected="true"] {
     background: var(--sunk);
+}
+
+.sender__option-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+/* The word that reaches this row from the keyboard, printed on it for the reason Send names
+   Shift-Enter: a shortcut nothing on the page mentions is one nobody uses. In the face it is typed
+   in, so it reads as something to type rather than as a second name for the row. */
+.sender__option-leader {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 400;
 }
 
 /* The rule separates what *sends* the text from what does not. `Keep` is last because it is the only
@@ -1334,6 +1556,12 @@ pre > .copy {
        above it with model cards sliding through - which is what a phone shows, where `.setup` is
        the box that scrolls. Here the padding scrolls away with the content, as it should. */
     padding-block: var(--gap);
+    /* And inline, because a scroller clips: `overflow-y: auto` on `.setup` computes `overflow-x` to
+       `auto` as well, so a control flush with its edge has its focus ring cut off on that side -
+       the base and the branch boxes, which fill their grid columns, and every card when its group is
+       open. This is the room that ring reaches into, so it is the widest of them: 4px against a
+       card's 2px outline at a 2px offset, and an input's 2px at 1px. */
+    padding-inline: var(--space-2);
 }
 
 .picker__part {
@@ -1450,6 +1678,119 @@ pre > .copy {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(20rem, 100%), 1fr));
     gap: var(--space-3);
+}
+
+/* Where in the repository the worktree starts, under the cards that say which repository. Two text
+   boxes rather than cards, because neither has a closed set to draw; laid out on the same grid as
+   the cards above so the group reads as one question with its details under it. */
+.basis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+}
+
+/* `relative`, because the branches are drawn *over* whatever is under the field rather than pushing
+   it down: the network group and the endpoint below it would otherwise jump every time somebody
+   typed a letter, which on a page of folded groups reads as the whole picker moving. */
+.basis__field {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+/* The same row a group's legend and its count sit in, because it is the same pair: what the field is
+   called, and how many answers there are to complete it from. */
+.basis__label {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* In the person's own hue, for the reason a group's count is: it is what says the field is a choice
+   with answers behind it rather than a box to be filled in from memory. */
+.basis__count {
+    color: var(--person-edge);
+}
+
+.basis input {
+    /* The neutral edge every other input takes, and deliberately not the person's hue: that one is
+       reserved for the box a message is written in, which is the thing on the person's side of the
+       palette. This is a setting, not something said. */
+    min-width: 0;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: inherit;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+
+/* A sentence rather than a ref, so it is set in the page's own face and not the input's: the
+   monospace above is for the value somebody types, and a whole sentence in it does not fit the box.
+   Named rather than `inherit`, which would inherit the monospace from the input itself. */
+.basis input::placeholder {
+    color: var(--ink-faint);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.72rem;
+}
+
+/* The branches, narrowed to what is typed. Over the page rather than in the flow, and bounded, so a
+   repository with fifty of them is a list you scroll rather than a group that pushes the endpoint
+   and the model off the screen while you type.
+
+   `hidden` is the server's initial state and the script's afterwards, so this is `display: none`
+   until something narrows it - which with the file absent is never, leaving the `<datalist>` beside
+   it as the whole of what the field offers. */
+.basis__found {
+    position: absolute;
+    z-index: 2;
+    top: 100%;
+    right: 0;
+    left: 0;
+    max-height: 14rem;
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2);
+    overflow-y: auto;
+    list-style: none;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.basis__found[hidden],
+.basis__found li[hidden] {
+    display: none;
+}
+
+.basis__found-one {
+    display: block;
+    width: 100%;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid transparent;
+    border-radius: calc(var(--radius) / 1.5);
+    background: none;
+    color: inherit;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+/* Hover and the keyboard's own position drawn alike, because they are the same thing said two ways:
+   which branch pressing now would take. */
+.basis__found-one:hover,
+.basis__found-one[aria-selected="true"] {
+    border-color: var(--person-edge);
+    background: color-mix(in srgb, var(--person-edge) 12%, transparent);
 }
 
 .networks__grid,
@@ -2072,7 +2413,8 @@ mark.hit.current {
 }
 
 .key__chip[data-kind="person"],
-.key__chip[data-kind="steering"] {
+.key__chip[data-kind="steering"],
+.key__chip[data-kind="command"] {
     --kind-hue: var(--person-edge);
 }
 

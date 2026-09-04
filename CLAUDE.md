@@ -42,10 +42,15 @@ what a frontier model does differently, and say so.
 does not hold there unless it is repeated.** It supplies checkpoint keys directly, which is what lets
 it plant a finished conversation nobody paid for, and is also what makes it the one place a
 contradictory record can be written: it once seeded every fixture naming a repository while recording
-that it reached no files, because `Isolation.settled` lives in `Service.start` and nothing here goes
-through it. So a rule about what a recorded `choice` may hold is a rule this file has to apply too,
-and the demo database is where that is noticed - rebuild it (`rm mainplate-demo.db*` then `just
-seed`) after any change to what a choice records, or it keeps serving the old shape.
+that it reached no files, because settling lives in `Service.start` and nothing here goes through it.
+So a rule about what a recorded `choice` may hold is a rule this file has to apply too, and the demo
+database is where that is noticed - rebuild it (`rm mainplate-demo.db*` then `just seed`) after any
+change to what a choice records, or it keeps serving the old shape.
+
+It calls `Choice.settled()` rather than restating what a repository decides, which is what keeps that
+list in one place: a field added to what a repository settles is settled here without an edit. That
+is the whole reason `settled` is a method on `Choice` rather than a line in each of its three
+callers.
 
 **The stylesheet is a deliverable, and no string assertion checks one.** `just shots` renders every
 page from fixture checkpoints and drives a real Chromium over them, so a styling change can be
@@ -77,6 +82,12 @@ when the checkpoint does, which is a second render arriving at a page nobody rel
 fixture serves the real app on a real port and hands the test the `Service` behind it, and the test
 writes the steps a pass would write while the browser is looking - which is also the only way to
 hold a turn half-finished long enough to assert on it.
+
+`working` is the same fixture with workspaces behind it, which the command box needs and nothing else
+there does: a session must have a worktree before `Run` is offered at all. Two fixtures rather than
+workspaces on the one, so a test that only drives a conversation does not get a clone and a worktree
+it never looks at. The real repository they are both built on lives in `conftest.py`, since two
+suites want one now.
 
 It drives Playwright's **async** binding, which is not a preference: `sync_playwright` runs an event
 loop on the calling thread, and this suite is already running one, so the sync API leaves every
@@ -182,15 +193,18 @@ knowing at the moment the word is picked rather than afterwards.
 
 ## The key scheme
 
-One key for the session and nine per turn, written by several different places and read by several:
+One key for the session and eleven per turn, written by several different places and read by several:
 
 ```text
-choice               the endpoint, model, repository, isolation and thinking level; written by
-                     `Service.start`
+choice               the endpoint, model, repository, base, branch, isolation and thinking level;
+                     written by `Service.start`
                      and by `Service.fork`, before the prompt
 turn:{n}:prompt      the person's message; written from outside a pass, by `Service.say`
 turn:{n}:steer:{k}   what the person said *into* a running turn; written from outside a pass, by
                      `Service.steer`, and claimed with `CLOSED` by the pass on its way out
+turn:{n}:command:{k} what the person ran themselves; written from outside a pass, by `Service.run`
+turn:{n}:result:{k}  what that command exited with, said and took; written by `Commands` when it
+                     finishes
 turn:{n}:tree:{i}    the worktree before the i-th model request; written by `StepwiseDurability`
 turn:{n}:heard:{i}   which steers were appended to that request; written by `StepwiseDurability`
 turn:{n}:late:{k}    which steers were found where the run would have ended, and so redirected it
@@ -201,10 +215,22 @@ turn:{n}:took:{id}   how long that call ran; written by `StepwiseDurability`
 turn:{n}:messages    what the agent run produced; written by the conversation body
 ```
 
-**Two of them hold what a person said**, `prompt` and `steer`, and both are written from outside a
-pass: somebody acting on a turn that is already running cannot be a step of it. `steer` is also the
-only key whose number is claimed by *trying*, since two writers racing for one number would otherwise
-lose the loser's message to the store's keep-the-first rule.
+**Three of them hold what a person did**, `prompt`, `steer` and `command`, and all three are written
+from outside a pass: somebody acting on a turn that is already running cannot be a step of it.
+`steer` and `command` both claim their number by *trying*, since two writers racing for one number
+would otherwise lose the loser's to the store's keep-the-first rule.
+
+**`command` is recorded and not told**, which is the whole of what a command is here, and the split
+it rests on is one this console already makes everywhere: whether something is *in the checkpoint*
+and whether it is *in the message history* are two questions, and `tree:{i}`, `heard:{i}` and
+`took:{id}` are all records the page draws and no model ever sees. So a command renders, survives a
+reload and comes across on a fork, and costs the conversation no context and reaches no provider.
+Telling the model what you ran is a message somebody writes, which is what the box above it is for.
+
+**`result` carries its own duration where a tool call needs `took:{id}` beside it**, and that is the
+difference between the two rather than an inconsistency: a tool returns somebody else's value of an
+unknown shape, so a duration next to it would be indistinguishable from a tool returning a field of
+that name. A result's shape is ours, so it has somewhere to put one.
 
 **And `steer` is the only key both halves of this console write**, which is why its slots are
 contended rather than merely numbered: the pass claims the next free one with `CLOSED` as it stops
@@ -577,8 +603,10 @@ they can break:
 - **A steer** writes a step *inside* a turn already being answered, and is the only one that reaches
   into the agent loop. It is not a disposition any more: it is what the default one resolves to when
   the record says a turn is running.
+- **A command** is the one that is not a message at all. It writes two keys nothing else writes,
+  runs a process outside the sandbox everything else here runs behind, and is never told to a model.
 
-Sorting them this way is what keeps the cheap ones cheap. Two of the three need no new mechanism.
+Sorting them this way is what keeps the cheap ones cheap. Two of the four need no new mechanism.
 
 ### The disposition
 
@@ -612,6 +640,12 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   every fork has one; gating it on the flag would be a restriction invented to make the flag look
   load-bearing. The destination is read off the row and never posted, so a form cannot put a message
   in a conversation nobody was looking at.
+- `run` is `Service.run`, and it is the one answer here that is not a message going somewhere. It is
+  in the same field all the same, because the question the menu asks is what happens to what you
+  typed; a control of its own would spend a slot in the row above the box. It is offered only where
+  the session has a worktree to run a command in, and posting it to one that has none is a `422`
+  rather than a silence, since a command that vanished is indistinguishable from one that did
+  nothing. See the command section below.
 - A **steer** is below. It is not one of these, because it is not a choice a form makes any more: it
   is what `here` resolves to when a turn is in flight, and the only one that writes inside a turn.
 
@@ -628,11 +662,28 @@ the row above the message box, which is the row a phone has least of. `sending_c
 a caret opening a `<details>` whose items are submit buttons, so the whole thing needs no script:
 the fold is how everything else here folds, and a named button has always posted its own pair.
 
-It deliberately does **not** switch what the primary button does, which is where GitHub's version of
-this control goes further. Remembering a choice means a button labelled `Send` that forks, and that
-is the one failure a control like this can have that nobody notices until after it has happened.
-What closing the menu on an outside click and on Escape adds is an enhancement over a control that
-already opens, chooses and submits with the file absent.
+**Every answer is one `Answer` value, rendered three times**: as a row in that menu, as the button
+the box shows once a leader has put it in that answer's mode, and as the sentence above the box
+saying what will happen. `sending_answers` is the list and the three renderings are functions of it,
+so what is on offer, what it is called and what it posts cannot come apart between them. That is the
+same bargain the branch field takes in rendering one `branches` argument as a `<datalist>` and as the
+list the script narrows.
+
+**One word per answer, and `Answer.named` is `leader.capitalize()` rather than a second field.** The
+word is the menu row's name, the leader typed after `/`, and the value in `data-leading`; where it
+names a disposition it *is* `Disposition.value`, so the word on the page, the word on the keyboard
+and the word in the store are one string. That is what took `Wait for the next turn` back to `Next`
+and `Back to where this came from` back to `Parent`: a sentence cannot be typed, so a leader would
+have needed a second name, and a second name is a synonym to keep in step for ever. What each one
+*does* is the `saying` under it, which is where an explanation belongs anyway.
+
+It deliberately does **not** switch what the primary button does *by remembering*, which is where
+GitHub's version of this control goes further. Remembering a choice means a button labelled `Send`
+that forks, and that is the one failure a control like this can have that nobody notices until after
+it has happened. A mode is different because it is only ever entered by asking for it by name, and
+the button then says `Fork` rather than `Send`. What closing the menu on an outside click and on
+Escape adds is an enhancement over a control that already opens, chooses and submits with the file
+absent.
 
 **Send not saying whether it steers is not an exception to that.** What a button says is still what
 it does: `Send` means "into this conversation, now", and steering is *how* that is carried out when a
@@ -652,9 +703,76 @@ exception - its card in the rail shows nothing without the script either.
 
 **It is posted as the submit button's own `name`/`value`**, which is the browser's mechanism rather
 than anything scripted, so it works with `mainplate.js` absent and htmx appends the submitter's pair
-like any other field. Shift-Enter deliberately reaches none of them: `requestSubmit()` with no
-submitter posts no disposition at all, which parses as `HERE`, so the keyboard shortcut keeps meaning
-the one thing it has always meant rather than whichever button was pressed last.
+like any other field. Shift-Enter reaches whichever button the *mode* leaves standing and no other:
+`requestSubmit()` with no submitter posts no disposition at all, which parses as `HERE`, so the
+keyboard shortcut means the one thing the button beside the box says rather than whichever row was
+pressed last.
+
+### Leaders
+
+**`/fork ` in an empty box is a shortcut to a row of that menu, never a second way of saying it.**
+Typed, it puts the composer into that answer's mode: the button beside the box says `Fork`, a
+sentence above it says what will happen, and what is then written and sent goes there. `! ` is the
+same thing for `/run`, which earns a key of its own by being the mode reached oftenest.
+
+**The space is what commits it, and that is what makes a leader something a reader *finishes*.**
+Until it is pressed the word is ordinary text sitting in the box with the menu open beside it, so
+`!` is a character, `/fo` is two, and nothing has happened on a keystroke somebody was in the middle
+of. It commits only where the box names an answer *in full*, because a prefix is somebody still
+typing and taking the row the keyboard happens to be on would put the box in a mode they were
+spelling their way towards; unnamed, the space types itself, which breaks the pattern and puts the
+menu away. That is also what lets `!` be a leader rather than a key that does something: it is `run`
+written in one character, so it narrows, commits, and is undone by a backspace exactly as `/run` is.
+
+Six things there are decided rather than incidental:
+
+- **It is entered in the page, visibly, and never parsed off the message.** If the server stripped a
+  leading `/fork` out of what was posted, a paragraph that legitimately opens with one would silently
+  be a fork, and it would have happened by the time anybody noticed. So the leader is consumed by the
+  script, the mode is drawn, and both buttons are rendered by the server with their own labels and
+  their own posted values - the script toggles one attribute on the form and hands `requestSubmit`
+  whichever button that leaves standing, so it holds no label, no field name and no disposition. A
+  button whose text and `name` the script rewrote would be the failure this shape exists to avoid.
+- **Only at the start of an empty box, and only in the default mode.** Mid-message a `/` is an
+  ordinary character; in a command box it is the front of half the paths anybody types, so a palette
+  opening over one would be in the way of every command. A word no answer answers to is ordinary text
+  too, so `/etc/hosts is where it lives` is a message.
+- **The sending menu *is* the palette**, which is what keeps one list: the rows already say what each
+  answer does and already carry its word, so a second list beside them would be a copy to keep in
+  step. It opens narrowed to what still fits, by prefix rather than anywhere in the word - the
+  opposite of the branch field, because a leader is a short word typed from the front. Enter takes
+  the row the keyboard is on, which is how a word nobody finished typing is finished; plain Enter is
+  safe to swallow there where it is nowhere else in this box, because what it would otherwise do is
+  break a line in the middle of `/fo`. Two keys and not two mechanisms: the space says the word is
+  done and Enter says the *row* is, which are different things to have decided.
+- **A row pressed while a leader is being typed chooses the mode rather than sending.** The rows are
+  submit buttons, so without the capture-phase intercept a press with `/fo` in the box would post
+  `/fo` as the message: both a message nobody wrote and a session nobody asked for.
+- **`Keep` is a mode like the rest and is the one that cannot be a submitter.** It posts nothing at
+  all, so it is a `type=button` the shelf listens for, and the keyboard reaches it by pressing it
+  rather than through `requestSubmit`. It is also the one mode nothing dispatches a `submit` from, so
+  leaving it is said outright in the shelf's own listener rather than reached through the path every
+  other answer takes; what decides is still the button's own `data-staying`.
+- **Whether a mode outlives what was sent from it is the answer's own decision**, carried on the
+  button the server drew for it as `data-staying` and read there rather than kept in a list in the
+  script. `Run` stays, because a command is rarely the only one; everything else comes back to `Send`,
+  because it is a thing somebody meant once, and a `Fork` or an `Aside` has navigated away by then
+  anyway. The script leaves the mode a turn of the event loop after the `submit`, because what leaving
+  it does is hide the very button the send is attributed to.
+
+**Which modes exist is read off the buttons the server drew**, not kept in a list in the script. A
+session with no files is offered no `Run`, so there is no `/run` and no `!`, and the two cannot drift
+because there is only the one thing that decides it. What CSS lists by name is which
+`data-leading` shows which button and sentence, the same bargain the card kinds take.
+
+**A mode is left by Escape, and by a send where the answer is not one that stays.** What makes
+staying safe is what makes the mode safe at all: the button says `Run`, not `Send`.
+
+**The sentence saying what the mode does sits *above* the box.** The composer is the bottom of the
+page, so a row appearing anywhere in its column pushes everything above that row upward: under the
+box it moved the box itself out from under the cursor at the moment somebody entered the mode, where
+above it what grows is the composer's top edge. `TestNamingAModeFromTheKeyboard` measures the box
+across the press, because both layouts are correct markup and each screenshot is right on its own.
 
 An **absent** field is `HERE` and an unrecognised one is a **refusal**, which is the one place a
 default would be wrong: guessing puts a message in a conversation nobody addressed it to, and it is
@@ -804,6 +922,120 @@ where the settled reading will put it, and anything no record accounts for goes 
 where a pending one belongs since nothing has been said since. A `late` one moves above its answer
 when that answer lands, and is the one reorder this reading performs.
 
+### Run
+
+The one answer in the menu that is not a message, and the only thing this console does that runs
+outside the sandbox everything else runs behind. `! ` typed into an empty box is the shortcut to it.
+
+**As the person and not as the agent, and that is the whole point rather than a gap.** A session's
+`isolation` bounds what a *model* asked for, and `sandbox.py` binds the clone read-only precisely so
+no tool can write a history no panel shows and no fork inherits. `git commit` and `git push` are the
+person's to run, and confining them is what would make this pointless. What it adds to the blast
+radius is nothing new: a session on `Filesystem.EVERYTHING` already hands a model the store, every
+other conversation, and `config.yaml` with the credentials in it. What it does mean is that who can
+reach this console is the whole of what guards it, which was already true and is now worth saying.
+
+**Recorded and not told**, which is the split the key scheme rests on. See there for why that is not
+an exception to the one idea: what a command exited with is settled the moment it exits, and nothing
+will ever rewrite it.
+
+**Two keys and a background task, because a `pytest` is minutes and somebody is waiting on the POST.**
+`Service.run` claims a slot, writes `turn:{n}:command:{k}`, and returns; `Commands` runs the thing and
+writes `turn:{n}:result:{k}` when it is over. The panel is drawn from the first the instant it lands
+and `Command.result is None` is the whole of "still running", exactly as `ToolUse.returned is None` is
+the whole of "still out". That is the control-plane argument the worker already answers for cloning,
+one step along. The cost, stated: **no live output.** The panel says running and then shows the whole
+result, which is right for `git commit` and irritating for a watch; live output needs a channel
+outside the checkpoint, which is a different feature.
+
+**The turn is `turns - 1`, the last one started**, whether or not it is still being answered, and the
+panel goes at the end of that turn's panels in *both* readings of it. Nothing records which model
+request was in flight when somebody ran `git status`, and nothing should: a second writer racing the
+pass for a position in its sequence is what `heard:{i}` costs a steer, and a steer earns it by
+actually reaching the model. A command reaches nothing, so where it sits among the model's own panels
+is a distinction with no consequence - and putting it at the end is what makes the running and settled
+readings produce the same panel, so nothing moves when `turn:{n}:messages` lands.
+
+**`Commands` is the one place this console holds work in flight**, which the note at the top of
+`service.py` says it does not. Stated rather than quietly excepted: a running command belongs to one
+process and does not survive a restart. What keeps it from spreading is that the place holds no
+answers - the command and its result are both in the checkpoint - so a page renders the same thing
+whichever process is asked, and the task set exists only so a shutdown can reap what it started.
+
+**A shutdown writes the record from `aclose`, not from the task**, and that is not belt and braces: a
+task cancelled before it has had a turn on the loop never enters its body at all, so its own `except`
+cannot run and nothing would say what became of it. `supply` keeping the first value is what lets the
+run that *did* get to say something for itself, with the partial output it managed, keep its answer.
+`UNFINISHED` is outside both the range a process can exit with and the negatives a signal produces, so
+"the console never learned" is not mistakable for either.
+
+**A status is drawn as the number, never as "failed".** `git diff --quiet` exits 1 to mean there
+*are* changes and `grep` exits 1 to mean no match, so flattening it would have this console report a
+command doing its job as one that broke.
+
+**The output is drawn open where a tool call's is folded, and the axis is who asked.** A call is the
+model reaching for context, so what it returned is something a reader opens to check the work; a
+command is a line the person typed, and what it said is the whole of why they typed it. It is still a
+`<details>` - it folds, the dock's fold controls reach it, a reader who has read one can put it away
+- and it simply does not have to be opened to be read.
+
+**A fold's frame shuts it, and not only its summary.** A summary is one row at the top of a box that
+may be several screens of output, so putting a long one away meant scrolling back up to the single
+place that would do it; the room around the output is at the *bottom* as well, which is where a reader
+who has just read to the end already is. It is every kind in `FOLDS` rather than a rule about
+commands, because it is one complaint: a command is drawn open so shutting is the press made oftenest
+there, and a call the reader opened to check the work is the one whose return runs to hundreds of
+lines. Two panels of the same shape answering the same press differently would be the thing to
+explain.
+
+The output is exempt, and that exemption is the whole of what makes this safe: a press in a `pre` is
+usually the start of lifting a line out, and a panel that folded under somebody selecting from it
+would cost more than the scroll it saves. A press that ended a drag is out for the same reason, since
+a browser reports one as a click on wherever the pointer came to rest. It shuts and never opens - a
+shut panel is a summary and little else - so this is the way out of a tall box rather than the toggle
+in a second place, and setting `open` dispatches `toggle`, so the decision is recorded exactly as a
+press on the summary is. `TestShuttingAFoldFromItsFrame` pins both kinds and both halves in a real
+Chromium, because where the frame stops and the output starts is a fact about the rendered layout that
+no markup assertion can see.
+
+**And a command that said nothing says so**, rather than drawing the empty pane that being open
+exposed. Plenty of them do - `git diff --quiet` is the gallery's own example, and so is every command
+whose whole answer is its exit status - and a blank rectangle under one reads as output that failed
+to arrive. It is a stated absence for the same reason `no reference record` is. A command still
+*running* gets no body at all, since "said nothing" is a claim about a finished one.
+
+**That is what makes the fold a decision in two directions, and the script keeps both.** A call the
+server renders shut can be opened and a command it renders open can be shut, so `mainplate.js` holds
+what the reader decided about each fold rather than a set of the ones they unfolded, and a fold nobody
+has touched is left to the server. And the id it keeps that under has to be one that does not move:
+a command's is the turn and its own `turn:{n}:command:{k}` slot, deliberately not the panel anchor a
+call's is built on, because a turn's commands are drawn at the end and so every panel the model
+produces lands in front of them, renumbering the panel they sit in on the very next response.
+`test_browser.py` pins the two directions beside each other.
+
+**`! ` is `/run`'s own key and never a parse of the message**, which is the leader rule above applied
+to the mode reached oftenest; see there for why a leader is entered in the page rather than stripped
+off what was posted, and why the space is what commits it. A command box is also where "only in the
+default mode" earns its keep, since `/` is the front of half the paths anybody types.
+
+**And it is the one mode that stays once a command has gone**, which is what `data-staying` is for: a
+session that reaches for `Run` reaches for it again a line later, where every other answer in that
+menu is a thing somebody meant once.
+
+`requestSubmit(submitter)` and not `requestSubmit()` is load-bearing here and nowhere else:
+unattributed it posts no button's pair at all, so a command typed into a command box would arrive as
+an ordinary message and be said to the model. `TestTurningTheBoxIntoACommandBox` pins it in a real
+Chromium, because that is htmx's and the browser's behaviour rather than ours and looks identical in
+the markup either way.
+
+`Run` is the one mode that changes what you are *writing* rather than only where it goes, so the box
+takes the terminal's monospace and a heavier edge on top of the button and the sentence every mode
+gets.
+
+The mode is entered from the box and left from the box, both by a key pressed while it has the focus,
+and it is deliberately *not* stored: it is a mode within a visit, like following the end, rather than
+a decision about a conversation.
+
 ### The record hangs off a request, not a panel
 
 `Source`, `sourced_at` and the per-panel `recorded` disclosure are gone. A panel is a run of blocks
@@ -856,6 +1088,123 @@ is created and recorded on the session, so a process-wide answer would be a seco
 question each session already answers, exactly as a process-wide model would be. A session may
 choose *no* repository, which is what this console was before there were any: a place to talk, with
 no files.
+
+### Where in it, and on what branch
+
+`Choice.base` is a commit-ish the worktree is checked out at and `Choice.branch` is one started
+there; both are recorded with the rest of the choice. A blank base is the repository's default branch
+as it stands now.
+
+**A blank branch is not blank: every session working in a repository gets one.** `Choice.branching`
+fills it with `mainplate/{session id}` where nobody named one, and that is a correction rather than
+the first design. A detached `HEAD` was the default until `Run` put `git commit` in the box below the
+conversation, and a commit on a detached `HEAD` is reachable only through the reflog - a way to lose
+work that nobody should have to know about, offered by the one control that makes committing easy.
+Reading, editing and every question `git` answers are all fine detached; committing is the one thing
+that is not, and it is now the thing this console invites.
+
+It is named from the **session id** because `git worktree add -b` refuses a name already in use, so
+two sessions on one repository must not collide: a name from the session's *title* would collide the
+moment two were opened with the same message, so the id would have to be in it anyway. A name
+somebody typed always wins over the generated one.
+
+The cost, stated: one local branch per session in the bare clone, accumulating, with nothing pruning
+them - `Worktrees.uproot` exists and nothing calls it. `git branch --list 'mainplate/*'` is what
+finds them, which is what the prefix is for.
+
+It is filled by `Service.start` and `Service.fork` rather than by `Choice.settled`, and that split is
+the same one `settled` already makes: `settled` is a rule about a choice on its own, where this needs
+the session's id. A fork takes one of its **own** for the same reason it drops its parent's - the
+parent's worktree still holds that name - and dropping without filling would land every fork on a
+detached `HEAD`, which is exactly where somebody carries on working.
+
+**They are two questions and not one, because a base cannot check its own branch out.** Git refuses a
+branch another worktree already holds, so a session started at `main` and left *on* `main` would stop
+the next such session planting at all - and a worktree apiece is the property everything here rests
+on. So a base says where to begin and a branch says what to begin, and the words on both controls
+have to say so: "leave the worktree detached" read as though the first field answered the second.
+
+Five things there are decided rather than incidental:
+
+- **`Choice.settled` is what stops the form expressing a contradiction**, and it is one call rather
+  than a rule per field. A base and a branch are answers *about* a repository, so with none picked
+  all three collapse together. That is the same stance `Isolation.settled` already took and it now
+  lives in one place with it, applied by `Service.start`, by `Service.fork`, and by `scripts/seed.py`,
+  which is the one writer that is not the service.
+- **With no repository the two controls are not drawn at all**, so a page never asks a question the
+  session does not have, and the record `settled` would drop is never posted in the first place. That
+  is not the greying `workspace_cards` was written to undo, and the difference is that nothing is kept
+  in step: which fields exist and which branches complete them are one answer, decided in one call
+  from the same `repository`, delivered by the one swap picking a card already makes. The block stays
+  as an empty anchor, since it is what the next pick targets. What it costs with `mainplate.js` and
+  htmx absent is naming a base by hand: a card cannot then reveal the fields, and such a session
+  starts on the repository's default branch under the name this console gives it. The completions were
+  always the swap's to deliver, so that page was already the lesser half of this control.
+- **A fork carries neither**, which is `settled(forked=True)`, and is then given a branch of its own.
+  A fork plants at the tree of the turn it re-asks, so a base beside that is a second answer to where
+  its files come from; and `git worktree add -b` refuses a branch already in use, so an inherited one
+  is a worktree that cannot be planted at all. `Worktrees.plant` ranks its three answers - a tree
+  wins, then a base, then the default branch - and `settled` is what makes sure it is never handed
+  two.
+- **Planting a worktree fetches, whether or not a base was named**, and that is where a person says
+  when this console's copy of a repository catches up. Nothing else ever refreshes a clone: it is
+  made once and would otherwise answer out of whatever the repository looked like the first time
+  anybody used it, for as long as the machine lives. Starting a session is both the moment that is
+  affordable and the moment somebody wants current code. `Clones.refresh` fetches into
+  `refs/remotes/origin/` and never over `refs/heads/`, since a forcing refspec there would walk over
+  a branch a session has been committing to.
+
+  **The no-base arm is the one that is easy to get wrong**, and it was wrong first: a fetch writes
+  `refs/remotes/origin/` and leaves the clone's own `HEAD` pointing at the stale `refs/heads/`, so
+  planting at `rev-parse HEAD` refreshed the refs and then checked out the commit beside them - a
+  round trip that changes nothing, which is worse than not making it. `Worktrees.default_branch`
+  reads the *name* out of the clone's `HEAD` symref and `resolve` turns that into the current commit,
+  so both arms go down one path. `test_snapshots.py` parametrises over naming a base and naming
+  nothing for exactly that reason.
+
+  Two cases skip the fetch and both would be round trips that cannot change an answer: a clone that
+  has just been made is current by construction, and a fork plants at a recorded tree, which is an
+  object this console wrote and already holds.
+- **The branches are offered rather than enumerated, and asked of the remote.** Picking a workspace
+  card swaps the block under the cards through `/fragments/branches`, which is the shape the model
+  group already has under the endpoint cards and for the same reason: what a repository's branches
+  are has a different answer per card, so a page that serialized one list would be completing the
+  wrong repository's the moment somebody changed their mind. `Clones.branches` runs `git ls-remote`,
+  which transfers no objects, so it needs no clone - which is the point, since the very first session
+  on a repository is both the case with no clone and the case where saying where to start matters
+  most. It promises not to raise, `forge.offers`-style, so an unreachable host costs a suggestion
+  rather than an ability.
+- **The field is a search over them, and is the only control in the picker that is not cards.** Every
+  other question here is a `choosing` group because every other question has a closed set of answers;
+  a starting point does not, since a tag, a hash or `main~3` is still typed. So the branches are
+  narrowed under the box rather than drawn as cards beside it: cards *are* the answer everywhere else,
+  where these only fill in the one answer, and a card posting `base` beside a field posting `base`
+  would be two places one value could come from.
+
+  It is rendered **twice** and that is not a copy to keep in step: a `<datalist>`, which is the whole
+  of what the field offers with `mainplate.js` absent, and a list the script narrows. Both come from
+  one `branches` argument in one call, and exactly one is ever live, because `paintBranches` removes
+  the `list` attribute at the moment it takes over - two dropdowns over one box is one more than a
+  reader can use. The narrowing matches anywhere in a name rather than at the front, because a branch
+  is called `feature/the-thing` far more often than it is called for the word you remember.
+
+  Two things there are decided. The list is `position: absolute`, so typing a letter does not push
+  the endpoint and the model down the page. And Enter is swallowed **only** while the reader is
+  actually on an entry, because this field's form is the one that starts the session: swallowing it
+  whenever the list was open would make the obvious key do nothing on a page whose whole point is
+  that form. `TestNarrowingTheBranches` drives all of it in a real Chromium, because the list is
+  `hidden` in what the server sends and everything that makes it a search happens after that.
+- **The values are refused at the form and re-parsed off the record.** Both become `git` arguments,
+  so what they must not be is an *option*: `parse_commitish` and `parse_branch` in `snapshots.py` are
+  anchored patterns that refuse a leading `-` along with everything nobody types on purpose. Refused
+  rather than dropped at the boundary, because a blank box is somebody taking the default where
+  `my branch` is somebody who meant something; and re-parsed on the way out, because a checkpoint
+  written by `scripts/seed.py` or edited by hand has been through no boundary at all.
+
+They are recorded as the words somebody typed rather than as what they resolved to, deliberately:
+what a session says about itself is the answer it was given, and `main` is a truer record of that
+intent than the hash `main` happened to be at that minute. The hash is in `turn:0:tree:0` for anybody
+who wants it.
 
 `snapshots.py` captures a tree through a *shadow index*, so nothing a reader can see moves: not
 their staged changes, not `HEAD`, not a branch, not `git log`. Four things there are easy to undo:
@@ -1240,6 +1589,13 @@ it can do with them, and the endpoint and model only decide who answers.
 and every other conversation. That is what choosing it means rather than an oversight, and the card
 says so.
 
+**None of these axes bind a command the *person* runs**, which is the composer's `Run`: that runs
+outside the sandbox entirely, as the service user, in the session's worktree. It is not a hole in
+this, it is what this is for - the read-only clone bound here is what stops a *tool* writing a
+history no panel shows, and `git commit` is not a tool. The authority it grants is what the paragraph
+above already grants a model, so what actually guards it is who can reach the console. See the Run
+section.
+
 One thing is deliberately still to come. `GitTracked.entries` runs `git ls-files` in the parent
 rather than through the sandbox, which is a narrower problem than arbitrary shell (its argv is ours;
 the exposure is a malicious repository's git configuration) and a good next step.
@@ -1537,6 +1893,16 @@ scrolls, so padding on it parked the sticky provider heading that far down the b
 above it with model cards sliding through. Inside, the padding scrolls away with the content, which
 is what it was always for.
 
+**And a scroller clips, so `.picker` carries inline padding too: the room a focus ring is drawn
+into.** `overflow-y: auto` computes `overflow-x` to `auto` as well, so a control flush with the
+scroller's edge has its gold cut off on that side - the base and the branch boxes, which fill their
+grid columns, and every card while its group is open. Inside the scroller for the same reason the
+block padding is. `TestTheFocusRingHasRoomToBeDrawn` is what fails when it goes, and it measures the
+gap against the ring's own `outline-width` and `outline-offset` rather than against a number written
+down twice. It sets a window narrower than the suite's own, because at 1400 the picker sits inside its
+`max-width` with room to spare and the clipping - which is every narrower window, so the common case -
+does not happen at all.
+
 The picker's controls are **associated with their form by name, not by nesting**, and that is
 load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned
 under it, so every radio in every group is a *sibling* of the form that posts them;
@@ -1551,12 +1917,15 @@ what a shut group still posts.
 
 **Shift-Enter sends and plain Enter breaks the line**, which is that way round because a message here
 is prose that wants paragraphs and fenced blocks: a box where the obvious key sends is a box you
-cannot write one in. `wireSend` calls **`requestSubmit`** and not `submit`, and that is the whole of
+cannot write one in. `sendFrom` calls **`requestSubmit`** and not `submit`, and that is the whole of
 why one delegated listener serves every page: `submit()` posts *without* dispatching a `submit`
 event, so htmx would never see a send on a session page and the browser would navigate away from the
 conversation instead. It also runs the form's own validation, so an empty box refuses from the
 keyboard exactly as it refuses from the button. The Send button names the key, because a shortcut
 nothing on the page mentions is one nobody uses.
+
+Plain Enter is the one key a mode may take, and only while the leader palette is open: what it would
+otherwise do there is break a line in the middle of `/fo`. See the leaders section.
 
 **The box is one line at rest and grows a line at a time**, to fourteen lines or two fifths of the
 window, whichever is smaller, and scrolls inside itself past that. `field-sizing: content` is the
@@ -1672,12 +2041,18 @@ oblique is synthesised by shearing every glyph, which leans a gutter and the sid
 leaving the horizontals flat.
 
 A turn is read out of the checkpoint as **panels of blocks**, not as a question-and-answer pair.
-A block is prose, reasoning, or a call with its result; a panel is a run of blocks of one kind within
-one model request, and it is what the page draws a coloured edge down. The palette runs on one axis and every kind takes
-its side from it: cool is what reached the model (the person), warm is what the model produced (its
-answer, its reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue
-decided by that rather than chosen for it. A part kind `parted` has no rendering for is passed
-over rather than refused, because the provider and Pydantic AI are both free to add one.
+A block is prose, reasoning, a call with its result, or a command with its own; a panel is a run of
+blocks of one kind within one model request, and it is what the page draws a coloured edge down. The
+palette runs on one axis and every kind takes its side from it: cool is what the person produced
+(their message, their steer, their command), warm is what the model produced (its answer, its
+reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue decided by that
+rather than chosen for it. A part kind `parted` has no rendering for is passed over rather than
+refused, because the provider and Pydantic AI are both free to add one.
+
+**The axis is who wrote it and not who was told**, which a command is the case that settles: it is
+the one kind on the person's side that no model ever saw, and what says so is its label (`you (ran)`)
+and its chip in the key rather than a hue of its own. A colour for "the model does not know about
+this" would be a second axis over one palette.
 
 **A panel says what is in it; a rule says what is true of the request or the turn around it.** Which
 turn it is, where the session may be forked from, the worktree a request was made against, and what
@@ -1756,3 +2131,8 @@ live connection must prove is that a *second* render reaches a page nobody reloa
 real server, a real Chromium, and a test writing steps into the checkpoint while the browser
 watches. It has no worker either, for the same reason and one more: writing the steps by hand is
 the only way to hold a turn half-finished long enough to assert on it.
+
+`test_commands.py` runs real processes against a real worktree, and synchronises on the *record*
+rather than on a clock: a command is run by a task nobody holds a handle to, so what a test waits for
+is `turn:{n}:result:{k}` appearing. Any fixed sleep there is either racy or wasted, and the record is
+the actual signal.
