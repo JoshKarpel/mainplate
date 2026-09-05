@@ -1315,10 +1315,16 @@ pre > .copy {
     display: none;
 }
 
-/* The one place a mode is listed by name, which is the same bargain the card kinds take: an answer
-   added without a line here is drawn as no mode at all. Spelled out because CSS cannot ask whether a
-   descendant's attribute matches an ancestor's, and the pairing is exactly that question. */
+/* The one place a mode is listed by name, which is the same bargain the card kinds take. Spelled out
+   because CSS cannot ask whether a descendant's attribute matches an ancestor's, and the pairing is
+   exactly that question.
+
+   An answer added without a line here is worse than a mode drawn plainly: the rule above has already
+   taken Send away, so what is left is a composer with no primary button and no sentence saying where
+   the text is about to go. `TestNamingAModeFromTheKeyboard` asks it of every button the server drew
+   rather than of a chosen one, which is what makes that a failing build. */
 .composer[data-leading="next"] :is(.sender__leader, .leading)[data-leader="next"],
+.composer[data-leading="forget"] :is(.sender__leader, .leading)[data-leader="forget"],
 .composer[data-leading="aside"] :is(.sender__leader, .leading)[data-leader="aside"],
 .composer[data-leading="fork"] :is(.sender__leader, .leading)[data-leader="fork"],
 .composer[data-leading="parent"] :is(.sender__leader, .leading)[data-leader="parent"],

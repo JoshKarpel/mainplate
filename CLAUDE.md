@@ -182,6 +182,23 @@ softened into "unavailable", "issue" or "not supported", because the reader's ne
 *what happened*, and a euphemism makes them ask it. The same goes for what a control does: `keep`
 takes text off the page, `drop` deletes it, and neither is called "manage".
 
+**The reader knows how an agent harness works, so reach for the plain technical word.** They know
+what a context, a tool call, a token, a checkpoint and a system prompt are, and naming one is the
+shortest true thing this console can say: `the model's context was cleared here` over "the model was
+told nothing above this line", which describes a state where the reader wants the act and leaves them
+working out what was acted on. Two failures, and the second is the one that keeps happening here:
+
+- **Explaining what they already know.** A gloss on what a context window is, on why a tool call has
+  an id, on what forking a conversation means. The term carries all of it, which is what a term is
+  for.
+- **Reaching around the term.** Naming the mechanism reads blunt, so a softer phrase gets written
+  instead, and the reader is now inferring which mechanism was meant. That is the euphemism above,
+  arriving through vocabulary rather than through tone, and it costs more here because the reader
+  could have been told outright.
+
+Neither is an argument for jargon this console made up, and it does not license the second word the
+rule above refuses. It is the plain name of a thing that already has one.
+
 **Prose may inflect where a control may not.** English makes a noun of an act, so a fork produces a
 branch and a session forked at turn three has a branch point. That is ordinary writing and not a
 second term. What must not vary is the label on a button, the name of an identifier, and the word a
@@ -869,7 +886,12 @@ Six things there are decided rather than incidental:
 **Which modes exist is read off the buttons the server drew**, not kept in a list in the script. A
 session with no files is offered no `Run`, so there is no `/run` and no `!`, and the two cannot drift
 because there is only the one thing that decides it. What CSS lists by name is which
-`data-leading` shows which button and sentence, the same bargain the card kinds take.
+`data-leading` shows which button and sentence, the same bargain the card kinds take, and it is the
+one place the answers *can* drift: CSS cannot ask whether a descendant's attribute matches an
+ancestor's, so an answer added without a line there enters a mode that hides `Send` and reveals
+nothing, leaving a composer with no primary button and no sentence.
+`TestNamingAModeFromTheKeyboard` asks it of every button the server drew rather than of a chosen
+one, which is what turns that into a failure rather than a mode nobody can use.
 
 **A mode is left by Escape, and by a send where the answer is not one that stays.** What makes
 staying safe is what makes the mode safe at all: the button says `Run`, not `Send`.
@@ -944,6 +966,12 @@ still comes across on a fork; the checkpoint is still the conversation. What sta
 message history, which is the split `command` already makes between being *in* the checkpoint and
 being *in* what a model is told, applied to turns rather than to one kind of record. A control saying
 `clear` beside a transcript that keeps all of it would be describing something this does not do.
+
+**The rule's own sentence is `the model's context was cleared here`, and the object is what keeps that
+from being the `clear` the control is refused.** A bare `clear` names nothing, so beside a transcript
+that keeps every word it reads as a claim about the transcript; naming the *context* says the one
+thing that was cleared and leaves the rest of the sentence true. That is the words section's plain
+technical word, at the one place a reader meets this mechanism.
 
 **It rides on the message rather than in a record beside it**, and that is what makes the boundary
 impossible to get wrong rather than a saving. Two entries need an order, and a turn can open between

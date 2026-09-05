@@ -727,7 +727,7 @@ class TestForgettingFromTheComposer:
 
         region = await watched(app, session)
         assert "rule--forget" in region
-        assert "the model was told nothing above this line" in region
+        assert "the model's context was cleared here" in region
         # And the turn it closed is still on the page, which is the half a rendering can get wrong.
         assert "what is a mainplate" in region
 

@@ -200,7 +200,7 @@ class Disposition(Enum):
     checkpoint can tell the two apart."""
 
     FORGET = "forget"
-    """`Service.say` with nothing above it told to the model.
+    """`Service.say` with the model's context cleared.
 
     The one answer here that changes what the *model* is handed rather than where the message goes.
     Nothing is deleted and nothing is hidden: every turn above it still renders, still counts toward
@@ -979,7 +979,7 @@ class Panel:
 
     forget: bool = False
     """
-    Whether the turn this panel opens was asked with nothing above it told to the model.
+    Whether the turn this panel opens was asked with the model's context cleared.
 
     Carried on the turn's first panel beside `tree`, and for the same reason: it is a fact about the
     turn rather than about the message, and the rule that opens the turn is what draws it. Where a

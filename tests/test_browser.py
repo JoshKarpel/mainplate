@@ -1635,6 +1635,36 @@ class TestNamingAModeFromTheKeyboard:
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
         assert await page.input_value(".composer textarea") == "", "the leader and its space are consumed"
 
+    async def test_every_answer_the_server_drew_has_a_mode_to_be_in(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one drift the mode's shape can have, asked over every answer rather than over a chosen
+        one. Which modes exist is read off the buttons the server drew, but which of them is *shown*
+        is a list of names in `mainplate.css`, and CSS cannot ask whether a descendant's attribute
+        matches an ancestor's. So an answer added without a line there enters a mode that hides Send
+        and reveals nothing: a composer with no primary button and no sentence saying where the text
+        is about to go.
+
+        A browser because the failure is entirely in the cascade - the markup is identical either
+        way, and both buttons are in the document in both.
+        """
+        await a_conversation(console, page)
+        leaders = await page.locator(".sender__leader").evaluate_all("row => row.map(one => one.dataset.leader)")
+        assert leaders, "the menu drew no answers at all"
+
+        for leader in leaders:
+            await page.click(".composer textarea")
+            await page.keyboard.type(f"/{leader} ")
+
+            await expect(page.locator(".composer")).to_have_attribute("data-leading", leader)
+            await expect(page.locator(f'.sender__leader[data-leader="{leader}"]')).to_be_visible()
+            await expect(page.locator(f'.leading[data-leader="{leader}"]')).to_be_visible()
+            await expect(page.locator(".sender__leader:visible")).to_have_count(1)
+            await expect(page.locator(".sender__send")).to_be_hidden()
+
+            await page.keyboard.press("Escape")
+
     async def test_a_space_after_part_of_a_word_is_an_ordinary_space(
         self, page: Page, console: tuple[str, Service]
     ) -> None:

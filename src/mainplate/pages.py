@@ -1884,12 +1884,14 @@ def rule_element(
 
     **`rule--forget` is the one rule that describes what is *above* it**, and that is what lets the
     sentence be short: every other rule looks forward at the request or the turn it opens, so there is
-    no ambiguity about which direction this one means. It is drawn in a heavier line rather than a
-    colour of its own, because the palette runs on one axis - cool for what the person produced, warm
-    for what the model did - and a boundary is neither. The panels above are left exactly as they
-    were: what changed is who was told, not what is worth reading, and fading them would say the
-    second thing while colliding with `muted`, which is the reader's own decision and already drawn
-    that way.
+    no ambiguity about which direction this one means. Its `cleared` is not the `clear` the control is
+    deliberately not called, and the object is what tells them apart: what was cleared is the
+    **context**, where a bare `clear` beside a transcript that keeps every word would be claiming the
+    transcript was. It is drawn in a heavier line rather than a colour of its own, because the palette
+    runs on one axis - cool for what the person produced, warm for what the model did - and a boundary
+    is neither. The panels above are left exactly as they were: what changed is what the model is
+    handed, not what is worth reading, and fading them would say the second thing while colliding with
+    `muted`, which is the reader's own decision and already drawn that way.
 
     The fork link says something extra here and is the *same link*, at the same turn, posting the same
     thing. Continuing the conversation a forget closed is `fork` at that turn: `before` copies the
@@ -1929,7 +1931,7 @@ def rule_element(
                 if opens and session
                 else ()
             ),
-            *((span(cls="rule__forget", children="the model was told nothing above this line"),) if forget else ()),
+            *((span(cls="rule__forget", children="the model's context was cleared here"),) if forget else ()),
             # Only where there is a session to ask, which the gallery's pages are rendered without: a
             # control pointed at no conversation is a dead button rather than an offer, the same
             # reason the fork link is conditional.
@@ -2422,7 +2424,7 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
         ),
         dispatched(
             Disposition.FORGET,
-            "Ask it with nothing above it told to the model, leaving the conversation on the page",
+            "Ask it with the model's context cleared, leaving the whole conversation on the page",
         ),
         dispatched(Disposition.ASIDE, "Step out into a side conversation you mean to come back from"),
         dispatched(Disposition.FORK, "Ask it in a new session carrying this whole conversation"),
