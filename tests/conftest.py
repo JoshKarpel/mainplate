@@ -24,6 +24,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from without_asgi import ASGIApp
+from without_durability.interfaces import inbox_key
 from without_durability.stepwise import Run
 
 from mainplate import records
@@ -40,6 +41,8 @@ from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.conversation import Progressed
 from mainplate.conversation import conversing
+from mainplate.conversation import heard_key
+from mainplate.conversation import opened_key
 from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
@@ -263,9 +266,34 @@ def came_back(returned: object, took: float | None = None) -> dict[str, object]:
     return records.Returned(returned=returned, took=None if took is None else timedelta(seconds=took)).recorded()
 
 
-def heard(*said: str) -> dict[str, object]:
-    """What one request was told, as the record saying so."""
-    return records.Heard(said=said).recorded()
+def said_at(turn: int, said: str, *, entry: int | None = None, forget: bool = False) -> dict[str, object]:
+    """
+    A turn's opening message, which since the inbox is two records rather than one.
+
+    The entry the store filed, and the cursor the turn recorded when it took it. A test writing only
+    one of them would be writing a checkpoint no pass could produce: a message nobody opened a turn
+    on, or a turn that opened on nothing.
+
+    The entry is numbered after the turn where a test says nothing, which is right for the ordinary
+    fixture of one message per turn and is what `entry` is for where it is not.
+    """
+    at = inbox_key(turn if entry is None else entry)
+    return {at: records.Prompt(said=said, forget=forget).recorded(), opened_key(turn): at}
+
+
+def steered_at(entry: int, said: str) -> dict[str, object]:
+    """Something said into a turn already running, as the entry it arrived as."""
+    return {inbox_key(entry): records.Steer(said=said).recorded()}
+
+
+def ran_at(entry: int, said: str) -> dict[str, object]:
+    """Something the person ran themselves, as the entry it arrived as."""
+    return {inbox_key(entry): records.Command(said=said).recorded()}
+
+
+def read_to(turn: int, at: int, entry: int) -> dict[str, object]:
+    """How far down the inbox a turn had read when it made its `at`-th request, as the cursor saying so."""
+    return {heard_key(turn, at): inbox_key(entry)}
 
 
 def snapshotted(tree: str | None) -> dict[str, object]:

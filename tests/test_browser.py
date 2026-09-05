@@ -28,6 +28,7 @@ from playwright.async_api import Page
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
 from playwright.async_api import expect
+from without_durability.interfaces import INBOX
 from without_http import serving
 
 from mainplate.app import build_app
@@ -35,14 +36,13 @@ from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Result
-from mainplate.conversation import command_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
-from mainplate.conversation import prompt_key
+from mainplate.conversation import opened_key
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_result
+from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
-from mainplate.conversation import steers_in
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
 from mainplate.service import Service
@@ -194,6 +194,20 @@ async def unscripted(browser: Browser) -> AsyncIterator[Page]:
         yield await context.new_page()
     finally:
         await context.close()
+
+
+async def taking(service: Service, session: str, turn: int = 0) -> None:
+    """
+    The next message a session has waiting, taken into a turn of its own, with no pass to do it.
+
+    Which is a pass's first act, written by hand because the `console` fixture runs no worker: a
+    test writing a turn's model steps needs a turn for them to be steps *of*, and until a message is
+    taken it is only queued.
+    """
+    recorded = await service.checkpointer.load(session)
+    await service.checkpointer.supply(
+        session, opened_key(turn), [key for key in recorded if key.startswith(INBOX)][turn]
+    )
 
 
 async def showing_model(page: Page) -> str:
@@ -893,6 +907,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
     ) -> None:
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         button = page.locator(".panel[data-kind=person] .panel__meta > .copy")
@@ -912,6 +927,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         """
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(0)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
@@ -951,6 +967,7 @@ class TestWatchingATurnArrive:
         """A session with a question in it, open in the browser, with nothing answered yet."""
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
         self.session = session.id
@@ -1054,7 +1071,7 @@ class TestWatchingATurnArrive:
         they had just put away on the very next thing the turn recorded.
         """
         service = await self.started(console, page)
-        await service.checkpointer.supply(self.session, command_key(0, 0), recorded_command("git status"))
+        await service.checkpointer.append(self.session, recorded_command("git status"))
         shut = page.locator("details.ran").first
         await expect(shut).to_have_attribute("open", "")
         await shut.locator("summary").click()
@@ -1073,6 +1090,7 @@ class TestWatchingATurnArrive:
         """
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
@@ -1096,10 +1114,11 @@ class TestShuttingAFoldFromItsFrame:
     async def a_command_with_output(self, console: tuple[str, Service], page: Page) -> None:
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), recorded_command("git status"))
+        await taking(service, session.id)
+        entry = await service.checkpointer.append(session.id, recorded_command("git status"))
         await service.checkpointer.supply(
             session.id,
-            result_key(0, 0),
+            result_key(entry.key),
             recorded_result(Result(status=0, output="on branch main\n", took=timedelta(seconds=0.2))),
         )
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
@@ -1157,6 +1176,7 @@ class TestShuttingAFoldFromItsFrame:
         """A finished call, which the server renders shut, opened the way a reader opens one."""
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await service.checkpointer.supply(session.id, tool_key(0, "call-1"), came_back("the first file"))
         await service.checkpointer.supply(session.id, tool_key(0, "call-2"), came_back("the second file"))
@@ -1203,6 +1223,7 @@ class TestOpeningTheRecordBehindARequest:
         """A conversation with one recorded request in it, as the closed tag on that request's rule."""
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         tag = page.locator(".tag").first
@@ -1265,9 +1286,10 @@ class TestOpeningTheRecordBehindARequest:
 
 
 async def a_conversation(console: tuple[str, Service], page: Page) -> str:
-    """One session with one message in it, on the page, as the id to write further steps against."""
+    """One session with a turn being answered, on the page, as the id to write further steps against."""
     url, service = console
     session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+    await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
     return session.id
@@ -1360,7 +1382,10 @@ class TestWhereTheComposerSendsTo:
 
         await expect(page.locator('.panel[data-kind="steering"]')).to_have_count(1)
         await expect(page.locator('.panel[data-kind="steering"]')).to_contain_text("actually, be brief")
-        assert steers_in(await service.checkpointer.load(session), 0) == ("actually, be brief",)
+        recorded = await service.checkpointer.load(session)
+        assert [held for key, held in recorded.items() if key.startswith(INBOX)][-1] == recorded_steer(
+            "actually, be brief"
+        )
 
     async def test_the_menu_offers_the_wait_only_while_something_is_being_answered(
         self, page: Page, console: tuple[str, Service]
@@ -1410,6 +1435,7 @@ async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces
 async def a_session_with_files(working: tuple[str, Service], page: Page) -> str:
     url, service = working
     session = await service.start("what is a mainplate", replace(DEFAULT_CHOICE, repository=FIXTURE))
+    await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
     return session.id
@@ -1537,8 +1563,9 @@ class TestTurningTheBoxIntoACommandBox:
 
         await expect(page.locator("#transcript")).to_contain_text("echo from the keyboard")
         recorded = await service.checkpointer.load(session)
-        assert recorded.get(command_key(0, 0)) == recorded_command("echo from the keyboard")
-        assert recorded.get(prompt_key(1)) is None, "a command is not a message, so it queues no turn"
+        delivered = [held for key, held in recorded.items() if key.startswith(INBOX)]
+        assert delivered[-1] == recorded_command("echo from the keyboard")
+        assert len(delivered) == 2, "a command is not a message, so it queued nothing for a model"
 
     async def test_a_session_with_no_files_has_no_command_box_to_turn_into(
         self, page: Page, console: tuple[str, Service]
@@ -2118,6 +2145,13 @@ class TestFollowingTheEnd:
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
         for turn in range(12):
+            # The two records a pass writes for a turn, by hand: which entry it took, and what came
+            # of it. The `console` fixture runs no worker, so a test that wants twelve settled turns
+            # writes what twelve passes would have.
+            recorded = await service.checkpointer.load(session.id)
+            await service.checkpointer.supply(
+                session.id, opened_key(turn), [key for key in recorded if key.startswith(INBOX)][turn]
+            )
             await service.checkpointer.supply(
                 session.id,
                 messages_key(turn),
@@ -2125,7 +2159,7 @@ class TestFollowingTheEnd:
                     {"kind": "response", "parts": [{"part_kind": "text", "content": f"answer {turn} " + "x " * 400}]}
                 ),
             )
-            await service.say(session.id, turn=turn + 1, said=f"and then {turn}")
+            await service.say(session.id, f"and then {turn}")
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         # The precondition itself, rather than a count standing in for it: none of this means
         # anything in a transcript short enough to have no end to be away from.

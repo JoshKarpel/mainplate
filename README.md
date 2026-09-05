@@ -246,21 +246,26 @@ async def converse(run: Run) -> Progressed:
     agent = agent_for(endpoints, chosen, instructions)  # the pair this session recorded at creation
     at = reached(run.recorded)
     while True:
-        prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
-        with stepping(run, turn_prefix(at.turn), allowance=spending):
+        asked = await opening_turn(run, at.turn)  # takes the next message off the session's inbox
+        with stepping(run, turn_prefix(at.turn), allowance=spending, draining=draining_inbox(run, at.turn)):
             try:
-                answered = await agent.run(prompt, message_history=list(at.history))
+                answered = await agent.run(asked.said, message_history=list(at.history))
             except AllowanceSpent:
                 return Progressed()  # one live model request per pass; the next one carries on
         said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
         at = Reached(turn=at.turn + 1, history=(*at.history, *said))
 ```
 
-`run.awaiting` suspends the pass until something outside it records a value under that key, which
-is what the console does when you send a message. Nothing polls the store for it, no pass is held
-open waiting, and the wait outlives the process that was waiting: the workflow is a row, and
-whichever worker picks it up next runs the body again from the top and reaches further than the
-last one did.
+A session has an **inbox**, and everything you do to it from the page is an append: a message, or a
+command to run in its worktree. `run.receive` suspends the pass until there is something in it, and
+records which entry the turn took. Nothing polls the store, no pass is held open waiting, and the
+wait outlives the process that was waiting: the workflow is a row, and whichever worker picks it up
+next runs the body again from the top and reaches further than the last one did.
+
+**Nothing decides in advance which turn a message lands in**, which is what a queue removes the need
+for. Type while a reply is coming and the pass folds your message into the request it is about to
+make; type a moment later and it opens the next turn. Neither the page nor the handler has to guess,
+because the pass is the only thing reading at the instant the answer is true.
 
 A pass is **one live model request and the tool batch behind it**, rather than a whole turn, so a
 turn of forty round trips is forty passes. What that buys is a lease that bounds one round trip
@@ -452,14 +457,12 @@ answer rather than the one after it. It shows in the transcript as a `you (steer
 instant you send it, and sits below the results it travelled with and above the answer it shaped.
 
 You are not asked which of those it is, because you could not answer: the page you typed on was drawn
-from a checkpoint that has moved since, so the server reads the record and writes to it in one place
-instead of honouring a choice made about a turn that has already ended.
+from a checkpoint that has moved since. Neither is it decided when the message is written, because
+that reading can go stale between the read and the write. It goes in the session's queue, and the
+reply that is running takes it if it is still running when it looks.
 
-Sending as a turn finishes cannot lose the message either. A turn stops listening by *claiming* the
-next steer slot rather than by reading it, so the reply ending and your message arriving are one
-contended write that the store settles: whichever gets there first wins, and the loser is told what
-the winner put there. Win it and the reply asks the model once more to carry your message; lose it
-and your message becomes the next turn instead.
+Sending as a turn finishes cannot lose the message either, and nothing has to be raced for that to
+hold: a message nobody took is still in the queue, and the next turn opens on it.
 
 The caret beside Send opens everything else you can do with what you typed. **Next** is the one thing
 the record cannot decide for you: it queues the message behind the reply that is coming instead of

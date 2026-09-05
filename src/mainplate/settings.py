@@ -174,7 +174,7 @@ class Settings(BaseSettings):
     `None` is unbounded, which is exactly what a pass was before there was a number here. What
     raising it trades is replay against steer latency: a pass replays every step of the turn behind
     it, so fewer passes is less replay, and a pass reads the checkpoint once, so a steer typed
-    mid-turn waits behind however many requests the pass has left. See `steers_waiting`.
+    mid-turn waits behind however many requests the pass has left. See `draining_inbox`.
 
     A number and not a second code path, which is what keeps it a thing to turn.
     """

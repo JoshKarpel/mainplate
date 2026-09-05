@@ -1,7 +1,6 @@
 # Handoff: adopt `without` 0.0.7 in mainplate
 
-Three stages. Stage 1 and stage 2a are done. Stage 2b is the inbox and is what remains of the
-restructuring; stage 3 is independent of both.
+Three stages. Stages 1 and 2 are done. Stage 3 is independent of both and is what remains.
 
 ## Stage 1 — the upgrade (done)
 
@@ -107,33 +106,33 @@ does not transfer. A command result is terminal so a placeholder is honest; `sup
 first-writer-wins, so an `UNFINISHED` under `turn:{n}:model:{i}` is permanent and the turn can
 never be retried.
 
-### Stage 2b: adopt the inbox
+### Stage 2b: adopt the inbox (done)
 
-- `Service.say`, `Service.steer` and `Service.run` stop allocating keys and become
-  `Durable.deliver` appends. The two `for n in count():` claim-by-trying loops go.
-- `converse`'s `run.awaiting(prompt_key(n))` becomes `run.receive(...)`, with `after`
-  carrying the cursor (the caller threads it; it is not hidden state on the `Run`).
-- `CLOSED`, `records.Closed` and `records.Said` are deleted. A queue cannot be permanently
-  claimed, so the end-of-turn compare-and-set has nothing left to do: whether a message is a
-  steer or a turn of its own is decided by which inbox cursor was recorded, not by a race
-  against a marker.
-- `heard:{i}` and `late:{k}` collapse into cursor records. Check whether both are still
-  needed; they were split because two hand-rolled counters could not share one.
-- The command panel ordering falls out. A command's place comes from where its entry sits
-  among the model records in the ordered `load`, which is the bug that started this whole
-  line of work (`ran_by` currently collapses a turn's commands into one panel at the end,
-  so a command sinks as each response lands above it).
+All of it, and four things worth knowing that the plan did not have:
 
-### Expect this to be mostly documentation
+- **`late` is deleted rather than collapsed.** The plan asked whether both cursor kinds were
+  still needed; the answer is no, and the reason is stronger than a tidy-up. A pass reads the
+  snapshot it loaded on the way in, so nothing can arrive *during* one: the drain before the
+  first request already sees everything the pass ever will, and a second drain where the run
+  would have ended could never find anything. `after_node_run` went with it. What used to cost
+  the ending turn an extra round trip now opens the turn after it.
+- **`before` needs a second rule, and it is the price the inbox charges.** An entry says nothing
+  about which turn it is in, so a fork cuts the inbox at `branch_at`, which counts against the
+  turns a *page* counts (opened, then queued) rather than the ones a pass has opened. The keys
+  come across unchanged, via `supply`, so the copied cursors still resolve.
+- **The transcript is cut by `turn:{n}:opened`.** A turn owns everything from its own entry to
+  the next turn's, which is what replaced asking for `prompt_key(n)`. `owned_in`, `queued_in`
+  and `unread_in` are that rule; a message nobody has opened a turn on is drawn as queued.
+- **The allowance had an ordering bug, found by driving a real worker.** `before_model_request`
+  records a cursor before the model runs, so a pass that drained and *then* refused left a
+  cursor for a request nobody made, and a message delivered meanwhile waited an extra round
+  trip. `Stepping.allow` is now called before the drain as well as at the request, idempotent
+  per request key. Pinned by `test_the_request_a_pass_refused_records_nothing_at_all`.
 
-`CLAUDE.md` documents the key scheme, the steer mechanism, the record policy and the
-disposition design at length, and stage 2 invalidates large parts of all four. Rewrite
-them to describe what is, rather than appending notes about what changed, per the durable-docs
-rule. `README.md` needs a pass too.
-
-`scripts/seed.py` and `scripts/gallery.py` write checkpoint records directly, bypassing
-`Service`, so both need updating for any record or key change, and the demo database
-must be rebuilt (`rm mainplate-demo.db*` then `just seed`) or it serves the old shape.
+`scripts/gallery.py` writes checkpoints directly and was updated with the rest; the demo
+database was rebuilt (`rm mainplate-demo.db*` then `just seed`). CLAUDE.md's key scheme, record
+policy, steer, disposition, forget, fork and Run sections were rewritten, and README.md's
+workflow-body sketch and Send description with them.
 
 ## What replay costs, and why the allowance exists
 

@@ -39,14 +39,11 @@ from datetime import timedelta
 from decimal import Decimal
 from time import monotonic
 from typing import Any
-from typing import Literal
 
 from pydantic import TypeAdapter
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.capabilities import CapabilityOrdering
 from pydantic_ai.capabilities import WrapModelRequestHandler
-from pydantic_ai.capabilities.abstract import AgentNode
-from pydantic_ai.capabilities.abstract import NodeResult
 from pydantic_ai.capabilities.abstract import ValidatedToolArgs
 from pydantic_ai.capabilities.abstract import WrapToolExecuteHandler
 from pydantic_ai.messages import ModelMessage
@@ -65,7 +62,6 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_jsonable_python
-from pydantic_graph import End
 from without_durability.stepwise import Parse
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
@@ -102,17 +98,6 @@ def parse_tree(recorded: object) -> str | None:
     is for - a `Tree` holding nothing says a snapshot was taken and there was nothing to take.
     """
     return None if recorded is None else records.Tree.model_validate(recorded).tree
-
-
-def parse_heard(recorded: object) -> tuple[str, ...]:
-    """
-    What one `heard` step holds, which is the messages it put to the model and nothing else.
-
-    Empty even when there were none, because a request that was told nothing is a request that ran:
-    the distinction this keeps is the one `parse_tree` keeps between `None` and a hash, and the store
-    already tells a recorded empty record from a key nobody wrote.
-    """
-    return records.Heard.model_validate(recorded).said
 
 
 def parse_took(recorded: object) -> timedelta | None:
@@ -222,20 +207,24 @@ class StreamingNotRecorded(NotImplementedError):
     """
 
 
-type Pending = Callable[[int], Awaitable[Sequence[str]]]
+type Draining = Callable[[StepKey], Awaitable[Sequence[str]]]
 """
-What the person has said into this turn past the first `n`, asked at each model request.
+What the person has said into this turn that no request has carried, taken under the key it records.
 
-A function for the reason `Pricer` is one: what answers it reads the conversation's own keys, and
-`conversation.py` reads `agent.py`, which builds the agent this capability is attached to. Taking
-the count rather than returning everything keeps the caller from having to know which were already
-delivered, which the scope knows and the checkpoint would have to be re-read to work out.
+A function for the reason `Pricer` is one: what answers it reads the session's inbox, and
+`conversation.py` reads `agent.py`, which builds the agent this capability is attached to. Injecting
+the one question keeps the capability ignorant of what a message is, which is the same ignorance
+that lets one instance serve every session.
 
-Two of these are injected and the difference is what they do rather than what they return. `pending`
-merely *reads*, and is asked before each model request. `closing` **claims** the next slot before
-reading, so a turn that is about to stop listening says so in the same operation that finds out
-whether anybody got in first; see `CLOSED` in `conversation.py`. Both hand back what still has to be
-put to the model, so one `steering` step records either.
+It takes the *key* rather than a count of what has already been said, because the record it writes is
+a cursor: how far down the inbox this turn has read. Where a count had to be carried on the scope and
+kept in step with the store, the cursor is the record, so two drains in one turn need nothing between
+them.
+
+One of these rather than the two there were. Reading the queue and shutting it used to be different
+acts - the second claimed the next steer slot so a message arriving as the turn ended could not be
+written where nothing would read it - and with a queue there is no slot to claim: a message nobody
+took is still in the queue, and the next turn opens on it.
 """
 
 
@@ -283,17 +272,17 @@ class Stepping:
     prefix: str
     worktree: Worktree | None = None
     pricer: Pricer | None = None
-    pending: Pending | None = None
-    closing: Pending | None = None
+    draining: Draining | None = None
     allowance: Allowance = field(default_factory=lambda: Allowance(limit=None))
     taken: Counter[str] = field(default_factory=Counter)
-    told: list[tuple[str, ...]] = field(default_factory=list)
+    allowed: set[StepKey] = field(default_factory=set)
     """
-    What each request of this turn was told, so the next one knows how far down the queue it is.
+    Which requests this pass has already spent an allowance on, so that no request spends two.
 
-    Held on the scope rather than counted out of the store on every request, because it is the same
-    kind of state `taken` is: a position that advances as the pass runs. A resumed pass rebuilds it
-    by replaying the same steps, which is what keeps the two passes asking identical questions.
+    The allowance is checked twice per request and the two are not redundant. `before_model_request`
+    checks it *first*, before anything is recorded for a request that is about to be refused; the
+    model's own `request` checks it because that is the request. Keyed by the step name, which is the
+    request's identity, so whichever runs first is the one that spends.
     """
 
     def key(self, kind: StepKind) -> StepKey:
@@ -304,9 +293,29 @@ class Stepping:
         record written under it tags itself with. The two used to be independent strings written at
         opposite ends of the console with nothing enforcing that they agreed.
         """
-        nth = self.taken[kind]
+        coming = self.coming(kind)
         self.taken[kind] += 1
-        return f"{self.prefix}:{kind}:{nth}"
+        return coming
+
+    def coming(self, kind: StepKind) -> StepKey:
+        """The key the next step of this kind will take, without taking it."""
+        return f"{self.prefix}:{kind}:{self.taken[kind]}"
+
+    def allow(self, key: StepKey) -> None:
+        """
+        Account for the model request named by `key`, refusing the one past this pass's allowance.
+
+        Only a *live* request counts: a replayed one pays nobody and takes no time worth bounding, so
+        a resumed pass gets further than the last rather than stopping where it did. Whether it is
+        live is what the key says.
+
+        Idempotent per request, because it is asked twice: once before anything is recorded for the
+        request, and once at the request itself. See `allowed`.
+        """
+        if key in self.allowed or key in self.run.recorded:
+            return
+        self.allowed.add(key)
+        self.allowance.take()
 
     def identified(self, kind: StepKind, identity: str) -> StepKey:
         """A key named by something already stable, for steps whose order is not fixed."""
@@ -331,40 +340,29 @@ class Stepping:
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
 
-    async def steering(self, pending: Pending, kind: Literal["heard", "late"] = "heard") -> tuple[str, ...]:
+    async def steering(self) -> tuple[str, ...]:
         """
-        The steers to put to the model now, recorded so a later pass says the same thing.
+        The steers to put to the model now, taken under a key that records how far this turn has read.
 
-        `pending` is asked how many have been delivered already and answers with what is left, which
-        is a live read of the checkpoint and therefore an *effect*: two passes at the same turn would
-        see different queues, because a person goes on typing between them. Wrapping it in a step is
-        what makes it replayable, and that is not a nicety - `turn:{n}:model:{i}` is the answer to a
-        question, and a replay that asked a different question would be pairing an answer with a
-        prompt nobody ever gave. It is also what keeps the *shape* of the run the same, since a read
-        that found something where the first pass found nothing would redirect a run that ended.
+        Reading the inbox is an *effect*, because a person goes on typing between two passes, so what
+        makes it replayable is that the take is recorded. That is not a nicety: `turn:{n}:model:{i}`
+        is the answer to a question, and a replay that asked a different one would be pairing an
+        answer with a prompt nobody ever gave. It is also what keeps the *shape* of the run the same,
+        since a read that found something where the first pass found nothing would ask a question the
+        first pass never asked.
 
-        The texts and not a count, so a resumed pass needs nothing but this record to reproduce the
-        request. Recorded even when empty, like the tree beside it, so a read that found nothing is
-        distinguishable from one that never happened.
+        The recording is `Run.pending`'s rather than this one's, and the value is a cursor: the key
+        of the last entry taken. Which is why nothing is carried on the scope any more - where the
+        record was a list of texts, and the next request needed a count of them, it is now a place in
+        a queue that the next drain simply reads.
 
-        Two kinds, because there are two moments a steer can be put to the model and only one of them
-        is a request. `heard:{i}` is what was appended to the *i*th request, so it stays one per
-        request and in step with `tree:{i}` and `model:{i}`; `late:{k}` is what was found at a
-        boundary where the run would otherwise have ended, which no request was left to carry. Kept
-        apart rather than sharing one counter, because sharing it would drift `heard` off the two
-        keys it is supposed to name one request alongside.
+        `heard:{i}` is one per request, in step with `tree:{i}` and `model:{i}`, and there is only
+        the one kind now: a drain where the run would have ended could never find anything, since a
+        pass reads a snapshot that was fixed before its first request.
         """
-        already = sum(len(said) for said in self.told)
-        # One class decides both halves, so the key's word and the record's tag cannot disagree about
-        # which boundary this was. A mapping beside them would be a third place to keep in step.
-        told = records.Late if kind == "late" else records.Heard
-
-        async def take() -> object:
-            return told(said=tuple(await pending(already))).recorded()
-
-        said = await self.step(self.key(kind), take, lambda held: told.model_validate(held).said)
-        self.told.append(said)
-        return said
+        if self.draining is None:
+            return ()
+        return tuple(await self.draining(self.key("heard")))
 
     def price(self, answered: ModelResponse) -> None:
         """
@@ -424,8 +422,7 @@ def stepping(
     prefix: str,
     worktree: Worktree | None = None,
     pricer: Pricer | None = None,
-    pending: Pending | None = None,
-    closing: Pending | None = None,
+    draining: Draining | None = None,
     allowance: Allowance | None = None,
 ) -> Iterator[Stepping]:
     """
@@ -446,8 +443,7 @@ def stepping(
         prefix=prefix,
         worktree=worktree,
         pricer=pricer,
-        pending=pending,
-        closing=closing,
+        draining=draining,
         allowance=allowance if allowance is not None else Allowance(limit=None),
     )
     token = current_stepping.set(scope)
@@ -495,15 +491,12 @@ class CheckpointedModel(WrapperModel):
         replays the snapshot too and runs no git, so the pair stay in step whatever happens
         between them.
 
-        The allowance is spent *before* any of that, and only where this request is a live one. A
-        pass that has made as many as it may stops here rather than after the snapshot, so a request
-        that was never made leaves no tree recorded in front of it and the next pass writes the pair
-        together. Whether it is live is what the key says: a recorded one is replayed, costs nothing,
-        and is not what the allowance is bounding.
+        The allowance is spent *before* any of that, so a request that was never made leaves no tree
+        recorded in front of it. It is ordinarily spent earlier still, in `before_model_request`,
+        because that runs before this and records a cursor of its own; see `Stepping.allowed`.
         """
         key = self.scope.key("model")
-        if key not in self.scope.run.recorded:
-            self.scope.allowance.take()
+        self.scope.allow(key)
         await self.scope.snapshot()
 
         async def ask() -> object:
@@ -595,50 +588,33 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
 
         What it is *told* comes from a recorded step, because a live read of the queue is an effect
         and a resumed pass would see a different one. See `Stepping.steering`.
+
+        **The allowance is spent here rather than at the request**, and that is not tidying: the
+        drain below records how far this turn has read, so a pass that recorded one and *then*
+        refused the request would leave a cursor for a request nobody made. The next pass replays
+        that cursor, so a message delivered while the refused request was being decided waits a
+        further round trip - or, if the turn ends first, opens a turn of its own. Refusing before
+        the drain is what makes a message reach the very next request the pass after this one makes.
         """
         scope = current_stepping.get()
-        if scope is None or scope.pending is None:
+        if scope is None:
             return request_context
-        said = await scope.steering(scope.pending)
+        scope.allow(scope.coming("model"))
+        if scope.draining is None:
+            return request_context
+        said = await scope.steering()
         if said:
             request_context.messages.append(ModelRequest(parts=[UserPromptPart(content=text) for text in said]))
         return request_context
 
-    async def after_node_run(
-        self, ctx: RunContext[AgentDepsT], *, node: AgentNode[AgentDepsT], result: NodeResult[AgentDepsT]
-    ) -> NodeResult[AgentDepsT]:
-        """
-        Stop listening, and carry away whatever arrived in the instant before that took effect.
-
-        `before_model_request` reaches every request the agent was going to make anyway, which is
-        every steer but one: the person typing *during* the final response has nowhere left to be
-        heard, and a message recorded and never answered is the one outcome worse than a slow one.
-
-        So this is the other boundary, and it **claims** rather than reads. `closing` writes `CLOSED`
-        into the next free steer slot, which the store settles atomically: winning it means nothing
-        can be written there afterwards, so a message sent from now on is told the turn is closed and
-        becomes a turn of its own. Losing it means somebody got in first, and what comes back is their
-        text rather than the marker. A read would leave a window between "the pass stopped listening"
-        and "the store says so", and every message sent inside it on the floor.
-
-        `ctx.enqueue` is right here where it was wrong in `before_model_request`. The drain's own
-        `after_node_run` runs *after* every other one, so a message put in the queue at the moment the
-        run would end is what redirects it into one more request. That request's
-        `before_model_request` reads the queue again, finds these already told, and appends nothing,
-        so each steer is delivered exactly once.
-
-        The cost is the extra round trip, which here is the point rather than an accident: there is
-        no request left to carry the message, so asking again is the only way to answer it at all.
-
-        Recorded as `late:{k}` and not as `heard:{i}`, so the per-request keys stay one per request.
-        See `Stepping.steering`.
-        """
-        scope = current_stepping.get()
-        if scope is None or scope.closing is None or not isinstance(result, End):
-            return result
-        for said in await scope.steering(scope.closing, kind="late"):
-            ctx.enqueue(said)
-        return result
+    # There was an `after_node_run` here, and the inbox is what deleted it. It drained again where a
+    # run would otherwise have ended, so that a message arriving during the last response could
+    # redirect the run into one more request rather than being answered by nobody. Two things it
+    # answered are now answered better. A message can no longer be lost at the end of a turn, because
+    # there is no slot for a pass to shut - what nobody took is still in the queue. And nothing can
+    # arrive *during* a pass at all: a pass reads its own snapshot, fixed the moment it started, so
+    # the drain before the first request already sees everything this pass ever will. What used to
+    # cost the ending turn an extra round trip now opens the turn after it.
 
     async def wrap_model_request(
         self,

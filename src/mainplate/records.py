@@ -28,6 +28,13 @@
 # An unknown *kind* is not covered by that and cannot be: a tag no arm answers to is a hard failure.
 # So readers parse by key, where the caller already knows what it asked for, and `Step` is for the
 # places that take a bag of records rather than one - a dump, an export, a migration.
+#
+# **Three checkpoint values are deliberately not records here, and all three are cursors.**
+# `turn:{n}:opened`, `turn:{n}:heard:{i}` and `turn:{n}:late:{k}` hold the key of the last inbox entry
+# a pass took, written by `Run.receive` and `Run.pending` rather than by anything in this console. The
+# shape argument does not reach them: their value is the store's, under the store's own semantics, so
+# there is no second field this console could ever want to put beside one. Wrapping them would mean
+# not using `receive`, and `receive` is the only thing that can suspend a pass on an inbox.
 
 from __future__ import annotations
 
@@ -45,12 +52,11 @@ type StepKind = Literal[
     "choice",
     "prompt",
     "steer",
-    "closed",
     "command",
     "result",
+    "opened",
     "tree",
     "heard",
-    "late",
     "model",
     "tool",
     "messages",
@@ -61,10 +67,11 @@ What a record says it is, and what a turn's keys are named by.
 One vocabulary for both, so `Stepping.key("tree")` and `tree_key(n, i)` cannot come to build
 different strings from opposite ends, which is a hazard those two carried with nothing enforcing it.
 
-Two members are not key segments and belong here all the same. `choice` names a key of its own rather
-than a segment of a turn's, and `closed` names no key at all: it is what a pass writes into a *steer*
-slot to say it has stopped listening, so the slot holds one of two kinds and the tag is what tells
-them apart. See `Closed`.
+The two halves no longer line up member for member, and that is the inbox rather than untidiness.
+`prompt`, `steer` and `command` name *records* and no key at all: what a person says and what they
+run are entries in the session's inbox, filed under a key the store mints. `opened`, `heard` and
+`late` are the other way round: they name keys whose value is a **cursor**, which is the store's own
+value rather than one of ours, so they have no record here. See the note on cursors below.
 
 Not to be confused with the panel `Kind` in `conversation.py`, which is a rendering vocabulary. Both
 are called `kind` because it is a generic word and each is unambiguous where it is used; they overlap
@@ -104,12 +111,17 @@ class Record(BaseModel):
 
 class Prompt(Record):
     """
-    What the person said to open a turn.
+    A message that must open a turn of its own, whatever is running when it lands.
 
-    Written from *outside* a pass, because a message is what queues a session and somebody typing
-    cannot be a step of the run that answers them. The one record here that crossed a trust boundary:
-    everything else was produced by code in this process, where this arrived from an HTTP handler on
-    behalf of whoever posted the form.
+    An inbox entry, written from *outside* a pass, because a message is what queues a session and
+    somebody typing cannot be a step of the run that answers them. The one record here that crossed a
+    trust boundary: everything else was produced by code in this process, where this arrived from an
+    HTTP handler on behalf of whoever posted the form.
+
+    **The difference from a `Steer` is what the pass may do with it, and nothing else.** A pass
+    draining what arrived while it was working stops at one of these, so it waits for the next turn
+    rather than folding it into this one. That is what `Disposition.NEXT` asks for, and what
+    `Disposition.FORGET` needs in order to mean anything.
     """
 
     kind: Literal["prompt"] = "prompt"
@@ -119,15 +131,13 @@ class Prompt(Record):
     """
     Whether this turn opens on a clean history, telling the model nothing that came before it.
 
-    **A field on the turn's opening record rather than a key beside it**, and that is what makes the
-    boundary impossible to get wrong. Two keys would need an order, and only one order is sound: the
-    worker parks on `prompt_key(n)`, so a marker written *after* the prompt could be missed by a pass
-    that had already started the turn, and a resumed pass reading it would then build a different
-    history and pair it with an answer the first pass gave to a different question. One record is one
-    write, so a turn whose history policy has not landed yet cannot exist.
+    **A field on the message rather than a record beside it**, and that is what makes the boundary
+    impossible to get wrong. Two entries would need an order and could be separated by a turn opening
+    between them; one record is one append, so a message whose history policy has not landed cannot
+    exist.
 
-    A boolean and not the turn its history starts at, which would be this turn's number said twice
-    and able to disagree with the key it sits under.
+    A boolean and not the turn its history starts at, which would be a number recoverable from where
+    the entry sits and able to disagree with it.
 
     Nothing is deleted and nothing is hidden: the transcript still draws every turn above the
     boundary, because the checkpoint is still the conversation. What changes is only what `reached`
@@ -138,52 +148,32 @@ class Prompt(Record):
 
 class Steer(Record):
     """
-    Something the person said *into* a turn that was already being answered.
+    A message that may join a turn already being answered, and opens one where none is.
 
-    Shares its slot with `Closed`, which is the only place in this scheme where one key holds two
-    kinds of record. That is not untidiness: the slot is contended between whoever is typing and the
-    pass shutting the door, and the tag is how a reader tells which of them won it.
+    What `Send` delivers, which is to say the ordinary case. **Whether it steers is not decided
+    here**: it is decided by where the entry lands, which is the whole of what the inbox settles. A
+    pass working when it arrives drains it into the request it is about to make; a pass between turns
+    takes it as the message that opens the next one. Nothing has to be claimed, refused, or re-tried,
+    because there is no slot for two writers to contend for.
     """
 
     kind: Literal["steer"] = "steer"
     said: str
 
 
-class Closed(Record):
-    """
-    What a pass writes into the next free steer slot when it is about to stop listening.
-
-    **This is the whole of how a message cannot be lost at the end of a turn**, and it works because
-    `supply` is a compare-and-set: it keeps the value a key was first given and hands the loser the
-    winner's. So the pass and whoever is typing contend for one key and exactly one of them wins.
-
-    - The pass wins: nothing can be written at that slot afterwards, so a message arriving from now
-      on is told the turn is closed and becomes a turn of its own instead.
-    - The person wins: the pass is handed their text rather than its own marker, and redirects the
-      run into one more request to carry it.
-
-    Without it the two decisions are separate reads and there is a window at the end of every turn
-    where the store still says a turn is being answered and the pass has already stopped reading. A
-    message sent into that window goes to a key nothing will ever look at again.
-
-    A record with no fields but its own tag, which is what a marker is once every value is a record.
-    Nothing anybody types can produce one, because what a person writes is a `Steer` and their text
-    is a field *inside* it. It was `None` before there were records, which said the same thing by
-    shape and cost one ambiguity this does not have: `recorded.get(key)` answers `None` for a slot
-    nobody has written as well as for a marker, where these are told apart.
-    """
-
-    kind: Literal["closed"] = "closed"
-
-
 class Command(Record):
     """
     Something the person ran themselves, beside the conversation rather than inside it.
 
-    Recorded and never told: no model sees one of these. It is in the checkpoint because that is the
-    only place this console keeps anything, so a command renders, survives a reload and comes across
-    on a fork; and it is out of the message history because telling a model what you ran is a message
+    An inbox entry like a message, and read out of the inbox by nobody: a pass passes over one on its
+    way down the queue and no model ever sees it. It is in the checkpoint because that is the only
+    place this console keeps anything, so a command renders, survives a reload and comes across on a
+    fork; and it is out of the message history because telling a model what you ran is a message
     somebody writes.
+
+    Being an entry is also what puts it in the right place on the page. Where it sits among a turn's
+    model records is where it was run, because the store files everything in the order it arrived, so
+    nothing has to record which request was in flight at the time.
     """
 
     kind: Literal["command"] = "command"
@@ -230,31 +220,6 @@ class Tree(Record):
 
     kind: Literal["tree"] = "tree"
     tree: str | None = None
-
-
-class Heard(Record):
-    """
-    Which steers were appended to one model request of a turn.
-
-    A record even when it names none, because a request that was told nothing is still a request that
-    ran, and a reader walking these consecutively would otherwise stop at the first quiet one.
-    """
-
-    kind: Literal["heard"] = "heard"
-    said: tuple[str, ...] = ()
-
-
-class Late(Record):
-    """
-    Which steers were found at the boundary where a run would otherwise have ended.
-
-    Its own kind rather than another `Heard`, because it is written where there is no request: the
-    two share a counter only if you let them, and sharing it would drift `heard:{i}` off the
-    `tree:{i}` and `model:{i}` it is supposed to name one request alongside.
-    """
-
-    kind: Literal["late"] = "late"
-    said: tuple[str, ...] = ()
 
 
 class Response(Record):
@@ -308,21 +273,22 @@ class Messages(Record):
     messages: list[object]
 
 
-type Said = Annotated[Steer | Closed, Field(discriminator="kind")]
+type Delivered = Annotated[Prompt | Steer | Command, Field(discriminator="kind")]
 """
-What a steer slot holds: either what somebody said into a running turn, or the marker saying nobody
-may.
+What one inbox entry holds: a message that must open a turn, one that may join the running one, or
+something the person ran.
 
-The one place in this scheme where a key holds two kinds, and stating it as a type is what the tag
-buys. Told apart by shape before there were records - a steer was text and the marker was `None` -
-which worked and left the slot's contract recoverable only by reading the walk that recovered it.
+The one place a *key* says nothing about what is under it, which is what the store minting the key
+buys and what makes the tag load-bearing rather than a second copy: three kinds share one key space,
+so nothing but the tag tells a reader whether an entry is to be told to a model, and a pass draining
+the queue answers a different question for each.
 """
 
-SAID: TypeAdapter[Said] = TypeAdapter(Said)
+DELIVERED: TypeAdapter[Delivered] = TypeAdapter(Delivered)
 
 
 type Step = Annotated[
-    Prompt | Steer | Closed | Command | Result | Tree | Heard | Late | Response | Messages | Returned,
+    Prompt | Steer | Command | Result | Tree | Response | Messages | Returned,
     Field(discriminator="kind"),
 ]
 """

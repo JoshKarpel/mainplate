@@ -164,8 +164,14 @@ class Slot:
     """
 
     session: str
-    turn: int
-    at: int
+    entry: str
+    """
+    The inbox entry the command was delivered as, which is the whole of what names its result.
+
+    Not a turn and a number, because a command belongs to whichever turn its entry landed in and
+    nothing outside a pass can say which that is: a handler naming one would be answering from a page
+    that may have moved on, where the entry is what it is for ever.
+    """
 
 
 @dataclass(slots=True)
@@ -204,7 +210,7 @@ class Commands:
         This is the control-plane argument the worker already answers for cloning, one step along: a
         POST records an intention and something else does the slow part.
         """
-        task = asyncio.create_task(self.record(slot, said, where), name=f"command {slot.session} {slot.turn}.{slot.at}")
+        task = asyncio.create_task(self.record(slot, said, where), name=f"command {slot.session} {slot.entry}")
         self.running[task] = slot
         task.add_done_callback(lambda done: self.running.pop(done, None))
 
@@ -262,7 +268,7 @@ class Commands:
         everything outstanding without checking, and lets the fuller record a cancelled run wrote for
         itself win over it.
         """
-        await self.checkpointer.supply(slot.session, result_key(slot.turn, slot.at), recorded_result(result))
+        await self.checkpointer.supply(slot.session, result_key(slot.entry), recorded_result(result))
 
     async def aclose(self) -> None:
         """

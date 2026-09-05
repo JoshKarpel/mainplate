@@ -10,46 +10,47 @@
 # been said is what has been recorded, so the page renders the checkpoint, a crash resumes from
 # it, and a second process reading the same file sees exactly what the first one did.
 #
-# One key for the session, and ten per turn. The whole scheme is here so that the code that
+# Two key spaces, and the store owns one of them. The whole scheme is here so that the code that
 # writes them and the functions that read them cannot drift apart:
 #
+#     inbox:{n}            a message or a command, filed by the store in the order it arrived and
+#                          appended from outside a pass, by `Service.say`, `send` and `run`
+#     result:{entry}       what the command delivered under that entry exited with, said and took,
+#                          written by `Commands` when it finishes
 #     choice               the endpoint, model, repository, isolation and thinking level this
 #                          session is on, written once at creation
-#     turn:{n}:prompt      what the person said, written from outside the pass by `arrive`
-#     turn:{n}:steer:{k}   what the person said *into* the turn while it ran, written from outside
-#                          the pass by `Service.steer`
-#     turn:{n}:command:{k} what the person ran themselves, written from outside the pass by
-#                          `Service.run`
-#     turn:{n}:result:{k}  what that command exited with, said and took, written when it finishes
+#     turn:{n}:opened      the entry this turn took, recorded by `Run.receive` in the body below
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
-#     turn:{n}:heard:{i}   which steers were appended to that request
-#     turn:{n}:late:{k}    which steers were found where the run would have ended, redirecting it
+#     turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
 #     turn:{n}:tool:{id}   what one tool call returned and how long it took, named by the call's
 #                          own id
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
 #
 # **Every one of those holds a record from `records.py` rather than a bare value**, which is what
-# lets any of them grow a field without a migration. `turn:{n}:took:{id}` is the key that no longer
-# exists because of it: a duration could not sit beside a tool's return while that return was stored
-# bare, since the pair would have been indistinguishable from a tool that returned two fields of
-# those names, and an envelope removes the objection. Each record also carries its own `kind`, so a
-# value written under the wrong key fails to parse rather than being read as whatever that key
-# expects.
+# lets any of them grow a field without a migration. The two cursors are the exception, and their
+# value is the store's rather than ours: `receive` and `pending` write them, and an inbox key has
+# nowhere a second field could ever want to go. Each record carries its own `kind`, so a value
+# written under the wrong key fails to parse rather than being read as whatever that key expects -
+# and in the inbox the tag is not a second copy of anything, since the store names an entry and
+# nothing else says whether what is in it may be told to a model.
 #
-# `prompt`, `steer` and `command` are the three a person writes, and they are written from *outside*
-# a pass, because somebody acting on a turn that is already running cannot be a step of it.
+# **Nothing allocates a number by trying, and no key is contended.** A message used to name the turn
+# it was going into, so writing one meant deciding which turn that was against a checkpoint that had
+# already moved. The store names an entry; *which turn takes one* is decided later, by the pass that
+# reads it, which is the only party reading at the moment the answer is true.
 #
 # **`command` is recorded and not told**, which is the whole of what a command is here. Those two
 # questions are separate and this console already keeps them apart everywhere else: `tree:{i}` and
 # `heard:{i}` are both records the page draws and no model ever sees. So a command is
 # in the checkpoint - it renders, it survives a reload, a fork carries it - and it is not in the
 # message history, so it costs the conversation no context and reaches no provider. Telling the model
-# is a message somebody writes, which is what the box above it is already for.
+# is a message somebody writes, which is what the box above it is already for. A pass draining its
+# inbox passes over one rather than reading it.
 #
-# `steer` is also the only key both halves write. The pass claims the next free slot with `CLOSED`
-# when it is about to stop listening, so that one contended write settles whether a message arriving
-# at the end of a turn is carried or turned away; see `CLOSED`.
+# What being an entry buys a command is a *place*: the store files everything in the order it
+# arrived, so counting a turn's model records ahead of it says how far the reply had got when
+# somebody typed it, and its panel stays there rather than sinking as later answers land above it.
 #
 # The indexed kinds are numbered by *position* within the turn and the tool key deliberately is
 # not. A model request happens in a fixed order, so counting them gives a name that is the same on
@@ -63,7 +64,7 @@
 #
 # `choice` is in the checkpoint rather than beside the session's row for the reason everything else
 # is: it has to be the same on every pass and after every restart, and the checkpoint is the thing
-# that already promises that. It is also why it is written before the first prompt and never
+# that already promises that. It is also why it is written before the first message and never
 # again, since a session that changed endpoint halfway would replay recorded answers from one and
 # continue on another. Forking is how a session's choice changes, and it changes it by making a
 # different session rather than by rewriting this one.
@@ -89,6 +90,8 @@ from datetime import timedelta
 from decimal import Decimal
 from enum import Enum
 from itertools import groupby
+from itertools import pairwise
+from itertools import takewhile
 from typing import Final
 from typing import Literal
 from typing import assert_never
@@ -107,7 +110,8 @@ from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.run import AgentRunResult
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_core import to_json
-from without_durability.interfaces import Checkpointer
+from without_durability.interfaces import INBOX
+from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
 
@@ -118,8 +122,7 @@ from mainplate.agent import agent_for
 from mainplate.durability import TOOK
 from mainplate.durability import Allowance
 from mainplate.durability import AllowanceSpent
-from mainplate.durability import Pending
-from mainplate.durability import parse_heard
+from mainplate.durability import Draining
 from mainplate.durability import parse_model_response
 from mainplate.durability import parse_returned
 from mainplate.durability import parse_took
@@ -176,27 +179,28 @@ class Disposition(Enum):
     """
 
     HERE = "here"
-    """Into this conversation, at whichever moment the checkpoint is actually in: a steer where a turn
-    is being answered, and the next turn where none is.
+    """Into this conversation, at whichever moment it is actually in: a steer where a turn is being
+    answered, and the next turn where none is.
 
-    **The one disposition the server decides rather than the person**, and it has to be. A page is
-    rendered from a checkpoint that has already moved by the time the form posts, so a reader choosing
-    between "steer" and "queue" is choosing against a state that no longer holds, and the server would
-    then honour a decision about the wrong turn. Only the thing that can read the checkpoint and write
-    to it in the same breath can answer this consistently.
+    **The one disposition nobody decides**, and it has to be that way. A page is rendered from a
+    checkpoint that has already moved by the time the form posts, so a reader choosing between
+    "steer" and "queue" is choosing against a state that no longer holds; so is a handler that reads
+    the record and picks between two writes, since a turn can end between the read and the write. The
+    message goes in the queue and the pass takes it or does not, which is the only reading made at
+    the moment the answer is true.
 
-    `NEXT` is the override for the case the checkpoint cannot settle, since wanting to be answered
-    *after* the reply that is coming is an intent no record carries."""
+    `NEXT` is the override for the case nothing can settle, since wanting to be answered *after* the
+    reply that is coming is an intent no record carries."""
 
     NEXT = "next"
-    """`Service.say` at the next free turn, whatever is running.
+    """`Service.say`, which delivers a message a draining pass stops at rather than folds in.
 
-    What `HERE` meant before the server decided, kept as an explicit answer rather than deleted: a
-    message meant to be taken up once the current reply lands is a different question from the one
-    being answered now, and nothing in the checkpoint can tell the two apart."""
+    Kept as an explicit answer rather than deleted: a message meant to be taken up once the current
+    reply lands is a different question from the one being answered now, and nothing in the
+    checkpoint can tell the two apart."""
 
     FORGET = "forget"
-    """`Service.say` at the next free turn, with nothing above it told to the model.
+    """`Service.say` with nothing above it told to the model.
 
     The one answer here that changes what the *model* is handed rather than where the message goes.
     Nothing is deleted and nothing is hidden: every turn above it still renders, still counts toward
@@ -204,14 +208,14 @@ class Disposition(Enum):
     which is why the word is `forget` and not `clear` - a control saying `clear` beside a transcript
     that keeps all of it would be describing something this does not do.
 
-    Never a steer, because a boundary between turns is the only place one can go: it is asked for by
-    name and always opens a turn of its own. It carries a message for the same reason - a marker with
-    no turn under it would be a rule with nothing below it and a slot nobody had claimed - and there
-    is no reason to forget without going on to say something.
+    Never a steer, because a boundary between turns is the only place one can go: it is delivered as
+    a message a draining pass stops at, so it always opens a turn of its own. It carries a message
+    for the same reason - a marker with no turn under it would be a rule with nothing below it - and
+    there is no reason to forget without going on to say something.
 
     Continuing the conversation it closed is `fork` at that turn, which the rule already offers: the
     branch carries every turn above the boundary and leaves the marker behind, since `before` copies
-    the turns below `at` and the record lives on the turn that opens."""
+    what is below the branch point and the record rides on the message that opens the turn."""
 
     FORK = "fork"
     """`Service.fork` at the end, carrying the whole conversation, with this message asked there.
@@ -273,6 +277,91 @@ def parse_disposition(named: str) -> Disposition | None:
 ENDPOINT_FIELD: Final = "endpoint"
 
 
+RESULTS: Final = "result:"
+"""
+What a command's result is filed under, ahead of the entry the command itself arrived as.
+
+Its own key space rather than a turn's, because a command belongs to whichever turn its entry landed
+in and nothing outside a pass can know that yet; see `result_key`.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class Posted:
+    """
+    One thing the person put into a session's inbox, and the key the store filed it under.
+
+    Both halves, because the key is what everything else is said in terms of: a turn records the key
+    it opened on, a request records how far down it had read, and a result names the command it
+    answers. The key is also the order, since the store mints keys that sort.
+    """
+
+    key: str
+    what: records.Delivered
+
+
+def posted_in(recorded: Mapping[str, object]) -> tuple[Posted, ...]:
+    """
+    Everything delivered to this session, in the order the store filed it.
+
+    The one walk of the inbox, so nothing else has to know how an entry is spotted. `recorded` comes
+    back from `load` in record order and the keys sort, so this is both the arrival order and the
+    order every cursor is compared in.
+    """
+    return tuple(
+        Posted(key=key, what=parse_delivered(value)) for key, value in recorded.items() if key.startswith(INBOX)
+    )
+
+
+def openings(recorded: Mapping[str, object]) -> tuple[str, ...]:
+    """
+    The entry each turn opened on, one per turn that has started, consecutive from zero.
+
+    The thing the whole transcript is cut by: a turn holds everything from its own entry up to the
+    next turn's, which is the only thing that says where an entry belongs. The walk stops at the
+    first turn nobody has opened rather than searching for the highest key, exactly as `reached`
+    walks turns, because a pass opens them in order and cannot leave a gap.
+    """
+    opened: list[str] = []
+    while (at := recorded.get(opened_key(len(opened)))) is not None:
+        opened.append(parse_cursor(at))
+    return tuple(opened)
+
+
+def parse_cursor(recorded: object) -> str:
+    """
+    One recorded cursor, which is an inbox key and nothing else.
+
+    Loud rather than lenient, like every other parser here, and hand-written because this is the one
+    kind of value the store writes for itself: there is no record to validate, so what can be checked
+    is that it is a string in the key space `receive` mints.
+
+    `None` is one of the two things `Run.pending` writes, and it means a drain that found nothing
+    with nothing behind it either. That reads as having read no further than the start of the inbox,
+    which sorts below every key in it.
+    """
+    if recorded is None:
+        return ""
+    if not isinstance(recorded, str) or not recorded.startswith(INBOX):
+        raise TypeError(f"a cursor names an inbox entry, and {recorded!r} is not one")
+    return recorded
+
+
+def held_in(inbox: Sequence[Posted], opened: Sequence[str], turn: int) -> tuple[Posted, ...]:
+    """
+    Everything that arrived while `turn` was the turn in hand, its own opening message included.
+
+    Which is to say the entries from this turn's own up to the next turn's, or to the end of the
+    inbox where no later turn has opened. That span is the whole of what makes an entry belong
+    somewhere: nothing records a turn on an entry, and nothing should, since a message becoming a
+    steer or a turn of its own is decided by where it lands.
+    """
+    if turn >= len(opened):
+        return ()
+    stop = opened[turn + 1] if turn + 1 < len(opened) else None
+    return tuple(at for at in inbox if at.key >= opened[turn] and (stop is None or at.key < stop))
+
+
 def turn_prefix(turn: int) -> str:
     return f"turn:{turn}"
 
@@ -301,16 +390,93 @@ def before(recorded: Mapping[str, object], turn: int) -> dict[str, object]:
     """
     Everything a fork inherits: every recorded key belonging to a turn before `turn`.
 
-    By turn rather than by key kind, so the whole of a shared past comes across whether it is a
-    prompt, the messages a turn produced, or a step some later version records. What is left behind
-    is `choice`, which the fork is about to answer differently, and that is the only key here that
-    belongs to the session rather than to one of its turns.
+    Two rules rather than one, because there are two key spaces. The turn-prefixed keys come across
+    by *shape*, so the whole of a shared past arrives whether it is the messages a turn produced or a
+    step some later version records: a `turn:3:approval:0` nobody has written yet is turn 3 already.
+    What is left behind there is `choice`, which the fork is about to answer differently.
+
+    The store's own keys need the second rule, and this is the price the inbox charges: an entry says
+    nothing about which turn it belongs to, so what decides is where it sits against the entry the
+    branch point opened on. Everything below that is the shared past, and a command's result travels
+    with the command it answers.
+
+    **The keys come across unchanged**, which is what makes the cursors in the copied turns resolve:
+    a fork appends nothing, it supplies the parent's own entry keys, so `turn:2:heard:0` still names
+    an entry the branch holds. The store mints keys that only ever rise, so a message delivered to
+    the branch afterwards still sorts after everything copied.
     """
-    return {key: value for key, value in recorded.items() if (at := turn_of(key)) is not None and at < turn}
+    at = branch_at(recorded, turn)
+    return {
+        key: value
+        for key, value in recorded.items()
+        if ((held := turn_of(key)) is not None and held < turn)
+        or ((posted := entry_of(key)) is not None and (at is None or posted < at))
+    }
 
 
-def prompt_key(turn: int) -> StepKey:
-    return f"{turn_prefix(turn)}:prompt"
+def branch_at(recorded: Mapping[str, object], turn: int) -> str | None:
+    """
+    The entry a fork at `turn` cuts the inbox at, or nothing where it cuts nothing off the end.
+
+    Against the turns a *page* counts rather than the ones a pass has opened, because that is what a
+    fork's `at` is: a reader forking at turn 3 of a conversation whose third message is still queued
+    means the message, and the branch carries everything above it. So the boundaries are the entries
+    every turn opened on, followed by the messages waiting for turns of their own, and `at` indexes
+    into the two together exactly as `Transcript.turns` counts them.
+
+    Nothing at all where the fork cuts nothing off the end, which is forking a conversation whole.
+    """
+    inbox = posted_in(recorded)
+    opened = openings(recorded)
+    queued = queued_in(recorded, inbox, opened, listening=False)
+    opening = (*opened, *(at.key for at in queued if not isinstance(at.what, records.Command)))
+    return opening[turn] if turn < len(opening) else None
+
+
+def entry_of(key: StepKey) -> str | None:
+    """
+    Which inbox entry a key is about, for the two key spaces that are not turn-prefixed.
+
+    An entry is about itself; a result is about the command it answers. Both answer by *shape*, like
+    `turn_of` and for the same reason: a fork copies a prefix of a conversation without being taught
+    each kind of thing that might hang off an entry.
+    """
+    if key.startswith(INBOX):
+        return key
+    if key.startswith(RESULTS):
+        return key.removeprefix(RESULTS)
+    return None
+
+
+def opened_key(turn: int) -> StepKey:
+    """
+    The inbox entry this turn opened on, which is the cursor `Run.receive` recorded when it took one.
+
+    What `turn:{n}:prompt` used to be, one indirection along: the message itself is an entry the
+    store filed, and this says which one. That is also what makes a turn's *extent* readable, since
+    everything from here to the next turn's own entry arrived while this turn was the one in hand.
+
+    It holds a bare cursor rather than a record, which is the one exception to the record policy and
+    is stated in `records.py`: the value is the store's, written by `receive` itself.
+    """
+    return f"{turn_prefix(turn)}:opened"
+
+
+def result_key(entry: str) -> StepKey:
+    """
+    What the command delivered under `entry` exited with, said, and took.
+
+    Named after the entry rather than after a turn and a slot, and that is not tidying: which turn a
+    command belongs to is decided by where its entry sits, so a key naming a turn would be a second
+    answer to that question, written by a handler reading a page that may have moved on. Keyed by the
+    entry there is nothing to disagree with.
+
+    A second key rather than a field on the command, because it lands later: a `pytest` is minutes
+    and somebody is watching, so the command's panel is drawn the instant it is posted and this
+    landing is what fills in the result. Absent is "still running", which is exactly how
+    `ToolUse.returned` reads and needs no flag beside it.
+    """
+    return f"{RESULTS}{entry}"
 
 
 def messages_key(turn: int) -> StepKey:
@@ -333,74 +499,12 @@ def tree_key(turn: int, at: int) -> StepKey:
     return f"{turn_prefix(turn)}:tree:{at}"
 
 
-def steer_key(turn: int, said: int) -> StepKey:
-    """
-    The `said`-th thing the person put into this turn while it was still being answered.
-
-    Written from *outside* a pass, like `turn:{n}:prompt`, because a steer is something one person
-    does to a turn somebody else is running. That is also why `Service.steer` has to resolve a clash
-    by trying the next number: the store keeps the value a key was first given, so two writers racing
-    for one number would lose the loser's message in silence.
-
-    **The one key both halves of this console write**, which every other key here can say it is not.
-    The pass claims the next free slot with `CLOSED` when it is about to stop listening, so a turn
-    ending and a message arriving are one contended write rather than two reads that can disagree.
-    See `CLOSED`.
-    """
-    return f"{turn_prefix(turn)}:steer:{said}"
-
-
-CLOSED: Final = records.Closed()
-"""
-What the pass writes into the next free steer slot when it is about to stop listening.
-
-The one constant this console keeps for a record, because it is the same value every time and every
-docstring that explains the end of a turn names it. See `records.Closed` for what it settles and why
-nothing anybody types can be mistaken for it.
-"""
-
-
-def command_key(turn: int, at: int) -> StepKey:
-    """
-    The `at`-th command the person ran themselves while this turn was the latest one.
-
-    Written from *outside* a pass, like `turn:{n}:prompt` and `turn:{n}:steer:{k}`, and for a reason
-    those two only half share: nothing in a pass runs this at all. A command is the person acting on
-    their own files beside a conversation, so the pass neither writes it nor reads it.
-
-    Numbered within the turn and claimed by trying, exactly as a steer is, because two commands
-    posted at once would otherwise lose the loser's to the store's keep-the-first rule. Unlike a
-    steer the slots are *not* contended with a pass, so there is no `CLOSED` here and never will be:
-    the only writer is whoever is typing.
-
-    Which turn is `turns - 1`, the last one started, whether or not it is still being answered. That
-    is what puts a command at the end of everything said so far, which is where it happened.
-    """
-    return f"{turn_prefix(turn)}:command:{at}"
-
-
-def result_key(turn: int, at: int) -> StepKey:
-    """
-    What the `at`-th command of this turn exited with, said, and took.
-
-    A second key rather than one record written when the command finishes, because a `pytest` is
-    minutes and somebody is watching: the command's own panel is drawn from `ran` the instant it is
-    posted, and this landing is what fills in the result. Absent is "still running", which is exactly
-    how `ToolUse.returned` reads and needs no flag beside it.
-
-    The duration is **in** this record rather than in a key of its own, which is what a tool call's is
-    now too: a record's shape is ours, so it has somewhere to put one. A bare tool return did not, and
-    that is the whole reason `turn:{n}:took:{id}` used to exist.
-    """
-    return f"{turn_prefix(turn)}:result:{at}"
-
-
 def heard_key(turn: int, at: int) -> StepKey:
     """
-    Which steers were appended to the `at`-th model request of this turn.
+    How far down the inbox this turn had read when it made its `at`-th model request.
 
-    Read as well as written, because it is what tells a page where a steer has already gone. Until
-    the turn records its messages there is nothing else that says so: `turn:{n}:steer:{k}` is what
+    A cursor, and read as well as written: it is what tells a page where a steer has already gone.
+    Until the turn records its messages there is nothing else that says so, since an entry is what
     somebody typed and says nothing about whether a model has seen it.
 
     Built here and by `Stepping.key("heard")` there, with the same standing hazard `tree_key` carries.
@@ -408,16 +512,13 @@ def heard_key(turn: int, at: int) -> StepKey:
     return f"{turn_prefix(turn)}:heard:{at}"
 
 
-def late_key(turn: int, at: int) -> StepKey:
-    """
-    Which steers were found where the run would otherwise have ended, redirecting it into one more
-    request.
-
-    Its own kind rather than another `heard`, because it is written at a boundary that is not a
-    request: sharing that counter would drift `heard:{i}` off the `tree:{i}` and `model:{i}` it names
-    one request alongside.
-    """
-    return f"{turn_prefix(turn)}:late:{at}"
+# `turn:{n}:late:{k}` used to be here, and the inbox is what deleted it. It recorded what was found
+# at the boundary where a run would otherwise have ended, so that a message arriving during the last
+# response could redirect the run into one more request to carry it. A pass reads its own snapshot,
+# which is fixed the moment the pass starts, so nothing can arrive *during* one: the drain before the
+# first request already takes everything the pass can see, and a message delivered after that is read
+# by the next pass. Where it once forced an extra round trip onto the turn that was ending, it now
+# opens the turn after it, which is both simpler and one fewer request nobody asked for.
 
 
 def model_key(turn: int, at: int) -> StepKey:
@@ -473,25 +574,25 @@ def recorded_prompt(said: str, forget: bool = False) -> dict[str, object]:
 
 def recorded_steer(said: str) -> dict[str, object]:
     """
-    What somebody said into a running turn, as the value the store's codec will take.
+    A message that may join the turn already running, as the value the store's codec will take.
 
-    Its own function beside `recorded_prompt` rather than one taking a kind, because the two land in
-    different slots under different rules and a caller that could pass the wrong word would be a way
-    to write a prompt into a steer slot.
+    Its own function beside `recorded_prompt` rather than one taking a kind, because the two are
+    read differently by the pass that takes them and a caller that could pass the wrong word would
+    be a way to have a message answered on its own that somebody meant as a steer.
     """
     return records.Steer(said=said).recorded()
 
 
-def parse_prompt(recorded: object) -> records.Prompt:
+def parse_delivered(recorded: object) -> records.Delivered:
     """
-    What opens a turn: what somebody typed, and what history it opens on.
+    One inbox entry, as whichever of the three things a person can put in a session it holds.
 
-    The whole record rather than its text, because a turn's opening now says two things and the
-    second decides what the model is told. The one value here that crossed a trust boundary: a step's
-    result was produced by code in this process, where this was written into the checkpoint by an
-    HTTP handler on behalf of whoever posted the form.
+    The one value here that crossed a trust boundary: a step's result was produced by code in this
+    process, where this was appended by an HTTP handler on behalf of whoever posted the form. That is
+    also why the tag is load-bearing rather than a second copy of the key: the store names an entry,
+    so nothing but the record says whether it is to be told to a model.
     """
-    return records.Prompt.model_validate(recorded)
+    return records.DELIVERED.validate_python(recorded)
 
 
 def recorded_messages(said: Sequence[ModelMessage]) -> dict[str, object]:
@@ -648,16 +749,30 @@ class Reached:
     history: tuple[ModelMessage, ...]
 
 
+def opening(recorded: Mapping[str, object], turn: int) -> records.Delivered | None:
+    """
+    The message a turn opened on, or nothing at all for a turn nobody has opened yet.
+
+    One lookup through two keys, because that is what the inbox costs: the turn records which entry
+    it took and the entry holds what was said. Every reader wanting a turn's own message comes
+    through here rather than doing the pair itself.
+    """
+    at = recorded.get(opened_key(turn))
+    return None if at is None else parse_delivered(recorded[parse_cursor(at)])
+
+
 def forgets(recorded: Mapping[str, object], turn: int) -> bool:
     """
     Whether this turn opens on a clean history, which is what `/forget` records.
 
-    A turn nobody has asked anything in forgets nothing, so an absent prompt is `False` rather than a
-    failure: `reached` asks this about the turn it is about to return, which is often one that has no
-    prompt yet.
+    A turn nobody has opened forgets nothing, so an absent one is `False` rather than a failure:
+    `reached` asks this about the turn it is about to return, which is often one no pass has reached.
+
+    Only a `Prompt` can carry the flag, which is not a special case but the same fact twice: forget
+    is never a steer, so what asks for it is delivered as a message that must open a turn.
     """
-    asked = recorded.get(prompt_key(turn))
-    return asked is not None and parse_prompt(asked).forget
+    said = opening(recorded, turn)
+    return isinstance(said, records.Prompt) and said.forget
 
 
 def reached(recorded: Mapping[str, object]) -> Reached:
@@ -814,8 +929,13 @@ class Command:
     No model ever sees one of these. It is in the checkpoint because that is the only place this
     console keeps anything, and it is out of the message history because telling a model what you ran
     is a message somebody writes. See the key scheme.
+
+    `entry` is the inbox key the command arrived under, and it is on the block because the page needs
+    a name for the fold that does not move. A panel's own position does move - a response landing
+    above pushes it down - where an entry is what it is for ever.
     """
 
+    entry: str
     text: str
     result: Result | None = None
 
@@ -1276,111 +1396,150 @@ def parse_result(recorded: object) -> Result:
     return Result(status=held.status, output=held.output, took=held.took)
 
 
-def commands_in(recorded: Mapping[str, object], turn: int) -> tuple[Command, ...]:
+def ran_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) -> tuple[tuple[int, Command], ...]:
     """
-    Every command the person ran while this turn was the latest one, in the order they ran them.
+    Every command run while this turn was in hand, each with how many of its requests had answered.
 
-    Consecutive from zero, so the scan stops at the first slot nobody has claimed rather than
-    searching for the highest key, exactly as `steers_in` and `responded` walk theirs. `Service.run`
-    never leaves a gap, which is what its clash check costs it.
+    **That number is where the command goes on the page**, and it is read rather than recorded: the
+    store files everything in the order it arrived, so counting this turn's model records ahead of a
+    command's entry says how far the reply had got when somebody typed it. Nothing had to be written
+    at the time, which is what makes it safe - a writer racing the pass for a position in its
+    sequence is exactly what a steer costs and a command has no reason to pay.
 
-    A slot with no result beside it is a command still running, which is what a reader watching one
-    sees and what a command a killed console leaves behind. The second is the honest record: the
-    process that would have written the result is gone, and inventing one would be a claim about
-    something nobody observed.
+    A command with no result beside it is one still running, which is what a reader watching one sees
+    and what a command a killed console leaves behind. The second is the honest record: the process
+    that would have written the result is gone, and inventing one would be a claim about something
+    nobody observed.
     """
-    ran: list[Command] = []
-    while (said := recorded.get(command_key(turn, len(ran)))) is not None:
-        came = recorded.get(result_key(turn, len(ran)))
-        ran.append(
-            Command(
-                text=records.Command.model_validate(said).said,
-                result=None if came is None else parse_result(came),
-            )
-        )
+    answering = f"{turn_prefix(turn)}:model:"
+    said = {at.key: at.what for at in held if isinstance(at.what, records.Command)}
+    ran: list[tuple[int, Command]] = []
+    made = 0
+    for key in recorded:
+        if key.startswith(answering):
+            made += 1
+        elif (was := said.get(key)) is not None:
+            ran.append((made, Command(entry=key, text=was.said, result=result_in(recorded, key))))
     return tuple(ran)
 
 
-def steers_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
+def drains_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
     """
-    Everything the person has said into this turn while it ran, in the order they said it.
+    How far this turn had read at each point it read, in the order the cursors were recorded.
 
-    Consecutive from zero, so the scan stops at the first number nobody has written, exactly as
-    `reached` walks turns and `responded` walks requests. `Service.steer` never leaves a gap, which
-    is what its clash check costs it.
+    The turn's own opening entry leads them, because that is where its reading of the inbox begins:
+    the first request's steers are the entries between the message that opened the turn and the
+    cursor that request recorded.
 
-    It stops at `CLOSED` as well as at a gap, and it is `records.Said` that says a slot holds one or
-    the other. Nothing downstream has to know the marker exists - it is not something anybody said,
-    so it is not part of what was said.
+    One walk of the checkpoint in *record* order rather than two lookups by name, so nothing here
+    depends on the drains being numbered consecutively - which they are, but the order is the
+    property being used and the store already guarantees it.
     """
-    said: list[str] = []
-    while (held := recorded.get(steer_key(turn, len(said)))) is not None:
-        slot = records.SAID.validate_python(held)
-        if not isinstance(slot, records.Steer):
-            break
-        said.append(slot.said)
-    return tuple(said)
+    heard = f"{turn_prefix(turn)}:heard:"
+    return tuple(
+        parse_cursor(value) for key, value in recorded.items() if key == opened_key(turn) or key.startswith(heard)
+    )
 
 
-def steers_waiting(run: Run, turn: int) -> Pending:
-    """
-    What this turn has been told past the first `already`, asked before each model request.
-
-    Read out of the pass's own snapshot rather than loaded from the store on every call, which is
-    what an allowance of one buys: a pass makes one live request and takes a fresh `load` on its way
-    in, so the snapshot in hand is as current as a read here would be. A steer written while the
-    pass was setting up waits for the next one, which is a round trip that has already been sent
-    either way.
-
-    That is the coupling the allowance costs and the reason to leave it at one. Raised, a pass makes
-    several requests off the one snapshot, so a steer waits behind as many as the pass has left.
-    """
-
-    async def waiting(already: int) -> Sequence[str]:
-        return steers_in(run.recorded, turn)[already:]
-
-    return waiting
+def steered(held: Sequence[Posted], since: str, upto: str) -> tuple[str, ...]:
+    """What somebody said into the turn between two cursors, which is one drain's worth of steers."""
+    return tuple(at.what.said for at in held if isinstance(at.what, records.Steer) and since < at.key <= upto)
 
 
-def steers_closing(checkpointer: Checkpointer, session: str, turn: int) -> Pending:
-    """
-    The same question at the one boundary where reading it is not enough, asked as a **claim**.
-
-    `supply` is a compare-and-set, so writing `CLOSED` into the next free slot and reading what comes
-    back settles two things in one operation: whether anybody got in first, and whether anybody still
-    can. Winning it hands back the marker and the turn is shut; losing it hands back somebody's text,
-    which the pass then has to carry.
-
-    Read instead of claimed, the pass would stop listening some milliseconds before the store said so
-    - it shuts at the boundary where the run would end, and the turn's messages land after that - and
-    every message sent inside that window would be written to a key nothing looks at again. See
-    `CLOSED`.
-
-    Built here rather than inside `conversing` so the capability's tests drive the mechanism that
-    ships instead of a stand-in that resembles it.
-    """
-
-    async def closing(already: int) -> Sequence[str]:
-        claimed = await checkpointer.supply(session, steer_key(turn, already), CLOSED.recorded())
-        if not isinstance(records.SAID.validate_python(claimed), records.Steer):
-            return ()
-        return steers_in(await checkpointer.load(session), turn)[already:]
-
-    return closing
-
-
-def heard_in(recorded: Mapping[str, object], turn: int) -> tuple[tuple[str, ...], ...]:
+def told_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) -> tuple[tuple[str, ...], ...]:
     """
     What each of this turn's requests was told, in the order the requests were made.
 
-    Consecutive from zero, like `responded` and for the same reason: the scan stops at the first
-    request nobody has reached rather than searching for the highest key. A request that was told
-    nothing records an empty list, which is what keeps the walk from stopping early on a quiet one.
+    Recovered from the cursors rather than from a list of texts, which is what the inbox replaced: a
+    request's steers are the entries between the cursor before it and the one it recorded.
     """
-    told: list[tuple[str, ...]] = []
-    while (said := recorded.get(heard_key(turn, len(told)))) is not None:
-        told.append(parse_heard(said))
-    return tuple(told)
+    return tuple(steered(held, since, upto) for since, upto in pairwise(drains_in(recorded, turn)))
+
+
+def since_last(recorded: Mapping[str, object], turn: int) -> str:
+    """
+    How far this turn has read, which is the cursor its last drain left.
+
+    An empty string for a turn with no drains at all, which sorts below every inbox key: a turn
+    nobody has opened has read nothing, so everything is still ahead of it.
+    """
+    drains = drains_in(recorded, turn)
+    return drains[-1] if drains else ""
+
+
+def unread_in(
+    recorded: Mapping[str, object], held: Sequence[Posted], turn: int, *, listening: bool
+) -> tuple[tuple[str, ...], tuple[Posted, ...]]:
+    """
+    What nobody has read, split into what this turn could still take and what will open its own turn.
+
+    **A prompt is the boundary and a steer is not**, which is the difference between the two records
+    said one more way: a steer is a message the running turn may fold in, so it is drawn where it
+    would go if it did; a prompt cannot be folded in by anybody, so it and everything behind it are
+    messages waiting for turns of their own.
+
+    A steer behind a prompt is drawn as waiting for a turn too, even though the pass will fold it
+    into the turn that prompt opens. That is the honest reading rather than a shortcoming: what a
+    page can say is that neither has been read and that the prompt between them is where this turn's
+    reading stops.
+
+    `listening` is whether this turn is still being answered, and with nothing listening every unread
+    message is one waiting for a turn. Without it a message that arrived just after a turn ended
+    would be drawn as a steer of that turn, which is a panel the settled reading does not draw at
+    all: it reads a finished turn from its own messages, where a steer nobody was told is not.
+
+    What comes back second is everything from that boundary on, commands included, because it is
+    where this turn's own entries stop rather than a list of messages: a command run after a message
+    nobody has opened a turn on belongs beside that message, not back up in the turn before it.
+    """
+    unread = tuple(at for at in held if at.key > since_last(recorded, turn))
+    # A turn still being answered reaches everything up to the first message it may not fold in; one
+    # that has finished reaches no message at all, and still owns the commands run beside it.
+    reaching = (
+        (lambda at: not isinstance(at.what, records.Prompt))
+        if listening
+        else (lambda at: isinstance(at.what, records.Command))
+    )
+    reachable = tuple(takewhile(reaching, unread))
+    return tuple(at.what.said for at in reachable if isinstance(at.what, records.Steer)), unread[len(reachable) :]
+
+
+def queued_in(
+    recorded: Mapping[str, object], inbox: Sequence[Posted], opened: Sequence[str], *, listening: bool
+) -> tuple[Posted, ...]:
+    """
+    Everything past the last turn, which is what a page draws after the conversation so far.
+
+    Every entry of a session nobody has answered yet, since no turn has opened to own any of them;
+    otherwise what the last turn does not own. Commands are in it, so one run beside a message
+    waiting for a turn is drawn beside that message rather than back in the turn before it.
+    """
+    if not opened:
+        return tuple(inbox)
+    _, queued = unread_in(recorded, held_in(inbox, opened, len(opened) - 1), len(opened) - 1, listening=listening)
+    return queued
+
+
+def result_in(recorded: Mapping[str, object], entry: str) -> Result | None:
+    """What the command delivered under `entry` came to, or nothing where it is still running."""
+    came = recorded.get(result_key(entry))
+    return None if came is None else parse_result(came)
+
+
+def owned_in(
+    recorded: Mapping[str, object], inbox: Sequence[Posted], opened: Sequence[str], turn: int, *, listening: bool
+) -> tuple[Posted, ...]:
+    """
+    The entries this turn owns: its span, up to where the messages waiting for a turn of their own
+    begin.
+
+    The last opened turn's span runs to the end of the inbox, because nothing later has opened to
+    stop it. That is the right span for reading its cursors and wrong for drawing it, since what is
+    queued behind it has not happened *in* it. This is the drawing answer.
+    """
+    held = held_in(inbox, opened, turn)
+    _, rest = unread_in(recorded, held, turn, listening=listening)
+    return held if not rest else tuple(at for at in held if at.key < rest[0].key)
 
 
 def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse, ...]:
@@ -1462,36 +1621,66 @@ def so_far(recorded: Mapping[str, object], turn: int) -> tuple[Block, ...]:
     same responses, in the same order, cut by the same rule, with the results that have not arrived
     yet still out. That is what lets the page morph one into the other without a panel ever moving.
     """
-    return tuple(block for block, _ in blocks_from(recorded, turn, responded(recorded, turn)))
+    held = held_in(posted_in(recorded), openings(recorded), turn)
+    blocks = blocks_from(recorded, held, turn, responded(recorded, turn))
+    return tuple(block for block, _ in alongside(blocks, ran_in(recorded, held, turn)))
 
 
-def blocks_from(recorded: Mapping[str, object], turn: int, responses: Sequence[ModelResponse]) -> tuple[Sourced, ...]:
+def blocks_from(
+    recorded: Mapping[str, object], held: Sequence[Posted], turn: int, responses: Sequence[ModelResponse]
+) -> tuple[Sourced, ...]:
     """
     One running turn's recorded steps as blocks, each with the request that produced it.
 
     Steers included, and they have to be: with Send deciding for itself whether a message steers, a
     turn that drew only what the *model* had said would take somebody's message and show nothing at
-    all until the turn ended. `turn:{n}:heard:{i}` is what makes that possible - it says which steers
-    were appended to request `i`, so one goes above the response it shaped, exactly where the settled
-    reading will put it.
+    all until the turn ended. The cursors are what make that possible - they say how far down the
+    inbox each request had read, so a steer goes above the response it shaped, exactly where the
+    settled reading will put it.
 
-    Anything no `heard` record accounts for goes at the end, which covers the steer nobody has
-    delivered yet and the one a redirect took at the end of a run. That is its right place while it is
-    pending, since nothing has been said since; a redirected one moves above its answer when that
-    answer lands, which is the one reorder this reading performs and the reason `late` is not walked
-    here.
+    Anything no request has carried goes at the end, which covers the steer nobody has read yet and
+    the one a redirect took at the end of a run. That is its right place while it is pending, since
+    nothing has been said since; a redirected one moves above its answer when that answer lands,
+    which is the one reorder this reading performs.
     """
     # One walk of the recorded calls, read twice: what each came back with and how long it took. Two
     # walks would eventually disagree about which calls a turn has heard from.
     called = calls_in(recorded, turn, responses)
-    returned = {call: returned_step(held) for call, held in called.items()}
-    took = {call: held.took for call, held in called.items() if held.took is not None}
-    told = heard_in(recorded, turn)
+    returned = {call: returned_step(said) for call, said in called.items()}
+    took = {call: said.took for call, said in called.items() if said.took is not None}
+    told = told_in(recorded, held, turn)
+    taking, _ = unread_in(recorded, held, turn, listening=True)
     blocks: list[Sourced] = []
     for at, response in enumerate(responses):
         blocks.extend((Steering(text=text), None) for text in (told[at] if at < len(told) else ()))
         blocks.extend((block, at) for block in blocks_in(response, returned, took))
-    blocks.extend((Steering(text=text), None) for text in steers_in(recorded, turn)[sum(len(said) for said in told) :])
+    blocks.extend((Steering(text=text), None) for text in taking)
+    return tuple(blocks)
+
+
+def alongside(sourced: Sequence[Sourced], ran: Sequence[tuple[int, Command]]) -> tuple[Sourced, ...]:
+    """
+    A turn's blocks with the commands run during it put back where they were run.
+
+    **Merged rather than appended**, which is the whole of what filing a command as an inbox entry
+    buys: a command sits after the requests that had answered when somebody typed it, so its panel
+    stays where it happened instead of sinking down the turn as each later answer lands above it.
+    Collected at the end, a reader watching a turn saw the command they had just run move.
+
+    `asked` is `None` on a command, as it is on a steer and on the person's own message, because no
+    model request produced it. That is what keeps it from opening a rule: a rule stands at a request
+    boundary, and a command is not one.
+
+    Both readings of a turn come through here with the same positions, which is what keeps the
+    running one a prefix of the settled one: nothing moves when `turn:{n}:messages` lands.
+    """
+    waiting = list(ran)
+    blocks: list[Sourced] = []
+    for block, asked in sourced:
+        while waiting and asked is not None and waiting[0][0] <= asked:
+            blocks.append((waiting.pop(0)[1], None))
+        blocks.append((block, asked))
+    blocks.extend((command, None) for _, command in waiting)
     return tuple(blocks)
 
 
@@ -1525,31 +1714,22 @@ def panelled(turn: int, sourced: Sequence[Sourced]) -> Iterator[Panel]:
         yield Panel(turn=turn, at=at, kind=kind, blocks=tuple(block for block, _ in run), asked=asked)
 
 
-def said_by(turn: int, prompt: records.Prompt, tree: str | None = None) -> Panel:
-    """A turn's opening panel, which is the person's own message and is always its first."""
-    return Panel(turn=turn, at=0, kind="person", blocks=(Prose(text=prompt.said),), tree=tree, forget=prompt.forget)
-
-
-def ran_by(recorded: Mapping[str, object], turn: int, at: int) -> tuple[Panel, ...]:
+def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Panel:
     """
-    A turn's commands as one panel at the end of it, or nothing where none were run.
+    A turn's opening panel, which is the person's own message and is always its first.
 
-    **At the end rather than interleaved**, and that is what makes this the cheap reading it is.
-    Nothing records which model request was in flight when somebody ran `git status`, and nothing
-    should: a second writer racing the pass for a position in its sequence is what `heard:{i}` costs
-    a steer, and a steer earns it by actually reaching the model. A command reaches nothing, so where
-    it sits among the model's own panels is a distinction with no consequence.
-
-    What that buys is the property the two readings of a turn already depend on: this appends the
-    same panel whether the turn is running or settled, so nothing moves when `turn:{n}:messages`
-    lands. A command run during turn 3 stays at the end of turn 3 for ever, which is also where it
-    happened.
-
-    `asked` is `None`, like the person's own panel and a steer, because no model request produced it
-    and so it opens none. That is what keeps it from drawing a rule of its own.
+    Either kind of message can open one, and that is the inbox rather than a looseness: a `Steer`
+    that arrived with nothing running opens the next turn, which is what `Send` means when a session
+    is idle. Only a `Prompt` carries a boundary, so only a `Prompt` can draw one.
     """
-    ran = commands_in(recorded, turn)
-    return (Panel(turn=turn, at=at, kind="command", blocks=ran),) if ran else ()
+    return Panel(
+        turn=turn,
+        at=0,
+        kind="person",
+        blocks=(Prose(text=said.said),),
+        tree=tree,
+        forget=isinstance(said, records.Prompt) and said.forget,
+    )
 
 
 def transcript(recorded: Mapping[str, object]) -> Transcript:
@@ -1567,55 +1747,59 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     that says which is which.
 
     The turn being answered has no such list yet, so it is read from the steps behind it instead,
-    which is the only place its progress exists until it ends. Only the first unanswered turn, and
-    not the ones queued behind it: one reply is actually being written, and a queued turn has been
-    said and not yet started.
+    which is the only place its progress exists until it ends. At most one turn is in that state,
+    because a pass answers the turn it opened before opening another; what a person types meanwhile
+    is an inbox entry with no turn yet, and those are drawn last, in the order they arrived.
     """
+    inbox = posted_in(recorded)
+    opened = openings(recorded)
     panels: list[Panel] = []
     spent: dict[int, Spent] = {}
     asking: dict[int, tuple[Request, ...]] = {}
     turn = 0
-    while (asked := recorded.get(prompt_key(turn))) is not None:
-        answered = recorded.get(messages_key(turn))
-        if answered is None:
-            break
+    while turn < len(opened) and (answered := recorded.get(messages_key(turn))) is not None:
+        held = owned_in(recorded, inbox, opened, turn, listening=False)
         said = parse_messages(answered)
         answering = responses_in(said)
-        panels.append(said_by(turn, parse_prompt(asked), parse_tree(recorded.get(opening_tree_key(turn)))))
-        panels.extend(panelled(turn, parted(said, tooks_in(recorded, turn, answering))))
-        # After the turn's own panels, which is where a command ran and where it stays. Counted from
-        # what this turn has drawn so far rather than tracked alongside, so `at` is the next free
-        # position however many panels the turn came to.
-        panels.extend(ran_by(recorded, turn, sum(1 for panel in panels if panel.turn == turn)))
+        panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
+        blocks = parted(said, tooks_in(recorded, turn, answering))
+        panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
         spent[turn] = spent_on(answering)
         asking[turn] = requests_in(recorded, turn, answering)
         turn += 1
-    # Several, because a person can type again while a reply is still coming. Those messages are
-    # recorded in the turns after the one in flight and are answered in order, so a transcript
-    # showing only the first would be hiding a message somebody had already sent.
-    awaiting = False
-    running = turn if recorded.get(prompt_key(turn)) is not None else None
-    while (waiting := recorded.get(prompt_key(turn))) is not None:
-        panels.append(said_by(turn, parse_prompt(waiting), parse_tree(recorded.get(opening_tree_key(turn)))))
-        if not awaiting:
-            # One walk of the turn's recorded responses, read twice: what it has said, and what it
-            # has spent saying it. A turn in flight has a cost at all because the step that records
-            # each response prices it on the way past, so this is the same reading the settled half
-            # above does rather than a second, poorer one.
-            answering = responded(recorded, turn)
-            panels.extend(panelled(turn, blocks_from(recorded, turn, answering)))
-            if answering:
-                spent[turn] = spent_on(answering)
-                asking[turn] = requests_in(recorded, turn, answering)
-        # Outside the branch above, because a command is not something the model is doing: a person
-        # can run one against a turn queued behind the reply in flight, and that turn draws no model
-        # panels at all until its own turn comes.
-        panels.extend(ran_by(recorded, turn, sum(1 for panel in panels if panel.turn == turn)))
-        awaiting = True
+    running = turn if turn < len(opened) else None
+    if running is not None:
+        held = owned_in(recorded, inbox, opened, turn, listening=True)
+        # One walk of the turn's recorded responses, read twice: what it has said, and what it has
+        # spent saying it. A turn in flight has a cost at all because the step that records each
+        # response prices it on the way past, so this is the same reading the settled half above does
+        # rather than a second, poorer one.
+        answering = responded(recorded, turn)
+        panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
+        blocks = blocks_from(recorded, held, turn, answering)
+        panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
+        if answering:
+            spent[turn] = spent_on(answering)
+            asking[turn] = requests_in(recorded, turn, answering)
+        turn += 1
+    # A person can type again while a reply is still coming, and what they type has no turn of its own
+    # until a pass opens one. Drawn all the same, and in order, because a transcript showing only what
+    # a pass had got to would be hiding a message somebody had already sent. A command run out here is
+    # drawn beside the message it followed, for the same reason it is drawn where it was run inside a
+    # turn: that is where it happened.
+    for waiting in queued_in(recorded, inbox, opened, listening=running is not None):
+        if isinstance(waiting.what, records.Command):
+            at = max(turn - 1, 0)
+            ran = Command(entry=waiting.key, text=waiting.what.said, result=result_in(recorded, waiting.key))
+            panels.append(
+                Panel(turn=at, at=sum(1 for panel in panels if panel.turn == at), kind="command", blocks=(ran,))
+            )
+            continue
+        panels.append(said_by(turn, waiting.what))
         turn += 1
     return Transcript(
         panels=tuple(panels),
-        awaiting=awaiting,
+        awaiting=running is not None or turn > len(opened),
         turns=turn,
         spent=spent,
         answering=running,
@@ -1703,6 +1887,66 @@ def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> W
     return workspaces.worktree(session)
 
 
+def taken(entries: Sequence[Entry]) -> tuple[records.Delivered, ...]:
+    """What a take from the inbox holds, parsed, in the order the store handed it back."""
+    return tuple(parse_delivered(entry.value) for entry in entries)
+
+
+async def opening_turn(run: Run, turn: int) -> records.Delivered:
+    """
+    The message this turn opens on, suspending on the inbox until there is one.
+
+    `receive` rather than a key named in advance, which is the whole of what the inbox changes here:
+    nothing allocates a turn number before the fact, so a message is delivered and the pass decides
+    where it lands. That is also what deletes the race at the end of a turn - there is no slot for a
+    pass and a person to contend for, only a queue and a cursor.
+
+    It takes up to and including the *first message*, so a command run while the session was idle is
+    passed over rather than opening a turn nobody asked for. What is behind that message is left for
+    the drain, which is what lets one turn answer several things said in a row.
+
+    Nothing to take is a limit of zero and that is how this waits: `receive` never returns empty, so
+    an empty take raises and the pass comes back `Blocked` on this key until something is delivered.
+    The limit is computed from what this pass can see, and a replay reads a fuller inbox; that is
+    sound because entries only ever arrive *behind* what is there, so the first message after the
+    cursor is the same one on every pass, and the recorded cursor governs the take regardless.
+    """
+    after = since_last(run.recorded, turn - 1) if turn else ""
+    available = run.delivered(after or None, None)
+    said = [at for at, what in enumerate(taken(available)) if not isinstance(what, records.Command)]
+    took = await run.receive(opened_key(turn), after=after or None, limit=said[0] + 1 if said else 0)
+    return taken(took)[-1]
+
+
+def draining_inbox(run: Run, turn: int) -> Draining:
+    """
+    What to put to the model now, recorded as how far down the inbox this turn has read.
+
+    One function for both boundaries a steer can arrive at, where there were two: reading the queue
+    and shutting it are the same act now, because nothing has to be shut. A message that arrives
+    after the last drain is not lost to a closed turn, it is simply still in the queue, and the next
+    turn opens on it.
+
+    **It stops at a prompt**, which is the one thing this has to get right: a message delivered as a
+    `Prompt` is one somebody asked to be answered on its own, so folding it into the turn already
+    running would be answering a question they did not ask. Everything up to that point is taken,
+    including the commands in between, which are passed over rather than told.
+
+    The cursor comes out of the pass's own snapshot, which is current within the pass because a step
+    writes back into it: two drains in one turn read where the one before them stopped without asking
+    the store again.
+    """
+
+    async def drain(key: StepKey) -> Sequence[str]:
+        since = since_last(run.recorded, turn)
+        available = taken(run.delivered(since or None, None))
+        wanted = len(tuple(takewhile(lambda what: not isinstance(what, records.Prompt), available)))
+        took = await run.pending(key, after=since or None, limit=wanted)
+        return tuple(what.said for what in taken(took) if isinstance(what, records.Steer))
+
+    return drain
+
+
 @dataclass(frozen=True, slots=True)
 class Progressed:
     """
@@ -1777,12 +2021,12 @@ def conversing(
         spending = Allowance(limit=allowance)
         at = reached(run.recorded)
         while True:
-            asked = await run.awaiting(prompt_key(at.turn), parse_prompt)
-            # Read off the prompt this pass just parked on rather than by asking the store again,
-            # which is the whole reason the boundary rides on the opening record: a pass carries its
-            # history forward between turns, so a marker written beside the prompt while it was
+            asked = await opening_turn(run, at.turn)
+            # Read off the message this pass just parked on rather than by asking the store again,
+            # which is the whole reason the boundary rides on the message itself: a pass carries its
+            # history forward between turns, so a marker delivered beside the message while it was
             # waiting here would be invisible to it and seen by the pass that resumed.
-            if asked.forget:
+            if isinstance(asked, records.Prompt) and asked.forget:
                 at = Reached(turn=at.turn, history=())
             # Cloning and checking out happen *here* rather than when the session was created,
             # because creating one is a request somebody is waiting on and a clone is a network
@@ -1805,13 +2049,8 @@ def conversing(
             # can write: the first is taken before the model is asked anything, which is the state
             # a rewind to this turn puts back, and each later one records what the previous batch
             # of calls left behind.
-            # Loaded from the store on each request rather than read out of `run.recorded`, which is
-            # the snapshot this pass started from. What makes a steer a steer is that it arrives
-            # *after* the turn began, and it is often written by another process entirely, so the
-            # pass's own copy is the one place it can never appear.
-            waiting = steers_waiting(run, at.turn)
-            shutting = steers_closing(run.checkpointer, run.workflow, at.turn)
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, waiting, shutting, spending):
+            draining = draining_inbox(run, at.turn)
+            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending):
                 try:
                     answered = await agent.run(asked.said, message_history=list(at.history))
                 except AllowanceSpent:

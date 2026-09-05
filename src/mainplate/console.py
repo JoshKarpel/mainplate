@@ -625,9 +625,10 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     match sending.where:
         case Disposition.HERE:
-            # The service decides between a steer and a turn of its own, because only it can read the
-            # checkpoint and write to it in one breath. The page this was posted from was rendered
-            # from a state that has since moved.
+            # Nobody here decides between a steer and a turn of its own, and that is the point: the
+            # message goes in the queue and the pass that takes it decides, because it is the only
+            # thing reading at the moment the answer is true. The page this was posted from was
+            # rendered from a state that has since moved, and so was any read this could make.
             await service.send(session, sending.said)
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
@@ -637,12 +638,7 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
             # next free turn and differ only in what that turn opens on. A forget never reaches
             # `send`, because a boundary between turns is the only place one can be.
-            await service.say(
-                session,
-                turn=found.said.turns,
-                said=sending.said,
-                forget=sending.where is Disposition.FORGET,
-            )
+            await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
@@ -684,10 +680,9 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             origin = found.session.forked
             if origin is None:
                 return page_response(422, refusal_page(LINKS, 422, f"session {session} was not forked from anything"))
-            came_from = await service.read(origin.session)
-            if came_from is None:
+            if await service.read(origin.session) is None:
                 return page_response(404, refusal_page(LINKS, 404, f"no session {origin.session}"))
-            await service.say(origin.session, turn=came_from.said.turns, said=sending.said)
+            await service.say(origin.session, sending.said)
             return navigating(LINKS.to_session(origin.session))
         case _ as unreachable:
             assert_never(unreachable)

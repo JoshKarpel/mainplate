@@ -1670,7 +1670,7 @@ def status_element(status: int) -> Element:
     )
 
 
-def command_block(ran: Command, turn: int, at: int) -> Element:
+def command_block(ran: Command) -> Element:
     """
     One command the person ran, with what it said open under it.
 
@@ -1685,12 +1685,11 @@ def command_block(ran: Command, turn: int, at: int) -> Element:
     what the reader decided rather than only what they unfolded, or a morph mid-turn would reopen
     a command they had just put away.
 
-    **The id is the turn and the command's own slot, and deliberately not the panel's anchor** as a
-    call's is. A turn's commands are drawn at the end of it, so every panel the model produces lands
-    *before* them: the panel a command sits in is the one whose `at` moves while the turn is
-    answered, and a fold identified by it is a decision the script loses on the next response. The
-    slot is `turn:{n}:command:{k}`'s own `k`, since a turn's commands are one run in the order they
-    were run, so this is the record's name for the thing rather than a second numbering of it.
+    **The id is the command's own inbox entry, and deliberately not the panel's anchor** as a call's
+    is. A panel's position moves while a turn is answered - a response landing above pushes it down -
+    so a fold identified by it is a decision the script loses on the next response. The entry is the
+    store's own name for the thing, minted once and never reused, so this is the record's name for it
+    rather than a second numbering.
 
     The command itself is shown verbatim and never as Markdown. It is a shell line, so the
     backticks, asterisks and underscores in it are characters rather than emphasis, and rendering it
@@ -1708,7 +1707,7 @@ def command_block(ran: Command, turn: int, at: int) -> Element:
     said = None if ran.result is None else ran.result.output
     return details(
         cls="ran",
-        attrs={"id": f"ran-{turn}-{at}", "open": True},
+        attrs={"id": f"ran-{ran.entry}", "open": True},
         children=[
             summary(
                 children=[
@@ -1766,7 +1765,7 @@ def block_element(block: Block, panel: Panel, at: int) -> Element:
 
     The panel rather than its anchor, because the two kinds that fold are named from different
     halves of it: a call is addressed by the panel it is in, which never moves once made, and a
-    command by the turn and its own slot, because the panel a command is in does move. See
+    command by its own inbox entry, because the panel a command is in does move. See
     `command_block`.
     """
     match block:
@@ -1775,7 +1774,7 @@ def block_element(block: Block, panel: Panel, at: int) -> Element:
         case Steering(text=text):
             return written_block("block--text", text)
         case Command():
-            return div(cls=("block", "block--ran"), children=command_block(block, panel.turn, at))
+            return div(cls=("block", "block--ran"), children=command_block(block))
         case Reasoning(text=text):
             return written_block("block--thinking", text)
         case ToolUse():

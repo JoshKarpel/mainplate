@@ -33,6 +33,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.usage import RequestUsage
+from without_durability.interfaces import inbox_key
 
 from mainplate import records
 from mainplate.agent import Choice
@@ -41,17 +42,16 @@ from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.console import LINKS
 from mainplate.conversation import Result
-from mainplate.conversation import command_key
+from mainplate.conversation import heard_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
-from mainplate.conversation import prompt_key
+from mainplate.conversation import opened_key
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_messages
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_result
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
-from mainplate.conversation import steer_key
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
@@ -383,7 +383,12 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
     written: dict[str, object] = {}
     for turn, messages in enumerate(turns):
         came_back = returns(messages)
-        written[prompt_key(turn)] = recorded_prompt(opening(messages))
+        # The two records a turn opens with: the entry the message arrived as, and the cursor saying
+        # this turn took it. `seed.py` and this script are the two writers that are not `Service`, so
+        # what a pass would write is written by hand, both halves or neither.
+        written[inbox_key(turn)] = recorded_prompt(opening(messages))
+        written[opened_key(turn)] = inbox_key(turn)
+        written[heard_key(turn, 0)] = inbox_key(turn)
         written[messages_key(turn)] = recorded_messages(messages)
         for at, response in enumerate(message for message in messages if isinstance(message, ModelResponse)):
             written[model_key(turn, at)] = records.Response(
@@ -475,26 +480,28 @@ def pages() -> dict[str, str]:
     # beside what was said. All three states, because they are drawn differently and the differences
     # are exactly what a screenshot is for: an exit of zero, an exit that is not a failure - `git
     # diff --quiet` exits 1 to say there *are* changes - and one still running.
-    settled[command_key(1, 0)] = recorded_command("git status --short")
-    settled[result_key(1, 0)] = recorded_result(
+    settled[inbox_key(2)] = recorded_command("git status --short")
+    settled[result_key(inbox_key(2))] = recorded_result(
         Result(status=0, output=" M src/mainplate/pages.py\n", took=timedelta(seconds=0.11))
     )
-    settled[command_key(1, 1)] = recorded_command("git diff --quiet")
-    settled[result_key(1, 1)] = recorded_result(Result(status=1, output="", took=timedelta(seconds=0.08)))
-    settled[command_key(1, 2)] = recorded_command("just test")
+    settled[inbox_key(3)] = recorded_command("git diff --quiet")
+    settled[result_key(inbox_key(3))] = recorded_result(Result(status=1, output="", took=timedelta(seconds=0.08)))
+    settled[inbox_key(4)] = recorded_command("just test")
     # And a turn that opens on a clean history, so the boundary is drawn somewhere it can be looked
     # at. Turn 1 rather than a turn of its own, because what a screenshot has to show is the rule
     # standing *between* two turns with the first still on the page above it: a boundary at the top
     # of a conversation would draw the same markup and prove nothing about what it says.
-    settled[prompt_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
+    settled[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
     waiting = dict(settled)
-    waiting[prompt_key(2)] = recorded_prompt("And what about a turn still being answered?")
+    waiting[inbox_key(5)] = recorded_prompt("And what about a turn still being answered?")
 
     # A turn part way through, read from the steps behind it rather than from messages it has not
     # written yet. The state exists only while a pass is actually running, so a fixture is the one
     # way to look at it - and looking at it is the point, since what it has to prove is that a
     # half-drawn turn reads as a turn in progress rather than as a broken one.
     answering = dict(waiting)
+    answering[opened_key(2)] = inbox_key(5)
+    answering[heard_key(2, 0)] = inbox_key(5)
     answering[model_key(2, 0)] = records.Response(
         response=ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
     ).recorded()
@@ -503,10 +510,10 @@ def pages() -> dict[str, str]:
         took=timedelta(seconds=TIMINGS["call-7"]),
     ).recorded()
     # A steer sent into that turn and not yet put to any model, which is the state Send now reaches
-    # every time somebody types while a reply is coming. It is drawn from `turn:{n}:steer:{k}` rather
-    # than from messages that do not exist yet, so a screenshot is where you find out whether a
-    # message that has been sent and not yet heard reads as one.
-    answering[steer_key(2, 0)] = recorded_steer("and while you are there, check the phone width")
+    # every time somebody types while a reply is coming. It is drawn from the entry rather than from
+    # messages that do not exist yet, so a screenshot is where you find out whether a message that has
+    # been sent and not yet heard reads as one.
+    answering[inbox_key(6)] = recorded_steer("and while you are there, check the phone width")
 
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
 
