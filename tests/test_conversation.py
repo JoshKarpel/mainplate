@@ -28,10 +28,10 @@ from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.usage import RequestUsage
 from without_durability.interfaces import claimed
+from without_durability.stepwise import Blocked
 from without_durability.stepwise import Completed
 from without_durability.stepwise import Run
 from without_durability.stepwise import Sleeping
-from without_durability.stepwise import Waiting
 from without_durability.stepwise import resume
 
 from mainplate import records
@@ -111,7 +111,7 @@ async def started(service: Service, said: str, session: str = SESSION) -> None:
 
 async def pass_at(
     service: Service, body: Callable[[Run], Awaitable[Never]], session: str = SESSION
-) -> Completed[Never] | Sleeping | Waiting:
+) -> Completed[Never] | Sleeping | Blocked:
     """One pass at a session, claimed and released the way the worker does it."""
     holder = await claimed(service.checkpointer, session)
     try:
@@ -851,7 +851,7 @@ class TestTheRecordedChoice:
 class TestAnsweringASession:
     async def test_a_started_session_waits_to_be_told_something(self, service: Service, provider: Provider) -> None:
         await service.checkpointer.supply(SESSION, CHOICE_KEY, recorded_choice(DEFAULT_CHOICE))
-        assert await pass_at(service, provider.body()) == Waiting(key=prompt_key(0))
+        assert await pass_at(service, provider.body()) == Blocked(waiting=frozenset({prompt_key(0)}))
         assert provider.asked == 0
 
     async def test_a_workflow_with_no_recorded_choice_is_refused_rather_than_guessed_at(
@@ -865,7 +865,7 @@ class TestAnsweringASession:
         self, service: Service, provider: Provider
     ) -> None:
         await started(service, said="hello")
-        assert await pass_at(service, provider.body()) == Waiting(key=prompt_key(1))
+        assert await pass_at(service, provider.body()) == Blocked(waiting=frozenset({prompt_key(1)}))
         said = transcript(await service.checkpointer.load(SESSION))
         assert spoken(said) == [("person", "hello"), ("assistant", "answer 1")]
         assert not said.awaiting
@@ -962,7 +962,7 @@ class TestAnsweringASession:
         recorded = await service.checkpointer.load(SESSION)
         assert messages_key(0) not in recorded
 
-        assert await pass_at(service, provider.body()) == Waiting(key=prompt_key(1))
+        assert await pass_at(service, provider.body()) == Blocked(waiting=frozenset({prompt_key(1)}))
         assert provider.asked == 1
 
     async def test_a_turn_carries_the_conversation_so_far_to_the_model(

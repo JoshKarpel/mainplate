@@ -7,7 +7,7 @@ from conftest import WHEN
 from conftest import Provider
 from test_conversation import pass_at
 from without_asgi import ASGIApp
-from without_durability.stepwise import Waiting
+from without_durability.stepwise import Blocked
 
 from mainplate.agent import Choice
 from mainplate.conversation import CHOICE_KEY
@@ -188,7 +188,7 @@ class TestWhatABranchInherits:
         assert forked is not None
 
         await service.say(forked.id, turn=1, said="a different second")
-        assert await pass_at(service, body, forked.id) == Waiting(key=prompt_key(2))
+        assert await pass_at(service, body, forked.id) == Blocked(waiting=frozenset({prompt_key(2)}))
 
         # Two messages of history plus the new prompt: the branch continued rather than restarted.
         assert provider.carried[-1] == 3

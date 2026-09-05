@@ -29,13 +29,16 @@ dependencies = [
     # SDK, a CLI, an MCP server, and an evals framework into an environment that uses one
     # of them. Adding a provider is an extra in this list rather than a change to any code.
     "pydantic-ai-slim[anthropic,openai]>=2.33",
-    "without-async>=0.0.6",
-    "without-asgi>=0.0.6",
-    "without-web>=0.0.6",
-    "without-html>=0.0.6",
-    "without-http>=0.0.6",
-    "without-durability>=0.0.6",
-    "without-durability-sqlite>=0.0.6",
+    "without-async>=0.0.7",
+    "without-asgi>=0.0.7",
+    "without-web>=0.0.7",
+    "without-html>=0.0.7",
+    "without-http>=0.0.7",
+    # 0.0.7 for the inbox (`Durable.deliver`, `Run.receive`) and for the `seq` column `load`
+    # orders by, which the SQLite store gained in the same release: a checkpoint written by
+    # one of these and read by the other is a `load` that fails on a missing column.
+    "without-durability>=0.0.7",
+    "without-durability-sqlite>=0.0.7",
     # Declared because `exe` imports it, though only `without-http` calls it: reflection lives at a
     # hostname that exists only inside an exe.dev VM, so "not on exe.dev" arrives as h11's own
     # `RemoteProtocolError` as readily as an `OSError`, and discovery catches it by name.

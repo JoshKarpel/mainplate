@@ -2,7 +2,7 @@
 #
 # The workflow id *is* the session id, and the body below is the whole of what a session is: wait
 # to be told what the person said, answer it, wait again. Nothing ends it, so a session's every
-# pass comes back `Waiting`, which is the honest report: a conversation is never finished, only
+# pass comes back `Blocked`, which is the honest report: a conversation is never finished, only
 # between turns.
 #
 # What that buys is the property the whole design turns on, that **the checkpoint is the
