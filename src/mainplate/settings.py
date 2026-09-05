@@ -161,12 +161,34 @@ class Settings(BaseSettings):
     long somebody is willing to watch their own command.
     """
 
+    allowance: int | None = Field(default=1, gt=0)
+    """
+    How many live model requests one pass may make before it hands the turn back.
+
+    One, so a pass is one round trip and the tool batch that follows it rather than a whole
+    conversation. That is what takes the lease below off a bet about the longest turn anybody will
+    ever ask for: a turn of forty round trips is forty passes under a lease sized for one, where a
+    pass that was the whole turn had to fit inside it or be fenced, redelivered, and replayed into
+    the same wall.
+
+    `None` is unbounded, which is exactly what a pass was before there was a number here. What
+    raising it trades is replay against steer latency: a pass replays every step of the turn behind
+    it, so fewer passes is less replay, and a pass reads the checkpoint once, so a steer typed
+    mid-turn waits behind however many requests the pass has left. See `steers_waiting`.
+
+    A number and not a second code path, which is what keeps it a thing to turn.
+    """
+
     lease: timedelta = Field(default=timedelta(minutes=10), gt=timedelta())
     """
     How long a pass may take before another worker may take the session over.
 
-    It has to exceed the longest a turn can honestly run, and nothing can work that out for you:
-    set it too short and a slow model call is fenced mid-flight and re-run, too long and a
-    crashed process leaves its session waiting that long. Ten minutes is a generous bound on one
-    model call and short enough to be worth waiting out after a crash.
+    It has to exceed one model request and the batch of tool calls that follows it, which is what a
+    pass is at the allowance above. Set it too short and a request in flight is fenced and re-run,
+    too long and a crashed process leaves its session waiting that long.
+
+    Ten minutes, and it is the *tool* ceiling that decides it rather than the model: `bash` will run
+    a command for up to `MAX_SECONDS`, which is ten minutes on its own, where a round trip to a
+    provider is a couple. So this is a bound on the one honest worst case rather than a generous
+    figure, and lowering it means lowering what a command may take first.
     """

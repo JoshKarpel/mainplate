@@ -13,7 +13,6 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
-from typing import Never
 
 import pytest
 from pydantic import SecretStr
@@ -39,6 +38,7 @@ from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
 from mainplate.config import Config
 from mainplate.config import Endpoint
+from mainplate.conversation import Progressed
 from mainplate.conversation import conversing
 from mainplate.forge import Clones
 from mainplate.forge import Reachable
@@ -179,9 +179,16 @@ class Provider:
         """
         return agent_for(self.endpoints(), DEFAULT_CHOICE, INSTRUCTIONS)
 
-    def body(self) -> Callable[[Run], Awaitable[Never]]:
-        """The workflow body, over the stand-in endpoints."""
-        return conversing(self.endpoints(), INSTRUCTIONS)
+    def body(self, allowance: int | None = None) -> Callable[[Run], Awaitable[Progressed]]:
+        """
+        The workflow body, over the stand-in endpoints.
+
+        Unbounded by default, so a test that is about a conversation drives a whole turn in one pass
+        and says nothing about how a pass is cut. What the console ships is one request per pass, and
+        the tests that are about *that* ask for it by name; `TestWhatOnePassDoes` is where the two
+        are pinned against each other.
+        """
+        return conversing(self.endpoints(), INSTRUCTIONS, allowance=allowance)
 
 
 @dataclass(slots=True)

@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from collections.abc import Awaitable
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from contextlib import AsyncExitStack
 from contextlib import asynccontextmanager
@@ -34,6 +36,8 @@ from without_asgi import make_asgi_app
 from without_asgi.routing import stack
 from without_async import background_task
 from without_async import sleep_forever
+from without_durability.interfaces import Durable
+from without_durability.stepwise import Run
 from without_durability.worker import work
 from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
@@ -63,6 +67,7 @@ from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
 from mainplate.console import page_response
 from mainplate.console import recover
+from mainplate.conversation import Progressed
 from mainplate.conversation import conversing
 from mainplate.exe import ExeDevGitHub
 from mainplate.forge import Clones
@@ -240,16 +245,21 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     ) as service:
         answering = work(
             service.durable,
-            conversing(
-                endpoints,
-                settings.instructions,
-                workspaces,
-                bwrap=bwrap,
-                # The holders rather than what they currently hold, so a turn is priced at the rates
-                # in force when it ran. What that costs the worker is two dictionary lookups per
-                # model request; what it buys is a figure in the checkpoint that nothing later
-                # re-derives, so a session's total means the same thing next month as today.
-                prices=Prices(catalogues=catalogues, references=references),
+            readying(
+                service.durable,
+                conversing(
+                    endpoints,
+                    settings.instructions,
+                    workspaces,
+                    bwrap=bwrap,
+                    # The holders rather than what they currently hold, so a turn is priced at the
+                    # rates in force when it ran. What that costs the worker is two dictionary
+                    # lookups per model request; what it buys is a figure in the checkpoint that
+                    # nothing later re-derives, so a session's total means the same thing next month
+                    # as today.
+                    prices=Prices(catalogues=catalogues, references=references),
+                    allowance=settings.allowance,
+                ),
             ),
             limit=settings.passes,
         )
@@ -264,6 +274,33 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                     background_task(refreshing_reference(references, config.model_reference, settings.reference_every))
                 )
             yield service
+
+
+def readying(durable: Durable, converse: Callable[[Run], Awaitable[Progressed]]) -> Callable[[Run], Awaitable[None]]:
+    """
+    The conversation body as the worker's, with the one thing a pass ending mid-turn needs.
+
+    A pass now stops when it has made its allowance of live model requests, which is `Completed` as
+    far as the mechanism is concerned: nothing is owed by the outside world, so there is no key for
+    a driver to wait on and nothing to schedule, and the worker's own answer to a completed pass is
+    to do nothing at all. What is owed is another pass, immediately, and that is this.
+
+    Asked for from *inside* the pass, while the claim is still held, which is the queue's documented
+    shape rather than a race: `make_ready` is a plain upsert onto a running pass's row, and the
+    pass's own `done` is conditional on the visibility it took, so the row this writes is the one
+    that survives. What it costs is the queue's poll interval, which is 50ms against a round trip
+    that takes seconds.
+
+    Here rather than in `conversation.py`, because the body is about answering a session and this is
+    about the queue in front of it. That split is what lets one console run the worker beside the
+    console and another run it somewhere else entirely.
+    """
+
+    async def answer(run: Run) -> None:
+        await converse(run)
+        await durable.scheduler.make_ready(run.workflow)
+
+    return answer
 
 
 def build_app(opening: Lifespan[Service]) -> ASGIApp:

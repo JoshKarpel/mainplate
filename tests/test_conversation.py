@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from itertools import pairwise
-from typing import Never
 
 import pytest
 from conftest import DEFAULT_CHOICE
+from conftest import FIXTURE
+from conftest import INSTRUCTIONS
 from conftest import Provider
+from conftest import Scripted
 from conftest import answered_with
+from conftest import calls
 from conftest import came_back
 from conftest import heard
 from conftest import recorded_turn
@@ -39,6 +43,7 @@ from mainplate.agent import Choice
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import NeverStarted
 from mainplate.conversation import Panel
+from mainplate.conversation import Progressed
 from mainplate.conversation import Prose
 from mainplate.conversation import Reached
 from mainplate.conversation import Reasoning
@@ -50,6 +55,7 @@ from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
+from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
 from mainplate.conversation import late_key
 from mainplate.conversation import messages_key
@@ -73,9 +79,11 @@ from mainplate.conversation import steers_in
 from mainplate.conversation import tooks_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
+from mainplate.conversation import tree_key
 from mainplate.conversation import turn_prefix
 from mainplate.durability import TOOK
 from mainplate.durability import stepping
+from mainplate.forge import Workspaces
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 
@@ -110,14 +118,31 @@ async def started(service: Service, said: str, session: str = SESSION) -> None:
 
 
 async def pass_at(
-    service: Service, body: Callable[[Run], Awaitable[Never]], session: str = SESSION
-) -> Completed[Never] | Sleeping | Blocked:
+    service: Service, body: Callable[[Run], Awaitable[Progressed]], session: str = SESSION
+) -> Completed[Progressed] | Sleeping | Blocked:
     """One pass at a session, claimed and released the way the worker does it."""
     holder = await claimed(service.checkpointer, session)
     try:
         return await resume(holder, service.checkpointer, body)
     finally:
         await service.checkpointer.release(holder)
+
+
+async def passes_at(
+    service: Service, body: Callable[[Run], Awaitable[Progressed]], session: str = SESSION
+) -> tuple[Completed[Progressed] | Sleeping | Blocked, ...]:
+    """
+    Every pass it takes to reach a stop, which is what the worker does with `Progressed`.
+
+    A pass that comes back `Completed` has spent its allowance mid-turn and is owed another at once,
+    so this is `readying` in `app.py` with the queue taken out: the same loop, driven by hand, so a
+    test can count the passes and say what each one did.
+    """
+    made: list[Completed[Progressed] | Sleeping | Blocked] = []
+    while True:
+        made.append(await pass_at(service, body, session))
+        if not isinstance(made[-1], Completed):
+            return tuple(made)
 
 
 class TestReadingACheckpoint:
@@ -1082,6 +1107,79 @@ class TestAnsweringASession:
             ("person", "second session"),
             ("assistant", "answer 2"),
         ]
+
+
+class TestWhatOnePassDoes:
+    """
+    How a turn of several round trips is cut into passes, and what that must not change.
+
+    A pass is one live model request and the tool batch behind it, so a turn is answered by as many
+    passes as it has requests. What has to hold across that is everything: the provider is asked
+    once per request whatever the cut, and the conversation the store ends up holding is the same
+    one either way. The fixture repository is here because a turn needs a *tool* to be worth more
+    than one request, and a tool needs a worktree to run in.
+    """
+
+    def scripted(self) -> Scripted:
+        """A turn of two requests: a tool call, then the answer once its result comes back."""
+        return Scripted(
+            script=(
+                calls(("create", {"path": "src/added.txt", "content": "written by a tool\n"})),
+                ModelResponse(parts=[TextPart("made it")]),
+            )
+        )
+
+    async def test_a_turn_of_two_requests_takes_a_pass_each(self, service: Service, workspaces: Workspaces) -> None:
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        body = conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces, allowance=1)
+
+        made = await passes_at(planting, body, session.id)
+
+        assert made == (
+            Completed(Progressed()),
+            Blocked(waiting=frozenset({prompt_key(1)})),
+        ), "the first pass handed the rest of the turn back; the second finished it and waited"
+
+    async def test_a_request_the_pass_handed_back_is_made_once_by_the_next_one(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """The unwind must not cost a provider call, which is the one way this could be expensive."""
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = self.scripted()
+
+        await passes_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1), session.id)
+
+        assert scripted.asked == 2, "two requests, one per pass, and neither asked twice"
+
+    async def test_a_turn_is_recorded_the_same_however_the_passes_fall(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        The claim the whole change rests on: the allowance decides how much one pass does and
+        nothing about what the conversation comes to. Two sessions, the same script, cut two ways.
+        """
+        planting = replace(service, workspaces=workspaces)
+        cut = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        whole = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        await passes_at(
+            planting, conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces, allowance=1), cut.id
+        )
+        await passes_at(planting, conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces), whole.id)
+
+        one = await planting.checkpointer.load(cut.id)
+        other = await planting.checkpointer.load(whole.id)
+        assert sorted(one) == sorted(other), "the same keys, so nothing was written that the other did not write"
+        assert spoken(transcript(one)) == spoken(transcript(other))
+        assert [panel.kind for panel in transcript(one).panels] == [panel.kind for panel in transcript(other).panels]
+        # The two kinds whose *values* can be compared outright, because neither holds a duration or
+        # a timestamp: what each request was told, and the tree it was made against. A counter that
+        # drifted across the unwind, or a tool that ran again and wrote something else, shows here.
+        # Named rather than filtered for, so the comparison cannot quietly become one of nothing.
+        settled = (tree_key(0, 0), tree_key(0, 1), heard_key(0, 0), heard_key(0, 1))
+        assert {key: one[key] for key in settled} == {key: other[key] for key in settled}
 
 
 class TestReadingBackWhatWasAlreadyRecorded:

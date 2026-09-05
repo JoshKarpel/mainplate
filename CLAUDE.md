@@ -1019,6 +1019,14 @@ travelling beside a batch of results arrives after them in one request and is re
 message. It is emphatically not `CheckpointedModel.request` either, which an earlier draft of this
 file said: anything added at the model reaches that one request and never the recorded history.
 
+**What it reads is the pass's own snapshot rather than the store**, which is what an allowance of
+one buys: a pass makes one live request and takes a fresh `load` on its way in, so `run.recorded` is
+as current at that request as a second read would be. A steer written while the pass was setting up
+waits for the next one, which is a round trip that has already been sent either way. That is the
+coupling the allowance costs and a reason to leave it at one, since a pass making several requests
+off one snapshot makes a steer wait behind as many as it has left. `steers_closing` is the exception
+and has to be: it is a claim rather than a read, so it is live by construction.
+
 **`after_node_run` is the other boundary, and `ctx.enqueue` is right there where it was wrong above.**
 `before_model_request` reaches every request the agent was going to make anyway, which is every steer
 but one: a person typing while the *last* response is written has nothing left to be appended to, and
@@ -1773,6 +1781,73 @@ This is `step` and not `transact`, so a tool is **at-least-once**: a crash betwe
 returning and the record landing re-runs it next pass. That window is one store round trip, and
 anchored editing is what makes the failure mild rather than corrupting, since an edit whose anchors
 no longer resolve is refused rather than applied somewhere wrong.
+
+## What one pass does
+
+**A pass is one live model request and the tool batch behind it**, not a whole turn, and the lease
+is why. A pass that was a whole conversation had to fit inside `Settings.lease`, which made that
+number a bet on the longest turn anybody would ever ask for: a turn with enough round trips to cross
+it is fenced on its next write, redelivered, replayed, and runs into the same wall again. Cut per
+request, what the lease has to cover is one round trip and the batch after it, which is a bound that
+can be reasoned about rather than guessed at.
+
+`Settings.allowance` is the whole of it: **one setting with a live value, never a second code
+path.** `CheckpointedModel.request` spends one on each *live* request and `Allowance.take` refuses
+the one that would go past it, which raises `AllowanceSpent` and unwinds `agent.run`; `conversing`
+catches that outside the run and returns `Progressed`. An allowance of `None` is unbounded, which is
+exactly what a pass was before there was a number here, so the tradeoff is a dial rather than a
+branch.
+
+Four things there are decided rather than incidental:
+
+- **Only live requests count.** A replayed one pays nobody and takes no time worth bounding, so a
+  resumed pass gets *further* than the last rather than stopping where it did. Whether a request is
+  live is what its key says, which is why the key is taken before the check and the snapshot in
+  front of it is taken after: a request that was never made leaves no tree recorded ahead of it.
+- **`AllowanceSpent` is deliberately not a `Suspended`.** Nothing is owed by the outside world, so
+  there is no key to report and nothing for `arrive` to answer. Being an ordinary exception is also
+  what keeps `resume`'s `Swallowed` check live: a body that returns having caught a real suspension
+  is refused, and a `-> Never` body could never trigger that at all.
+- **The request stays inside the pass.** Dispatching it to a pool and suspending on `Run.awaiting`
+  works and is worse, because the lease is what recovers interrupted work: a request outside the
+  pass is a request outside the lease, and a pass that dispatched and reported `Blocked` has had its
+  delivery acknowledged with nothing scheduled, so a process that dies with work in flight leaves a
+  session waiting for ever. Recovering that needs a reconciler, idempotent dispatch, and a durable
+  leased in-flight marker, which is a second queue. Under the claim, a dead process is an expired
+  claim and `reclaim` redelivers. **Never write a placeholder record for a model request** if that
+  is ever revisited: `supply` keeps the first value, so an `UNFINISHED` under `turn:{n}:model:{i}` is
+  permanent and the turn can never be retried. `Commands` writes one from `aclose` and that
+  precedent does not transfer, because a command's result is terminal where a request's is not.
+- **The allowance is the pass's, not the turn's.** A pass that finds two prompts already recorded
+  answers two turns, and a fresh count per turn would let it make one live request for each under a
+  lease sized for one. So `conversing` makes one `Allowance` per pass and hands the same one to
+  every `stepping` scope in it.
+
+**A pass that returns is `Completed`, which the worker answers by doing nothing**, so `readying` in
+`app.py` is what carries the turn on: it asks the scheduler to make the session ready again. That is
+in the composition root rather than in `conversation.py`, because the body is about answering a
+session and this is about the queue in front of it. Asked for from inside the pass while the claim
+is still held, which is the queue's documented shape rather than a race: `make_ready` is a plain
+upsert onto a running pass's row and the pass's own `done` is conditional on the visibility it took,
+so the row this writes survives. What it costs is the queue's 50ms poll per request, measured, which
+is nothing against a round trip that takes seconds. `test_app.py` is what fails when it goes, and it
+fails as a timeout, because the failure it guards is a session that stops mid-turn with nothing
+anywhere saying so.
+
+**What replay costs was measured rather than reasoned about**, and it is not where it looks. Each
+pass re-runs `converse` from the top, so a turn of *n* requests replays O(n²) steps; record parsing
+is 1.4% of a 40-round turn and `load` is 0.8% to 2.4% against real SQLite. The dominant term is
+Pydantic AI rebuilding its frozen `RunContext` once per capability per hook, which is upstream's.
+Absolute figures: about 65ms per pass, 2.2s spread across a 40-round turn that costs minutes of
+provider time. **Do not build a record cache or a fetch-only-what-is-missing store for this**: loads
+are already linear and parsing is 1.4%, so the quadratic is somewhere a store-level cache cannot
+reach, and raising the allowance cuts the pass count, the graph replay and the re-loading together.
+Revisit only if very large `read` returns become common.
+
+**The tests default to unbounded and the console ships one.** A test about a conversation drives a
+whole turn in one pass and says nothing about how a pass is cut; `TestWhatOnePassDoes` is where the
+two are pinned against each other, and what it asserts is that the allowance decides how much one
+pass does and *nothing* about what the conversation comes to.
 
 ## The systemd unit
 

@@ -91,7 +91,6 @@ from enum import Enum
 from itertools import groupby
 from typing import Final
 from typing import Literal
-from typing import Never
 from typing import assert_never
 from typing import cast
 
@@ -117,6 +116,8 @@ from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
 from mainplate.durability import TOOK
+from mainplate.durability import Allowance
+from mainplate.durability import AllowanceSpent
 from mainplate.durability import Pending
 from mainplate.durability import parse_heard
 from mainplate.durability import parse_model_response
@@ -1321,18 +1322,22 @@ def steers_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
     return tuple(said)
 
 
-def steers_waiting(checkpointer: Checkpointer, session: str, turn: int) -> Pending:
+def steers_waiting(run: Run, turn: int) -> Pending:
     """
     What this turn has been told past the first `already`, asked before each model request.
 
-    Loaded from the store on every call rather than read out of the pass's own `run.recorded`, which
-    is the snapshot it started from. What makes a steer a steer is that it arrives *after* the turn
-    began, and it is often written by another process entirely, so the pass's copy is the one place
-    it can never appear.
+    Read out of the pass's own snapshot rather than loaded from the store on every call, which is
+    what an allowance of one buys: a pass makes one live request and takes a fresh `load` on its way
+    in, so the snapshot in hand is as current as a read here would be. A steer written while the
+    pass was setting up waits for the next one, which is a round trip that has already been sent
+    either way.
+
+    That is the coupling the allowance costs and the reason to leave it at one. Raised, a pass makes
+    several requests off the one snapshot, so a steer waits behind as many as the pass has left.
     """
 
     async def waiting(already: int) -> Sequence[str]:
-        return steers_in(await checkpointer.load(session), turn)[already:]
+        return steers_in(run.recorded, turn)[already:]
 
     return waiting
 
@@ -1698,13 +1703,29 @@ def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> W
     return workspaces.worktree(session)
 
 
+@dataclass(frozen=True, slots=True)
+class Progressed:
+    """
+    What a pass that ended mid-turn comes back with: the session is owed another one at once.
+
+    The only way this body returns, and the reason it is a value rather than `None`. A pass that
+    returns is `Completed` as far as the mechanism is concerned, and a conversation is never
+    completed - it is only ever between turns - so the value is what stops that reading being the
+    obvious one. Waiting on a person is still a suspension and comes back `Blocked`.
+
+    Nothing is owed by the outside world, so there is nothing for a driver to wait on and nothing to
+    schedule: the answer is to make the session ready again, which `answering` in `app.py` does.
+    """
+
+
 def conversing(
     endpoints: Wires,
     instructions: str,
     workspaces: Workspaces | None = None,
     bwrap: str | None = None,
     prices: Prices | None = None,
-) -> Callable[[Run], Awaitable[Never]]:
+    allowance: int | None = None,
+) -> Callable[[Run], Awaitable[Progressed]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
 
@@ -1725,9 +1746,14 @@ def conversing(
     change: reading it again on the second turn would be asking a question whose answer is already
     recorded. Doing it before the first `awaiting` is what makes a missing endpoint a failure the
     console can explain rather than one discovered mid-turn.
+
+    `allowance` is how many live model requests one pass may make before it hands the rest of the
+    turn back, and `None` is unbounded, which is a pass answering a whole turn however many round
+    trips that takes. It is one number rather than two code paths, which is what keeps the choice a
+    thing to turn rather than a thing to maintain; see `Settings.allowance` for what it trades.
     """
 
-    async def converse(run: Run) -> Never:
+    async def converse(run: Run) -> Progressed:
         chosen = choice_of(run.recorded)
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no endpoint, so it was never started by this console")
@@ -1745,6 +1771,10 @@ def conversing(
         # Without one a turn records no cost, which is what a console with no reference configured
         # has always shown - a card with no numbers on it.
         pricer = None if prices is None else prices.pricer(chosen)
+        # One per pass and shared by every turn in it, because what it bounds is how long this pass
+        # runs. A pass that finds two prompts waiting answers two turns, and a fresh count per turn
+        # would let it make one live request for each of them under a lease sized for one.
+        spending = Allowance(limit=allowance)
         at = reached(run.recorded)
         while True:
             asked = await run.awaiting(prompt_key(at.turn), parse_prompt)
@@ -1779,10 +1809,16 @@ def conversing(
             # the snapshot this pass started from. What makes a steer a steer is that it arrives
             # *after* the turn began, and it is often written by another process entirely, so the
             # pass's own copy is the one place it can never appear.
-            waiting = steers_waiting(run.checkpointer, run.workflow, at.turn)
+            waiting = steers_waiting(run, at.turn)
             shutting = steers_closing(run.checkpointer, run.workflow, at.turn)
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, waiting, shutting):
-                answered = await agent.run(asked.said, message_history=list(at.history))
+            with stepping(run, turn_prefix(at.turn), worktree, pricer, waiting, shutting, spending):
+                try:
+                    answered = await agent.run(asked.said, message_history=list(at.history))
+                except AllowanceSpent:
+                    # Caught out here rather than anywhere inside the agent, because what it ends is
+                    # the pass and not the request: every step this turn has taken is recorded, so
+                    # the pass that follows replays them and reaches the request this one refused.
+                    return Progressed()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             at = Reached(turn=at.turn + 1, history=(*at.history, *said))
 

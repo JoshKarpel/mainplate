@@ -242,13 +242,16 @@ A session is a durable workflow under
 whole of what a session is:
 
 ```python
-async def converse(run: Run) -> Never:
+async def converse(run: Run) -> Progressed:
     agent = agent_for(endpoints, chosen, instructions)  # the pair this session recorded at creation
     at = reached(run.recorded)
     while True:
         prompt = await run.awaiting(prompt_key(at.turn), parse_prompt)
-        with stepping(run, turn_prefix(at.turn)):
-            answered = await agent.run(prompt, message_history=list(at.history))
+        with stepping(run, turn_prefix(at.turn), allowance=spending):
+            try:
+                answered = await agent.run(prompt, message_history=list(at.history))
+            except AllowanceSpent:
+                return Progressed()  # one live model request per pass; the next one carries on
         said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
         at = Reached(turn=at.turn + 1, history=(*at.history, *said))
 ```
@@ -258,6 +261,13 @@ is what the console does when you send a message. Nothing polls the store for it
 open waiting, and the wait outlives the process that was waiting: the workflow is a row, and
 whichever worker picks it up next runs the body again from the top and reaches further than the
 last one did.
+
+A pass is **one live model request and the tool batch behind it**, rather than a whole turn, so a
+turn of forty round trips is forty passes. What that buys is a lease that bounds one round trip
+instead of a bet on how long the longest conversation might run: a pass that spends its allowance
+hands the turn back, the session is made ready again, and the next pass replays what is recorded
+and reaches one request further. Nothing is paid for twice, because a replayed request is read out
+of the checkpoint.
 
 The two things a pass writes are what make the second run cheap and the first one safe:
 

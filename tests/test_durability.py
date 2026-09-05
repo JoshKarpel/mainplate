@@ -36,6 +36,8 @@ from mainplate.conversation import steers_in
 from mainplate.conversation import steers_waiting
 from mainplate.conversation import turn_of
 from mainplate.durability import TOOK
+from mainplate.durability import Allowance
+from mainplate.durability import AllowanceSpent
 from mainplate.durability import CheckpointedModel
 from mainplate.durability import Stepping
 from mainplate.durability import StepwiseDurability
@@ -89,7 +91,7 @@ def steered(run: Run, *, when: Callable[[], bool], said: str = "one more thing")
 
     async def waiting(already: int) -> Sequence[str]:
         await arriving(already)
-        return await steers_waiting(run.checkpointer, run.workflow, 0)(already)
+        return await steers_waiting(run, 0)(already)
 
     async def closing(already: int) -> Sequence[str]:
         await arriving(already)
@@ -666,6 +668,68 @@ class TestRecordingAToolCall:
 
         assert tools.ran == ["alpha", "alpha"], "nothing was recorded, so the tool ran both times"
         assert await checkpointer.load(WORKFLOW) == {}
+
+
+class TestBoundingWhatOnePassDoes:
+    """
+    The allowance: how many live model requests one pass may make before it hands the turn back.
+
+    What it is for is the lease. A pass that was a whole conversation had to fit inside one, which
+    made the lease a bet on the longest turn anybody would ever ask for; a pass that is one round
+    trip and the tool batch after it is a bound that can be reasoned about.
+    """
+
+    def test_an_allowance_refuses_the_request_that_would_go_past_it(self) -> None:
+        spending = Allowance(limit=2)
+        spending.take()
+        spending.take()
+        with pytest.raises(AllowanceSpent):
+            spending.take()
+
+    def test_no_allowance_is_an_unbounded_one(self) -> None:
+        """What a pass was before there was a number here, and what a block outside a worker wants."""
+        spending = Allowance(limit=None)
+        for _ in range(50):
+            spending.take()
+
+    async def test_a_pass_stops_at_the_request_past_its_allowance(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        The unwind, seen from the store: the request it refused left no record, and neither did the
+        tree that would have stood in front of it.
+        """
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        agent = calling(scripted, Noting())
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", allowance=Allowance(limit=1)), pytest.raises(AllowanceSpent):
+                await agent.run("go")
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert scripted.asked == 1, "the second request is what it stopped at"
+        assert "turn:0:model:0" in recorded
+        assert "turn:0:model:1" not in recorded
+        assert "turn:0:tree:1" not in recorded, "a request that was never made leaves no tree in front of it"
+
+    async def test_a_replayed_request_does_not_spend_the_allowance(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        Which is the whole of why a resumed pass gets further rather than stopping where the last one
+        did. A replayed request pays nobody and takes no time worth bounding, so only a live one
+        counts, and the pass reaches the request its predecessor refused.
+        """
+        tools = Noting()
+        scripted = Scripted(script=(calls(("note", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        agent = calling(scripted, tools)
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", allowance=Allowance(limit=1)), pytest.raises(AllowanceSpent):
+                await agent.run("go")
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0", allowance=Allowance(limit=1)):
+                answered = await agent.run("go")
+
+        assert scripted.asked == 2, "one live request each, and the first was replayed rather than re-asked"
+        assert tools.ran == ["alpha"], "the tool between them was replayed too"
+        assert answered.output == "done"
 
 
 class TestTheCapabilityItself:

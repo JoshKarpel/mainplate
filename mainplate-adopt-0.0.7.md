@@ -1,50 +1,48 @@
 # Handoff: adopt `without` 0.0.7 in mainplate
 
-Three stages. Stage 1 is mechanical and nearly done. Stage 2 restructures how much of a turn one
-pass does, and its design is settled below along with the measurements behind it. Stage 3 is
-independent of both.
+Three stages. Stage 1 and stage 2a are done. Stage 2b is the inbox and is what remains of the
+restructuring; stage 3 is independent of both.
 
-## Already done
+## Stage 1 — the upgrade (done)
 
 - `pyproject.toml`: the six `without-*` floors moved to `>=0.0.7`, with a comment on the
   durability pair saying why (the inbox, and the `seq` column `load` orders by).
 - `uv sync --upgrade` run; `uv.lock` updated; 0.0.7 is installed.
-- `mainplate.db*` and `mainplate-demo.db*` deleted. 0.0.7 changed the checkpoint schema and
-  ships **no migration** (`migrate` is `CREATE TABLE IF NOT EXISTS`, so an old database
-  keeps its shape and every `load` fails on the missing `seq`). Both were disposable: the
-  first was empty and the second is rebuilt by `just seed`. **The demo database has not
-  been re-seeded yet.**
+- `mainplate.db*` deleted and `mainplate-demo.db*` rebuilt from scratch. 0.0.7 changed the
+  checkpoint schema and ships **no migration** (`migrate` is `CREATE TABLE IF NOT EXISTS`, so an
+  old database keeps its shape and every `load` fails on the missing `seq`).
+- `Waiting` became `Blocked`, which reports **every** branch a pass stopped on rather than one, in
+  two sets: `waiting` are addresses from `Run.awaiting`, answered with `arrive(workflow, key,
+  value)`; `listening` are read-step keys from `Run.receive`, answered with `deliver(workflow,
+  value)`. Five call sites across `test_conversation.py` and `test_fork.py`.
+- The `duplicate route` concern came to nothing: 0.0.7 makes two `without-web` routes that differ
+  only in what they *name* a path parameter a build-time error, and the suite builds the app
+  through its own fixtures, so nothing was hiding.
 
-## Stage 1 — finish the upgrade
+## Stage 2a — one model request per pass (done)
 
-`just test` fails with exactly two mypy errors, and nothing else is known broken:
+Built as designed below, with two departures worth knowing:
 
-```text
-tests/test_conversation.py:34: Module "without_durability.stepwise" has no attribute "Waiting"
-tests/test_fork.py:10:        Module "without_durability.stepwise" has no attribute "Waiting"
-```
+- **The lease stays at ten minutes.** The plan said two, on the grounds that a request hanging
+  longer is the HTTP client's timeout to own. That overlooks the tool batch, which rides inside the
+  pass: `bash` will run a command for up to `MAX_SECONDS`, which is ten minutes on its own, so a
+  two-minute lease would fence any pass carrying a long command. The lease's docstring now names
+  the two terms and says the tool ceiling is what decides it. Lowering the lease means lowering
+  `MAX_SECONDS` first.
+- **The re-ready is `readying` in `app.py`**, wrapping the conversation body, and it calls
+  `durable.scheduler.make_ready` from *inside* the pass. That is the queue's documented shape
+  rather than a race: `SCHEDULE` is a plain upsert onto a running pass's row and `FINISH` is
+  conditional on the visibility the pass took, so the row `readying` writes survives the worker's
+  own `done`. Probed against the real SQLite store and the real worker: 20 consecutive re-readied
+  passes, no contention, a median gap of 54ms, which is the queue's own `POLL`.
 
-`Waiting` became `Blocked`, which reports **every** branch a pass stopped on rather than
-one, in two sets:
+What landed: `Allowance` and `AllowanceSpent` in `durability.py`, the live-request check in
+`CheckpointedModel.request`, `Settings.allowance` defaulting to 1, `Progressed` and the catch in
+`conversing`, `readying` in `app.py`, and `steers_waiting` off `run.recorded`. Tested by
+`TestBoundingWhatOnePassDoes` (test_durability.py), `TestWhatOnePassDoes` (test_conversation.py),
+and the second wiring test in `test_app.py`, which fails as a timeout when the re-ready goes.
 
-- `waiting` are addresses, from `Run.awaiting`, answered with `arrive(workflow, key, value)`
-- `listening` are read-step keys, from `Run.receive`, answered with `deliver(workflow, value)`
-
-So `Waiting(key=prompt_key(0))` becomes a `Blocked` whose `waiting` holds that key and
-whose `listening` is empty. Read the class in `.venv/.../without_durability/stepwise.py` for the
-exact field types rather than guessing. Also update the return annotation at
-`tests/test_conversation.py:114`.
-
-Then:
-
-1. `just seed` to rebuild the demo database.
-2. `just test` to green.
-
-Watch for one thing that has not been checked: 0.0.7 makes two `without-web` routes that
-differ only in what they *name* a path parameter a build-time `duplicate route` error. If
-mainplate has such a pair it will fail loudly at app construction, not silently.
-
-Stage 1 is a complete, committable change on its own. Confirm green before starting stage 2.
+The design as it was settled, kept because stage 2b builds on it:
 
 ## Stage 2 — one model request per pass
 
@@ -108,16 +106,6 @@ record for a model request.** `Commands` writes `UNFINISHED` from `aclose` and t
 does not transfer. A command result is terminal so a placeholder is honest; `supply` is
 first-writer-wins, so an `UNFINISHED` under `turn:{n}:model:{i}` is permanent and the turn can
 never be retried.
-
-### Stage 2a: restructure the pass
-
-Land this on its own, before the inbox.
-
-- The private unwind exception, the allowance, and `converse` returning `Progress`.
-- The driver re-readying on `Progressed`.
-- `Settings.lease` down to the one-request figure.
-- `steers_waiting`'s live `checkpointer.load` goes: at `allowance=1` every pass has a fresh
-  snapshot, so reading `run.recorded` is correct.
 
 ### Stage 2b: adopt the inbox
 

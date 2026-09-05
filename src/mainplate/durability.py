@@ -162,6 +162,51 @@ def snapshotting(worktree: Worktree | None, why: str) -> Callable[[], Awaitable[
     return capture
 
 
+class AllowanceSpent(Exception):
+    """
+    The pass has made as many live model requests as it may, and the turn is not finished.
+
+    Raised from `CheckpointedModel.request` at the point a further request would be made, so it
+    unwinds `agent.run` and every node above it. `conversing` catches it outside that call and
+    returns, which ends the pass with the turn part-answered and the session owed another one.
+
+    Deliberately **not** a `Suspended`. Nothing is owed by the outside world here - no key is
+    unanswered and there is nothing for `arrive` to deliver - so reporting one would tell a driver
+    to wait for a write that is never coming. It is an ordinary exception for the same reason: a
+    `Suspended` this console caught and carried on from is exactly what `resume`'s `Swallowed` check
+    refuses, and that check is what keeps the honest suspensions honest.
+    """
+
+
+@dataclass(slots=True)
+class Allowance:
+    """
+    How many live model requests one pass may make, and how many it has made.
+
+    One per *pass* rather than one per turn, which is why it is threaded in rather than made inside
+    `stepping`: a pass that finds two prompts already recorded answers two turns, and the lease
+    covers the pass rather than either of them.
+
+    `limit` of `None` is unbounded, which is what a pass was before there was an allowance: it runs
+    the whole turn, however many round trips that takes. What the number trades is replay against
+    the lease and against how long a steer waits, since a pass reads the checkpoint once: see
+    `Settings.allowance`.
+
+    Only *live* requests count. A pass replaying what an earlier one recorded pays no provider and
+    takes no time worth bounding, so a resumed pass reaches the same point the last one stopped at
+    rather than stopping short of it.
+    """
+
+    limit: int | None
+    spent: int = 0
+
+    def take(self) -> None:
+        """Account for one live request, refusing the one that would go past the allowance."""
+        if self.limit is not None and self.spent >= self.limit:
+            raise AllowanceSpent(f"this pass has made its {self.limit} live model request(s)")
+        self.spent += 1
+
+
 class StreamingNotRecorded(NotImplementedError):
     """
     A streamed model request was made inside a checkpointed scope, which records nothing.
@@ -227,9 +272,11 @@ class Stepping:
     of the recorded model response, and a replay is handed the same response, so it is stable
     across passes for free where a counter is not.
 
-    Fresh per turn, so nothing survives the scope for another one to see. `worktree` is the one
-    thing on it that belongs to the session rather than the turn, and it is here because the point
-    where a snapshot may be taken is a model request and this is what stands at one.
+    Fresh per turn, so nothing it counts survives the scope for another turn to see. Two things on
+    it belong to something wider and are handed in rather than made here: `worktree` is the
+    session's, and is here because the point where a snapshot may be taken is a model request and
+    this is what stands at one; `allowance` is the *pass's*, and is shared by every scope in it,
+    since what it bounds is how long one pass runs rather than how much one turn does.
     """
 
     run: Run
@@ -238,6 +285,7 @@ class Stepping:
     pricer: Pricer | None = None
     pending: Pending | None = None
     closing: Pending | None = None
+    allowance: Allowance = field(default_factory=lambda: Allowance(limit=None))
     taken: Counter[str] = field(default_factory=Counter)
     told: list[tuple[str, ...]] = field(default_factory=list)
     """
@@ -378,6 +426,7 @@ def stepping(
     pricer: Pricer | None = None,
     pending: Pending | None = None,
     closing: Pending | None = None,
+    allowance: Allowance | None = None,
 ) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
@@ -387,8 +436,20 @@ def stepping(
     not by us: there is no parameter anywhere between here and there to thread a checkpoint
     through. It is the same place DBOS reads its workflow id from, and the same place Pydantic AI
     keeps its own ambient run context.
+
+    No allowance is an unbounded one, which is what a block outside a worker wants: a script or a
+    test driving one `agent.run` has no driver to hand the rest of the turn to, so a pass that cut
+    itself short there would simply leave the turn unfinished.
     """
-    scope = Stepping(run=run, prefix=prefix, worktree=worktree, pricer=pricer, pending=pending, closing=closing)
+    scope = Stepping(
+        run=run,
+        prefix=prefix,
+        worktree=worktree,
+        pricer=pricer,
+        pending=pending,
+        closing=closing,
+        allowance=allowance if allowance is not None else Allowance(limit=None),
+    )
     token = current_stepping.set(scope)
     try:
         yield scope
@@ -433,7 +494,16 @@ class CheckpointedModel(WrapperModel):
         state the model is about to be asked to reason about. A pass that replays this request
         replays the snapshot too and runs no git, so the pair stay in step whatever happens
         between them.
+
+        The allowance is spent *before* any of that, and only where this request is a live one. A
+        pass that has made as many as it may stops here rather than after the snapshot, so a request
+        that was never made leaves no tree recorded in front of it and the next pass writes the pair
+        together. Whether it is live is what the key says: a recorded one is replayed, costs nothing,
+        and is not what the allowance is bounding.
         """
+        key = self.scope.key("model")
+        if key not in self.scope.run.recorded:
+            self.scope.allowance.take()
         await self.scope.snapshot()
 
         async def ask() -> object:
@@ -443,7 +513,7 @@ class CheckpointedModel(WrapperModel):
             self.scope.price(answered)
             return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
 
-        return await self.scope.step(self.scope.key("model"), ask, parse_model_response)
+        return await self.scope.step(key, ask, parse_model_response)
 
     @asynccontextmanager
     async def request_stream(
