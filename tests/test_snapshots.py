@@ -577,7 +577,7 @@ class TestForkingTheWorktreeToo:
 
         # What turn 1 will see, and then a later edit that turn 1 never saw.
         (workspaces.at(session.id) / "src" / "kept.txt").write_text("as turn one saw it\n")
-        await planting.say(session.id, turn=1, said="second")
+        await planting.say(session.id, "second")
         await pass_at(planting, body, session.id)
         (workspaces.at(session.id) / "src" / "kept.txt").write_text("changed long after\n")
 
@@ -957,7 +957,7 @@ class TestWhatATurnRecords:
         await pass_at(planting, body, session.id)
 
         (workspaces.at(session.id) / "src" / "kept.txt").write_text("they edited it\n")
-        await planting.say(session.id, turn=1, said="second")
+        await planting.say(session.id, "second")
         await pass_at(planting, body, session.id)
 
         recorded = await planting.checkpointer.load(session.id)

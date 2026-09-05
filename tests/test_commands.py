@@ -9,8 +9,14 @@ from calling import calling
 from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
 from conftest import already
+from conftest import answered_with
+from conftest import ran_at
+from conftest import recorded_turn
 from conftest import run
+from conftest import said_at
+from pydantic import ValidationError
 from without_asgi import ASGIApp
+from without_durability.interfaces import inbox_key
 
 from mainplate.agent import Choice
 from mainplate.app import build_app
@@ -19,12 +25,11 @@ from mainplate.commands import Commands
 from mainplate.conversation import Command
 from mainplate.conversation import Panel
 from mainplate.conversation import Result
-from mainplate.conversation import command_key
-from mainplate.conversation import commands_in
 from mainplate.conversation import messages_key
+from mainplate.conversation import model_key
 from mainplate.conversation import parse_result
-from mainplate.conversation import prompt_key
 from mainplate.conversation import reached
+from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
 from mainplate.conversation import transcript
@@ -76,7 +81,7 @@ async def planted(service: Service, workspaces: Workspaces, chosen: Choice) -> s
     return session.id
 
 
-async def settled(service: Service, session: str, at: int = 0, turn: int = 0) -> Result:
+async def settled(service: Service, session: str, entry: str) -> Result:
     """
     What one command came to, waited for rather than slept on.
 
@@ -85,10 +90,17 @@ async def settled(service: Service, session: str, at: int = 0, turn: int = 0) ->
     """
     async with asyncio.timeout(PATIENCE.total_seconds()):
         while True:
-            held = (await service.checkpointer.load(session)).get(result_key(turn, at))
+            held = (await service.checkpointer.load(session)).get(result_key(entry))
             if held is not None:
                 return parse_result(held)
             await asyncio.sleep(0.01)
+
+
+async def ran(service: Service, session: str, command: str) -> Result:
+    """One command, run and waited for, which is what almost every test below wants."""
+    entry = await service.run(session, command)
+    assert entry is not None, "this session has somewhere to run a command"
+    return await settled(service, session, entry)
 
 
 class TestWhatTheStoreHolds:
@@ -96,9 +108,12 @@ class TestWhatTheStoreHolds:
         """
         Literal strings, exactly as the other key tests are, and for the same reason: a session on
         disk was written by whatever this file said at the time and has to keep reading back.
+
+        A result is named after the entry its command arrived as, rather than after a turn and a
+        slot: which turn a command belongs to is decided by where its entry landed, so a key naming
+        one would be a second answer to that question.
         """
-        assert command_key(3, 1) == "turn:3:command:1"
-        assert result_key(3, 1) == "turn:3:result:1"
+        assert result_key(inbox_key(7)) == "result:inbox:00000000000000000007"
 
     def test_a_result_round_trips_through_what_the_codec_takes(self) -> None:
         came = Result(status=2, output="no such file\n", took=timedelta(milliseconds=250))
@@ -118,55 +133,73 @@ class TestWhatTheStoreHolds:
         ],
     )
     def test_a_record_that_is_not_a_result_fails_loudly(self, held: object) -> None:
-        with pytest.raises(TypeError):
+        with pytest.raises(ValidationError):
             parse_result(held)
 
     def test_a_command_with_no_result_beside_it_is_one_still_running(self) -> None:
-        assert commands_in({command_key(0, 0): "sleep 30"}, 0) == (Command(text="sleep 30"),)
-
-    def test_the_walk_stops_at_the_first_slot_nobody_claimed(self) -> None:
-        """Consecutive from zero, like every other numbered kind: `Service.run` leaves no gap."""
-        recorded = {command_key(0, 0): "git status", command_key(0, 2): "never written by this console"}
-        assert [ran.text for ran in commands_in(recorded, 0)] == ["git status"]
+        recorded = {**said_at(0, "have a look"), **ran_at(1, "sleep 30")}
+        assert transcript(recorded).panels[-1].blocks == (Command(entry=inbox_key(1), text="sleep 30"),)
 
 
 class TestWhereACommandIsDrawn:
     """
-    At the end of the turn it ran during, in both readings of that turn.
+    Where it was run, in both readings of the turn it ran during.
 
-    The property worth pinning is that the two agree: the page morphs one into the other when a turn
-    lands, so a command that moved at that moment would be the transcript rewriting itself under
-    whoever was reading it.
+    Two properties, and the second is what the inbox bought. A command sits after the requests that
+    had answered when somebody typed it, because the store files an entry in the order it arrived and
+    counting this turn's model records ahead of it says how far the reply had got. And the two
+    readings agree: the page morphs one into the other when a turn lands, so a command that moved at
+    that moment would be the transcript rewriting itself under whoever was reading it.
     """
 
     def test_a_command_run_during_a_settled_turn_sits_after_that_turn_s_panels(self) -> None:
         recorded: dict[str, object] = {
-            prompt_key(0): "have a look",
-            messages_key(0): [],
-            command_key(0, 0): "git status",
-            result_key(0, 0): {"status": 0, "output": "nothing to commit\n", "took": 0.1},
+            **said_at(0, "have a look"),
+            messages_key(0): recorded_turn(),
+            **ran_at(1, "git status"),
+            result_key(inbox_key(1)): recorded_result(
+                Result(status=0, output="nothing to commit\n", took=timedelta(seconds=0.1))
+            ),
         }
         said = transcript(recorded)
 
         assert [(panel.kind, panel.at) for panel in said.panels] == [("person", 0), ("command", 1)]
 
     def test_a_command_run_while_a_turn_is_being_answered_is_drawn_before_it_lands(self) -> None:
-        running: dict[str, object] = {prompt_key(0): "have a look", command_key(0, 0): "git status"}
+        running: dict[str, object] = {**said_at(0, "have a look"), **ran_at(1, "git status")}
         assert transcript(running).panels[-1] == Panel(
-            turn=0, at=1, kind="command", blocks=(Command(text="git status"),)
+            turn=0, at=1, kind="command", blocks=(Command(entry=inbox_key(1), text="git status"),)
         )
 
     def test_a_command_does_not_move_when_the_turn_it_ran_during_is_answered(self) -> None:
         """
-        The whole of why it goes at the end rather than among the model's own panels: nothing records
-        which request was in flight, so anywhere else would be a position one reading could not
-        reconstruct and the panel would jump as the turn settled.
+        The property the two readings of a turn rest on, one kind of panel along: a command is placed
+        by where its entry sits among the turn's model records, and that is the same reading whether
+        the turn is being watched or has landed.
         """
-        ran = {command_key(0, 0): "git status"}
-        running: dict[str, object] = {prompt_key(0): "have a look", **ran}
-        landed: dict[str, object] = {prompt_key(0): "have a look", messages_key(0): [], **ran}
+        ran = ran_at(1, "git status")
+        running: dict[str, object] = {**said_at(0, "have a look"), **ran}
+        landed: dict[str, object] = {**said_at(0, "have a look"), messages_key(0): recorded_turn(), **ran}
 
         assert transcript(running).panels[-1] == transcript(landed).panels[-1]
+
+    def test_a_command_run_between_two_answers_stays_between_them(self) -> None:
+        """
+        What filing a command as an entry buys, and the bug it fixes: collected at the end of the
+        turn, the panel sank as each later answer landed above it, under a reader who had just run it.
+        """
+        recorded: dict[str, object] = {
+            **said_at(0, "have a look"),
+            model_key(0, 0): answered_with({"kind": "response", "parts": [{"part_kind": "text", "content": "one"}]}),
+            **ran_at(1, "git status"),
+            model_key(0, 1): answered_with({"kind": "response", "parts": [{"part_kind": "text", "content": "two"}]}),
+        }
+        assert [(panel.kind, panel.at) for panel in transcript(recorded).panels] == [
+            ("person", 0),
+            ("assistant", 1),
+            ("command", 2),
+            ("assistant", 3),
+        ]
 
     def test_a_command_never_reaches_the_history_a_model_is_given(self) -> None:
         """
@@ -175,10 +208,12 @@ class TestWhereACommandIsDrawn:
         wrote to the model.
         """
         recorded: dict[str, object] = {
-            prompt_key(0): "have a look",
-            messages_key(0): [],
-            command_key(0, 0): "echo do not tell the model",
-            result_key(0, 0): {"status": 0, "output": "do not tell the model\n", "took": 0.1},
+            **said_at(0, "have a look"),
+            messages_key(0): recorded_turn(),
+            **ran_at(1, "echo do not tell the model"),
+            result_key(inbox_key(1)): recorded_result(
+                Result(status=0, output="do not tell the model\n", took=timedelta(seconds=0.1))
+            ),
         }
         assert reached(recorded).history == ()
 
@@ -194,23 +229,29 @@ class TestHowACommandIsDrawn:
 
     async def test_the_output_is_open_rather_than_folded_away(self, app: ASGIApp, service: Service) -> None:
         session = await service.start("have a look", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), "git status --short")
+        entry = await service.checkpointer.append(session.id, recorded_command("git status --short"))
         await service.checkpointer.supply(
-            session.id, result_key(0, 0), {"status": 0, "output": " M pages.py\n", "took": 0.1}
+            session.id,
+            result_key(entry.key),
+            recorded_result(Result(status=0, output=" M pages.py\n", took=timedelta(seconds=0.1))),
         )
 
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
 
-        assert '<details class="ran" id="ran-0-0" open>' in drawn.text
+        assert f'<details class="ran" id="ran-{entry.key}" open>' in drawn.text
         assert " M pages.py" in drawn.text
 
     async def test_a_command_that_said_nothing_says_so_rather_than_drawing_an_empty_box(
         self, app: ASGIApp, service: Service
     ) -> None:
         session = await service.start("have a look", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), "git diff --quiet")
-        await service.checkpointer.supply(session.id, result_key(0, 0), {"status": 1, "output": "", "took": 0.08})
+        entry = await service.checkpointer.append(session.id, recorded_command("git diff --quiet"))
+        await service.checkpointer.supply(
+            session.id,
+            result_key(entry.key),
+            recorded_result(Result(status=1, output="", took=timedelta(seconds=0.08))),
+        )
 
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
@@ -224,7 +265,7 @@ class TestHowACommandIsDrawn:
         console that made it about a running one would be reporting an absence it cannot know about.
         """
         session = await service.start("have a look", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), "just test")
+        await service.checkpointer.append(session.id, recorded_command("just test"))
 
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
@@ -240,9 +281,8 @@ class TestRunningOne:
     ) -> None:
         session = await planted(running, workspaces, on_fixture)
 
-        assert await running.run(session, "pwd") == 0
+        came = await ran(running, session, "pwd")
 
-        came = await settled(running, session)
         assert came.status == 0
         assert came.output.strip() == str(workspaces.at(session))
 
@@ -255,9 +295,9 @@ class TestRunningOne:
         """
         session = await planted(running, workspaces, on_fixture)
 
-        await running.run(session, "echo first; echo second >&2; echo third")
+        came = await ran(running, session, "echo first; echo second >&2; echo third")
 
-        assert (await settled(running, session)).output.splitlines() == ["first", "second", "third"]
+        assert came.output.splitlines() == ["first", "second", "third"]
 
     async def test_an_exit_status_is_recorded_as_the_number_rather_than_as_a_failure(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -268,9 +308,7 @@ class TestRunningOne:
         """
         session = await planted(running, workspaces, on_fixture)
 
-        await running.run(session, "exit 3")
-
-        assert (await settled(running, session)).status == 3
+        assert (await ran(running, session, "exit 3")).status == 3
 
     async def test_a_git_write_lands_in_the_worktree_because_nothing_confines_it(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -284,12 +322,13 @@ class TestRunningOne:
         where = workspaces.at(session)
         (where / "src" / "kept.txt").write_text("edited by hand\n")
 
-        await running.run(
+        came = await ran(
+            running,
             session,
             "git -c user.email=probe@example.invalid -c user.name=probe commit -aqm 'from the console'",
         )
 
-        assert (await settled(running, session)).status == 0
+        assert came.status == 0
         assert await run("git", "log", "-1", "--format=%s", cwd=where) == "from the console"
 
     async def test_a_command_that_will_not_stop_is_killed_and_says_so(
@@ -300,44 +339,44 @@ class TestRunningOne:
         )
         session = await planted(impatient, workspaces, on_fixture)
 
-        await impatient.run(session, "echo starting; sleep 30")
+        came = await ran(impatient, session, "echo starting; sleep 30")
 
-        came = await settled(impatient, session)
         assert "starting" in came.output, "what it managed to say survives being killed"
         assert "killed after" in came.output
 
-    async def test_two_commands_posted_at_once_each_take_a_slot_of_their_own(
+    async def test_three_commands_posted_at_once_each_take_an_entry_of_their_own(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         """
-        The store keeps the value a key was first given, so two writers racing for one number would
-        leave the loser's command under a key nothing reads: run, and never rendered.
+        What the queue removed the need to check for. Two writers picking a number by trying could
+        lose the loser's command to the store's keep-the-first rule; the store names an entry, so
+        three appends are three entries and there is nothing to race for.
         """
         session = await planted(running, workspaces, on_fixture)
 
         taken = await asyncio.gather(*(running.run(session, f"echo {which}") for which in ("one", "two", "three")))
 
-        assert sorted(at for at in taken if at is not None) == [0, 1, 2], "three commands, three slots"
-        for at in taken:
-            assert at is not None
-            assert (await settled(running, session, at)).status == 0
+        assert len(set(taken)) == 3, "three commands, three entries"
+        for entry in taken:
+            assert entry is not None
+            assert (await settled(running, session, entry)).status == 0
 
-    async def test_a_command_is_recorded_against_the_last_turn_started(
+    async def test_a_command_is_drawn_in_the_turn_that_was_in_hand_when_it_ran(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         """
-        Which is where it happened: everything said so far is above it and nothing has been said
-        since. A turn queued behind a reply in flight counts as started, so a command run then lands
-        under the message somebody typed ahead rather than above it.
+        Which is where it happened, and it is read rather than recorded: the entry sits after the
+        message that opened the turn in hand, so nothing had to decide a turn at the moment it was
+        posted. A message queued behind it has not opened a turn yet, so a command run afterwards is
+        still in the last turn anybody opened.
         """
         session = await planted(running, workspaces, on_fixture)
-        await running.say(session, turn=1, said="and another thing")
+        await running.say(session, "and another thing")
 
-        assert await running.run(session, "echo late") == 0
+        entry = await running.run(session, "echo late")
 
-        recorded = await running.checkpointer.load(session)
-        assert recorded.get(command_key(1, 0)) == "echo late"
-        assert recorded.get(command_key(0, 0)) is None
+        assert entry is not None
+        assert (await running.checkpointer.load(session))[entry] == recorded_command("echo late")
 
     async def test_a_command_before_the_first_turn_says_the_worktree_is_not_there_yet(
         self, running: Service, on_fixture: Choice
@@ -350,17 +389,13 @@ class TestRunningOne:
         """
         session = await running.start("hello", on_fixture)
 
-        assert await running.run(session.id, "git status") == 0
+        came = await ran(running, session.id, "git status")
 
-        came = await settled(running, session.id)
         assert came.status == UNFINISHED
         assert "worktree is made on its first turn" in came.output
 
     async def test_a_session_with_no_files_has_nowhere_to_run_one(self, running: Service) -> None:
-        """
-        `None` rather than a raise, matching what `send` does with a turn that stopped listening: it
-        is a state the page can explain, not a fault.
-        """
+        """`None` rather than a raise: it is a state the page can explain, not a fault."""
         session = await running.start("hello", replace(DEFAULT_CHOICE, repository=None))
 
         assert await running.run(session.id, "echo nowhere") is None
@@ -382,12 +417,13 @@ class TestRunningOne:
         cancellation because `open_store` closes the runner inside its own `finally`.
         """
         session = await planted(running, workspaces, on_fixture)
-        await running.run(session, "sleep 30")
+        entry = await running.run(session, "sleep 30")
+        assert entry is not None
         assert running.commands is not None
 
         await running.commands.aclose()
 
-        came = await settled(running, session)
+        came = await settled(running, session, entry)
         assert came.status == UNFINISHED
         assert "the console stopped" in came.output
 
@@ -411,8 +447,9 @@ class TestThroughTheConsole:
             answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "echo hello", "disposition": "run"})
 
         assert answer.status == 200
-        assert (await running.checkpointer.load(session)).get(command_key(0, 0)) == "echo hello"
-        assert (await settled(running, session)).output.strip() == "hello"
+        recorded = await running.checkpointer.load(session)
+        entry = next(key for key, held in recorded.items() if held == recorded_command("echo hello"))
+        assert (await settled(running, session, entry)).output.strip() == "hello"
 
     async def test_the_command_is_drawn_rather_than_sent_as_a_message(
         self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -424,8 +461,9 @@ class TestThroughTheConsole:
             answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "echo hello", "disposition": "run"})
 
         assert "echo hello" in answer.text
-        assert (await running.read(session)) is not None
-        assert (await running.checkpointer.load(session)).get(prompt_key(1)) is None
+        found = await running.read(session)
+        assert found is not None
+        assert found.said.turns == 1, "the command opened no turn of its own and queued no message"
 
     async def test_a_session_with_no_files_refuses_rather_than_swallowing_it(
         self, app: ASGIApp, running: Service

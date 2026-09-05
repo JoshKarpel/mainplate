@@ -22,7 +22,6 @@ from dataclasses import field
 from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
-from itertools import count
 from pathlib import Path
 
 from without_durability_sqlite import Database
@@ -37,14 +36,12 @@ from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
-from mainplate.conversation import command_key
-from mainplate.conversation import commands_in
 from mainplate.conversation import opening_tree_key
-from mainplate.conversation import prompt_key
 from mainplate.conversation import recorded_choice
+from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_prompt
+from mainplate.conversation import recorded_steer
 from mainplate.conversation import requested_at
-from mainplate.conversation import steer_key
-from mainplate.conversation import steers_in
 from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
@@ -301,7 +298,7 @@ class Service:
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
         # already lives. Until then the session renders, names its repository, and has no files.
         await self.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(chosen))
-        await self.say(session.id, turn=0, said=said)
+        await self.say(session.id, said)
         return session
 
     async def fork(
@@ -395,127 +392,79 @@ class Service:
             await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
         if said:
-            await self.say(forked.id, turn=at, said=said)
+            await self.say(forked.id, said)
         return forked
 
-    async def steer(self, session: str, *, turn: int, said: str) -> int | None:
+    async def run(self, session: str, said: str) -> str | None:
         """
-        Put a message into a turn that is already being answered, and say which number it took, or
-        nothing at all where the turn had already stopped listening.
-
-        Written straight into the checkpoint rather than handed to the pass, because the pass may be
-        in another process: the two halves of this console are joined only by the store, so the store
-        is the only channel a steer can travel down. Pydantic AI's own `enqueue` is what *delivers*
-        it once a pass picks it up, and is in-memory, so it could never be the transport.
-
-        Nothing is queued, unlike `say`. The workflow is already running by definition - that is what
-        makes this a steer - and queueing it again would ask a second worker to take a session the
-        first one holds a lease on.
-
-        The number is claimed by trying and checking rather than by counting, because `supply` keeps
-        the value a key was first given and hands back the winner. Two steers racing for one number
-        would otherwise leave the loser's message in the store under a key nobody reads, which is a
-        message silently on the floor. Bounded by how many are already there, since each attempt that
-        loses has found one more.
-
-        **The pass competes for the same slots, and losing to it is `None` rather than the next
-        number up.** It writes `CLOSED` into the next free one when it is about to stop listening, so
-        getting that back is the store saying this turn will never be read again - and stepping past
-        it to write at the number above would put the message exactly where it could not be seen. The
-        caller answers by saying it into a turn of its own; see `CLOSED` and `Service.send`.
-        """
-        for said_at in count(len(steers_in(await self.checkpointer.load(session), turn))):
-            stored = await self.checkpointer.supply(session, steer_key(turn, said_at), said)
-            if stored == said:
-                return said_at
-            if not isinstance(stored, str):
-                return None
-        raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
-
-    async def run(self, session: str, said: str) -> int | None:
-        """
-        Run `said` in this session's own worktree, and say which slot recorded it, or nothing at all
+        Run `said` in this session's own worktree, and say which entry recorded it, or nothing at all
         where this session has nowhere to run one.
 
-        **The turn is the last one started**, whether or not it is still being answered, because that
-        is where the command happened: everything said so far is above it and nothing has been said
-        since. A queued turn counts as started, so a command run while a reply is coming lands under
-        the message the person typed ahead rather than above it.
+        Delivered to the session's inbox like a message, and read out of it by nobody: a pass passes
+        over a command on its way down the queue. What being an entry buys is the one thing a slot
+        could not give it, which is a *place*: the store files it in the order it arrived, so where it
+        sits among the turn's model records is where it was run, and its panel stays there rather
+        than sinking as later answers land above it.
 
-        The slot is claimed by trying and checking, exactly as `steer` claims its own and for the
-        same reason: `supply` keeps the value a key was first given, so two commands posted at once
-        would otherwise leave the loser's under a key nothing reads. Unlike a steer nothing else
-        competes for these, so there is no `CLOSED` to get back - the only writer is whoever is
-        typing, and the loop is against another of them.
+        Nothing has to be claimed by trying any more, and nothing has to decide which turn it belongs
+        to. Both of those were answers to questions the key space asked; the store names the key, so
+        two commands posted at once are simply two entries.
 
         Recorded *before* it is started, and both of those are here rather than in the handler so the
         pair cannot come apart: a command started without a record would run with nothing on the page
         saying it had, and a record with nothing running would be a panel that never resolves.
 
-        Nowhere to run one is `None` and not a raise, matching what `send` does with a turn that
-        stopped listening: it is a state the page can explain, not a fault.
+        Nowhere to run one is `None` and not a raise: it is a state the page can explain, not a fault.
         """
         if self.commands is None or self.workspaces is None:
             return None
         found = await self.read(session)
         if found is None or found.chosen is None or found.chosen.repository is None:
             return None
-        # The last turn started, which for any session this console made is at least turn 0: `start`
-        # writes the choice and then the first message, so a session with a row has a prompt.
-        turn = found.said.turns - 1
-        if turn < 0:  # pragma: no cover - a session is created with its first message
-            return None
         where = self.workspaces.at(session)
-        for ran_at in count(len(commands_in(await self.checkpointer.load(session), turn))):
-            stored = await self.checkpointer.supply(session, command_key(turn, ran_at), said)
-            if stored == said:
-                self.commands.start(Slot(session=session, turn=turn, at=ran_at), said, where)
-                return ran_at
-        raise AssertionError("unreachable: `count` does not end")  # pragma: no cover
+        # Appended rather than delivered, because there is nothing for a worker to do about it: a
+        # command reaches no model, so waking a pass to look at one would be a pass with no work.
+        entry = await self.checkpointer.append(session, recorded_command(said))
+        self.commands.start(Slot(session=session, entry=entry.key), said, where)
+        return entry.key
 
-    async def say(self, session: str, *, turn: int, said: str) -> None:
+    async def say(self, session: str, said: str, *, forget: bool = False) -> None:
         """
-        Put a message into a session's checkpoint, and ask for the session to be looked at.
+        Put a message into a session that must be answered on its own, and ask for a look at it.
 
-        One call, because `SqliteDurable.arrive` writes the value and queues the workflow in a
-        single commit: over one file there is no window where a session holds a message with
-        nothing scheduled to answer it. Whichever worker takes it next is the one that answers,
-        and this returns without waiting for any of that.
+        A `Prompt` rather than a `Steer`, which is the whole of what "on its own" means: a pass
+        draining what arrived while it was working stops at one of these, so this is never folded
+        into the turn already running. What `Send` does is `send`, which delivers the other one.
+
+        One call, because `SqliteDurable.deliver` appends the value and queues the workflow in a
+        single commit: over one file there is no window where a session holds a message with nothing
+        scheduled to answer it. Whichever worker takes it next is the one that answers, and this
+        returns without waiting for any of that.
+
+        No turn is named, and that is the inbox: which turn a message opens is decided by the pass
+        that takes it, so there is no number here to be stale by the time it is written.
+
+        `forget` opens that turn on a clean history, and it is a field of the record this already
+        writes rather than a second entry: one append, so a worker cannot take the message between
+        the two and answer it on a history the record was about to contradict.
         """
-        await self.durable.arrive(session, prompt_key(turn), said)
+        await self.durable.deliver(session, recorded_prompt(said, forget=forget))
 
-    async def send(self, session: str, said: str) -> int | None:
+    async def send(self, session: str, said: str) -> None:
         """
-        Put a message into a session at whichever moment its checkpoint is actually in, and say which
-        turn it was steered into, or nothing at all where it was queued as a turn of its own.
+        Put a message into a session at whichever moment it is actually in, which the pass decides.
 
-        **The decision belongs here rather than in the composer**, and that is what makes it
-        consistent. A page is rendered from a checkpoint, and by the time somebody has typed a
-        paragraph into it that checkpoint has moved: a reader choosing between `Steer` and `Send` is
-        choosing against a state that no longer holds, and two controls meant the server honoured a
-        decision about the wrong turn. Read and write in one place and the answer is whatever the
-        record says at the instant of writing.
+        **The decision belongs to the pass rather than to the composer or to this**, and that is what
+        makes it consistent. A page is rendered from a checkpoint, and by the time somebody has typed
+        a paragraph into it that checkpoint has moved: a reader choosing between `Steer` and `Send`
+        is choosing against a state that no longer holds. So was this, when it read the checkpoint
+        and chose which of two writes to make; the read and the write were two moments, and a turn
+        could end between them.
 
-        `answering` and not `turns - 1`, because a person can type again while a reply is coming: the
-        turns behind the one in flight are queued rather than running, so a message steered into one
-        of those would reach a model that has not been asked anything yet.
-
-        **What the read decides is which to *try*, and the store decides which happens.** A read alone
-        cannot settle it: the pass stops listening at the boundary where its run would end, which is
-        some milliseconds before the turn's messages land, so a checkpoint saying a turn is being
-        answered is not the same as a turn that will still hear you. So a steer that comes back
-        `None` is one the pass shut the door on, and this says it into a turn of its own instead.
-
-        That is a compare-and-swap re-decided on the true answer rather than a fallback: there is no
-        second mechanism here, only the same two calls this always had, chosen with what the failed
-        attempt reported. See `CLOSED`.
+        With a queue there is no moment to get right. A `Steer` is delivered, and where it lands is
+        where the pass finds it: folded into the request the turn is about to make, or, if nothing is
+        listening by then, opening the next turn. Nothing is claimed, nothing is refused, and nothing
+        has to be re-decided on a failed attempt - which is why this now returns nothing at all,
+        where it used to have to say which turn had taken the message.
         """
-        said_in = transcript(await self.checkpointer.load(session))
-        if said_in.answering is not None:
-            steered = await self.steer(session, turn=said_in.answering, said=said)
-            if steered is not None:
-                return said_in.answering
-        # Re-read rather than trusting the count from before the attempt: losing the slot means the
-        # turn ended while this was deciding, so what the next free turn is may have moved with it.
-        await self.say(session, turn=transcript(await self.checkpointer.load(session)).turns, said=said)
-        return None
+        await self.durable.deliver(session, recorded_steer(said))

@@ -5,9 +5,12 @@ from calling import calling
 from conftest import DEFAULT_CHOICE
 from conftest import WHEN
 from conftest import Provider
+from conftest import ran_at
+from conftest import said_at
 from test_conversation import pass_at
 from without_asgi import ASGIApp
-from without_durability.stepwise import Waiting
+from without_durability.interfaces import inbox_key
+from without_durability.stepwise import Blocked
 
 from mainplate.agent import Choice
 from mainplate.conversation import CHOICE_KEY
@@ -15,7 +18,8 @@ from mainplate.conversation import Prose
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import messages_key
-from mainplate.conversation import prompt_key
+from mainplate.conversation import opened_key
+from mainplate.conversation import result_key
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_of
 from mainplate.pages import arrange
@@ -49,29 +53,49 @@ class TestReadingAKeyBack:
         assert turn_of(key) == turn
 
     def test_a_prefix_carries_every_kind_of_key_for_the_turns_it_covers(self) -> None:
-        recorded = {
+        recorded: dict[str, object] = {
             CHOICE_KEY: {"endpoint": "here", "model": "ripe/fast"},
-            prompt_key(0): "first",
+            **said_at(0, "first"),
             messages_key(0): [],
             "turn:0:model:0": {"kind": "response"},
             "turn:0:tree:0": "a1b2c3",
             "turn:0:tool:toolu_017": "noted",
-            prompt_key(1): "second",
+            **said_at(1, "second"),
             messages_key(1): [],
-            prompt_key(2): "third",
+            **said_at(2, "third"),
         }
         carried = before(recorded, 2)
 
         assert set(carried) == {
-            prompt_key(0),
+            inbox_key(0),
+            opened_key(0),
             messages_key(0),
             "turn:0:model:0",
             "turn:0:tree:0",
             "turn:0:tool:toolu_017",
-            prompt_key(1),
+            inbox_key(1),
+            opened_key(1),
             messages_key(1),
         }
         assert CHOICE_KEY not in carried, "the branch answers the choice itself"
+
+    def test_a_prefix_carries_a_command_and_its_result_and_stops_at_the_branch_point(self) -> None:
+        """
+        The second rule `before` needs, and the price the inbox charges: an entry says nothing about
+        which turn it is in, so what decides is where it sits against the entry the branch opened on.
+        A result travels with the command it answers, by the same shape rule.
+        """
+        recorded: dict[str, object] = {
+            **said_at(0, "first"),
+            **ran_at(1, "git status"),
+            result_key(inbox_key(1)): {"kind": "result", "status": 0, "output": ""},
+            messages_key(0): [],
+            **said_at(1, "second", entry=2),
+            **ran_at(3, "git diff"),
+        }
+        carried = before(recorded, 1)
+
+        assert set(carried) == {inbox_key(0), opened_key(0), inbox_key(1), result_key(inbox_key(1)), messages_key(0)}
 
 
 class TestWhatABranchInherits:
@@ -81,7 +105,7 @@ class TestWhatABranchInherits:
         body = provider.body()
         session = await service.start("first", DEFAULT_CHOICE)
         await pass_at(service, body, session.id)
-        await service.say(session.id, turn=1, said="second")
+        await service.say(session.id, "second")
         await pass_at(service, body, session.id)
 
         forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE)
@@ -187,8 +211,8 @@ class TestWhatABranchInherits:
         forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE)
         assert forked is not None
 
-        await service.say(forked.id, turn=1, said="a different second")
-        assert await pass_at(service, body, forked.id) == Waiting(key=prompt_key(2))
+        await service.say(forked.id, "a different second")
+        assert await pass_at(service, body, forked.id) == Blocked(listening=frozenset({opened_key(2)}))
 
         # Two messages of history plus the new prompt: the branch continued rather than restarted.
         assert provider.carried[-1] == 3

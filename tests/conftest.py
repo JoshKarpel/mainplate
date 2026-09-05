@@ -13,7 +13,6 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
-from typing import Never
 
 import pytest
 from pydantic import SecretStr
@@ -25,8 +24,10 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from without_asgi import ASGIApp
+from without_durability.interfaces import inbox_key
 from without_durability.stepwise import Run
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.agent import Wires
@@ -38,7 +39,10 @@ from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
 from mainplate.config import Config
 from mainplate.config import Endpoint
+from mainplate.conversation import Progressed
 from mainplate.conversation import conversing
+from mainplate.conversation import heard_key
+from mainplate.conversation import opened_key
 from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
@@ -178,9 +182,16 @@ class Provider:
         """
         return agent_for(self.endpoints(), DEFAULT_CHOICE, INSTRUCTIONS)
 
-    def body(self) -> Callable[[Run], Awaitable[Never]]:
-        """The workflow body, over the stand-in endpoints."""
-        return conversing(self.endpoints(), INSTRUCTIONS)
+    def body(self, allowance: int | None = None) -> Callable[[Run], Awaitable[Progressed]]:
+        """
+        The workflow body, over the stand-in endpoints.
+
+        Unbounded by default, so a test that is about a conversation drives a whole turn in one pass
+        and says nothing about how a pass is cut. What the console ships is one request per pass, and
+        the tests that are about *that* ask for it by name; `TestWhatOnePassDoes` is where the two
+        are pinned against each other.
+        """
+        return conversing(self.endpoints(), INSTRUCTIONS, allowance=allowance)
 
 
 @dataclass(slots=True)
@@ -227,6 +238,67 @@ def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:
             for at, (tool, arguments) in enumerate(wanted)
         ]
     )
+
+
+# Checkpoint values, as the records this console actually writes. A test that wrote a bare string
+# under a key would be asserting against a shape the store no longer holds, so these are built with
+# the console's own records: a change to one fails here rather than passing quietly.
+
+
+def recorded_turn(*said: object) -> dict[str, object]:
+    """Message dicts written out by hand, as the record a turn keeps them in."""
+    return records.Messages(messages=list(said)).recorded()
+
+
+def answered_with(response: object) -> dict[str, object]:
+    """One response dict, as the record the step that made that request keeps it in."""
+    return records.Response(response=response).recorded()
+
+
+def came_back(returned: object, took: float | None = None) -> dict[str, object]:
+    """
+    What one call returned and how long it took, as the one record holding both.
+
+    Both in one record rather than two keys, which is what the envelope bought: a duration could not
+    sit beside a bare tool return without being indistinguishable from a tool that returned a field
+    of that name.
+    """
+    return records.Returned(returned=returned, took=None if took is None else timedelta(seconds=took)).recorded()
+
+
+def said_at(turn: int, said: str, *, entry: int | None = None, forget: bool = False) -> dict[str, object]:
+    """
+    A turn's opening message, which since the inbox is two records rather than one.
+
+    The entry the store filed, and the cursor the turn recorded when it took it. A test writing only
+    one of them would be writing a checkpoint no pass could produce: a message nobody opened a turn
+    on, or a turn that opened on nothing.
+
+    The entry is numbered after the turn where a test says nothing, which is right for the ordinary
+    fixture of one message per turn and is what `entry` is for where it is not.
+    """
+    at = inbox_key(turn if entry is None else entry)
+    return {at: records.Prompt(said=said, forget=forget).recorded(), opened_key(turn): at}
+
+
+def steered_at(entry: int, said: str) -> dict[str, object]:
+    """Something said into a turn already running, as the entry it arrived as."""
+    return {inbox_key(entry): records.Steer(said=said).recorded()}
+
+
+def ran_at(entry: int, said: str) -> dict[str, object]:
+    """Something the person ran themselves, as the entry it arrived as."""
+    return {inbox_key(entry): records.Command(said=said).recorded()}
+
+
+def read_to(turn: int, at: int, entry: int) -> dict[str, object]:
+    """How far down the inbox a turn had read when it made its `at`-th request, as the cursor saying so."""
+    return {heard_key(turn, at): inbox_key(entry)}
+
+
+def snapshotted(tree: str | None) -> dict[str, object]:
+    """What the worktree held before one request, as the record of that snapshot."""
+    return records.Tree(tree=tree).recorded()
 
 
 @pytest.fixture

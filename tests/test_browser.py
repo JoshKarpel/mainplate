@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -16,6 +18,9 @@ from conftest import FIXTURE
 from conftest import FIXTURE_NAME
 from conftest import LEASE
 from conftest import already
+from conftest import answered_with
+from conftest import came_back
+from conftest import recorded_turn
 from conftest import run
 from playwright.async_api import Browser
 from playwright.async_api import Locator
@@ -23,18 +28,21 @@ from playwright.async_api import Page
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
 from playwright.async_api import expect
+from without_durability.interfaces import INBOX
 from without_http import serving
 
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
 from mainplate.conversation import THINKING_FIELD
-from mainplate.conversation import command_key
+from mainplate.conversation import Result
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
-from mainplate.conversation import prompt_key
+from mainplate.conversation import opened_key
+from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_result
+from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
-from mainplate.conversation import steers_in
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
 from mainplate.service import Service
@@ -188,6 +196,20 @@ async def unscripted(browser: Browser) -> AsyncIterator[Page]:
         await context.close()
 
 
+async def taking(service: Service, session: str, turn: int = 0) -> None:
+    """
+    The next message a session has waiting, taken into a turn of its own, with no pass to do it.
+
+    Which is a pass's first act, written by hand because the `console` fixture runs no worker: a
+    test writing a turn's model steps needs a turn for them to be steps *of*, and until a message is
+    taken it is only queued.
+    """
+    recorded = await service.checkpointer.load(session)
+    await service.checkpointer.supply(
+        session, opened_key(turn), [key for key in recorded if key.startswith(INBOX)][turn]
+    )
+
+
 async def showing_model(page: Page) -> str:
     """The id on the one model card a shut group is drawn as."""
     return str(
@@ -290,6 +312,29 @@ class TestWhereTheReaderIs:
         landed = page.locator(".rule[data-landed]")
         await expect(landed).to_have_count(1)
         await expect(landed).to_have_attribute("id", "rule-1")
+
+    async def test_stepping_by_forget_lands_on_the_boundary_and_not_on_every_turn(
+        self, page: Page, gallery: str
+    ) -> None:
+        # The column steps where the model's history starts again, which is one stop in a fixture
+        # with several turns in it. Asserted against the turn column beside it, because "lands on a
+        # rule" would hold for both and the whole point is that this one lands on fewer.
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.click('button[data-leap="start"]')
+        await page.click('button[data-step="1"][data-stop="forget"]')
+        landed = page.locator(".rule[data-landed]")
+        await expect(landed).to_have_count(1)
+        await expect(landed).to_have_class(re.compile(r"\brule--forget\b"))
+
+    async def test_the_forget_column_is_drawn_in_a_session_that_has_never_forgotten(
+        self, page: Page, gallery: str
+    ) -> None:
+        # The rail lives outside the region that swaps, so a column that appeared with the first
+        # forget would not appear until a reload. Drawn always and stepping nothing is the honest
+        # shape, and it is what lets one recorded mid-session be reachable at once.
+        await page.goto(f"{gallery}/stalled.html", wait_until="load")
+        await expect(page.locator(".rule--forget")).to_have_count(0)
+        await expect(page.locator('button[data-stop="forget"]')).to_have_count(2)
 
     async def test_a_permalink_followed_after_stepping_moves_the_landing(self, page: Page, gallery: str) -> None:
         # The other half of the same disagreement, arrived at the other way round: the dock marks a
@@ -862,6 +907,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
     ) -> None:
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         button = page.locator(".panel[data-kind=person] .panel__meta > .copy")
@@ -881,26 +927,29 @@ class TestSayingSomethingWasCopiedThroughASwap:
         """
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(0)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await expect(page.locator(".panel[data-kind=thinking] .panel__meta > .copy")).to_have_count(1)
         # And nothing is seated twice, which is what an unguarded re-seating after every swap does.
-        await service.checkpointer.supply(session.id, tool_key(0, "call-1"), "the first file")
+        await service.checkpointer.supply(session.id, tool_key(0, "call-1"), came_back("the first file"))
         await expect(page.locator(".panel[data-kind=thinking] .copy")).to_have_count(1)
 
 
 # One response of a turn, as the capability records it partway through: the model reasoned and asked
 # for two files at once. Two calls because that is the state worth watching arrive - they run
 # together, so one comes back while the other is still out.
-PARTWAY = {
-    "kind": "response",
-    "parts": [
-        {"part_kind": "thinking", "content": "Two files to look at."},
-        {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "a.py"}, "tool_call_id": "call-1"},
-        {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "b.py"}, "tool_call_id": "call-2"},
-    ],
-}
+PARTWAY = answered_with(
+    {
+        "kind": "response",
+        "parts": [
+            {"part_kind": "thinking", "content": "Two files to look at."},
+            {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "a.py"}, "tool_call_id": "call-1"},
+            {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "b.py"}, "tool_call_id": "call-2"},
+        ],
+    }
+)
 
 
 class TestWatchingATurnArrive:
@@ -918,6 +967,7 @@ class TestWatchingATurnArrive:
         """A session with a question in it, open in the browser, with nothing answered yet."""
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
         self.session = session.id
@@ -942,7 +992,7 @@ class TestWatchingATurnArrive:
         service = await self.started(console, page)
         await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
         await expect(page.locator(".tool .waiting")).to_have_count(2)
-        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), "the first file")
+        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), came_back("the first file"))
         await expect(page.locator(".tool .waiting")).to_have_count(1)
         await expect(page.locator(".tool").first).to_contain_text("the first file")
 
@@ -958,8 +1008,8 @@ class TestWatchingATurnArrive:
         await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
         opened = page.locator("details.tool").first
         await expect(opened).to_have_attribute("open", "")
-        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), "the first file")
-        await service.checkpointer.supply(self.session, tool_key(0, "call-2"), "the second file")
+        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), came_back("the first file"))
+        await service.checkpointer.supply(self.session, tool_key(0, "call-2"), came_back("the second file"))
         # Both are back, so the server renders both closed; the one the reader has open stays open.
         await expect(page.locator("details.tool")).to_have_count(2)
         await expect(opened).to_have_attribute("open", "")
@@ -1008,7 +1058,7 @@ class TestWatchingATurnArrive:
         marked = page.locator(".panel[data-fresh]")
         await expect(marked).to_have_count(2)
         await expect(marked).to_have_count(0, timeout=5_000)
-        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), "the first file")
+        await service.checkpointer.supply(self.session, tool_key(0, "call-1"), came_back("the first file"))
         await expect(marked).to_have_count(1)
         assert await marked.first.get_attribute("data-kind") == "tool"
 
@@ -1021,7 +1071,7 @@ class TestWatchingATurnArrive:
         they had just put away on the very next thing the turn recorded.
         """
         service = await self.started(console, page)
-        await service.checkpointer.supply(self.session, command_key(0, 0), "git status")
+        await service.checkpointer.append(self.session, recorded_command("git status"))
         shut = page.locator("details.ran").first
         await expect(shut).to_have_attribute("open", "")
         await shut.locator("summary").click()
@@ -1040,6 +1090,7 @@ class TestWatchingATurnArrive:
         """
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
@@ -1063,9 +1114,12 @@ class TestShuttingAFoldFromItsFrame:
     async def a_command_with_output(self, console: tuple[str, Service], page: Page) -> None:
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
-        await service.checkpointer.supply(session.id, command_key(0, 0), "git status")
+        await taking(service, session.id)
+        entry = await service.checkpointer.append(session.id, recorded_command("git status"))
         await service.checkpointer.supply(
-            session.id, result_key(0, 0), {"status": 0, "output": "on branch main\n", "took": 0.2}
+            session.id,
+            result_key(entry.key),
+            recorded_result(Result(status=0, output="on branch main\n", took=timedelta(seconds=0.2))),
         )
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator("details.ran")).to_have_attribute("open", "")
@@ -1122,9 +1176,10 @@ class TestShuttingAFoldFromItsFrame:
         """A finished call, which the server renders shut, opened the way a reader opens one."""
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
-        await service.checkpointer.supply(session.id, tool_key(0, "call-1"), "the first file")
-        await service.checkpointer.supply(session.id, tool_key(0, "call-2"), "the second file")
+        await service.checkpointer.supply(session.id, tool_key(0, "call-1"), came_back("the first file"))
+        await service.checkpointer.supply(session.id, tool_key(0, "call-2"), came_back("the second file"))
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         opened = page.locator("details.tool").first
         await expect(opened).not_to_have_attribute("open", "")
@@ -1168,6 +1223,7 @@ class TestOpeningTheRecordBehindARequest:
         """A conversation with one recorded request in it, as the closed tag on that request's rule."""
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         tag = page.locator(".tag").first
@@ -1230,9 +1286,10 @@ class TestOpeningTheRecordBehindARequest:
 
 
 async def a_conversation(console: tuple[str, Service], page: Page) -> str:
-    """One session with one message in it, on the page, as the id to write further steps against."""
+    """One session with a turn being answered, on the page, as the id to write further steps against."""
     url, service = console
     session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+    await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
     return session.id
@@ -1325,7 +1382,10 @@ class TestWhereTheComposerSendsTo:
 
         await expect(page.locator('.panel[data-kind="steering"]')).to_have_count(1)
         await expect(page.locator('.panel[data-kind="steering"]')).to_contain_text("actually, be brief")
-        assert steers_in(await service.checkpointer.load(session), 0) == ("actually, be brief",)
+        recorded = await service.checkpointer.load(session)
+        assert [held for key, held in recorded.items() if key.startswith(INBOX)][-1] == recorded_steer(
+            "actually, be brief"
+        )
 
     async def test_the_menu_offers_the_wait_only_while_something_is_being_answered(
         self, page: Page, console: tuple[str, Service]
@@ -1342,7 +1402,9 @@ class TestWhereTheComposerSendsTo:
         await expect(page.locator('.sender__option[value="next"]')).to_have_count(1)
 
         await service.checkpointer.supply(
-            session, messages_key(0), [{"kind": "response", "parts": [{"part_kind": "text", "content": "a plate"}]}]
+            session,
+            messages_key(0),
+            recorded_turn({"kind": "response", "parts": [{"part_kind": "text", "content": "a plate"}]}),
         )
         await page.reload(wait_until="load")
         await page.click(".sender__caret")
@@ -1373,6 +1435,7 @@ async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces
 async def a_session_with_files(working: tuple[str, Service], page: Page) -> str:
     url, service = working
     session = await service.start("what is a mainplate", replace(DEFAULT_CHOICE, repository=FIXTURE))
+    await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
     return session.id
@@ -1500,8 +1563,9 @@ class TestTurningTheBoxIntoACommandBox:
 
         await expect(page.locator("#transcript")).to_contain_text("echo from the keyboard")
         recorded = await service.checkpointer.load(session)
-        assert recorded.get(command_key(0, 0)) == "echo from the keyboard"
-        assert recorded.get(prompt_key(1)) is None, "a command is not a message, so it queues no turn"
+        delivered = [held for key, held in recorded.items() if key.startswith(INBOX)]
+        assert delivered[-1] == recorded_command("echo from the keyboard")
+        assert len(delivered) == 2, "a command is not a message, so it queued nothing for a model"
 
     async def test_a_session_with_no_files_has_no_command_box_to_turn_into(
         self, page: Page, console: tuple[str, Service]
@@ -1571,6 +1635,36 @@ class TestNamingAModeFromTheKeyboard:
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
         assert await page.input_value(".composer textarea") == "", "the leader and its space are consumed"
 
+    async def test_every_answer_the_server_drew_has_a_mode_to_be_in(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one drift the mode's shape can have, asked over every answer rather than over a chosen
+        one. Which modes exist is read off the buttons the server drew, but which of them is *shown*
+        is a list of names in `mainplate.css`, and CSS cannot ask whether a descendant's attribute
+        matches an ancestor's. So an answer added without a line there enters a mode that hides Send
+        and reveals nothing: a composer with no primary button and no sentence saying where the text
+        is about to go.
+
+        A browser because the failure is entirely in the cascade - the markup is identical either
+        way, and both buttons are in the document in both.
+        """
+        await a_conversation(console, page)
+        leaders = await page.locator(".sender__leader").evaluate_all("row => row.map(one => one.dataset.leader)")
+        assert leaders, "the menu drew no answers at all"
+
+        for leader in leaders:
+            await page.click(".composer textarea")
+            await page.keyboard.type(f"/{leader} ")
+
+            await expect(page.locator(".composer")).to_have_attribute("data-leading", leader)
+            await expect(page.locator(f'.sender__leader[data-leader="{leader}"]')).to_be_visible()
+            await expect(page.locator(f'.leading[data-leader="{leader}"]')).to_be_visible()
+            await expect(page.locator(".sender__leader:visible")).to_have_count(1)
+            await expect(page.locator(".sender__send")).to_be_hidden()
+
+            await page.keyboard.press("Escape")
+
     async def test_a_space_after_part_of_a_word_is_an_ordinary_space(
         self, page: Page, console: tuple[str, Service]
     ) -> None:
@@ -1591,16 +1685,34 @@ class TestNamingAModeFromTheKeyboard:
         """
         The palette's own key, which is what a half-typed word is finished with: the space names an
         answer in full, and Enter takes whichever row the arrows have arrived at.
+
+        `/fo` is a genuinely ambiguous prefix - `forget` and `fork` both answer to it - which is what
+        makes this a test of the *position* rather than of there happening to be one row left. The
+        arrow is what proves it: without it, taking the first row and taking the row the keyboard is
+        on are the same thing and the key could be wrong in a way nothing here would see.
         """
         await a_conversation(console, page)
         await page.click(".composer textarea")
         await page.keyboard.type("/fo")
+        await expect(page.locator(".sender__option:visible")).to_have_count(2)
+        await page.keyboard.press("ArrowDown")
         await page.keyboard.press("Enter")
 
         await expect(page.locator(".composer")).to_have_attribute("data-leading", "fork")
         await expect(page.locator('.sender__leader[data-leader="fork"]')).to_be_visible()
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
         assert await page.input_value(".composer textarea") == "", "the leader is consumed, not sent"
+
+    async def test_enter_on_an_ambiguous_prefix_takes_the_row_it_starts_on(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """The other half of the pair above: untouched, the keyboard is on the first row that fits."""
+        await a_conversation(console, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/fo")
+        await page.keyboard.press("Enter")
+
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "forget")
 
     async def test_a_word_no_answer_answers_to_is_ordinary_text(self, page: Page, console: tuple[str, Service]) -> None:
         """
@@ -2063,12 +2175,21 @@ class TestFollowingTheEnd:
         url, service = console
         session = await service.start("what is a mainplate", DEFAULT_CHOICE)
         for turn in range(12):
+            # The two records a pass writes for a turn, by hand: which entry it took, and what came
+            # of it. The `console` fixture runs no worker, so a test that wants twelve settled turns
+            # writes what twelve passes would have.
+            recorded = await service.checkpointer.load(session.id)
+            await service.checkpointer.supply(
+                session.id, opened_key(turn), [key for key in recorded if key.startswith(INBOX)][turn]
+            )
             await service.checkpointer.supply(
                 session.id,
                 messages_key(turn),
-                [{"kind": "response", "parts": [{"part_kind": "text", "content": f"answer {turn} " + "x " * 400}]}],
+                recorded_turn(
+                    {"kind": "response", "parts": [{"part_kind": "text", "content": f"answer {turn} " + "x " * 400}]}
+                ),
             )
-            await service.say(session.id, turn=turn + 1, said=f"and then {turn}")
+            await service.say(session.id, f"and then {turn}")
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         # The precondition itself, rather than a count standing in for it: none of this means
         # anything in a transcript short enough to have no end to be away from.
