@@ -152,7 +152,7 @@ still drawn, at two fifths opacity, so it is quieted rather than hidden or remov
 side conversation, which is a different thing entirely and the one that keeps the name.
 
 Two things the script holds are deliberately *not* stored, and the line between them is worth
-keeping. Which calls a reader has unfolded, and whether they are following the end, are modes
+keeping. What a reader has folded, and whether they are following the end, are modes
 within a visit rather than decisions about a conversation: unfolding a call is how you read one
 answer, and following is a mode you fall out of by scrolling up and back into by scrolling down.
 Carried across a reload either would be a page that opens somewhere the reader has to notice and
@@ -1204,17 +1204,24 @@ command is a line the person typed, and what it said is the whole of why they ty
 **A fold's frame shuts it, and not only its summary.** A summary is one row at the top of a box that
 may be several screens of output, so putting a long one away meant scrolling back up to the single
 place that would do it; the room around the output is at the *bottom* as well, which is where a reader
-who has just read to the end already is. It is every kind in `FOLDS` rather than a rule about
-commands, because it is one complaint: a command and a stretch of reasoning are drawn open so
-shutting is the press made oftenest there, and a call the reader opened to check the work is the one
-whose return runs to hundreds of lines. Two panels of the same shape answering the same press
-differently would be the thing to explain.
+who has just read to the end already is. It is one complaint about three boxes: a command and a
+document are drawn open so shutting is the press made oftenest there, and a call the reader opened to
+check the work is the one whose return runs to hundreds of lines. Two boxes of the same shape
+answering the same press differently would be the thing to explain.
+
+**`FRAMES` names the bodies rather than the folds around them**, and that is what let one rule
+survive the fold moving up to the panel: each frame shuts whichever `<details>` it is a body of, so a
+document's shuts the panel it sits in and a call's shuts the call. Stated that way it also says the
+thing a list of folds could not - a panel's own room is the whitespace between the blocks of a
+conversation, which is in no frame here, so a press that missed a paragraph cannot fold the reply it
+missed. That is the one place this rule must not reach, and it is why the panel joining `FOLDS` did
+not put it in `FRAMES`.
 
 What is *in* the box is exempt, and that exemption is the whole of what makes this safe: a press in
 there is usually the start of lifting a line out, and a panel that folded under somebody selecting
 from it would cost more than the scroll it saves. Two selectors, because the content takes two shapes
-- a `pre` for a command's output and a tool's return, rendered prose for a system prompt and a
-stretch of reasoning - and the exemption is about the content rather than about either shape.
+- a `pre` for a command's output and a tool's return, rendered prose for a document - and the
+exemption is about the content rather than about either shape.
 A press that ended a drag is out for the same reason, since
 a browser reports one as a click on wherever the pointer came to rest. It shuts and never opens - a
 shut panel is a summary and little else - so this is the way out of a tall box rather than the toggle
@@ -1236,6 +1243,12 @@ has touched is left to the server. And the id it keeps that under has to be one 
 a command's is its own inbox entry, deliberately not the panel anchor a call's is built on, because a
 panel's position moves as a turn is answered and a fold identified by it is a decision the script
 loses on the next response. `test_browser.py` pins the two directions beside each other.
+
+A panel's own fold is kept under its anchor, which has that same weakness and takes it knowingly: a
+command landing mid-turn shifts every panel after it, so a decision about a panel can be applied to
+its neighbour for as long as the turn runs. It is the exposure every permalink and `data-landed` on
+this page already has, and the cost of getting it wrong is a fold in the wrong state rather than a
+record in the wrong place.
 
 **`! ` is `/run`'s own key and never a parse of the message**, which is the leader rule above applied
 to the mode reached oftenest; see there for why a leader is entered in the page rather than stripped
@@ -1591,33 +1604,34 @@ is showing half of how a turn happened. Five things there are decided:
   `Transcript.system_prompts` is where it rides instead. It is `system-prompt` in `data-kind`, in the
   anchor and in the class, and `system prompt` on the page, because a reader who reaches for `#told`
   is reaching for a word this console prints nowhere.
-- **A stretch nothing has composed for yet is drawn with the working dots in it**, because composing
-  reads a repository the pass is the one to fetch: a session's first message is on the page before
-  there is anything to put under it, and on a fresh clone that gap is minutes. Drawn rather than left
-  out, so what is coming is visible from the moment the message is; `instructed_in` is what keeps it
-  off a stretch nothing will ever compose for, which is every turn answered before this console
-  recorded instructions at all. Those draw no panel, which is a loss taken knowingly against a
-  spinner that would never resolve. `opening.html` in the gallery is that state to look at.
-- **Rendered as the Markdown it is, and that costs nothing about what was sent.** What is under the
-  fold is `.md` files concatenated - the operator's guidance and the repository's `AGENTS.md` - so
+- **A stretch nothing has composed for yet carries the working dots on the panel's own row**, in the
+  opening line's place, with the panel drawn shut. Composing reads a repository the pass is the one
+  to fetch: a session's first message is on the page before there is anything to put under it, and on
+  a fresh clone that gap is minutes. Drawn rather than left out, so what is coming is visible from
+  the moment the message is; on the row rather than inside an open panel, because a panel opened to
+  show three dots is a row spent on three dots, and because a fold whose default *moves* is one the
+  console cannot draw either way once a morph has recorded the state it delivered. `instructed_in` is
+  what keeps it off a stretch nothing will ever compose for, which is every turn answered before this
+  console recorded instructions at all. Those draw no panel, which is a loss taken knowingly against
+  a spinner that would never resolve. `opening.html` in the gallery is that state to look at.
+- **Rendered as the Markdown it is, and that costs nothing about what was sent.** What is in the
+  panel is `.md` files concatenated - the operator's guidance and the repository's `AGENTS.md` - so
   its headings, lists and fences are the structure their authors wrote, and a wall of `##` is the one
   reading of it nobody meant. The claim that this is what was *sent* is kept by the source riding
   along in `data-markdown`, which is what the copy button hands back, and by the raw record on the
   rule one step further out. The block is deliberately uncapped and does not scroll: a reader who
-  opened the fold asked for all of it, and a box that scrolls has no still corner for the copy button
-  to pin to.
+  opened the panel asked for all of it, and a box that scrolls has no still corner for the copy
+  button to pin to.
 
-  **It is a `.block` around the fold rather than the fold alone**, which is what puts a copy button
-  on the panel: the script seats one against a panel's blocks, and the whole prompt is what somebody
-  reaches for. Verbatim, the fold's own `pre` took the only button there was, and the panel had none.
+  **It is a `.block` and not bare prose**, which is what puts a copy button on the panel: the script
+  seats one against a panel's blocks, and the whole prompt is what somebody reaches for.
 
-  **The fold is `document_fold`, shared with the guidance a turn is handed mid-way.** On the page the
-  two are the same thing, so they are one shape; what separates them is where each sits in the
-  request, and that is what the *panel* around each says. Its summary is the document's own opening
-  line, clipped, with the character count pushed to the end of the row - the line is what identifies
-  it without opening it, and the count is what says it is paid for on every request from here on. The
-  line goes when the fold opens and the count does not, since a figure about the whole is not a
-  prefix of anything.
+  **It carries no fold of its own; the panel is its fold.** It is drawn as the same `block--document`
+  the guidance a turn is handed mid-way is drawn as, because on the page the two are the same thing,
+  and what separates them is where each sits in the request, which is what the *panel* around each
+  says. The document's opening line and its character count are on the panel's row - the line is what
+  identifies it without opening it, and the count is what says it is paid for on every request from
+  here on. See "Every panel folds, from its own row".
 
 The panel takes the person's hue, by the same rule as `command`: the axis is who produced the text,
 and what is in a system prompt was written by the operator and by whoever wrote the repository's
@@ -1691,14 +1705,15 @@ decided:
   that shows what a model answered and hides what it was handed is showing half of how a turn
   happened, and this is the half that arrives mid-turn. Drawn as the Markdown it is, by the standing
   prompt's own argument one panel up: it is an `AGENTS.md` with a line of the console's own in front
-  of it, in the same `.document` fold, shut, named by the line it opens with.
+  of it, drawn as the same `block--document`, in a panel drawn shut and named on its row by the line
+  it opens with.
 
   **`guidance` and not `system-prompt`, and the line between them is mechanical rather than
   editorial.** A system prompt is `instructions`, a per-request parameter re-rendered on every
   request in front of the cached prefix; this is a `SystemPromptPart` appended into the history at a
   position. Two mechanisms, two places in the request, two things a reader may want to quiet apart in
   the key - so two words, by the rule that keeps `steer` apart from `prompt`. What they share is the
-  shape on the page, which is why they share a fold and not a kind.
+  shape on the page, which is why they share a block and not a kind.
 
   **The two are not weighted alike by the model either, and that is an argument for the split rather
   than against it - but it is the provider's answer and not ours.** Pydantic AI measured it and
@@ -2332,7 +2347,7 @@ somewhere in particular.
 
 The rail (search, key, dock, theme) lives **outside** the region that swaps, so no control is
 rebuilt under a reader's finger. What it projects back *onto* the transcript — search marks, the
-panel landed on, which kinds are muted, which calls are unfolded — cannot live in the markup
+panel landed on, which kinds are muted, what is folded — cannot live in the markup
 either, so `assets/mainplate.js` holds it as values and reapplies it after every swap. That
 projection is one idempotent `repaint()` serving the first render, every swap, and every press.
 Everything it drives is an enhancement: with the file absent the page still renders, posts, and
@@ -2582,50 +2597,118 @@ quotation differ from the thing quoted. It costs alignment as well: no italic fa
 oblique is synthesised by shearing every glyph, which leans a gutter and the sides of a box while
 leaving the horizontals flat.
 
-**A stretch of reasoning folds, drawn open**, which is the same shape as a command and for the same
-reason one along: reasoning arrives while the turn is being answered, and watching a model think is
-one of the things a live transcript is for, so a fold rendered shut would hide the thing being
-watched at the moment it is worth watching. Shut afterwards it is a line, and the dock's
-fold-everything button puts every one of them away in one press - which is what a reader coming back
-to a finished conversation wants and what `muted` could never give them, since a muted kind is
-quieted at two fifths opacity and still occupies every inch it did.
+### Every panel folds, from its own row
 
-**Its summary is its own opening line, clipped by the browser at the panel's width**, which is the
-shape `opening_line` gives all three folds whose summary is a prefix of their own body: a stretch of
-reasoning, the standing system prompt, and a delivered guidance file. A call and a command are not
-among them, because a tool's name and a command's line are not prefixes of anything. There is
-deliberately no length in the markup: `text-overflow: ellipsis` measures a line against a box, which
-is a measurement the server cannot make, and any character count it picked would cut in the wrong
-place at every other width. `min-width: 0` is what lets the flex item shrink below its content and so
-is the whole of what makes the ellipsis appear.
+**A panel is a `<details>`, its row of facts is the `<summary>`, and the mark sits immediately right
+of the title.** That is one mechanism for what used to be three folds and five kinds that could not
+fold at all. What a reader wants put away is theirs to decide, so the console says only where each
+kind *starts* (`OPENS` in `pages.py`) and nothing more.
 
-Reasoning takes the line **alone**, where a document fold keeps its character count beside it. That
-is not asymmetry for its own sake: what a stretch of reasoning cost is on the rule already, as tokens
-and money for the request it belongs to, where what a document costs is paid on every request from
-here on and no rule speaks for that.
+**It began as a complaint about vertical space, and the space was the symptom.** A stretch of
+reasoning, the standing system prompt and a delivered guidance file each carried a `<details>` of
+its own whose summary was the front of its own body - so a panel spent one row saying what it was and
+a second row saying it again, and once open the second row held a lone marker and nothing else. Those
+three had no fold worth keeping, because the thing their summary said is the thing the panel's row
+already says. They are drawn plain now, and the panel is their fold.
+
+**A call and a command keep theirs, and the difference is whether the summary is the block
+restated.** A tool's name with its outcome and how long it ran, and a command's line with the status
+a program chose, are facts about the block rather than a prefix of it - and a panel holds a whole
+*batch* of either, so a reader wanting one read out of three needs a fold per call as well as one per
+panel. Two levels, and each is named: a panel's fold is the reader's, a call's is the call's.
+
+**The row is the summary and everything in it keeps working**, which is the browser's rule rather
+than this markup's: a summary's activation behaviour skips a press whose target is interactive
+content, so the permalink navigates and the copy button copies without folding the panel underneath.
+`TestFoldingAPanel` asks Chromium both questions, because a page where that did not hold would look
+identical in the markup and fold the panel a reader had just linked to.
+
+**The mark is a `::after` on the role rather than the summary's own**, and that is forced: a
+disclosure's marker always leads the row, and this one has to come *between* the title and the line
+it stands for. On the role it takes the panel's kind colour for free, so there is no second list of
+hues to keep in step.
+
+**Shut, the transcript is its own outline**, one row per panel, which is what the dock's
+fold-everything button now produces. That is a wider meaning than it had - it used to put the calls
+away - and it is the one worth having, since what `muted` could never give a reader coming back to a
+finished conversation is a conversation that takes less room.
+
+**A third dock button puts every fold back where the console had it**, and it is not a midpoint
+between the two beside it: those set every fold one way, and this hands out a different answer per
+fold, a call shut and a reply open and a system prompt away. It is the way back from either of the
+others, which without it are one-way presses over a whole conversation. What makes it possible is
+`opens` in `pages.py`, which writes `data-opens` beside the `open` attribute: `open` is the state and
+is what makes the page work with no script, `data-opens` is where the console *put* it, and the two
+stop being the same thing the moment anything presses anything. Not a copy that can drift, then, but
+the original beside the current.
+
+**`mainplate.js` records every toggle as a decision, a morph's own included, and that is
+deliberate.** A call still out is drawn open, so the morph that delivers one records it open, and a
+reader watching it fill in keeps it open when the result lands rather than having it collapse under
+them at the moment it became worth reading. Told apart - by comparing against the `data-opens` the
+server just sent - a still-out call would shut itself on arrival and a reader could not ask
+otherwise, because at the moment they would press, open is already what the console said, so the
+press reads as agreeing rather than as deciding. The two are indistinguishable there, so nothing
+tries. What it costs is that little stays undecided on a turn being watched, and the third button is
+the way back. `TestWatchingATurnArrive` pins both halves against each other.
+
+**A panel whose default would otherwise move carries the working dots on its own row instead.** The
+panel saying a reply is being written, and a stretch of context whose instructions no pass has
+composed yet, are both drawn *shut* with the dots in the opening line's place. Two things fall out of
+one decision: a panel opened to show three dots is a row spent on three dots, which is the thing this
+row exists not to spend; and a fold whose default moves under a reader is one the console can no
+longer draw either way once a morph has recorded the state it delivered.
+
+### The line a shut panel stands for
+
+**Every panel's row carries the front of what is in it, clipped by the browser at the panel's
+width.** Folding prose is only worth offering if the shut state identifies it, so this is what makes
+the fold above worth having on a message and a reply rather than only on reference material.
+
+What that line *is* differs by what the blocks are, and `panel_opening` draws the split the old
+per-block folds already drew. Prose stands for itself with its own opening. A call and a command have
+no prose to take a front off, so the panel *names* what is in it: `read, read` and `git status
+--short, git diff --quiet`. The first block for the prose kinds and every block for the two that are
+named, which is not an inconsistency - an opening is a prefix, and a prefix of a run of paragraphs is
+the front of the first, where a list of calls naming only its first would be hiding the rest.
+
+There is deliberately no length in the markup: `text-overflow: ellipsis` measures a line against a
+box, which is a measurement the server cannot make, and any character count it picked would cut in
+the wrong place at every other width. `min-width: 0` is what lets the flex item shrink below its
+content and so is the whole of what makes the ellipsis appear.
+
+**A document keeps its character count beside the line and nothing else does.** What a reply cost is
+on the rule already, as tokens and money for the request it belongs to, where what a system prompt or
+a delivered guidance file costs is paid on every request from here on and no rule speaks for that.
+`SIZED` is the two kinds; summed across the blocks, since a batch reaching into two parts of a
+repository is handed both files at once and they arrive as one guidance panel.
 
 `pages.OPENING` is a bound on what is *carried* rather than on what is shown, and it exists because a
-summary holding the whole of a long stretch would put every word of it on the page twice, on a region
+line holding the whole of a long block would put every word of it on the page twice, on a region
 re-rendered whenever the turn in flight records anything. The number is what keeps the clipping
 honest: clipped short of it the ellipsis says there is more, and clipped *at* it with no ellipsis it
 would say there is not. So it has to exceed what the widest panel can show, which is a bounded
 question because the transcript is capped at `--measure`, and
-`TestFoldingAStretchOfReasoning::test_more_is_carried_than_the_widest_panel_can_ever_show` measures
+`TestTheLineAShutPanelStandsFor::test_more_is_carried_than_the_widest_panel_can_ever_show` measures
 the worst case there is - the narrowest glyph the prose face draws, repeated - and fails if it fits.
 
-Three consequences of a summary being a prefix of its own body, which apply to all three of these
-folds and to nothing else here:
+Three consequences of the line being a prefix of the body under it:
 
 - **It is hidden once open**, since a prefix standing directly above the body says nothing twice.
-  What stays is the mark, and the count where there is one, so the control does not move under the
-  finger that pressed it. Only reasoning tightens its open row to one glyph's height, because it is
-  the only one whose summary has no text left to set.
+  Hidden and not removed: taken out of the flow the row's free space collapses and the permalink
+  slides left across the panel, and a control that moves under the finger that pressed it cannot be
+  pressed twice.
 - **The search skips `.opening`.** Found in both, the dock would step through one sentence at two
   stops and the count would say there is twice as much of it as there is. It is the one entry in
   `markHits`'s skip list that is there for being a second copy rather than for not being
   conversation.
 - **A copy button reads `data-markdown`**, as it does for every other Markdown block, so what comes
   out is the source and the opening is in it once.
+
+**It is the source rather than the rendering**, which is what a message written to be markup makes
+worth saying: the sanitiser never sees this line, so the escaping of a text child is the whole of
+what keeps it inert, and `test_markup_in_a_message_is_still_text_in_the_line_its_panel_stands_for`
+reads it back with a real HTML parser.
 
 A turn is read out of the checkpoint as **panels of blocks**, not as a question-and-answer pair.
 A block is prose, reasoning, a call with its result, or a command with its own; a panel is a run of

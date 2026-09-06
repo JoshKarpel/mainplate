@@ -29,22 +29,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file itself, the model wrote the file, a fork carried it across, or a `forget` dropped it and it
   is handed over again. A `bash` command reaches none of this, because its argv is the model's and a
   path inside it is not this console's to parse; the index is what covers that.
-- The system prompt drawn as a panel, folded, under the rule that opens the stretch of context it
+- The system prompt drawn as a panel, shut, under the rule that opens the stretch of context it
   belongs to. It is read from what that stretch recorded rather than out of a turn's messages, so it
   is on the page while the first turn is still being answered rather than only once one has landed; a
-  stretch nothing has composed for yet draws the panel with the working dots in it, which is where a
+  stretch nothing has composed for yet draws the working dots on the panel's row, which is where a
   session sits for as long as its clone and its worktree take. Drawn as the Markdown it is, since
-  what is under the fold is `.md` files and a wall of `##` is the one reading of them nobody meant;
-  the source rides along as `data-markdown`, so the copy button still hands back exactly what was
-  sent. The fold is shut and stands for itself with its own opening line, clipped at the width of the
-  panel, with the character count beside it. A console that shows what a model answered and hides
-  what it was told is showing half of how a turn happened.
-- Guidance handed over mid-turn drawn as a `guidance` panel, in the same fold, at the position it was
-  delivered. Its own kind rather than the system prompt's, because the two sit in different places in
-  the request - `instructions` in front of the cached prefix against a system part appended once into
-  the history - reach the model with different authority depending on which model it is, and are two
-  things the key can quiet apart. Shut, it names the file it came from, which is the line it opens
-  with.
+  what is in it is `.md` files and a wall of `##` is the one reading of them nobody meant; the source
+  rides along as `data-markdown`, so the copy button still hands back exactly what was sent. The
+  panel's row stands for it with its own opening line, clipped at the width of the panel, and the
+  character count beside it, which is what says it is paid for on every request from here on. A
+  console that shows what a model answered and hides what it was told is showing half of how a turn
+  happened.
+- Guidance handed over mid-turn drawn as a `guidance` panel, in the same shape, at the position it
+  was delivered. Its own kind rather than the system prompt's, because the two sit in different
+  places in the request - `instructions` in front of the cached prefix against a system part appended
+  once into the history - reach the model with different authority depending on which model it is,
+  and are two things the key can quiet apart. Shut, its row names the file it came from, which is the
+  line it opens with.
 - Places reached by name rather than by path: `read`, `edit` and `create` take a `root`, and a
   command finds `$MAINPLATE_WORKTREE` and `$MAINPLATE_SCRATCH` in its environment. A worktree sits
   under 32 hex characters of session id, and a model reproducing those from memory eventually
@@ -59,11 +60,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- A stretch of the model's reasoning folds, drawn open, with its own opening line as the summary and
-  the browser clipping that line at whatever width the panel has. Open is what a turn being watched
-  needs, since a fold rendered shut would hide the thinking at the moment it is worth watching; shut,
-  a stretch is one line, and the dock's fold-everything button now puts every one of them away in one
-  press. What a copy button hands back is unchanged, because it reads the source rather than the page.
+- Every panel folds, from its own row of facts, with the mark immediately right of the title. What a
+  reader wants put away is theirs to decide, so the console says only where each kind starts: a
+  message, a reply, a stretch of reasoning and a batch of calls open, a system prompt and a delivered
+  guidance file shut. Shut, a panel is one row carrying the front of what is in it - clipped by the
+  browser at whatever width the panel has, and for a batch of calls or commands the names of what ran
+  rather than a quotation - so the whole transcript folds down to its own outline. A tool call and a
+  command keep the fold they have, because their summary is facts about the block rather than the
+  block restated and a panel holds a batch of either. Reasoning, the system prompt and delivered
+  guidance lose theirs, which is a row apiece back: the thing their summary said is the thing the
+  panel's row now says, and once open that row held a lone marker.
+- The dock's fold-everything and unfold-everything buttons reach every panel rather than only the
+  calls, and a third button beside them puts every fold back where the console had it. That is not a
+  midpoint between the two: it hands out a different answer per fold, so it is the way back from
+  either of them, which without it are one-way presses over a whole conversation.
+- The panel saying a reply is being written, and a stretch of context whose instructions are not
+  composed yet, carry the working dots on their own row instead of opening a panel to show them.
 - Panels are named after what they hold, in the word the page prints: `prompt` and `steer` where
   they read `you` and `you (steering)`. A reader who learns a word from a panel now finds it in the
   code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind

@@ -239,7 +239,7 @@ class TestHowACommandIsDrawn:
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
 
-        assert f'<details class="ran" id="ran-{entry.key}" open>' in drawn.text
+        assert f'<details class="ran" id="ran-{entry.key}" open data-opens="open">' in drawn.text
         assert " M pages.py" in drawn.text
 
     async def test_a_command_that_said_nothing_says_so_rather_than_drawing_an_empty_box(

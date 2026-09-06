@@ -132,6 +132,40 @@ def blocks_carrying_markdown(region: str) -> list[dict[str, str | None]]:
     return found
 
 
+def opening_lines(region: str) -> list[str]:
+    """
+    What each panel's row says it stands for, as the text a browser would show in it.
+
+    Parsed for the same reason `blocks_carrying_markdown` is. The opening line is the *source* of
+    what is under it rather than the rendering, so a message written to be markup reaches this
+    element as characters, and what has to hold is that they are still characters when the document
+    is read back - which is a statement about the parse and not about which escaped spelling appears.
+    """
+    found: list[str] = []
+
+    class Reading(HTMLParser):
+        inside = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if self.inside:
+                self.inside += 1
+            elif dict(attrs).get("class") == "opening":
+                self.inside = 1
+                found.append("")
+
+        def handle_endtag(self, tag: str) -> None:
+            self.inside = max(0, self.inside - 1)
+
+        def handle_data(self, data: str) -> None:
+            if self.inside:
+                found[-1] += data
+
+    reading = Reading()
+    reading.feed(region)
+    reading.close()
+    return found
+
+
 # A catalogue offering something else entirely, for the session whose pair went away. It stands in
 # for both ways that happens - an endpoint edited out of the file, and an endpoint that stopped
 # listing a model - because the console cannot tell them apart and does not try to.
@@ -671,15 +705,35 @@ class TestTheConsole:
         pass on the sidebar's copy whatever the transcript did with it, which is the check that
         cannot fail measuring the wrong thing.
 
-        Asserted on what is *drawn*, with the sources the copy buttons hand over taken back out. A
-        block carries the Markdown it was written as, so it holds that message's angle brackets by
-        construction; what it must not do is let them become anything, which is the test below.
+        Asserted on what is *drawn*, with the two places the source is deliberately carried taken
+        back out. A block carries the Markdown it was written as for its copy button, and a panel's
+        row carries the front of it as the line a shut panel stands for, so both hold that message's
+        angle brackets by construction; what neither may do is let them become anything, which is
+        what the two tests below ask of each.
         """
         session = await a_session(app, "<script>alert(1)</script> and <img src=x onerror=alert(2)>")
-        drawn = sub(r' data-markdown="[^"]*"', "", await watched(app, session))
+        drawn = sub(r'( data-markdown="[^"]*"|<span class="opening">[^<]*</span>)', "", await watched(app, session))
         assert "<script" not in drawn
         assert "alert(1)" not in drawn
         assert "onerror" not in drawn
+
+    async def test_markup_in_a_message_is_still_text_in_the_line_its_panel_stands_for(self, app: ASGIApp) -> None:
+        """
+        A panel's opening line is the source rather than the rendering, so the sanitiser never sees
+        it and the escaping of a text child is the whole of what keeps it inert. The message is
+        written to close that element and open a script beside it.
+
+        Read back with a real HTML parser, because what has to hold is that the document parses to
+        one element whose text is exactly the front of the message - the same statement whether the
+        renderer spells the bracket `&lt;` or `&#60;`.
+
+        The empty ones are dropped rather than counted: a panel with nothing to stand for yet carries
+        the working dots in this element instead of a line, and how many of those a page happens to
+        have is not what this asks.
+        """
+        said = "</span><script>alert(1)</script>"
+        session = await a_session(app, said)
+        assert [line for line in opening_lines(await watched(app, session)) if line] == [said]
 
     async def test_the_source_a_copy_button_hands_over_cannot_break_out_of_its_attribute(self, app: ASGIApp) -> None:
         """

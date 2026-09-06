@@ -400,8 +400,8 @@ conversation down it whenever the session records anything. Every message is a w
 rather than a delta, which is what makes a dropped connection cost nothing and a reconnect need no
 replay, and each names the region it is for, so a second region joins the same connection rather
 than opening another. A render is *morphed* into the page rather than replacing it, so what a reader
-has done to the conversation, a tool call they unfolded, a command they put away, a search, the place
-they had scrolled to, survives an update arriving.
+has done to the conversation, a panel or a tool call they unfolded, a command they put away, a
+search, the place they had scrolled to, survives an update arriving.
 
 **A turn is drawn as it happens.** The responses and tool results behind a running turn are already
 in the checkpoint, recorded step by step so that a resumed pass does not pay for them twice, so the
@@ -417,10 +417,15 @@ for what reached the model and warm for what it produced, so a reader scrolling 
 apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
 page.
 
-Reasoning folds, drawn open, so watching a model think costs no clicks while the turn is running.
-Shut, a stretch stands for itself with its own opening line, clipped to whatever width the panel has
-- so coming back to a finished conversation, the dock's fold-everything button turns the thinking
-into one line apiece and leaves the answers where they were.
+**Every panel folds, from its own row**, with the mark just right of the title. What you want put
+away is yours to decide; the console only says where each kind starts, which is a message, a reply, a
+stretch of reasoning and a batch of calls open, and reference shut. Shut, a panel's row carries the
+front of what is in it, clipped to whatever width the panel has - and for a batch of calls or
+commands, the names of what ran. So the dock's fold-everything button turns a finished conversation
+into its own outline, one row per panel, and a third button beside it puts every fold back where the
+console had it. A tool call and a command keep a fold of their own inside the panel, because what
+their summary says is the outcome and the status rather than the first line of the body, and a panel
+holds a whole batch of either.
 
 Two more panels say what the model was *told* rather than what anyone said. The **system prompt** is
 what every request in a stretch of context carried, drawn under the rule that opens that stretch, and
@@ -430,8 +435,8 @@ request - the first is re-sent whole on every request in front of the cached pre
 appended once into the history - so the key can quiet either without the other, and so that a reader
 can see which is which. How much authority the second one carries is the provider's answer rather
 than this console's, and it varies by model, which is another reason not to draw them as one thing.
-Both fold shut and stand for themselves the same way reasoning does, with the character count beside
-the line, because what is in them is paid for on every request from there on.
+Both are drawn shut, with the character count beside the opening line on the row, because what is in
+them is paid for on every request from there on.
 
 A **rule** stands at every round trip to the model, carrying what is true of that request rather than
 of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and
@@ -464,10 +469,11 @@ up to check, what you want to see now is the answer to what you just sent.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that steps where the model's history starts again, whole turns, every
-panel, or only what the model said, and folds everything at once, a shelf for text you have written
+panel, or only what the model said, and folds everything at once or puts every fold back where the
+console had it, a shelf for text you have written
 and not sent, a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
-off the console still renders, still posts messages, and every tool call is still a fold that
-opens; what goes is the rail and the keyboard send.
+off the console still renders, still posts messages, and every panel and every tool call is still a
+fold that opens; what goes is the rail and the keyboard send.
 
 **Send** puts what is in the box into the conversation now. If a reply is already coming, that means
 **steering**: the message is put to the model in the turn it is answering, appended to the next

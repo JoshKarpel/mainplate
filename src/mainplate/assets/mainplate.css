@@ -422,6 +422,16 @@ main > * {
     opacity: 0.4;
 }
 
+/* The row of facts, which is also the summary that folds the panel. It was a `<header>` and the
+   panel was an `<article>`; what changed is which element they are, and every rule below held
+   before the panel folded.
+
+   `gap` on two axes because the row wraps: on a phone the opening line takes a line of its own
+   under the role, and the row gap is what keeps the two off each other.
+
+   `list-style: none` and the WebKit marker together, because the marker this row draws is on the
+   role and sits *between* the role and the opening line, which a disclosure's own marker cannot
+   do - it is always the first thing in the summary. */
 .panel__meta {
     display: flex;
     flex-wrap: wrap;
@@ -432,6 +442,12 @@ main > * {
     font-size: 0.68rem;
     letter-spacing: 0.03em;
     color: var(--ink-faint);
+    cursor: pointer;
+    list-style: none;
+}
+
+.panel__meta::-webkit-details-marker {
+    display: none;
 }
 
 .panel__role {
@@ -439,6 +455,23 @@ main > * {
     text-transform: uppercase;
     letter-spacing: 0.09em;
     color: var(--ink-soft);
+}
+
+/* The mark, immediately right of the title, in the title's own ink - so it takes the panel's kind
+   colour for free from the rules below and there is no second list of hues to keep in step.
+
+   On the role rather than as a `::before` on the summary, which is the only place a generated
+   marker can go that is *after* the word and before the line: a summary's own marker leads the row,
+   and so would `::before`. `letter-spacing: normal` because the role is tracked out and the mark
+   would otherwise carry a trailing gap that reads as a wider space than the flex gap beside it. */
+.panel__role::after {
+    content: "\25B8";
+    margin-left: 0.45em;
+    letter-spacing: normal;
+}
+
+.panel[open] > .panel__meta .panel__role::after {
+    content: "\25BE";
 }
 
 /* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
@@ -463,7 +496,19 @@ main > * {
     color: var(--tool-edge);
 }
 
-/* Muted until hovered, so it reads as chrome rather than as prose. */
+/* How much of a document there is, which is the one fact worth having without opening it: what is
+   in there is paid for on every request from here on, so a prompt or a delivered file grown to tens
+   of thousands of characters is worth seeing at a glance. Never shrunk, so the opening line beside
+   it is what gives way, and never hidden when the panel opens, since a figure about the whole is
+   not a prefix of anything. */
+.panel__size {
+    flex: none;
+    letter-spacing: 0.02em;
+}
+
+/* Muted until hovered, so it reads as chrome rather than as prose. The `auto` is what puts it flush
+   right on a row whose opening line is absent or has not been given the free space - a page with no
+   `.opening` at all still reads correctly. */
 .panel__meta .panel__anchor {
     margin-left: auto;
     color: var(--ink-faint);
@@ -544,28 +589,36 @@ pre > .copy {
     opacity: 1;
 }
 
-/* --- The line a shut fold stands for ------------------------------------ */
+/* --- The line a shut panel stands for ----------------------------------- */
 
-/* Three folds summarise themselves with the front of their own body: a stretch of reasoning, the
-   standing system prompt, and a guidance file handed over mid-turn. A call and a command are not
-   among them, because a tool's name and a command's line are not prefixes of anything.
+/* Every panel folds, so every panel needs a line saying what is in it while it is shut: the front
+   of its own prose, or - for a batch of calls or commands, which have no prose to take a front off
+   - what is in it, named. See `panel_opening` in `pages.py`.
+
+   It takes the free space between the role and the figures at the end, which is what makes the
+   permalink's `margin-left: auto` unnecessary on a row that has one of these and why the anchor
+   gives that up. `flex: 1` rather than letting it size to its content, or a short opening would
+   leave the row's own gap doing the spacing and the permalink would sit against the text.
 
    Clipped by the browser at whatever width the panel has, which is the whole of why there is no
    length in the markup: the server cannot know the window, and any character count it picked would
    cut in the wrong place at every other width. `min-width: 0` is what lets a flex item shrink below
    its content and so is what makes the ellipsis appear at all. */
 .opening {
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+    color: var(--ink-soft);
 }
 
 /* Open, it goes: a prefix of the body standing directly above the body says nothing twice. The mark
-   stays, and so does anything else on the row, so the control does not move under the finger that
-   pressed it. */
-details[open] > summary > .opening {
-    display: none;
+   stays, and so does the figure and the permalink, so nothing on the row moves under the finger
+   that pressed it - which is why this is `visibility` and not `display`. Removed from the flow, the
+   row's free space would collapse and the permalink would slide left across the panel. */
+.panel[open] > .panel__meta > .opening {
+    visibility: hidden;
 }
 
 /* --- Blocks ----------------------------------------------------------- */
@@ -804,48 +857,15 @@ details[open] > summary > .opening {
     border-top: 1px solid var(--edge);
 }
 
+/* Reasoning, in the box the block itself is. It carries no fold of its own: the panel around it is
+   the fold, and a `<details>` in here spent one row on a marker that stood for the very text a few
+   pixels below it. See `.panel__meta`. */
 .block--thinking {
     padding: 0.5rem 0.9rem;
     border-radius: 0 var(--radius) var(--radius) 0;
     background: var(--sunk);
     color: var(--ink-soft);
     font-style: italic;
-}
-
-/* Reasoning folds, drawn open. It borrows neither `.tool`'s frame nor `.ran`'s, because the block
-   around it is already a box: what is wanted here is the mark and the line, not a second edge inside
-   an edge. */
-.thinking > summary {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-4);
-    /* The whole of what the fold shuts, since the block's own padding is outside it. */
-    cursor: pointer;
-    list-style: none;
-}
-
-.thinking > summary::-webkit-details-marker {
-    display: none;
-}
-
-.thinking > summary::before {
-    content: "▾";
-    /* It never wraps and never shrinks, so the line beside it is what gives way. */
-    flex: none;
-    color: var(--thinking-edge);
-    opacity: 0.7;
-}
-
-.thinking:not([open]) > summary::before {
-    content: "▸";
-}
-
-/* Open, the row holds one glyph, so it takes the height of that glyph rather than of a line of
-   prose: left at the inherited leading it is a band of empty box between the mark and the reasoning
-   it belongs to. Only here, because a document fold keeps its size beside the mark and so keeps a
-   line of text to set. */
-.thinking[open] > summary {
-    line-height: 1;
 }
 
 /* Reasoning is set in italic, and code inside it is not. A model reasons *about* code, so a block
@@ -857,11 +877,6 @@ details[open] > summary > .opening {
 .block--thinking pre {
     font-style: normal;
 }
-
-/* Guidance the console handed over part way through a turn, because the model reached into a part of
-   the repository that carries its own. It needs no rules of its own: what is in it is a `.document`
-   fold, the same one the session's standing system prompt is drawn in, because on the page the two
-   are the same thing. */
 
 /* --- Tool calls ------------------------------------------------------- */
 
@@ -994,71 +1009,33 @@ details[open] > summary > .opening {
 
    The hue is the person's throughout. What says no model was told is the panel's label and the
    sentence under the box, not a colour: the palette answers who wrote it. */
-/* A Markdown file the console handed the model, shut: the session's standing system prompt, and the
+/* A Markdown file the console handed the model: the session's standing system prompt, and the
    guidance a turn is handed when it reaches into a part of the repository carrying its own. One set
    of rules because on the page they are the same thing; what separates them is where each sits in
-   the request, which is the panel's business rather than the fold's.
+   the request, which the panel's own kind says.
 
-   It borrows `.ran`'s frame rather than inventing one, because it is the same shape of thing: a
-   summary that says what is in the box, and a box under it. What differs is the mark on the summary
-   and that it opens shut. */
-.document {
-    margin: 0.5rem 0;
-    border: 1px solid color-mix(in srgb, var(--person-edge) 35%, var(--edge-soft));
-    border-radius: var(--radius);
-    background: var(--raised);
-}
+   It carries no fold of its own. The panel is the fold - which is where its opening line and its
+   character count now are, on the one row - so what is left here is the sunk box the prose sits in
+   and the band around it.
 
-.document > summary {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-4);
-    padding: 0.35rem 0.6rem;
-    color: var(--ink-soft);
-    cursor: pointer;
-    list-style: none;
-}
-
-.document > summary::-webkit-details-marker {
-    display: none;
-}
-
-.document > summary::before {
-    content: "▸";
-    /* It never wraps and never shrinks, so the line beside it is what gives way. */
-    flex: none;
-    color: var(--person-edge);
-    opacity: 0.7;
-}
-
-.document[open] > summary::before {
-    content: "▾";
-    opacity: 1;
-}
-
-/* How much of it there is, which is the one fact worth having without opening it: what is in here is
-   paid for on every request from here on, so a prompt or a delivered file grown to tens of thousands
-   of characters is worth seeing at a glance. Pushed to the end of the row and never shrunk, so the
-   opening line is what gives way and the figure stays where the eye learns to find it. */
-.document__size {
-    flex: none;
-    margin-left: auto;
-    font-size: 0.72rem;
-    letter-spacing: 0.02em;
-}
-
-.document__body {
-    padding: 0 var(--space-4) var(--space-4);
+   That band is the room a press shuts the panel from, which is the same band `.tool__body` and
+   `.ran__body` carry and is why it is spaced like them: this is the longest thing on the page, so
+   the reader who wants it put away is at the *bottom* of it rather than back up at the row that
+   opened it. No padding on top, because the panel's row is directly above and the box wants to sit
+   under it. */
+.block--document {
+    padding: 0 var(--space-3) var(--space-3);
     cursor: pointer;
 }
 
-/* What is in the fold is `.text`, so every rule Markdown already has on this page applies to it and
-   there is nothing here to keep in step with them. Only the two things the *fold* decides: that the
-   prose is out of the band that shuts it, exactly as a command's output is, and that it is sunk
-   below the summary so the box reads as one thing rather than as a page inside a panel.
+/* Every rule Markdown already has on this page applies to `.text`, so there is nothing here to keep
+   in step with them. Only the two things the *fold* decides: that the prose is out of the band that
+   shuts it, exactly as a command's output is, and that it is sunk so the box reads as one thing
+   rather than as a page inside a panel.
 
-   Deliberately uncapped, and the fold is why: a reader who opened this asked for all of it. */
-.document__body .text {
+   Deliberately uncapped and it does not scroll: a reader who opened this asked for all of it, and a
+   box that scrolls has no still corner for a copy button to pin to. */
+.block--document .text {
     cursor: auto;
     padding: var(--space-3) var(--space-4);
     border-radius: calc(var(--radius) / 1.5);
