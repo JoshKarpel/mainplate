@@ -1,8 +1,8 @@
 # The console
 
 The page: how it is rendered, how a second render reaches a browser nobody reloaded, and the
-controls around the conversation. The stylesheet, the script's own responsibilities and the
-monospace grid live beside the files, in `src/mainplate/assets/AGENTS.md`.
+controls around the conversation. What *draws* it, the three shapes, the one value that scales
+everything, and the monospace grid, is [the stylesheet and the grid](assets.md).
 
 ## htmx 4
 

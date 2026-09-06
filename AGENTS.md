@@ -91,12 +91,16 @@ change:
   where in it and on what branch, and snapshots.
 - [`docs/design/guidance.md`](docs/design/guidance.md): what a session is told, and the nested
   guidance handed over as the model reaches into a directory.
+- [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
+  content-addressed anchoring scheme behind `read` and `edit`.
 - [`docs/design/sandbox.md`](docs/design/sandbox.md): the mount namespace `bash` runs behind, and
   the two isolation axes a session picks.
 - [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, and what one
   pass does.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
+- [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
+  page, and the vendored monospace face box drawing depends on.
 - [`docs/design/deployment.md`](docs/design/deployment.md): the systemd unit `mainplate install`
   renders, and why the service is not itself confined.
 
@@ -104,17 +108,15 @@ The toolchain around the source rather than any part of the console is
 [`docs/maintaining.md`](docs/maintaining.md): the dependency choices, the checks, the documentation
 site, and where the prose in this repository goes.
 
-Some guidance is only useful while looking at one directory, so it lives there instead:
+Five directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
+than having to go and find: `src/mainplate/tools/` and `src/mainplate/tools/files/` for what a
+change to a tool must not break, `src/mainplate/assets/` for what a change to the stylesheet, the
+script or the vendored font must not break, `tests/` for how the suite is driven and what has to be
+a browser, and `scripts/` for the gallery and the seeder.
 
-- [`src/mainplate/tools/AGENTS.md`](src/mainplate/tools/AGENTS.md): how a toolset is assembled and
-  which tools a session gets.
-- [`src/mainplate/tools/files/AGENTS.md`](src/mainplate/tools/files/AGENTS.md): the content-addressed
-  line anchoring scheme.
-- [`src/mainplate/assets/AGENTS.md`](src/mainplate/assets/AGENTS.md): the stylesheet, the script,
-  the three shapes, and the monospace grid.
-- [`tests/AGENTS.md`](tests/AGENTS.md): how the suite is driven, and what has to be a browser.
-- [`scripts/AGENTS.md`](scripts/AGENTS.md): the gallery, the seeder, and the invariants the seeder
-  has to repeat because it is not the service.
+**Those say what must hold; the design notes say why.** A page argues for four lowercase letters and
+the file beside `anchors.py` says do not make it three, so write a new constraint beside the code
+and its reasoning on the page, rather than either in both.
 
 ## Dependencies
 

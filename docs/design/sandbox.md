@@ -73,6 +73,8 @@ line editor; a build cache never does.
 
 ## Roots
 
+Where the file tools may reach. What they *are* is [how a model reaches a file](tools.md).
+
 `Files` holds `roots`, a tuple of *typed* places rather than one path and a list of extras. The type
 is what decides: a `GitTracked` is files a conversation is about and is the only kind git can be
 asked about, so it owns `entries` and answers `list`; a `Scratch` answers no question git answers,

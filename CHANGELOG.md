@@ -112,10 +112,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   history itself, and forking at the turn drops that turn's own requests while keeping everything
   under them.
 - A documentation site, one page per part of the console, built by `just docs-build` and published
-  to GitHub Pages on a push to `main`. It is where the design narrative now lives: `AGENTS.md` is the
-  map, `PHILOSOPHY.md` is the one idea and the rules every page cites rather than restates, and the
-  parts of the source that carry guidance only useful while looking at them carry their own
-  `AGENTS.md` beside the code.
+  to GitHub Pages on a push to `main`. It is where the design narrative now lives, with `README.md`
+  as its home page: `AGENTS.md` is the map, `PHILOSOPHY.md` is the one idea and the rules every page
+  cites rather than restates, and several directories carry an `AGENTS.md` saying what a change
+  *there* must not break, which is a different thing from the page that argues why.
 
 ### Fixed
 

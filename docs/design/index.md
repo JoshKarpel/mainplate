@@ -25,25 +25,26 @@ the cross-cutting rules the pages cite rather than restate.
   worktree a session gets, and how a tree is snapshotted at every model request.
 - **[What a session is told](guidance.md)** is the instructions: console guidance, a repository's
   own `AGENTS.md`, and the nested guidance handed over as the model reaches into a directory.
+- **[How a model reaches a file](tools.md)** is the toolset: which tools a session gets, and the
+  content-addressed anchoring scheme behind `read` and `edit`.
 - **[Where a command runs](sandbox.md)** is the mount namespace `bash` runs behind, and the two
   isolation axes a session picks.
 - **[Durability](durability.md)** is the Pydantic AI capability that records a turn step by step,
   and what one pass of a session actually does.
 - **[The console](console.md)** is the page: the live connection, the transcript, panels and rules,
   and the controls around them.
+- **[The stylesheet and the grid](assets.md)** is what draws it: the three shapes, the one value
+  that scales the page, and the vendored monospace face box drawing depends on.
 - **[Running it as a service](deployment.md)** is the systemd unit `mainplate install` renders, and
   why the service is not itself confined.
 
 The toolchain around the source, rather than any part of the console, is
 [maintaining mainplate](../maintaining.md): the dependency choices, the checks, and this site.
 
-## What lives beside the code instead
+## What is written beside the code instead
 
-Some guidance is only useful while looking at one directory, so it lives there as that directory's
-own `AGENTS.md`:
-
-- `src/mainplate/tools/` for how a toolset is assembled and which tools a session gets.
-- `src/mainplate/tools/files/` for the content-addressed line anchoring scheme.
-- `src/mainplate/assets/` for the stylesheet, the script, and the monospace grid.
-- `tests/` for how the suite is driven, including the browser tests.
-- `scripts/` for the gallery and the seeder.
+These pages carry the *reasoning*. Several directories also carry a short file of their own naming
+what a change there must not break, which is a different thing rather than a second copy: the page
+says why four lowercase letters, and the file beside `anchors.py` says do not make it three. Those
+are delivered to whatever is working in that directory rather than read from here, so nothing on
+this site sends you to one.

@@ -38,9 +38,10 @@ unnarrowed *inside* its record, because a toolset is unrelated functions with un
 and there is no one type to validate against; both passes see the round trip, so they agree.
 
 This is `step` and not `transact`, so a tool is **at-least-once**: a crash between the tool returning
-and the record landing re-runs it next pass. That window is one store round trip, and anchored
-editing is what makes the failure mild rather than corrupting, since an edit whose anchors no longer
-resolve is refused rather than applied somewhere wrong.
+and the record landing re-runs it next pass. That window is one store round trip, and [anchored
+editing](tools.md#a-line-is-addressed-by-a-hash-of-its-own-content) is what makes the failure mild
+rather than corrupting, since an edit whose anchors no longer resolve is refused rather than applied
+somewhere wrong. An arbitrary shell command has no such defence and re-runs silently.
 
 ## What one pass does
 

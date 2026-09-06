@@ -84,9 +84,11 @@ nav:
       - The composer: design/composer.md
       - The workspace: design/workspace.md
       - What a session is told: design/guidance.md
+      - How a model reaches a file: design/tools.md
       - Where a command runs: design/sandbox.md
       - Durability: design/durability.md
       - The console: design/console.md
+      - The stylesheet and the grid: design/assets.md
       - Running it as a service: design/deployment.md
   - Maintaining: maintaining.md
   - Changelog: changelog.md

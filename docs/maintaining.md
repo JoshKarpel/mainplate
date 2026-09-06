@@ -70,6 +70,8 @@ The prose in this repository is split four ways, and the split is worth keeping:
   the standard new work is measured against, and not the authority on what the code currently does.
 - **`docs/`** is the design notes: what each mechanism is, what it costs, and which alternatives
   were tried and are not worth trying again.
-- **`AGENTS.md`**, at the root and in the directories that need one, is the map and whatever is only
-  useful while looking at that directory. It also carries the standard all four are written to,
-  since it is the one of them every harness loads without being asked.
+- **`AGENTS.md`**, at the root, is the map, and it carries the standard all four are written to
+  since it is the one of them every harness loads without being asked. In a directory it is what a
+  change *there* must not break, which is a different thing from a design note rather than a shorter
+  one: the page argues for four lowercase letters, the file beside `anchors.py` says do not make it
+  three. Write a new constraint beside the code and its reasoning on the page, never either in both.
