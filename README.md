@@ -427,6 +427,13 @@ console had it. A tool call and a command keep a fold of their own inside the pa
 their summary says is the outcome and the status rather than the first line of the body, and a panel
 holds a whole batch of either.
 
+A **handoff** is the one panel nobody typed. Ask a session to hand itself off and it writes down
+where the work has got to, checking the working tree rather than recalling it, and the document it
+writes opens the next turn with everything above it out of the model's context - still in the
+transcript for you to read, and no longer in what the model is told. Both the ask and the document
+are drawn as their own kind, on the person's side of the palette because that is who produced the
+text, with the panel saying outright that the console composed it.
+
 Two more panels say what the model was *told* rather than what anyone said. The **system prompt** is
 what every request in a stretch of context carried, drawn under the rule that opens that stretch, and
 **guidance** is a repository's own `AGENTS.md` for a directory, handed over at the moment a tool
@@ -481,9 +488,11 @@ Beside the conversation is a rail: find-and-step search, a key that filters by k
 the colour legend, a dock that steps where the model's history starts again, whole turns, every
 panel, or only what the model said, and folds everything at once or puts every fold back where the
 console had it, a shelf for text you have written
-and not sent, a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
-off the console still renders, still posts messages, and every panel and every tool call is still a
-fold that opens; what goes is the rail and the keyboard send.
+and not sent, a follow-the-end toggle, a light/dark/system theme, and, at the foot of it, the handoff.
+That last one is the only card there that *does* something rather than moving you around, which is why
+it sits apart from the rest. Everything above it is an enhancement: with JavaScript
+off the console still renders, still posts messages, still hands off, and every panel and every tool
+call is still a fold that opens; what goes is the reading controls and the keyboard send.
 
 **Send** puts what is in the box into the conversation now. If a reply is already coming, that means
 **steering**: the message is put to the model in the turn it is answering, appended to the next

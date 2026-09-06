@@ -82,6 +82,8 @@ from mainplate.commands import UNFINISHED
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
+from mainplate.conversation import GUIDING_FIELD
+from mainplate.conversation import GUIDING_LENGTH
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
@@ -187,6 +189,7 @@ NAMES: Final[tuple[tuple[Kind, str], ...]] = (
     ("system-prompt", "system prompt"),
     ("guidance", "guidance"),
     ("prompt", "prompt"),
+    ("handoff", "handoff"),
     ("steer", "steer"),
     ("command", "command"),
     ("thinking", "thinking"),
@@ -207,6 +210,9 @@ TITLES: Final[dict[Kind, str]] = {
         "The console handed this to the model when it reached into a part of the repository "
         "that carries its own guidance."
     ),
+    # The third, and the one where leaving it out would be worst: every other message in a
+    # conversation was typed by somebody, so a reader has no reason to suspect this one was not.
+    "handoff": "The console wrote this itself, so that the conversation could carry on with a cleared context.",
 }
 
 # Which side of the exchange a kind is on: what reached the model, and what the model produced.
@@ -222,6 +228,10 @@ SIDES: Final[dict[Kind, str]] = {
     # request, which is not something a hue can say.
     "guidance": "person",
     "prompt": "person",
+    # The person's side because the axis is who produced the *text*, and what a handoff holds was
+    # produced by this session rather than by the model about to be handed it. Its `title` says the
+    # console composed it, exactly as `command`'s says no model was told.
+    "handoff": "person",
     "steer": "person",
     # The person's side because the axis is who produced the text, which is the same rule `steer`
     # follows. It is the one kind on that side the model never saw, and the panel's own `title` says
@@ -240,16 +250,20 @@ SIDES: Final[dict[Kind, str]] = {
 # without an entry here is a `KeyError` at render, which is the same bargain `SIDES` takes and for
 # the same reason: a default nobody chose is worse than a page that will not draw.
 #
-# Reference is shut and conversation is open, which is the one line through all eight. A system
+# Reference is shut and conversation is open, which is the one line through every kind here. A system
 # prompt and a delivered guidance file are documents somebody committed, so they are drawn as their
 # opening line and a figure; everything else is what was said, and a conversation whose replies had
-# to be opened one at a time would not be a transcript. A tool panel is *open* with each call inside
-# it shut, which is today's rendering exactly: the calls are listed, and what each was handed is a
-# press away.
+# to be opened one at a time would not be a transcript. A handoff falls on the conversation side of
+# that despite reading like a document: it is a message, it is the one nobody wrote, and so it is the
+# one a reader cannot recall for themselves. A tool panel is *open* with each call inside it shut,
+# which is today's rendering exactly: the calls are listed, and what each was handed is a press away.
 OPENS: Final[dict[Kind, bool]] = {
     "system-prompt": False,
     "guidance": False,
     "prompt": True,
+    # Open, because it is a message and not reference material: what it says is why the turn under it
+    # goes the way it does, and it is the one message a reader did not write and so cannot recall.
+    "handoff": True,
     "steer": True,
     "command": True,
     "thinking": True,
@@ -322,6 +336,7 @@ class Links:
     workspace_branches: Reversible
     fork_form: Reversible
     fork: Reversible
+    hand_off: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -386,6 +401,9 @@ class Links:
 
     def to_fork(self, session: str) -> str:
         return url_for(self.fork, {"session": session})
+
+    def to_hand_off(self, session: str) -> str:
+        return url_for(self.hand_off, {"session": session})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -2829,7 +2847,74 @@ def theme_card() -> Element:
     )
 
 
-def rail() -> Element:
+def handoff_card(links: Links, session: str) -> Element:
+    """
+    Ask this conversation to write down where it has got to and carry on from that.
+
+    **In the rail rather than in the sending menu**, and the test is the menu's own premise: every
+    answer there is a decision about what happens to the text somebody typed, and this one ignores
+    it. It would also have to sit beside `Keep`, which is the only row that sends the text nowhere -
+    close enough to look like a fourth answer to one question and far enough to confuse it.
+
+    Here it sits with the settings that decide when the console does this by itself, which is the
+    more useful adjacency: what a person presses and what a threshold fires are one call, and a
+    control that says so is a control nobody has to be told twice about.
+
+    **The rail's own docstring says "navigates", and this does not.** Widening that is the deliberate
+    half of putting it here: what the rail holds is conversation controls, which is what its
+    `aria-label` has always said, and a second region pinned to the same edge would be one piece of
+    chrome too many for the sake of a word.
+
+    A form and not a scripted button, so it works with `mainplate.js` absent. Its swap is the
+    composer's, because what comes back is the same transcript with one more message waiting in it.
+    """
+    return form(
+        cls="handoff",
+        attrs={
+            "method": "post",
+            "action": links.to_hand_off(session),
+            "hx-post": links.to_hand_off(session),
+            "hx-target": f"#{TRANSCRIPT_ID}",
+            "hx-swap": SEND_SWAP,
+            # A refusal is not a transcript, exactly as it is not one for the composer: a session
+            # nobody can answer refuses this, and leaving the conversation on screen is the honest
+            # answer to that.
+            "hx-status:4xx": "swap:none",
+            "hx-status:5xx": "swap:none",
+            "aria-label": "Handoff",
+        },
+        children=[
+            div(cls="handoff__head", children="handoff"),
+            # Its own field rather than the message box, because the box is `required` and the
+            # ordinary handoff has nothing typed into it: borrowing it would refuse the common case
+            # to serve the rare one. What goes in here is appended to the standing ask rather than
+            # replacing it, so leaving it empty is a whole answer.
+            input_(
+                cls="handoff__note",
+                attrs={
+                    "type": "text",
+                    "name": GUIDING_FIELD,
+                    "maxlength": str(GUIDING_LENGTH),
+                    "placeholder": "What to dwell on (optional)",
+                    "aria-label": "What the handoff should dwell on",
+                },
+            ),
+            button(
+                cls="handoff__now",
+                attrs={
+                    "type": "submit",
+                    "title": (
+                        "Ask this session to write down where it has got to, then carry on from that "
+                        "document with everything above it cleared from the model's context."
+                    ),
+                },
+                children="Hand off now",
+            ),
+        ],
+    )
+
+
+def rail(links: Links, session: str) -> Element:
     """
     Everything that navigates the conversation, in one column outside the region that swaps.
 
@@ -2841,6 +2926,12 @@ def rail() -> Element:
     The clasp comes first so that on a window too narrow to stand the rail beside the conversation
     it is left where the cards' head was, and the cards slide off. Which width that is stays the
     stylesheet's to say.
+
+    **What it holds is conversation controls, which is wider than navigating and always was**: the
+    `aria-label` has said so since there was a rail, and the handoff card is the first thing here
+    that acts on a session rather than moving around inside one. It goes last, pinned to the bottom
+    by the stylesheet, because it is the one card that *does* something: putting it among the reading
+    controls would mean a button that spends money sharing an edge with one that scrolls.
     """
     return section(
         cls="rail",
@@ -2856,6 +2947,7 @@ def rail() -> Element:
             dock_card(),
             shelf_card(),
             theme_card(),
+            handoff_card(links, session),
         ],
     )
 
@@ -3320,19 +3412,36 @@ def stalled_by(showing: Conversation) -> str | None:
     """
     Why this session cannot be answered, or nothing at all when it can.
 
-    One sentence naming the endpoint, because that is the only thing a person can act on: the
-    endpoint was configured when the session started, so putting it back in the configuration file
-    is what makes the conversation continue exactly where it stopped.
+    Two ways to be stopped, and each says the one thing a person can act on. The endpoint is a
+    configuration file somebody can put back, so the conversation continues exactly where it left
+    off. A refused request cannot be put back at all, because what the provider turned down is the
+    recorded history itself, so what it names is `fork`: forking at the refused turn drops that
+    turn's own requests and keeps everything under them, which is the shape that fits again.
+
+    The endpoint is asked first because it is the cheaper failure to fix, and because a session whose
+    endpoint is gone has no provider to have been refused by.
 
     It names the endpoint and not the model on purpose. A model missing from the picker does not
     stop a session, since an endpoint routes more ids than it advertises, so saying so here would
     tell somebody to fix something that is not broken.
     """
-    if showing.answerable or showing.chosen is None:
+    if showing.chosen is None:
         return None
+    if not showing.answerable:
+        return (
+            f"This session was started on endpoint {showing.chosen.endpoint!r}, which the configuration "
+            f"no longer declares. Put it back to carry on, or start a new session."
+        )
+    if showing.refused is None:
+        return None
+    # The status where there is one, because the number is what somebody looks up, and never in
+    # place of the provider's own words: a refusal says which of the several things a 400 can mean
+    # this one was, and flattening that to a code would take the answer away.
+    said = showing.refused.why
+    coded = "" if showing.refused.status is None else f" ({showing.refused.status})"
     return (
-        f"This session was started on endpoint {showing.chosen.endpoint!r}, which the configuration "
-        f"no longer declares. Put it back to carry on, or start a new session."
+        f"The provider refused this turn{coded} and would refuse it again, so nothing is waiting on "
+        f"it: {said}. Fork at this turn to carry on without the requests it made."
     )
 
 
@@ -3370,7 +3479,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             # Only where there is a conversation to navigate. On the page where a session does not
             # exist yet every control in it would be pointed at an empty transcript, which is a
             # row of dead buttons rather than an offer.
-            aside_rail=[rail()],
+            aside_rail=[rail(links, showing.session.id)],
         ),
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,

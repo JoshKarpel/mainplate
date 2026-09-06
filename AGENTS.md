@@ -222,7 +222,9 @@ console names.
 
 ```text
 inbox:{n}            a message or a command, filed in the order it arrived; appended from outside a
-                     pass, by `Service.say`, `Service.send` and `Service.run`
+                     pass, by `Service.say`, `Service.send`, `Service.run` and `Service.hand_off`,
+                     and from inside one by the `hand_off` tool
+
 result:{entry}       what the command delivered under `{entry}` exited with, said and took; written
                      by `Commands` when it finishes
 choice               the endpoint, model, repository, base, branch, isolation and thinking level;
@@ -235,6 +237,8 @@ turn:{n}:tree:{i}    the worktree before the i-th model request; written by `Ste
 turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request, recorded by
                      `Run.pending` through `StepwiseDurability`
 turn:{n}:model:{i}   the i-th model response of that turn; written by `StepwiseDurability`
+turn:{n}:refused:{i} why the i-th request will never be accepted, where one never was; written by
+                     `StepwiseDurability`, and exclusive with `model:{i}`
 turn:{n}:tool:{id}   what one tool call returned and how long it ran; written by
                      `StepwiseDurability`
 turn:{n}:messages    what the agent run produced; written by the conversation body
@@ -381,9 +385,16 @@ step because `StepKind` is one vocabulary the key builders and the discriminator
 
 **In the inbox it is not a second copy at all, and that is where it earns most.** The store names an
 entry, so nothing in the key says whether what is in it is a message that must open a turn, one a
-running turn may fold in, or a command no model will ever see. `records.Delivered` is the union of
-the three and the tag is the whole of what tells them apart, which is why a pass draining its queue
-can stop at a prompt and pass over a command.
+running turn may fold in, a message the console wrote itself, or a command no model will ever see.
+`records.Delivered` is the union of the four and the tag is the whole of what tells them apart, which
+is why a pass draining its queue can stop at a prompt and pass over a command.
+
+**Which questions a reader asks of that tag are `records.opens` and `records.forgets`**, and they are
+functions rather than an `isinstance` chain repeated at five call sites. `opens` is whether a
+draining pass must stop here, which a `Prompt` and a `Handoff` answer alike; `forgets` is that and
+the field together, since only a message a turn opens on can carry a boundary. `opens` is a `TypeIs`
+so the union it names is written once and every caller that goes on to read `forget` is narrowed by
+asking rather than by repeating it.
 
 **Not to be confused with the panel `Kind`.** Both are called `kind` because it is a generic word and
 each is unambiguous where it is used; they overlap on `command` and `tool` meaning different things,
@@ -447,9 +458,29 @@ each reaches models the other does not. It also decides what `url` means: the An
 `/v1/messages`, so it wants the host; the OpenAI SDK appends `/chat/completions`, so it wants the
 host and `/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
 
-`agent.py` holds one `Wire` class per format, and it holds *both* format-specific things: how to
-name a model over it and how to ask it what it serves. A third format is one class, not an edit in
-three files.
+`agent.py` holds one `Wire` class per format, and it holds *all three* format-specific things: how to
+name a model over it, how to ask it what it serves, and what it has to be told to reuse a
+conversation's prefix. A third format is one class, not an edit in three files.
+
+**`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
+conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input
+price for everything said so far, over and over - on a long turn that is most of the bill, and
+nothing about the request looks any different. It is opt-in on the Anthropic wire
+(`anthropic_cache`, a top-level `cache_control` whose breakpoint the server moves forward as the
+conversation grows) and automatic and uncontrollable on the OpenAI one, which answers with an empty
+`ModelSettings`. Empty rather than absent, because what has to be true is that every wire *answers*:
+a format added later is then a `caching` somebody had to write rather than a session quietly paying
+full price.
+
+`CACHE_FOR` is `1h` rather than the default five minutes, and the trade is stated because it is real:
+an hour's retention is written at 2x base input against 1.25x, so it pays only where a conversation
+is picked up again after a pause. That is what a chat console *is* - somebody reads an answer, thinks,
+and replies - where five minutes barely outlasts one long turn.
+
+`agent_for` merges the wire's answer under the session's own, so a recorded choice always wins. The
+two do not overlap today; if they ever do, the thing somebody picked should be the thing that
+happens. `test_what_a_wire_asks_for_reaches_the_request` is what fails when the merge goes, because a
+setting built and never passed on looks exactly like one that was.
 `chat_models` is the pure half of the OpenAI side and is where its two exclusions live: exe.dev
 publishes every OpenAI model twice (bare and prefixed) and mixes embedding models in with chat
 ones. The embedding rule is a rule over names because that list carries no capability to ask;
@@ -1064,6 +1095,82 @@ transcript the way every other column's are, by the `data-stop` a rule declares 
 recorded mid-session is reachable at once; its upper terminus is the top of the transcript, which is
 what "before any forget" means.
 
+### Handoff
+
+**A forget whose message the session wrote itself.** The console asks a session to write down where
+it has got to; the model does that with its own tools, calls `hand_off` with the document, and the
+document is delivered back as a message carrying a boundary. What the next model is told is the
+document and nothing above it.
+
+**It happens in the session, not in an aside**, which was the first design and was worse in four ways
+at once:
+
+- **The worktree.** A fork plants a fresh one at a recorded tree, and an end-fork has no recorded
+  tree at all, so it falls through to the repository's default branch. The agent asked to describe
+  the work would have been looking at a directory with none of it in it - and "check rather than
+  recall" is the whole reason for letting it use tools.
+- **The cost.** `altogether` sums a session's own turns, so a handoff's spend would have landed on a
+  different total, and the parent's running figures would have been quietly missing it.
+- **The recursion.** An aside inherits its parent's settings, and it carries the parent's whole
+  window, so it starts near any reserve by construction. Turning auto-handoff off on the copy is one
+  line and exactly the kind that gets forgotten until it recurses in production.
+- **The cache.** Instructions are the per-request parameter Pydantic AI renders in front of the whole
+  cached prefix, so a fork's first request pays full price for the window unless its composed
+  instructions come out byte-identical. In-session there is no second prefix: the handoff turn is the
+  next turn on the one already cached.
+
+**The tool is in every session's prefix**, and that is arithmetic rather than convenience. Tool
+definitions sit above the system prompt in the cached prefix, so adding one invalidates the whole
+conversation beneath it: introduced at handoff time it would cost a full uncached read of the window,
+where a permanent one costs its own description at cache-read prices on every request. Four orders of
+magnitude. `agent_for` therefore adds it unconditionally, and unlike the file tools it is not
+conditioned on the isolation, because what it reaches is the conversation rather than the machine.
+
+**A tool rather than the turn's prose, because models leak the framing.** Asked for a handoff in
+words, a model writes "Here is the handoff document: ... What would you like next?", and the framing
+is then durably part of what the next model is told. An argument splits the document from the chat
+around it, and `hand_off` refuses anything under `LEAST` characters, which is what catches the model
+that acknowledges the ask instead of answering it.
+
+**Neither the ask nor the tool prescribes a shape**, and that is a decision rather than an omission.
+What somebody picking up a refactor needs handed over and what somebody picking up an investigation
+needs are different documents, so a fixed set of headings would have every session filling in the
+ones it has nothing to say under. `ASKING` says what a handoff is about - where the work got to, what
+was decided and why, what to do next - and stops; the tool's description carries the parts that are
+*mechanical* rather than editorial (the document becomes the whole context, pass it alone, check
+rather than recall) and says outright that the shape is the model's.
+
+**A person who wants it pointed somewhere says so in the card's own field**, which is appended to the
+standing ask rather than replacing it: "dwell on the parser work" on its own is an instruction to
+summarise a summary. It is a field of the card and not the message box because the box is `required`,
+so borrowing it would refuse the empty case, which is the ordinary one. `GUIDING_FIELD` lives beside
+`DISPOSITION_FIELD` in `conversation.py`, for the reason that one does: the page renders the control
+and the boundary parses it, and `pages.py` cannot import the console without closing a ring.
+
+**It is delivered and not appended, and that costs a pass boundary.** An entry appended mid-pass is
+invisible to the pass that appended it, since `receive` reads the snapshot loaded at the top - which
+is what makes a drain replayable - and an append queues nothing. A handoff written that way leaves
+the session `Blocked` on a message already sitting in its own inbox with nothing that will ever wake
+it. `handing_through` therefore takes the whole `Durable` rather than the checkpointer a pass holds.
+
+**`records.Handoff` is an arm of `Delivered` rather than a flag on `Prompt`.** Every other message in
+a conversation was typed by somebody, so a reader has to be able to tell at a glance that this one
+was not; the tag is what the panel's kind is read off, which is the same argument that made `Steer`
+its own record. It behaves exactly as a `Prompt` otherwise, and `records.opens` and `records.forgets`
+are where that "exactly as" is written once rather than as an `isinstance` chain at each of the five
+readers. Both uses are `handoff` because both are the handoff: the ask carries no boundary and the
+document carries one.
+
+The panel takes the person's hue, by `command`'s rule: the axis is who produced the text, and what a
+handoff holds was produced by this session rather than by the model about to be handed it. Its
+`TITLES` entry is what says the console composed it, which is the one thing the label leaves out.
+
+**The control is in the rail rather than in the sending menu**, because every answer in that menu is
+a decision about the text somebody typed and this one ignores it. It sits with the settings that will
+decide when the console does this by itself, pinned to the bottom by `margin-top: auto` so a button
+that spends money does not share an edge with one that scrolls. That widens what `rail()` holds from
+navigating to acting, which its `aria-label` has said since there was a rail.
+
 ### Merging an aside is a disposition, not a merge
 
 Splicing an aside's turns into its parent is the appealing reading and the wrong one. Those turns
@@ -1585,6 +1692,17 @@ Four details there are decided:
 - **The key is not turn-prefixed**, deliberately. `before` copies turn-prefixed keys by shape, so a
   turn-shaped name would carry a parent's instructions into a fork that may have attached a
   repository the parent never had. Named this way a fork composes its own.
+- **`working_note` names a session's places and never paths them**, which is `roots.py`'s whole
+  argument said one layer out and a fact about the cache besides. A worktree sits under 32 hex
+  characters of session id, so printing the path invites the failure the root names were built to
+  prevent; and instructions are the per-request parameter Pydantic AI renders in front of the entire
+  cached prefix, so a sentence naming one session's directories makes that session's prefix unlike
+  every other's. With the paths out, the note is a pure function of the isolation: two sessions of
+  the same shape compose byte-identical instructions, and a fork's first request reads its parent's
+  prefix from cache rather than paying full price for the whole conversation again. A relative path
+  already lands in the worktree and `$MAINPLATE_WORKTREE` already names it in a command, so nothing
+  was given up. `test_what_a_stretch_records_is_exactly_what_its_requests_carried` asserts the path
+  is absent beside its control that the note is present, so an emptied note cannot pass it.
 
 **Console guidance is read once at startup instead, and nothing watches it.** `just serve` watches
 `src/mainplate`, and this lives under the config home, so an edit there wants the process restarted
@@ -1744,20 +1862,31 @@ decided:
 ## How a model names a line
 
 Every tool lives under `tools/`, one package per tool, as `tools/{name}/{module}.py`. Only the
-constructor reaches the harness: `tools/__init__.py` exports `Files`, `file_tools` and `bash_tools`
-and nothing else, so `agent.py` asks for the tools a workspace affords without knowing that editing
-is anchored, that a worktree root has to be resolved against, or how a command is confined. A third
-tool is a new package beside `files/` and `bash/` and one more name in that list, rather than an
-edit to anything that already imports them.
+constructor reaches the harness: `tools/__init__.py` exports the constructors and the values they
+take and nothing else, so `agent.py` asks for the tools a workspace affords without knowing that
+editing is anchored, that a worktree root has to be resolved against, or how a command is confined. A
+further tool is a new package beside `files/`, `bash/` and `handoff/` and one more name in that list,
+rather than an edit to anything that already imports them.
+
+**`handoff/` is the one whose subject is the conversation rather than the machine**, which is why it
+alone is not conditioned on the isolation: every session has a conversation. See the handoff section
+for why it is in every session's cached prefix, and why it takes a document as an argument rather
+than reading one out of the turn's prose.
 
 Within the files one, `tools/files/anchors.py` is pure and `tools/files/tools.py` is the shell
 around it, which is the split that lets the interesting half be tested with a list of strings. A
-**Which tools a session gets is decided by its `isolation`, not by whether it picked a
-repository.** A session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree
+**Which tools a session gets over its *files* is decided by its `isolation`, not by whether it picked
+a repository.** A session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree
 and its scratch; one on `EVERYTHING` gets the same four over `/`, where `list` refuses because
-nothing there is in git; one on `NOTHING` gets **no toolset at all**, because tools that can only
-fail are worse than none and cost a description on every request. `bash` is added to the first two
-wherever there is a sandbox to run it in.
+nothing there is in git; one on `NOTHING` gets **none of them**, because tools that can only fail are
+worse than none and cost a description on every request. `bash` is added to the first two wherever
+there is a sandbox to run it in.
+
+**`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
+with no files still has exactly one toolset rather than none. It is not an exception to the rule
+above but a different subject: what it reaches is the conversation, and every session has one. See
+the handoff section for why it has to be in the prefix from the first request rather than added when
+a handoff is wanted.
 
 **`list` asks git rather than walking**, so a `.gitignore` is obeyed and a `.venv` or a
 `node_modules` never reaches a context window. `git ls-files --cached --others --exclude-standard`
@@ -2192,6 +2321,43 @@ so the row this writes survives. What it costs is the queue's 50ms poll per requ
 is nothing against a round trip that takes seconds. `test_app.py` is what fails when it goes, and it
 fails as a timeout, because the failure it guards is a session that stops mid-turn with nothing
 anywhere saying so.
+
+**A pass that cannot go on comes back `Stalled` instead, and that is a different instruction rather
+than a shade of the same one.** `readying` matches on which it got: `Progressed` asks the scheduler
+to make the session ready again, and `Stalled` asks for nothing, because the pass that followed would
+put an identical question to the provider and get an identical answer. `Ended` is the union, named
+for the pass rather than `Outcome`, which already means how a tool call went here and what the
+mechanism made of a pass in `without-durability`.
+
+**The bug it closes is invisible rather than loud.** `without-durability`'s worker leaves a delivery
+unanswered when a pass raises, deliberately, since it cannot tell a workflow's own failure from a
+store that was briefly unreachable, and its own docstring names the cost: a workflow that fails on
+every pass is retried once per lease for as long as it keeps failing, and the count belongs in the
+checkpoint. So a refusal is written to the checkpoint, once, and the loop stops there.
+
+**Terminal is a 4xx and transient is everything else**, which `terminally` decides. A 4xx is the
+provider saying the request itself is wrong - a prompt over the window, a model it will not route, a
+body it will not parse - and no amount of asking again fixes any of those; the exceptions are the
+4xx codes that describe the moment rather than the request (`408`, `409`, `425`, `429`), and a
+redelivery is exactly what each asks for. **The default is transient**, which is the safe way round:
+read as terminal, a transient error stalls a session that would have recovered on its own, where the
+other way costs a redelivery per lease until somebody looks.
+
+**`turn:{n}:refused:{i}` is named after the request rather than the turn**, and it is a settled value
+in a write-once store for a reason worth keeping: what a request is made of is the recorded history
+and the recorded message, neither of which will ever change, so a turn refused at request `i` is
+refused at request `i` on every later pass. Sharing the index with `turn:{n}:model:{i}` is the point,
+since the two are the question and the reason there is no answer and exactly one of them exists.
+`CheckpointedModel.request` reads it *before* the allowance and the snapshot, so a pass spends
+nothing on a question already answered and captures no tree in front of a request nobody makes.
+
+**A person can still ask again, and that is the point rather than a gap.** Writing a message queues
+the session, so a refusal costs one attempt per human action rather than one per lease - and that
+attempt is free, since the recorded refusal answers it without reaching a provider. What gets a
+conversation *past* a refused turn is `fork` at it, which drops the turn's own requests while keeping
+everything under them, and the sentence on the page says so. `refusal_in` is what the page reads, of
+the turn being answered and no other: a refusal on a turn that later answered is history, and the
+transcript is where history goes.
 
 **What replay costs was measured rather than reasoned about**, and it is not where it looks. Each
 pass re-runs `converse` from the top, so a turn of *n* requests replays O(n²) steps; record parsing

@@ -365,7 +365,10 @@ main > * {
    delivered but nobody here wrote: what is in both is the operator's own guidance and the
    repository's own, written by people. They are two kinds rather than one because they sit in
    different places in the request, which is not something a hue can say. */
+/* And the handoff, which nobody typed at all: what is in it was produced by this session, which is
+   the person's side of the axis, and the panel's own title is what says the console composed it. */
 .panel[data-kind="prompt"],
+.panel[data-kind="handoff"],
 .panel[data-kind="steer"],
 .panel[data-kind="command"],
 .panel[data-kind="system-prompt"],
@@ -500,6 +503,7 @@ main > * {
 /* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
    tell the kinds apart without reading the word. */
 .panel[data-kind="prompt"] .panel__role,
+.panel[data-kind="handoff"] .panel__role,
 .panel[data-kind="steer"] .panel__role,
 .panel[data-kind="command"] .panel__role,
 .panel[data-kind="system-prompt"] .panel__role,
@@ -2480,6 +2484,55 @@ mark.hit.current {
     gap: var(--space-2);
 }
 
+/* The one card here that acts on the session rather than moving around inside it, so it is pinned to
+   the bottom of the column and away from the reading controls: a button that spends money should not
+   share an edge with one that scrolls. `margin-top: auto` is the whole of the pinning, which needs no
+   second region and no rule about where the rail's other cards go. */
+.handoff {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: auto;
+}
+
+.handoff__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* Optional, and drawn as one: neutral where the button beside it is edged, and never wider than the
+   card it sits in. `min-width: 0` is what actually lets it shrink, since an input's default width is
+   a content-based floor a flex column would otherwise widen the whole rail to fit. */
+.handoff__note {
+    min-width: 0;
+    padding: 0.2rem 0.35rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--sunk);
+    color: var(--ink);
+    font: inherit;
+}
+
+/* Edged in the person's hue rather than the neutral one, by the composer's own rule: what this
+   produces is a message on that side of the palette, written by this session rather than by the
+   model about to be handed it. */
+.handoff__now {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--person-edge);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    cursor: pointer;
+}
+
+.handoff__now:hover,
+.handoff__now:focus-visible {
+    background: var(--sunk);
+    color: var(--mark);
+}
+
 .shelf__title {
     color: var(--ink-faint);
     letter-spacing: 0.08em;
@@ -2563,6 +2616,7 @@ mark.hit.current {
 }
 
 .key__chip[data-kind="prompt"],
+.key__chip[data-kind="handoff"],
 .key__chip[data-kind="steer"],
 .key__chip[data-kind="command"],
 .key__chip[data-kind="system-prompt"],

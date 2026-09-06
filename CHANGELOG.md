@@ -70,6 +70,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the bottom of a conversation somebody is reading the middle of. It follows the same rule the session
   total does: the first unpriced turn takes it off every rule below, because a total quietly missing a
   turn reads as the whole and understates it.
+- **Handoff**: ask a session to write down where it has got to, and carry on from that document with
+  everything above it out of the model's context. The summariser is the session itself, with the
+  tools it already had, so it checks the working tree rather than recalling it - which is the failure
+  mode a summary has, and the one nothing else can catch. It happens in the session rather than in a
+  branch, so the cost lands on the session's own total, the worktree is the one the work is in, and
+  the turn is answered on the prefix already cached. `hand_off` takes the document as an argument
+  because a model asked for one in prose writes "Here is the handoff: ... what next?", and the
+  framing then becomes durably part of what the next model is told. Neither the ask nor the tool
+  prescribes a shape: what a refactor needs handed over and what an investigation needs are different
+  documents. The rail's card carries an optional note for pointing one somewhere, appended to the
+  standing ask rather than replacing it. The two messages the console writes are drawn as their own
+  `handoff` kind, because every other message in a conversation was typed by somebody.
+- A session the provider will never accept a request from says so and stops, rather than spinning.
+  What it names is `fork`, because nothing can be put back: what was turned down is the recorded
+  history itself, and forking at the turn drops that turn's own requests while keeping everything
+  under them.
+
+### Fixed
+
+- **Prompt caching is on.** It is opt-in on the Anthropic wire and was never asked for, so every
+  request paid full input price for the whole conversation - and since a conversation is re-sent
+  whole on every turn, on a long turn that is most of the bill. Nothing about the request looked any
+  different, which is why the wire now answers a question about it rather than a setting sitting
+  somewhere it can be forgotten. An hour's retention rather than the default five minutes, which is a
+  stated bet: it is written at 2x base input against 1.25x, so it pays where a conversation is picked
+  up again after a pause, and that is what a chat console is.
+- The instructions no longer print a session's own directories. They named the worktree and the
+  scratch by absolute path, which is 32 hex characters of session id sitting in front of the entire
+  cached prefix, so no two sessions could share one and a fork could never read its parent's. The
+  root names and `$MAINPLATE_WORKTREE` were already the way to reach both, so nothing was given up.
 
 ### Changed
 

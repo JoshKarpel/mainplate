@@ -24,8 +24,10 @@ from contextlib import AbstractAsyncContextManager
 from contextlib import AsyncExitStack
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Final
+from typing import assert_never
 
 from without_asgi import ASGIApp
 from without_asgi import HttpScope
@@ -67,8 +69,11 @@ from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
 from mainplate.console import page_response
 from mainplate.console import recover
+from mainplate.conversation import Ended
 from mainplate.conversation import Progressed
+from mainplate.conversation import Stalled
 from mainplate.conversation import conversing
+from mainplate.conversation import handing_through
 from mainplate.exe import ExeDevGitHub
 from mainplate.forge import Clones
 from mainplate.forge import Forge
@@ -268,6 +273,12 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                     # as today.
                     prices=Prices(catalogues=catalogues, references=references),
                     allowance=settings.allowance,
+                    # The whole `Durable` rather than the checkpointer a pass already holds, because
+                    # writing a handoff means *queueing* the session as well as recording it: an
+                    # entry appended mid-pass is invisible to the pass that appended it, so a handoff
+                    # that only appended would leave the session waiting on a message already in its
+                    # own inbox.
+                    handoffs=partial(handing_through, service.durable),
                 ),
             ),
             limit=settings.passes,
@@ -285,14 +296,14 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
             yield service
 
 
-def readying(durable: Durable, converse: Callable[[Run], Awaitable[Progressed]]) -> Callable[[Run], Awaitable[None]]:
+def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> Callable[[Run], Awaitable[None]]:
     """
     The conversation body as the worker's, with the one thing a pass ending mid-turn needs.
 
-    A pass now stops when it has made its allowance of live model requests, which is `Completed` as
-    far as the mechanism is concerned: nothing is owed by the outside world, so there is no key for
-    a driver to wait on and nothing to schedule, and the worker's own answer to a completed pass is
-    to do nothing at all. What is owed is another pass, immediately, and that is this.
+    A pass stops when it has made its allowance of live model requests, which is `Completed` as far
+    as the mechanism is concerned: nothing is owed by the outside world, so there is no key for a
+    driver to wait on and nothing to schedule, and the worker's own answer to a completed pass is to
+    do nothing at all. What is owed is another pass, immediately, and that is this.
 
     Asked for from *inside* the pass, while the claim is still held, which is the queue's documented
     shape rather than a race: `make_ready` is a plain upsert onto a running pass's row, and the
@@ -300,14 +311,25 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Progressed]])
     that survives. What it costs is the queue's poll interval, which is 50ms against a round trip
     that takes seconds.
 
+    **`Stalled` is the arm that asks for nothing, and it is why this reads the outcome rather than
+    discarding it.** A pass that hit a request the provider will never accept must not be woken
+    again, because the next one would ask the same question of the same recorded history. Left to
+    the worker's own answer for a raised pass - leave the delivery unanswered, redeliver when the
+    lease elapses - that is a session retried for ever with only a log line to show for it.
+
     Here rather than in `conversation.py`, because the body is about answering a session and this is
     about the queue in front of it. That split is what lets one console run the worker beside the
     console and another run it somewhere else entirely.
     """
 
     async def answer(run: Run) -> None:
-        await converse(run)
-        await durable.scheduler.make_ready(run.workflow)
+        match await converse(run):
+            case Progressed():
+                await durable.scheduler.make_ready(run.workflow)
+            case Stalled():
+                logger.warning(f"{run.workflow} stalled on a request no pass can make; not waking it again")
+            case _ as unreachable:
+                assert_never(unreachable)
 
     return answer
 

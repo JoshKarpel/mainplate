@@ -48,6 +48,7 @@ from mainplate.forge import Workspaces
 from mainplate.pages import OPENING
 from mainplate.service import Service
 from mainplate.snapshots import Worktree
+from scripts.gallery import INSTRUCTIONS
 from scripts.gallery import pages
 from scripts.gallery import write
 
@@ -1589,16 +1590,22 @@ class TestFoldingADocumentTheConsoleHandedOver:
         The opening line goes when the panel opens, because a prefix of the body standing above the
         body says nothing twice. The figure is not a prefix of anything, and what it says - that this
         is paid for on every request from here on - is worth having with the panel either way.
+
+        The count comes from the fixture rather than being written down, because what is under test
+        is that the figure survives the fold and not what the gallery's system prompt happens to say:
+        a number spelled here fails whenever that text is edited, which is a test about the wrong
+        thing.
         """
         panels = await self.documents(page, gallery)
         panel = panels.first
-        await expect(panel.locator(".panel__size")).to_have_text("1184 characters")
+        told = f"{len(INSTRUCTIONS)} characters"
+        await expect(panel.locator(".panel__size")).to_have_text(told)
 
         await panel.locator(".panel__role").click()
 
         await expect(panel).to_have_attribute("open", "")
         await expect(panel.locator(".opening")).to_be_hidden()
-        await expect(panel.locator(".panel__size")).to_have_text("1184 characters")
+        await expect(panel.locator(".panel__size")).to_have_text(told)
 
     async def test_the_frame_around_it_shuts_the_panel_it_belongs_to(self, page: Page, gallery: str) -> None:
         """

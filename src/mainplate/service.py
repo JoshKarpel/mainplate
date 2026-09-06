@@ -28,6 +28,7 @@ from without_durability_sqlite import Database
 from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
@@ -41,6 +42,7 @@ from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
+from mainplate.conversation import refusal_in
 from mainplate.conversation import requested_at
 from mainplate.conversation import transcript
 from mainplate.forge import Reachable
@@ -56,6 +58,7 @@ from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
 from mainplate.settings import DEFAULT_WATCHING
+from mainplate.tools import ASKING
 
 # How many steps a session has recorded. A count and not a hash of them, because what it is asked
 # for is whether to look again rather than what changed, and the store's own primary key already
@@ -83,6 +86,20 @@ class Conversation:
     said: Transcript
     chosen: Choice | None
     answerable: bool
+
+    refused: records.Refused | None = None
+    """
+    Why the turn being answered stopped and will not start again, where one did.
+
+    A second way to be stuck, and a different question from `answerable`: that one asks whether the
+    endpoint still exists, and this asks whether the provider took the request. Both end in the same
+    place - a sentence in place of a spinner - because a spinner that will never resolve is the one
+    state a person cannot diagnose.
+
+    It is about the turn being answered rather than about any turn in the conversation. A refusal
+    recorded against a turn that later answered is history, and history is what the transcript is
+    for; only a refusal on the turn nothing has got past says the session has stopped.
+    """
 
     repository: str | None = None
     """
@@ -232,6 +249,7 @@ class Service:
             said=transcript(recorded),
             chosen=chosen,
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
+            refused=refusal_in(recorded),
             repository=self.repository_of(chosen),
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
             runnable=self.commands is not None and self.workspaces is not None and working,
@@ -445,6 +463,43 @@ class Service:
         entry = await self.checkpointer.append(session, recorded_command(said))
         self.commands.start(Slot(session=session, entry=entry.key), said, where)
         return entry.key
+
+    async def hand_off(self, session: str, guiding: str | None = None) -> None:
+        """
+        Ask this session to write down where it has got to, and to start its context again from that.
+
+        `guiding` is whatever the person wants the handoff pointed at, appended to the standing ask
+        rather than replacing it. Appended, because the two say different things: the base is what a
+        handoff *is* and has to be there whether or not anybody adds to it, and this is what this one
+        should dwell on. Replacing it would make a note like "focus on the parser" the whole of the
+        instruction, which is a summary of a summary nobody asked for.
+
+        Deliberately not a template with a slot in it. What somebody picking up a refactor needs and
+        what somebody picking up an investigation needs are different documents, so the ask says what
+        a handoff is about and leaves the shape to the model that read the conversation.
+
+        A message like any other, which is what makes this cheap: the turn it opens is answered by
+        the same pass, on the same agent, over the prefix already cached, and what comes back is
+        recorded by the same tool machinery as every other call. Nothing here is a second mechanism
+        for summarising a conversation - the summariser is the session itself, with its own tools, so
+        it can check the working tree rather than recalling it.
+
+        **In this session rather than in an aside**, which was the first design and was worse in four
+        ways at once. An aside plants a fresh worktree at a recorded tree, so the agent asked to
+        describe the work would be looking at a directory without any of it in it; its cost would
+        land on a different session's total; it would need its own settings copied and its auto
+        handoff turned off so it could not recurse; and its first request would pay full price,
+        because instructions differ per session and sit in front of the whole cached prefix. Here
+        there is no aside, no copy, and no cold read.
+
+        Delivered rather than appended, because nothing else is going to queue this: `Service.run`
+        appends since a command reaches no model, and this is a message that must be answered.
+
+        No boundary on the ask, and one on what comes back. The context has to survive long enough
+        to be summarised, so it is the *document* that clears it, which the tool records for itself.
+        """
+        said = ASKING if not (steer := (guiding or "").strip()) else f"{ASKING}\n\n{steer}"
+        await self.durable.deliver(session, records.Handoff(said=said).recorded())
 
     async def say(self, session: str, said: str, *, forget: bool = False) -> None:
         """

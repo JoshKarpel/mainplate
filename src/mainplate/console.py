@@ -34,6 +34,7 @@ from mainplate.agent import Choice
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
+from mainplate.conversation import GUIDING_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Disposition
@@ -114,6 +115,23 @@ def parse_form_prompt(raw: bytes) -> str:
 
 
 prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
+
+
+def parse_form_guiding(raw: bytes) -> str:
+    """
+    What a person wants a handoff pointed at, which is optional and empty where they said nothing.
+
+    Empty rather than refused, unlike a message: the whole control works with nothing typed into it,
+    and `parse_qs` drops an empty value anyway, so an absent field and a blank one are the same
+    answer and neither is a fault. Bounded by the same length a message is, since it goes to a model
+    the same way.
+    """
+    if len(raw) > LONGEST_PROMPT:
+        raise NotAMessage(f"a handoff note may be at most {LONGEST_PROMPT} bytes")
+    return parse_qs(raw.decode("utf-8", errors="replace")).get(GUIDING_FIELD, [""])[0].strip()
+
+
+guiding = body(parse_form_guiding, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,6 +709,41 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             assert_never(unreachable)
 
 
+@post(t"/sessions/{session_id}/handoffs", session_id, guiding, summary="Ask a session to hand itself off")
+async def hand_off(service: Service, session: str, guiding: str) -> Response:
+    """
+    Ask this session to write down where it has got to and carry on from that.
+
+    It takes no *message*, which is why it is a route of its own rather than one more answer in the
+    sending menu: every arm of that menu is a decision about what happens to the text somebody typed,
+    and this one ignores it. The control lives in the rail beside the settings that govern the
+    automatic version, so what a person presses and what a threshold fires are visibly one thing.
+
+    What it does take is an optional note, which is why the card carries a field of its own rather
+    than borrowing the message box: the box is `required`, so a handoff sent from there would refuse
+    the empty case, which is the ordinary one. A note is appended to the standing ask rather than
+    replacing it; see `Service.hand_off`.
+
+    Answered with the transcript rather than a redirect, exactly as `HERE` is: the ask is a message,
+    so the page shows it waiting for a turn straight away and the live connection sends the same
+    thing a moment later, which morphs to nothing.
+
+    A session that cannot be answered is refused rather than asked, because a handoff nobody will
+    ever write is a panel that waits for ever - which is the one state the stall sentence exists to
+    prevent, arrived at from the other direction.
+    """
+    found = await service.read(session)
+    if found is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    if stalled_by(found) is not None:
+        return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
+    await service.hand_off(session, guiding)
+    asked = await service.read(session)
+    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return page_response(200, fragment(transcript_region(LINKS, session, asked.said, None, asked.window)))
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
     start,
@@ -701,6 +754,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     fork_form,
     fork,
     say,
+    hand_off,
     request_record,
 )
 
@@ -715,5 +769,6 @@ LINKS = Links(
     workspace_branches=workspace_branches,
     fork_form=fork_form,
     fork=fork,
+    hand_off=hand_off,
     assets=ASSETS,
 )

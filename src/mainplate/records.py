@@ -41,6 +41,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Annotated
 from typing import Literal
+from typing import TypeIs
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
@@ -52,6 +53,7 @@ type StepKind = Literal[
     "choice",
     "instructions",
     "prompt",
+    "handoff",
     "steer",
     "command",
     "result",
@@ -59,6 +61,7 @@ type StepKind = Literal[
     "tree",
     "heard",
     "model",
+    "refused",
     "tool",
     "messages",
 ]
@@ -144,6 +147,37 @@ class Prompt(Record):
     boundary, because the checkpoint is still the conversation. What changes is only what `reached`
     hands the model, which is the same split `command` already makes between being *in* the
     checkpoint and being *in* the message history.
+    """
+
+
+class Handoff(Record):
+    """
+    A message the console wrote itself: the ask that opens a handoff turn, and what came back from it.
+
+    **An arm of its own rather than a flag on `Prompt`, because nobody typed it.** A reader has to be
+    able to tell at a glance that a message in their own conversation is not theirs, and the tag is
+    what the panel's kind is read off - the same argument that made `Steer` its own record rather
+    than a `Prompt` with a boolean, one axis along. It behaves exactly as a `Prompt` does otherwise:
+    it must open a turn of its own, a draining pass stops at it, and it may carry a boundary.
+
+    Both uses are `handoff` because both are the handoff. The ask carries no boundary and opens the
+    turn that writes the document; the document carries one, because starting the model's history
+    again on a summary of what came before it is the whole of what a handoff is for.
+
+    **Recorded rather than composed at render time**, which is the fork's bargain and not the
+    catalogue's: what a handoff says is settled the moment the turn that wrote it ends, and nothing
+    will ever rewrite it. What the model was told and what the page shows are then one string.
+    """
+
+    kind: Literal["handoff"] = "handoff"
+    said: str
+
+    forget: bool = False
+    """
+    Whether this message starts the model's history again, which the document does and the ask does not.
+
+    Read by the same `forgets` predicate a `Prompt` is, since where a boundary may sit is a fact
+    about turns rather than about who wrote the message that carries one.
     """
 
 
@@ -268,6 +302,33 @@ class Response(Record):
     response: object
 
 
+class Refused(Record):
+    """
+    A model request the provider will not accept, whatever this console does about it.
+
+    **Recorded because the alternative is a session that stops with nothing saying so.** A pass that
+    raises is left unanswered by the worker, redelivered when its lease elapses, and tried again for
+    as long as it keeps failing - which for a deterministic refusal is for ever, once per lease, at
+    no cost anybody can see. So the refusal is written down, the pass reports `Stalled`, and the page
+    says what happened.
+
+    **A settled value rather than a state, which is what lets it live in a write-once store.** What
+    is refused is a request, and a request's input is the recorded history and the recorded message,
+    neither of which will ever change: a turn refused at request `i` is refused at request `i` on
+    every later pass. So the key it goes under is the request's own position, and the record can
+    never be contradicted by a retry.
+
+    `status` is the provider's own, `None` where the failure carried none. It is not flattened into a
+    reason, for the same reason `Result.status` is not flattened into a boolean: the number is what
+    somebody looks up.
+    """
+
+    kind: Literal["refused"] = "refused"
+
+    why: str
+    status: int | None = None
+
+
 class Returned(Record):
     """
     What one tool call came back with, and how long it took.
@@ -304,10 +365,10 @@ class Messages(Record):
     messages: list[object]
 
 
-type Delivered = Annotated[Prompt | Steer | Command, Field(discriminator="kind")]
+type Delivered = Annotated[Prompt | Handoff | Steer | Command, Field(discriminator="kind")]
 """
-What one inbox entry holds: a message that must open a turn, one that may join the running one, or
-something the person ran.
+What one inbox entry holds: a message that must open a turn, one the console wrote itself, one that
+may join the running one, or something the person ran.
 
 The one place a *key* says nothing about what is under it, which is what the store minting the key
 buys and what makes the tag load-bearing rather than a second copy: three kinds share one key space,
@@ -318,8 +379,34 @@ the queue answers a different question for each.
 DELIVERED: TypeAdapter[Delivered] = TypeAdapter(Delivered)
 
 
+def opens(what: Delivered) -> TypeIs[Prompt | Handoff]:
+    """
+    Whether a pass draining its inbox must stop at this entry rather than carrying past it.
+
+    A `TypeIs` rather than a `bool`, so the two arms it names are written once in this module and
+    every caller that goes on to read `forget` is narrowed by asking the question rather than by
+    repeating the union.
+
+    The question every reader of the queue asks, written once here rather than as an `isinstance`
+    chain repeated at each of them. A `Steer` may be folded into the turn already being answered and
+    a `Command` reaches no model at all, so both are carried past; a `Prompt` and a `Handoff` are
+    messages that must be answered on their own, whoever wrote them.
+    """
+    return isinstance(what, Prompt | Handoff)
+
+
+def forgets(what: Delivered) -> bool:
+    """
+    Whether the turn this message opens starts the model's history again.
+
+    Only a message a turn opens on can carry a boundary, because a boundary between turns is the only
+    place one can be, so this is `opens` and the field together rather than the field alone.
+    """
+    return opens(what) and what.forget
+
+
 type Step = Annotated[
-    Prompt | Steer | Command | Result | Tree | Response | Messages | Returned | Instructions,
+    Prompt | Handoff | Steer | Command | Result | Tree | Response | Refused | Messages | Returned | Instructions,
     Field(discriminator="kind"),
 ]
 """

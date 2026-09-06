@@ -5,12 +5,7 @@ from typing import get_args
 import pytest
 from conftest import OFFERED
 from conftest import Stand
-from pydantic_ai.messages import ModelMessage
-from pydantic_ai.messages import ModelResponse
-from pydantic_ai.messages import TextPart
-from pydantic_ai.models import ModelRequestParameters
-from pydantic_ai.models.function import FunctionModel
-from pydantic_ai.settings import ModelSettings
+from conftest import Watching
 from pydantic_ai.settings import ThinkingEffort
 from pydantic_ai.settings import ThinkingLevel
 
@@ -24,29 +19,6 @@ from mainplate.thinking import name_of_thinking
 from mainplate.thinking import thinking_named
 
 INSTRUCTIONS = "Answer as a fixture would."
-
-
-class Watching(FunctionModel):
-    """
-    A stand-in model that records the settings each request was handed.
-
-    Asserting on `Agent.model_settings` would only say the agent was constructed with something.
-    What is worth pinning is that the value survives the capability stack and reaches the request,
-    since `StepwiseDurability` wraps every model this console builds.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(lambda messages, info: ModelResponse(parts=[TextPart("ok")]))
-        self.seen: list[ModelSettings | None] = []
-
-    async def request(
-        self,
-        messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
-        model_request_parameters: ModelRequestParameters,
-    ) -> ModelResponse:
-        self.seen.append(model_settings)
-        return await super().request(messages, model_settings, model_request_parameters)
 
 
 class TestTheVocabulary:

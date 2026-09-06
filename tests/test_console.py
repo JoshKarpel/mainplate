@@ -18,6 +18,7 @@ from conftest import snapshotted
 from without_asgi import ASGIApp
 from without_durability.interfaces import INBOX
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.app import build_app
@@ -41,6 +42,7 @@ from mainplate.conversation import opened_key
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
+from mainplate.conversation import refused_key
 from mainplate.conversation import tool_key
 from mainplate.conversation import tree_key
 from mainplate.pages import TRANSCRIPT_ID
@@ -661,6 +663,30 @@ class TestTheConsole:
             answered = await caller.get(f"/sessions/{session}")
         assert DEFAULT_CHOICE.endpoint in answered.text
         assert "no longer declares" in answered.text
+        assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
+
+    async def test_a_session_the_provider_refused_says_so_and_points_at_the_fork(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The second way to be stuck, drawn the same way and pointing somewhere different.
+
+        A missing endpoint is a configuration file somebody can put back. A refused request cannot be
+        put back at all, because what the provider turned down is the recorded history itself, so the
+        sentence names the one thing that does work: forking at the turn drops that turn's own
+        requests and keeps everything under them.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session, refused_key(0, 0), records.Refused(why="prompt is too long", status=400).recorded()
+        )
+
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session}")
+
+        assert "prompt is too long" in answered.text, "the provider's own words rather than a code standing in"
+        assert "(400)" in answered.text
+        assert "Fork at this turn" in answered.text
         assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
 
     async def test_a_session_on_a_model_the_picker_stopped_listing_is_not_stuck(

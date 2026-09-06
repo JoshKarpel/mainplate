@@ -17,5 +17,18 @@ from mainplate.tools.files import GitTracked
 from mainplate.tools.files import Scratch
 from mainplate.tools.files import System
 from mainplate.tools.files import file_tools
+from mainplate.tools.handoff import ASKING
+from mainplate.tools.handoff import Handing
+from mainplate.tools.handoff import handoff_tools
 
-__all__ = ["Files", "GitTracked", "Scratch", "System", "bash_tools", "file_tools"]
+__all__ = [
+    "ASKING",
+    "Files",
+    "GitTracked",
+    "Handing",
+    "Scratch",
+    "System",
+    "bash_tools",
+    "file_tools",
+    "handoff_tools",
+]

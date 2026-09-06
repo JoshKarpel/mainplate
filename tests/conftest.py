@@ -17,12 +17,15 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.settings import ModelSettings
 from without_asgi import ASGIApp
 from without_durability.interfaces import inbox_key
 from without_durability.stepwise import Run
@@ -39,7 +42,7 @@ from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
 from mainplate.config import Config
 from mainplate.config import Endpoint
-from mainplate.conversation import Progressed
+from mainplate.conversation import Ended
 from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
 from mainplate.conversation import opened_key
@@ -132,11 +135,54 @@ class Stand:
     offers: tuple[Listed, ...]
     responding: FunctionModel
 
+    asking: ModelSettings = field(default_factory=ModelSettings)
+    """
+    What this stand-in's format needs to be told, which for a stand-in is nothing by default.
+
+    A field rather than a second class, because what a test wants to vary is one answer: whether the
+    wire contributes settings of its own and whether they reach the request beside the session's.
+    """
+
     def model(self, name: str) -> FunctionModel:
         return self.responding
 
     async def listed(self) -> tuple[Listed, ...]:
         return self.offers
+
+    def caching(self) -> ModelSettings:
+        """
+        Answered rather than left off, which is the protocol doing its job.
+
+        A wire that did not answer this would be a type error rather than a session quietly paying
+        full input price for the whole conversation on every request.
+        """
+        return self.asking
+
+
+class Watching(FunctionModel):
+    """
+    A stand-in model that records the settings each request was handed.
+
+    Asserting on `Agent.model_settings` would only say the agent was constructed with something. What
+    is worth pinning is that the value survives the capability stack and reaches the request, since
+    `StepwiseDurability` wraps every model this console builds.
+
+    Here rather than in one suite because two want it now: what a session asked of a model and what
+    its wire asked for are two questions with one way of answering them.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(lambda messages, info: ModelResponse(parts=[TextPart("ok")]))
+        self.seen: list[ModelSettings | None] = []
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        self.seen.append(model_settings)
+        return await super().request(messages, model_settings, model_request_parameters)
 
 
 @dataclass(slots=True)
@@ -182,7 +228,7 @@ class Provider:
         """
         return agent_for(self.endpoints(), DEFAULT_CHOICE, INSTRUCTIONS)
 
-    def body(self, allowance: int | None = None) -> Callable[[Run], Awaitable[Progressed]]:
+    def body(self, allowance: int | None = None) -> Callable[[Run], Awaitable[Ended]]:
         """
         The workflow body, over the stand-in endpoints.
 
@@ -210,11 +256,20 @@ class Scripted:
 
     script: tuple[ModelResponse, ...]
     asked: int = 0
+    carried: list[int] = field(default_factory=list)
+    """
+    How many messages each request brought, which is `Provider`'s field for `Provider`'s reason.
+
+    What a turn *records* is only the messages it produced, so a checkpoint cannot answer how much
+    history a request carried. This is the only reading that can, and it is what a test asserting on
+    a cleared context has to ask.
+    """
 
     def model(self) -> FunctionModel:
         def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             answering = self.script[min(self.asked, len(self.script) - 1)]
             self.asked += 1
+            self.carried.append(len(messages))
             return answering
 
         return FunctionModel(respond)
@@ -222,6 +277,40 @@ class Scripted:
     def endpoints(self) -> Wires:
         shared = self.model()
         return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+
+@dataclass(slots=True)
+class Refusing:
+    """
+    A stand-in model that answers a while and then will not answer at all.
+
+    `after` is how many requests it takes before the refusal, so a test can put one anywhere in a
+    turn rather than only at its first request - which is the case that matters, since the key a
+    refusal is recorded under is the refused *request's* and not the turn's.
+
+    `asked` counts what actually reached it, which is the whole assertion for the replay: a pass that
+    re-ran a request already known to be refused would show up here and nowhere else.
+    """
+
+    status: int
+    after: int = 0
+    asked: int = 0
+
+    def model(self) -> FunctionModel:
+        def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            self.asked += 1
+            if self.asked > self.after:
+                raise ModelHTTPError(status_code=self.status, model_name="fixture", body="prompt is too long")
+            return calls(("read", {"path": "README.md"}))
+
+        return FunctionModel(respond)
+
+    def endpoints(self) -> Wires:
+        shared = self.model()
+        return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    def body(self) -> Callable[[Run], Awaitable[Ended]]:
+        return conversing(self.endpoints(), INSTRUCTIONS)
 
 
 def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:

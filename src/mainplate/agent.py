@@ -50,6 +50,7 @@ from anthropic.types import ModelInfo
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -59,6 +60,7 @@ from pydantic_ai.settings import ThinkingLevel
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.durability import StepwiseDurability
+from mainplate.roots import environment_named
 from mainplate.sandbox import Confinement
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import InAWorktree
@@ -68,10 +70,12 @@ from mainplate.snapshots import Worktree
 from mainplate.snapshots import branch_named
 from mainplate.tools import Files
 from mainplate.tools import GitTracked
+from mainplate.tools import Handing
 from mainplate.tools import Scratch
 from mainplate.tools import System
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
+from mainplate.tools import handoff_tools
 from mainplate.tools.files.tools import Root
 
 
@@ -307,7 +311,7 @@ class Listed:
 
 class Wire(Protocol):
     """
-    One built SDK client, and the two questions only its API format can answer about it.
+    One built SDK client, and the three questions only its API format can answer about it.
 
     A protocol rather than a base class because there is no shared implementation to inherit: the
     arms have a client each, of unrelated types, and everything they do is the part that differs.
@@ -321,6 +325,22 @@ class Wire(Protocol):
         """Whatever the endpoint currently says it serves, in the order it said it."""
         ...
 
+    def caching(self) -> ModelSettings:
+        """
+        What this format has to be told to reuse a conversation's prefix, which for one of them is nothing.
+
+        The third format-specific thing, and it belongs here for the reason the other two do: whether
+        caching is opt-in is a fact about an API rather than about a session, and a `Choice` has no
+        way to know which wire will answer it.
+
+        **It is opt-in on the Anthropic wire and automatic on the OpenAI one, and getting that wrong
+        costs real money on every request.** A conversation is re-sent whole each turn, so a session
+        with no breakpoint pays full input price for everything said so far, over and over: on a long
+        turn that is most of the bill. Nothing about the request looks different, which is why this
+        is a method somebody has to answer rather than a setting somebody might forget.
+        """
+        ...
+
 
 # An id whose last segment says it is an embedding model. The OpenAI list carries no capability to
 # ask - an entry there is four fields, none of them about what the model does - so this is a rule
@@ -328,6 +348,13 @@ class Wire(Protocol):
 # is an option that can only ever fail. The Anthropic list needs none of this, since it does not
 # carry them at all.
 EMBEDDING: Final = "embedding"
+
+# How long a cached prefix is kept where the format lets this console ask. An hour rather than the
+# five minutes that is the default, and the trade is stated because it is a real one: an hour's
+# retention is written at 2x base input against 1.25x, so it pays only where a conversation is picked
+# up again after a pause. That is what a chat console is - somebody reads an answer, thinks, and
+# replies - and five minutes barely outlasts one long turn, let alone the walk to the kettle.
+CACHE_FOR: Final = "1h"
 
 
 def provider_of(model_id: str, format_name: str) -> str:
@@ -370,6 +397,22 @@ class AnthropicWire:
         # listing more than a thousand chat models is a different problem than this one.
         page = await listing_client(self.sdk).models.list(limit=1000)
         return tuple(anthropic_listed(found) for found in page.data)
+
+    def caching(self) -> ModelSettings:
+        """
+        A top-level `cache_control`, which is the one that moves its breakpoint forward as a turn grows.
+
+        The alternative Pydantic AI offers is per-block breakpoints on the instructions, the tool
+        definitions and the last message. Those are for a gateway that takes the Anthropic message
+        format without the automatic parameter; asked for here they would pin breakpoints this
+        console would then have to move itself, which is the server's job and it does it better.
+
+        `CACHE_FOR` rather than the default five minutes, and that is a bet worth stating: an hour's
+        retention is written at 2x base input against 1.25x, so it pays only where a conversation is
+        picked up again after a pause. That is what a chat console *is* - somebody reads an answer,
+        thinks, and replies - where five minutes barely outlasts a single long turn.
+        """
+        return AnthropicModelSettings(anthropic_cache=CACHE_FOR)
 
 
 def anthropic_listed(found: ModelInfo) -> Listed:
@@ -433,6 +476,18 @@ class OpenAIWire:
     async def listed(self) -> tuple[Listed, ...]:
         page = await self.sdk.client.models.list()
         return chat_models(tuple((found.id, found.model_extra or {}) for found in page.data))
+
+    def caching(self) -> ModelSettings:
+        """
+        Nothing, because this format caches a repeated prefix without being asked and cannot be told to.
+
+        An empty answer rather than an absent method: what has to be true is that every wire answers
+        the question, so that a format added later is a `caching` somebody had to write rather than a
+        session quietly paying full price on every request. The retention is the provider's and is
+        neither documented nor controllable, which is why the console's own reading of whether a
+        prefix is still warm can only ever be one-sided here.
+        """
+        return ModelSettings()
 
 
 def chat_models(every: Sequence[tuple[str, Mapping[str, object]]]) -> tuple[Listed, ...]:
@@ -522,24 +577,36 @@ def build_wires(config: Config) -> Wires:
     return Wires(by_endpoint={name: build_wire(endpoint) for name, endpoint in config.endpoints.items()})
 
 
-def working_note(worktree: Worktree, scratch: Path | None = None) -> str:
+def working_note(scratch: bool) -> str:
     """
-    What the agent is told about the directory its tools reach, which is where it is and nothing more.
+    What the agent is told about the places its tools reach, by name and never by path.
 
     How to *use* the tools is on the tools, because that is where it stays true: a description of
     the anchor scheme written here would be a second copy of what each tool's own description
-    already says, kept in step by hand. What cannot live there is which directory this session got,
+    already says, kept in step by hand. What cannot live there is which places this session got,
     since a toolset is built per session and its own description is not.
+
+    **No absolute path appears here, and both halves of that are decided.** It is what `roots.py`
+    exists for: a worktree sits under 32 hex characters of session id, and a model reproducing those
+    from memory eventually reproduces them wrong, so printing the path invites exactly the failure
+    the root names were built to prevent - and a relative path already lands in the worktree, so
+    there was never anything to do with it.
+
+    The second half is the cache. Instructions are a per-request parameter Pydantic AI renders in
+    front of the whole cached prefix, so a sentence naming one session's directories makes that
+    session's prefix unlike every other's. With the paths out, this is a pure function of the
+    isolation: two sessions of the same shape compose the same string, and a fork's first request
+    reads its parent's prefix from cache instead of paying for the whole conversation again.
     """
     said = (
-        f"You are working in a git worktree at {worktree.root}, which is called `worktree`. The file "
-        f"tools take paths relative to it and reach nothing outside it. Changes you make there are "
-        f"snapshotted automatically; you never need to commit, and you should not run git commands "
-        f"to record your work."
+        "You are working in a git worktree, which is called `worktree`. The file tools take paths "
+        "relative to it and reach nothing outside it. Changes you make there are snapshotted "
+        "automatically; you never need to commit, and you should not run git commands to record "
+        "your work."
     )
-    if scratch is None:
+    if not scratch:
         return said
-    # The paths and the policy both, because both are this session's rather than the tool's. A
+    # The names and the policy both, because both are this session's rather than the tool's. A
     # `bash` description cannot carry either: one toolset is built per session and its tools'
     # descriptions are not, so what varies between sessions has to be said here.
     #
@@ -547,16 +614,16 @@ def working_note(worktree: Worktree, scratch: Path | None = None) -> str:
     # `cd` does not survive to the next call, which on its own reads as an instruction to put one at
     # the front of every command. `--chdir` has already done it.
     return (
-        f"{said} You also have a scratch directory at {scratch}, called `scratch`, outside the "
-        f"worktree and outside every snapshot, which is where anything that is not the repository's "
-        f'belongs. Reach it by passing `root: "scratch"` to `read`, `edit` or `create` rather than '
-        f"by writing that path out; in a command it is `$MAINPLATE_SCRATCH`, and the worktree is "
-        f"`$MAINPLATE_WORKTREE`. Commands you run start in the worktree, so a relative path means "
-        f"the same thing there as it does to the file tools and you never need to `cd` into it. "
-        f"They reach those two directories and a read-only system, and nothing else: no home "
-        f"directory, no other session's files, and no configuration of the console itself. Git can "
-        f"be read but not written there, so `status`, `diff`, `log` and `blame` answer while `add`, "
-        f"`commit` and `stash` fail."
+        f"{said} You also have a scratch directory called `scratch`, outside the worktree and "
+        f"outside every snapshot, which is where anything that is not the repository's belongs. "
+        f'Reach it by passing `root: "scratch"` to `read`, `edit` or `create`; in a command it is '
+        f"`${environment_named('scratch')}`, and the worktree is `${environment_named('worktree')}`. "
+        f"Commands you run start in the worktree, so a relative path means the same thing there as "
+        f"it does to the file tools and you never need to `cd` into it. They reach those two "
+        f"directories and a read-only system, and nothing else: no home directory, no other "
+        f"session's files, and no configuration of the console itself. Git can be read but not "
+        f"written there, so `status`, `diff`, `log` and `blame` answer while `add`, `commit` and "
+        f"`stash` fail."
     )
 
 
@@ -641,11 +708,11 @@ def reaching(
             # name a directory nothing ever creates. The worktree is first, so a relative path still
             # means the repository however many roots a session ends up with.
             if scratch is None or bwrap is None:
-                return Reach(roots=(GitTracked(path=worktree.root),), note=working_note(worktree))
+                return Reach(roots=(GitTracked(path=worktree.root),), note=working_note(scratch=False))
             return Reach(
                 roots=(GitTracked(path=worktree.root), Scratch(path=scratch)),
                 confinement=InAWorktree(worktree=worktree, scratch=scratch),
-                note=f"{working_note(worktree, scratch)}\n\n{network_note(isolation.network)}",
+                note=f"{working_note(scratch=True)}\n\n{network_note(isolation.network)}",
             )
         case Filesystem.WORKTREE:
             # A worktree was chosen and none was supplied, which is the instant before a session's
@@ -670,6 +737,7 @@ def agent_for(
     worktree: Worktree | None = None,
     scratch: Path | None = None,
     bwrap: str | None = None,
+    handing: Handing | None = None,
 ) -> Agent[None, str]:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -689,18 +757,31 @@ def agent_for(
     reporting less than was said, and instructions that change under a conversation whose cached
     prefix they sit in front of. `reaching` is where the note comes from, and `conversing` composes
     it into what it records.
+
+    **The handoff tool is not conditioned on the isolation**, unlike the two below it, because what
+    it reaches is the conversation rather than the machine: every session has one of those. It is
+    absent only where nowhere has been given to put a handoff, which is a bare agent in a script or a
+    test and never a pass. That it is in every real session's prefix is the point rather than a
+    detail - a tool added later invalidates the whole cached conversation beneath it, since tool
+    definitions sit above the system prompt.
     """
+    wire = wires.for_endpoint(chosen.endpoint)
     reach = reaching(chosen.isolation, worktree, scratch, bwrap)
     tools = []
+    if handing is not None:
+        tools.append(handoff_tools(handing))
     if reach.roots:
         tools.append(file_tools(Files(roots=reach.roots)))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue))
     return Agent(
-        wires.for_endpoint(chosen.endpoint).model(chosen.model),
+        wire.model(chosen.model),
         name="mainplate",
         instructions=instructions,
-        model_settings=chosen.settings,
+        # The session's own settings over the wire's, so a recorded choice always wins: what the two
+        # carry does not overlap today, and if it ever does, the thing somebody picked should be the
+        # thing that happens.
+        model_settings=ModelSettings(**wire.caching(), **(chosen.settings or ModelSettings())),
         capabilities=[StepwiseDurability()],
         toolsets=tools,
     )
