@@ -188,9 +188,9 @@ takes text off the page, `drop` deletes it, and neither is called "manage".
 
 **The reader knows how an agent harness works, so reach for the plain technical word.** They know
 what a context, a tool call, a token, a checkpoint and a system prompt are, and naming one is the
-shortest true thing this console can say: `the model's context was cleared here` over "the model was
-told nothing above this line", which describes a state where the reader wants the act and leaves them
-working out what was acted on. Two failures, and the second is the one that keeps happening here:
+shortest true thing this console can say: `context cleared` over "the model was told nothing above
+this line", which describes a state where the reader wants the act and leaves them working out what
+was acted on. Two failures, and the second is the one that keeps happening here:
 
 - **Explaining what they already know.** A gloss on what a context window is, on why a tool call has
   an id, on what forking a conversation means. The term carries all of it, which is what a term is
@@ -606,6 +606,13 @@ Three rules there are load-bearing:
   `catalogue.discover`'s refusal, and the difference is that nothing here can leave somebody
   holding a choice they cannot use. A reference that will not load costs a card its numbers.
 
+`facts_of` is the same lookup asked from the other end: a card starts with a listing, and a session
+starts with a recorded choice, so the endpoint's own listing has to be found first. One function
+rather than two, because what prices a turn and how big that model's window is are the same record
+read for two fields, and two lookups could come to disagree about which record that is.
+`Prices.pricer` reads it for the cost, and `Service.read` reads it for `Conversation.window`, which
+is what every rule's gauge is drawn against.
+
 `Described.consulted` is what decides whether a card with no record says so. With
 `[model_reference]` absent nothing was looked up, so nothing is missing, and a marker there would
 report the absence of a feature nobody turned on.
@@ -987,11 +994,20 @@ message history, which is the split `command` already makes between being *in* t
 being *in* what a model is told, applied to turns rather than to one kind of record. A control saying
 `clear` beside a transcript that keeps all of it would be describing something this does not do.
 
-**The rule's own sentence is `the model's context was cleared here`, and the object is what keeps that
-from being the `clear` the control is refused.** A bare `clear` names nothing, so beside a transcript
-that keeps every word it reads as a claim about the transcript; naming the *context* says the one
-thing that was cleared and leaves the rest of the sentence true. That is the words section's plain
-technical word, at the one place a reader meets this mechanism.
+**The rule says `context cleared`, and the object is what keeps that from being the `clear` the
+control is refused.** A bare `clear` names nothing, so beside a transcript that keeps every word it
+reads as a claim about the transcript; naming the *context* says the one thing that was cleared and
+leaves the phrase true. That is the words section's plain technical word, at the one place a reader
+meets this mechanism, and it is two words rather than a sentence because a rule now carries six
+figures beside it: what a reader needs there is the noun and the verb, and the fork link under the
+same finger already says what to do about it.
+
+**It sits in the middle of the rule, between two of the gaps that hold the line apart.** A rule has
+the turn's own controls at one end and its figures at the other, and a boundary belongs to neither:
+drawn against the left group it read as one more fact about the turn rather than as the thing the
+rule is saying. On a phone the three parts stack instead, each on its own row - the same two gaps,
+given a whole line's basis so that a flex item takes a line on its own, which is one mechanism at
+both widths rather than a wrapper element that exists for one of them.
 
 **It rides on the message rather than in a record beside it**, and that is what makes the boundary
 impossible to get wrong rather than a saving. Two entries need an order, and a turn can open between
@@ -1027,18 +1043,18 @@ second name for one call, so what the rule carries instead is a `title` saying w
 means.
 
 **The rule is the one this transcript draws that describes what is *above* it**, which is what lets
-the sentence be short: every other rule looks forward at the request or the turn it opens. It is drawn
+the phrase be short: every other rule looks forward at the request or the turn it opens. It is drawn
 in a stronger ink rather than a hue of its own, because the palette runs on one axis and a boundary
-belongs to neither side of it, and the sentence takes the full ink and the bold face where everything
+belongs to neither side of it, and the phrase takes the full ink and the bold face where everything
 else on a rule is faint - set in the same weight as a tree hash it reads as chrome to skip. The panels
 above are left exactly as they were: what changed is who was told, not what is worth reading, and
 fading them would say the second thing while colliding with `muted`, which is the reader's own
 decision and already drawn that way.
 
-**The rule wraps and the controls on it do not.** It is the only rule carrying a sentence, so it is
-the only one that wraps unprompted, and what goes onto the second line is the phrase and the figures
-rather than the `#N` and the fork link somebody is about to press. That is "a control that toggles may
-not move", one rule along.
+**The rule wraps and the controls on it do not.** It is the only rule carrying a phrase as well as
+its figures, so it is the only one that wraps unprompted, and what goes onto the second line is the
+tail of the figures rather than the `#N` and the fork link somebody is about to press. That is "a
+control that toggles may not move", one rule along.
 
 **The dock gains a leftmost column**, widest-first the way the picker is ordered: it steps the points
 where the model's history starts again. It is drawn in every session and steps nothing in most of
@@ -2540,24 +2556,36 @@ nothing saying why. `guess_lang` is off: a wrong guess colours text by a grammar
 in, which reads worse than no colour. The palette is the console's own hues in `mainplate.css`, not
 an imported Pygments theme with its own opinion about light and dark.
 
+**One value scales the whole page, and it is `html { font-size }`.** Everything here except the
+monospace grid is sized in `rem` - the text, the spacing steps, the reading measure, the sidebar and
+the rail - so a single percentage moves all of it in the proportions it already has. It is 110%
+because the console read small enough that the page was better at a browser zoom of 110%, which is
+the same scaling asked for by hand on every visit, and a stylesheet that needs a zoom is a stylesheet
+with a number in the wrong place. Deliberately *not* the breakpoints, which resolve `rem` against the
+browser's own default rather than against this: the three shapes are about how much screen there is,
+and a shape should change where the window runs out of room and not where the text got bigger.
+
 **Monospace is a grid, and it is vendored because a grid cannot be borrowed.** A model answers in
 tables and trees, and every `read` comes back as lines behind a `│` gutter, so most of what a panel
 here shows is box drawing. Two rows of it join on two conditions, and missing either draws that
 column as a dashed line rather than as a line. The row pitch must be no more than the glyph's own
-ink, which is a fact about the font: `│` is drawn over 22px at 13px in JuliaMono, against 20px in
-Fira Code, 18px in Cascadia Code, 15px in DejaVu Sans Mono and 15px in Liberation Mono and Courier
-New, so a stack of names makes the console's spacing depend on which of those the reader happens to
+ink, which is a fact about the font: `│` is drawn over about 1.7 times its size in JuliaMono, where
+Fira Code, Cascadia Code, DejaVu Sans Mono, Liberation Mono and Courier New all cap out well under
+that, so a stack of names makes the console's spacing depend on which of those the reader happens to
 have. And the pitch must be a **whole number of pixels**, or every row lands on a different subpixel
 phase and the joins falling between two device rows draw as two half-lit ones - a hairline on some
 rows of a figure and not others, which is the failure that survives getting the first condition
 right.
 
 So `assets/JuliaMono-Regular.woff2` and its bold are upstream unmodified, under the OFL beside them,
-and `--mono-size` and `--mono-line` are stated in pixels: 13, where this face's cell comes out at 8,
-and 21, which is the 22 its ink spans less the pixel that keeps the pitch off its own boundary.
-**Measured rather than taken from the outline**, because a rendered glyph is hinted: a run of bar
-joins at a 22px pitch and breaks at 23, where the outline says 1.70em and `measureText` says less
-again, and neither is the number to build on. The pixel held back is not symmetry: overlapping ink
+and `--mono-size` and `--mono-line` are stated in pixels: at a size of 14 a run joins at a pitch of
+23 and breaks at 24, so the pitch is 22, which is that ceiling less the pixel that keeps it off its
+own boundary. **Measured rather than taken from the outline**, because a rendered glyph is hinted:
+the outline says 1.70em and `measureText` says less again, and neither is the number to build on.
+That also means the pair cannot be *scaled* when the rest of the page is, since the whole numbers on
+either side of the answer are a pixel apart: `html { font-size }` moves everything in `rem` at once
+and this is the one thing it does not reach, so moving it is a measurement rather than a
+multiplication. The pixel held back is not symmetry: overlapping ink
 still draws the line the figure means, and a gap draws a line the figure does not. Air beyond that
 has to come from a larger `--mono-size`, since the span is a multiple of the size rather than a
 constant, which is the one knob that moves the ceiling. Both the size and the pitch have to move together,
@@ -2651,6 +2679,15 @@ otherwise, because at the moment they would press, open is already what the cons
 press reads as agreeing rather than as deciding. The two are indistinguishable there, so nothing
 tries. What it costs is that little stays undecided on a turn being watched, and the third button is
 the way back. `TestWatchingATurnArrive` pins both halves against each other.
+
+**A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
+working, on its own panel, and it is the model's call, so a second panel of dots under it says the
+same thing twice - and says it in a shape nothing is writing, since an empty reply below a call reads
+as a turn that has started answering where what is happening is a tool running. `out_on_a_call` asks
+it of the turn being answered rather than of the last panel on the page, because a person can type
+while a reply is coming and what is at the bottom may be their message. A *command* running is not
+this: it runs outside the conversation and no model was told about it, so it says nothing about
+whether one is answering.
 
 **A panel whose default would otherwise move carries the working dots on its own row instead.** The
 panel saying a reply is being written, and a stretch of context whose instructions no pass has
@@ -2754,8 +2791,75 @@ change within one, so nothing keeps a second list of where a turn or a request b
 under the last panel of the turn before it, so a bare row of figures there reads as a footer
 summarising what is *above* it, which is the opposite of what it says. The `#1` against the `#1.0` on
 the panels below settles the direction, and doubles as the permalink to the boundary the fork acts
-on. A rule inside a turn names its request the same way, as `r1`, which is also what opens the
-record.
+on. A rule inside a turn names its request the same way, as `r1.1`, which is also what opens the
+record: the whole address rather than the index within the turn, for `Panel.label`'s reason one level
+along, since a rule inside a turn draws no `#N` and a bare `r1` said which request without saying of
+what. The `r` is what keeps it from being read as a panel, which numbers a different axis - `#3.1` is
+turn 3's second *panel* and `r3.1` is its second *request*.
+
+### What the figures on a rule say
+
+Six of them, and none is picked out from the others: how long it took, how much context it carried
+and how much of that came out of the cache, how full the model's window is, how much came back, what
+it cost, and what the conversation has cost so far. The cost used to take a stronger ink, which read
+as the figure to look at; which one somebody is reading changes with what they are doing, so picking
+one is deciding that for them.
+
+**The input figure is the context and not the sum**, which is `Spent.context`'s argument said on the
+page. Every request of a turn carries the whole conversation again, so a summed input says what the
+provider charged for, several times over about the same tokens; what a reader wants off a rule is
+how much of the window is gone, which is where the turn's *last* request left it. The summed figure
+is still true and still drawn, under the message box, as what the session has been charged for.
+
+**A symbol per figure, and the words in the titles.** A rule is one line that must not wrap and it
+now carries six figures where it carried three. `↑` and `↓` are a count of tokens going up to the
+model and coming back, `▣` is how much of the first came out of the provider's cache instead, and
+`Δ` against `Σ` is what this exchange added against the running total, which is that pair's own
+notation and reads as a pair rather than as two prices to tell apart by size. Five cells against the
+twenty or so the words would take, on the one line that cannot afford them.
+
+`▣` is the one of the five that is a mark rather than notation, and it is a mark rather than the `↩`
+tried before it for two reasons: `↩` is already the sidebar's aside, so it would be one glyph reading
+two ways on one page, and beside `↑` it read as a third direction rather than as a fact about the
+first. A square with something in it reads as a store, sits on the cell like every other symbol here,
+and cannot be mistaken for an arrow.
+
+The cached count sits inside the context figure as `↑96K (▣45K)` rather than beside it, because it is
+a fact about that count and not a figure of its own, the way the wire's own numbers nest. The bracket
+is what says so.
+
+**The separator is interleaved rather than carried by each figure.** Every one of these is drawn only
+where there is something to say, so a dot baked into a figure is a dot that appears with it: the time
+had none and the count after it had one, and a turn nothing timed then opened with a dot standing for
+nothing.
+
+**The running total is inclusive of what the rule speaks for**, so a turn rule says what the
+conversation had cost by the end of the turn it opens, exactly as it already says what that turn
+spent: both figures on it summarise what is below rather than what is above. It follows
+`altogether`'s rule one rule at a time, so the first unpriced turn takes it off every rule below,
+and it is left off entirely where it *is* the figure beside it, since the first priced turn of a
+session would otherwise print one number twice.
+
+**And the line itself is a gauge.** It is filled from the left as far as the request's context
+reaches into the model's window, shading from the rule's own colour toward `--vermilion`, which is
+the palette's red already. A rule is a hairline drawn across the whole column at every request
+boundary, so the one thing a long conversation most wants to know costs no row and no control: a
+reader scrolling down watches the line lengthen and warm. Three things there are decided:
+
+- **The scale is the whole width and the fill is clipped to it**, rather than the gradient being
+  squeezed into the filled part. Squeezed, every conversation ends in red and the colour at a point
+  means nothing; clipped, a point along the line means the same fraction on every rule of every
+  session. It shades rather than steps because a threshold is a number somebody would have to invent
+  and defend, where the whole point is that this gets worse gradually.
+- **The server computes `--filled` and nothing else.** The colours, the geometry and the cap are
+  decisions, so they live in the stylesheet; the fraction is a fact about one request, and there is
+  nowhere else it could come from. It is the one inline style this console writes.
+- **The window comes from the reference and not from the checkpoint.** `Conversation.window` is
+  `facts_of` asked about the session's own choice, which is the same lookup that prices a turn, so a
+  database that learns a model's window shows it on every session already running on that model.
+  Absent - no database, an endpoint that no longer lists the recorded id, a model with no record -
+  the counts are drawn and the fraction and the gauge simply are not, which is what a rule was before
+  there was one.
 
 The dock's turn column steps `rule--turn` rather than the person's panels, and that is a removal.
 There is exactly one message per turn, so a "previous message of yours" column and a "previous turn"

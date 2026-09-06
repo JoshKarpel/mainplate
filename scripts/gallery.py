@@ -68,6 +68,7 @@ from mainplate.pages import start_page
 from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
+from mainplate.reference import facts_of
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.service import Conversation
@@ -133,7 +134,11 @@ REFERENCE = Reference(
     qualified={
         "anthropic/claude-sonnet-4-6": Facts(
             cost=Cost(input=3, output=15, cache_read=0.3, cache_write=3.75),
-            context=1_000_000,
+            # The window every session in this gallery is answered on, and the smaller of the two
+            # deliberately: what the gauge along each rule has to show is a conversation getting
+            # somewhere near the end of one, and a fixture on a million-token window would draw every
+            # rule as an empty line. The card beside it still renders `1M` for the model below.
+            context=200_000,
             output=128_000,
             released=date(2030, 11, 19),
             about="Balanced everyday model: fast enough to iterate with, careful enough to trust.",
@@ -218,6 +223,13 @@ def spending(asked: int, answered: int, cached: int = 0, cost: str = "0") -> Req
     The cost is on the response because that is where this console now records it, before the
     response is written rather than after. A fixture that left it off would draw the one state the
     live path no longer produces: a settled turn with counts and no price.
+
+    The counts climb across the conversation the way a real one's do - each request carries
+    everything said before it, and almost all of that comes back out of the cache - because that is
+    the whole of what the gauge on each rule draws. Fixtures that all sat at four thousand tokens
+    would draw four identical empty lines and say nothing about the one figure they are for. The
+    prices are what this reference's own rates come to on these counts, so a screenshot shows a
+    session whose money and tokens agree with each other.
     """
     return RequestUsage(
         input_tokens=asked,
@@ -300,7 +312,7 @@ CONVERSATION: list[ModelMessage] = [
                 tool_call_id="call-1",
             ),
         ],
-        usage=spending(asked=4_182, answered=196, cost="0.0156"),
+        usage=spending(asked=38_400, answered=196, cost="0.1181"),
         metadata=timing(3.4),
     ),
     ModelRequest(
@@ -363,7 +375,7 @@ CONVERSATION: list[ModelMessage] = [
                 )
             )
         ],
-        usage=spending(asked=4_610, answered=832, cached=3_968, cost="0.0219"),
+        usage=spending(asked=44_800, answered=832, cached=38_400, cost="0.0432"),
         metadata=timing(9.7),
     ),
 ]
@@ -375,7 +387,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
             TextPart(content="Checking."),
             ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-2"),
         ],
-        usage=spending(asked=5_604, answered=88, cached=4_608, cost="0.0041"),
+        usage=spending(asked=96_300, answered=88, cached=44_600, cost="0.1698"),
         metadata=timing(1.2),
     ),
 ]
@@ -392,7 +404,7 @@ PARTWAY = ModelResponse(
     # A turn in flight has a cost too, which is the point of pricing a response before the step
     # records it rather than after the run ends. Left off, this fixture would draw the state the
     # console used to have and no longer does.
-    usage=spending(asked=6_120, answered=142, cached=5_120, cost="0.0067"),
+    usage=spending(asked=151_900, answered=142, cached=96_200, cost="0.1981"),
     metadata=timing(2.8),
 )
 
@@ -535,6 +547,9 @@ def showing(
         # puts `Run` among the sending menu's answers, and so what makes `/run` and `!` reach a mode
         # at all.
         runnable=working,
+        # Looked up here rather than written down, exactly as `Service.read` does it, so the gauge
+        # on every rule is drawn against the same number the model's own card shows.
+        window=facts.context if (facts := facts_of(CATALOGUE, REFERENCE, chosen)) is not None else None,
     )
 
 

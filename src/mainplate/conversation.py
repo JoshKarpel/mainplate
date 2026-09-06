@@ -1148,12 +1148,35 @@ class Spent:
     is the round trips to the provider and nothing else, so it is what a turn spent *waiting on the
     model*: the calls it made in between ran here and are timed on their own panels, and summing
     those into this would double-count a batch that ran at once.
+
+    `context` and `cached` are the one pair here that is **not** a sum, and that is what separates a
+    level from a total. Every request of a turn carries the whole conversation, so adding their input
+    counts up says what the provider charged for and says it several times over about the same
+    tokens: a turn of four round trips reports four contexts and would draw a window four times as
+    full as it is. What is true of the window is the *last* request's input, which is where the
+    conversation had got to when the turn ended.
     """
 
     asked: int
     answered: int
     cost: Decimal | None
     took: timedelta | None = None
+
+    context: int = 0
+    """
+    How much the last request of this turn carried, which is how much of the window is spoken for.
+
+    Zero where nothing has been asked yet, which is the same answer as "nothing to say about the
+    window" and is drawn as no figure at all. See `spent_on` for why this is a level and not a sum.
+    """
+
+    cached: int = 0
+    """
+    How much of that context the provider read out of its cache rather than being sent afresh.
+
+    Part of `context` rather than beside it: Pydantic AI normalises every wire so `input_tokens`
+    already includes the cache reads, which is the same nesting `priced` subtracts against.
+    """
 
 
 def response_took(answered: ModelResponse) -> timedelta | None:
@@ -1178,14 +1201,23 @@ def spent_on(responses: Sequence[ModelResponse]) -> Spent:
     tool calls, so the figure worth showing is the turn's own. The same sum serves both readings of
     a turn, because a response carries its usage whether it was read back from `turn:{n}:messages`
     or from the `turn:{n}:model:{i}` step that recorded it.
+
+    The window is the exception, and it is read off the **last** response rather than summed. Each
+    request of a turn carries the whole conversation again, so what the sum answers is what the
+    provider charged for, where what a reader wants to know is how much of the window is gone - and
+    those are the same number only for a turn that took one round trip. The last request is the
+    furthest the conversation got, which is what the turn leaves behind it.
     """
     charged = [response.usage.cost for response in responses]
     settled = [one for one in charged if one is not None]
+    last = responses[-1].usage if responses else None
     return Spent(
         asked=sum(response.usage.input_tokens for response in responses),
         answered=sum(response.usage.output_tokens for response in responses),
         cost=sum(settled, Decimal(0)) if settled and len(settled) == len(charged) else None,
         took=whole(response_took(response) for response in responses),
+        context=last.input_tokens if last is not None else 0,
+        cached=last.cache_read_tokens if last is not None else 0,
     )
 
 
@@ -1215,15 +1247,24 @@ def altogether(spent: Iterable[Spent]) -> Spent:
     Unknown anywhere is unknown for the whole, so a session with one unpriced turn reports no total
     rather than the sum of the rest: what a person reads off a total is what the session has cost
     them, and a figure quietly missing a turn is worse than no figure.
+
+    The window carries forward from the last turn that said anything about it, by `spent_on`'s own
+    rule one scale up: a session's context is where its most recent request left it, and a turn that
+    made no request at all knows nothing about the window rather than knowing it is empty. That is
+    also what makes a forget read correctly here, since the turn after one starts a smaller context
+    and the session's figure follows it down.
     """
     counted = tuple(spent)
     charged = [one.cost for one in counted]
     settled = [one for one in charged if one is not None]
+    reached = [one for one in counted if one.context]
     return Spent(
         asked=sum(one.asked for one in counted),
         answered=sum(one.answered for one in counted),
         cost=sum(settled, Decimal(0)) if settled and len(settled) == len(charged) else None,
         took=whole(one.took for one in counted),
+        context=reached[-1].context if reached else 0,
+        cached=reached[-1].cached if reached else 0,
     )
 
 

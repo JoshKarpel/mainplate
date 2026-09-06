@@ -51,6 +51,7 @@ from without_http import stack
 
 from mainplate.agent import Choice
 from mainplate.agent import Listed
+from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Catalogues
 from mainplate.config import ModelReference
 from mainplate.config import ReferenceFormat
@@ -483,6 +484,28 @@ def describe(listed: Listed, reference: Reference | None) -> Described:
     )
 
 
+def facts_of(catalogue: Catalogue, reference: Reference | None, chosen: Choice) -> Facts | None:
+    """
+    What the database says about the model one session is bound to, or nothing where nothing does.
+
+    The lookup a card makes, asked from the other end: a card starts with a listing and this starts
+    with a recorded choice, so the endpoint's own listing has to be found first. Each of the three
+    ways to know nothing is an ordinary `None` - no database was configured, the endpoint no longer
+    lists the id this session was recorded on, or the database has never heard of it - and a page
+    draws the same blank for all three.
+
+    One function rather than two, because what a turn is priced by and how big its window is are the
+    same record read for two fields, and two lookups could come to disagree about which record that
+    is.
+    """
+    if reference is None:
+        return None
+    listed = catalogue.listed_as(chosen.endpoint, chosen.model)
+    if listed is None:
+        return None
+    return reference.look_up(listed)
+
+
 def rate(per_million: float) -> Decimal:
     """
     One published price as an exact decimal.
@@ -558,13 +581,7 @@ class Prices:
         """
 
         def price(usage: RequestUsage) -> Decimal | None:
-            reference = self.references.current
-            if reference is None:
-                return None
-            listed = self.catalogues.current.listed_as(chosen.endpoint, chosen.model)
-            if listed is None:
-                return None
-            facts = reference.look_up(listed)
+            facts = facts_of(self.catalogues.current, self.references.current, chosen)
             if facts is None or facts.cost is None:
                 return None
             return priced(facts.cost, usage)

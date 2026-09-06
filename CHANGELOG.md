@@ -58,8 +58,45 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository's own guidance moves it constantly. A `forget` ends a stretch and composes again, which
   costs nothing: the prefix it would have invalidated has just been thrown away.
 
+- How full the model's context window is, on every rule and in two forms. The figures say how much
+  context the request carried, how much of it was read from the provider's cache, and what percentage
+  of the window that is; the rule's own line is a gauge of the same fraction, filled from the left and
+  shading toward red as it fills. The scale is the whole width of the rule and the fill is clipped to
+  it, so a point along the line means the same fraction on every rule of every session. The window is
+  the reference database's answer about the session's model, so a console with none configured draws
+  the counts and no fraction, exactly as it did before.
+- What the conversation has cost so far, on every rule beside what that turn or request cost. One
+  turn's price is only readable against the running total, and the total under the message box is at
+  the bottom of a conversation somebody is reading the middle of. It follows the same rule the session
+  total does: the first unpriced turn takes it off every rule below, because a total quietly missing a
+  turn reads as the whole and understates it.
+
 ### Changed
 
+- The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
+  this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
+  rather than multiplied, since the pitches on either side of the answer are a pixel apart.
+- A rule's input figure is the *context* the request carried rather than the sum of what the turn's
+  requests were charged for. Every request of a turn carries the whole conversation again, so the sum
+  says the same tokens several times over and would draw a turn of four round trips as four times as
+  full as it is. What the session was charged for is still under the message box.
+- A rule's figures are symbols rather than words: `↑` and `↓` for the tokens sent and returned, `▣`
+  for how much of the first came out of the cache, and `Δ` against `Σ` for what one exchange cost
+  against what the conversation has. The cached count is inside the context figure as `↑96K (▣45K)`,
+  because it is part of that count rather than a figure of its own, and none is drawn in a stronger
+  ink than the others. A rule is one line that must not wrap and it now carries six figures; the
+  words are in the titles. It is also a size larger, because a line whose whole job is figures was
+  saving a couple of pixels of height at the cost of reading them at a glance.
+- A turn waiting on a tool call draws no reply panel under it. The call is already drawn working on
+  its own panel, so the dots below it said the same thing twice, in the shape of an empty reply that
+  nothing was writing.
+- A rule's line stops where the panels' text does rather than crossing the whole column, so it no
+  longer runs under the transcript's scrollbar - which matters more now that the line is a gauge.
+- The marker that opens a request's raw record names its turn as well as its request, `r3.1` rather
+  than `r1`. A rule inside a turn draws no `#N`, so the index alone said which request without saying
+  of what.
+- A forget's rule says `context cleared`, in the middle of the line, between the turn's own controls
+  at one end and its figures at the other. On a phone those three parts stack, one to a row.
 - Every panel folds, from its own row of facts, with the mark immediately right of the title. What a
   reader wants put away is theirs to decide, so the console says only where each kind starts: a
   message, a reply, a stretch of reasoning and a batch of calls open, a system prompt and a delivered

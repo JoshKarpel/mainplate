@@ -123,26 +123,34 @@
 
        Two rows of box drawing join on two conditions, and missing either draws that column as a
        dashed line. The pitch must be no more than the glyph's own span, which is why the face is
-       vendored: this one draws `│` over 22px at 13px, where the fonts a stack would have reached
-       instead cap out between 15px and 18px. Measured rather than taken from the outline, since a
-       rendered glyph is hinted: a run of bar joins at a 22px pitch and breaks at 23, where the
-       outline says 1.70em and `measureText` says less again. And the pitch must be a whole number
-       of pixels, or every row lands on a different subpixel phase and the joins falling between two
+       vendored: this one draws `│` over about 1.7 times its size, where the fonts a stack would have
+       reached instead cap out well under that. Measured rather than taken from the outline, since a
+       rendered glyph is hinted: the outline says 1.70em and `measureText` says less again, and what
+       decides is a run drawn into a canvas and read back. And the pitch must be a whole number of
+       pixels, or every row lands on a different subpixel phase and the joins falling between two
        device rows render as two half-lit ones, which is a hairline on some rows of a figure and not
        others.
 
-       So 21 is the loosest pitch box drawing can be given, less the pixel that keeps it from being
+       So the pitch is the loosest box drawing can be given, less the pixel that keeps it from being
        the boundary itself. What that pixel is for is that the two ways to be wrong are not equal:
        overlapping ink still draws the line the figure means, and a gap draws a line the figure does
        not. Anything looser has to come from a larger `--mono-size`, since the span this is measured
        against is a multiple of it and not a constant.
 
-       Both are stated in pixels, which is what a grid of cells is, and 13 is where this face's cell
-       comes out at 8. The cost is that a reader who has raised their browser's default font size
-       does not raise this with it, where every other size on this page is in `rem` and does.
-       Browser zoom still scales it, being a scale on the pixel rather than on the root. */
-    --mono-size: 13px;
-    --mono-line: 21px;
+       Both are stated in pixels, which is what a grid of cells is: a fractional pitch is the
+       subpixel phase problem above, so this is the one pair on the page that cannot be scaled with
+       `rem` and has to be moved by hand when everything else moves - and moved by *measuring*, not
+       by multiplying, since the whole numbers on either side of the answer are a pixel apart. At 14
+       the run joins at a pitch of 23 and breaks at 24, so 22 is that loosest pitch less the safety
+       pixel above. The cost is that a reader who has raised their browser's default font size does
+       not raise this with it. Browser zoom still scales it, being a scale on the pixel rather than
+       on the root.
+
+       `TestTheGridMonospaceIsDrawnOn` is what says whether a pair is a grid, and it is the only
+       thing that can: every one of these renderings is a correct picture of *some* grid, so what is
+       wrong with a broken one is a hairline no still and no markup assertion can see. */
+    --mono-size: 14px;
+    --mono-line: 22px;
 }
 
 /* The toggle forces one side of every pair by pinning `color-scheme`; with no attribute (or
@@ -161,11 +169,26 @@
     box-sizing: border-box;
 }
 
+/* Everything on this page except the monospace grid is sized in `rem`, so this is the one value
+   that scales all of it at once: the text, the spacing steps, the reading measure, the sidebar and
+   the rail, in the proportions they already have. It is here because the console read small - the
+   page was better at a browser zoom of 110%, which is the same scaling asked for by hand on every
+   visit - and a stylesheet that needs a zoom is a stylesheet with a number in the wrong place.
+
+   Deliberately *not* the breakpoints, which resolve `rem` against the browser's own default rather
+   than against this: the three shapes are about how much screen there is, and a shape should change
+   where the window runs out of room and not where the text got bigger. */
+html {
+    font-size: 110%;
+}
+
 body {
     margin: 0;
     background: var(--ground);
     color: var(--ink);
-    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    /* 15px against the browser's default, which is what this was written at, scaled by the line
+       above with everything else rather than pinned underneath it. */
+    font: 0.9375rem/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 .shell {
@@ -2686,21 +2709,60 @@ mark.hit.current {
    never revealed by hover: these are facts to scan down a conversation for, and the fork is the only
    way a session changes its mind, so a pointer-only control would take it off every phone.
 
-   The right inset is the panels' own, so what a turn spent lines up with the `#1.0` anchors down
-   the conversation instead of sitting under the transcript's scrollbar. Padding rather than a
-   narrower box, so the hairline still crosses the whole column. */
+   The right inset is the panels' own, so what a turn spent lines up with the `#1.0` anchors down the
+   conversation. It is a margin rather than padding, so the *line* stops there too: the hairline used
+   to cross the whole column and run under the transcript's scrollbar, which on a browser that draws
+   one over the content is a rule ending in a grey band, and now that the line is also a gauge that is
+   a gauge whose last few percent are behind something. Ending where the figures do costs nothing:
+   what a rule separates is panels whose own text stops at the same place. */
 .rule {
+    position: relative;
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
-    margin: var(--space-4) 0 var(--space-3);
+    margin: var(--space-4) var(--space-6) var(--space-3) 0;
     padding-top: var(--space-2);
-    padding-right: var(--space-6);
     border-top: 1px solid var(--edge);
     font-family: var(--mono);
-    font-size: 0.68rem;
+    /* A figure has to be read rather than noticed, and a rule now carries six of them where it
+       carried three. Under about this the digits stop being legible at a glance, which for a line
+       whose whole job is figures is the wrong economy: what a rule saves by being small is a couple
+       of pixels of height. Still well under the transcript's own size, since these are facts about
+       the conversation and not part of it. */
+    font-size: 0.74rem;
     letter-spacing: 0.03em;
     color: var(--ink-faint);
+
+    /* Where the gauge starts, which is the line's own colour, so a conversation with room left
+       looks exactly like a conversation with no gauge at all. Restated by the rules below that
+       colour the line differently, so the gauge always grows out of whatever the rule is drawn in
+       rather than out of a colour it only has by default. */
+    --gauge-from: var(--edge);
+}
+
+/* How full the model's context window is at this request, drawn along the rule that already stands
+   at that request's boundary. The one figure a long conversation ends up asking about, for no row,
+   no control and no colour of its own that a panel could be confused with.
+
+   Two things make it readable rather than decorative. The scale is the *whole* width of the rule, so
+   a point along the line means the same fraction on every rule of every session, and the fill is
+   clipped to how far the context reaches rather than the gradient being squeezed into it - a bar
+   ending in red would say every conversation is in trouble. And the far end is `--vermilion`, which
+   is the palette's red already: reaching for a new one would put a second red on a page whose only
+   other one means a fault. It shades rather than steps, because a threshold is a number somebody
+   would have to invent and defend, where the whole point is that this gets worse gradually.
+
+   The server computes `--filled` and nothing else. The colours, the scale, the height and the cap
+   are decisions, so they live here; the fraction is a fact about one request, and there is nowhere
+   else it could come from. */
+.rule::before {
+    content: "";
+    position: absolute;
+    inset-block-start: -1px;
+    inset-inline: 0;
+    block-size: 1px;
+    background-image: linear-gradient(to right, var(--gauge-from), var(--vermilion));
+    clip-path: inset(0 calc(100% - var(--filled, 0%)) 0 0);
 }
 
 /* More air above a turn than above a request within one, because the two are boundaries of
@@ -2721,6 +2783,7 @@ mark.hit.current {
 .rule--forget {
     flex-wrap: wrap;
     border-top-color: var(--ink-soft);
+    --gauge-from: var(--ink-soft);
 }
 
 /* The one thing on any rule that is a sentence rather than a figure, so it takes the full ink and
@@ -2732,8 +2795,10 @@ mark.hit.current {
     font-weight: 600;
 }
 
-/* The gap that pushes what a turn spent to the far end, so the counts line up down the page
-   whatever is on the left of them. */
+/* The gaps that hold a rule's parts apart: what the turn is and what it is forked from at one end,
+   what it spent at the other, and on a boundary the phrase saying so between them. Equal shares of
+   whatever is left over, so the counts line up down the page whatever is on the left of them and a
+   boundary sits in the middle of the line rather than against either side. */
 .rule__span {
     flex: 1;
 }
@@ -2759,16 +2824,13 @@ mark.hit.current {
     text-decoration: underline;
 }
 
-.rule__tree,
-.rule__took {
-    color: var(--ink-faint);
-}
-
-/* An estimate rather than a bill, so it is drawn as quietly as the counts beside it: a figure in
-   the ink of something authoritative would claim more than this console can know. */
-.rule__cost {
-    color: var(--ink-soft);
-}
+/* Every figure on a rule is drawn in the rule's own ink, and none of them is picked out. The cost
+   used to take a stronger one, which read as the figure to look at, and there are six of them now:
+   the time, how much context there is, how full the window is, what came out of the cache, what
+   came back, and what it cost. None is more the point than the others - which one somebody is
+   reading changes with what they are doing - so picking one is deciding that for them. What
+   emphasis this line has left is the gauge, which is about the conversation rather than about any
+   figure on it. */
 
 /* Marked the same way a panel is, because a rule is landed on by the same arrows and the same
    permalink machinery. Drawn on the line rather than as a filled block: a rule is a hairline and a
@@ -2777,6 +2839,7 @@ mark.hit.current {
 .rule[data-landed] {
     border-top-color: var(--mark);
     color: var(--ink-soft);
+    --gauge-from: var(--mark);
 }
 
 /* `main` is a grid whose first row grows, because on a session page that child is the transcript
@@ -3216,5 +3279,37 @@ main:has(> .forking) {
 
     .theme button {
         padding: var(--space-2) var(--space-4);
+    }
+
+    /* A rule is one line that must not wrap, and a phone has room for about half of what it says.
+       These two are the halves a reader can do without: what was cached is a fact about how a
+       request was billed rather than about the conversation, and the running total is on the line
+       under the message box as the session's own. What stays is the time, how much context there is
+       and how full the window is, what came back and what this turn cost - and the gauge, which
+       needs no room at all. The cached count is inside the context figure rather than beside it, so
+       what goes here is the bracket and the count it qualifies stays. */
+    .rule__cached,
+    .rule__running {
+        display: none;
+    }
+
+    /* And what is left still does not fit beside the turn's own controls, so a rule's parts stack
+       instead of sharing a line: which turn it is and what it forks from, then the boundary where
+       there is one, then the figures. Each keeps its own row and starts at the left margin, which
+       is where a narrow column is read from.
+
+       The break is the spacers themselves rather than a wrapper element per part. A flex item given
+       a whole line's basis takes a line on its own, so the two gaps that pushed the parts apart
+       across a wide rule are the two that separate them down a narrow one - one mechanism at both
+       widths, and no markup that exists only for one of them. They are drawn no taller than the row
+       gap either side, since what they are here is the break and not a row. */
+    .rule {
+        flex-wrap: wrap;
+        row-gap: 0;
+    }
+
+    .rule__span {
+        flex-basis: 100%;
+        height: 0;
     }
 }

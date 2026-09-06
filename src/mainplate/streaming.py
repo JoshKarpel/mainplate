@@ -77,6 +77,6 @@ async def watching(service: Service, links: Links, session: str, every: timedelt
             showing = await service.read(session)
             if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
                 return
-            drawn = transcript_region(links, session, showing.said, stalled_by(showing))
+            drawn = transcript_region(links, session, showing.said, stalled_by(showing), showing.window)
             yield Event(data=render(partial(TRANSCRIPT_ID, SWAP, drawn)), id=str(now))
         await asyncio.sleep(every.total_seconds())

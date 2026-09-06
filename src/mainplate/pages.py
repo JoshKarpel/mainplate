@@ -33,6 +33,7 @@ from typing import assert_never
 from pydantic_ai.settings import ThinkingLevel
 from without_html import DOCTYPE
 from without_html import Attributes
+from without_html import Child
 from without_html import Element
 from without_html import VoidElement
 from without_html import a
@@ -694,7 +695,40 @@ def elapsed(took: timedelta) -> str:
     return f"{minutes:.0f}m {rest:.0f}s"
 
 
-def spend_element(spent: Spent, whose: str) -> tuple[Element, ...]:
+def consumed(context: int, window: int | None) -> float | None:
+    """
+    How much of a model's context window this much context takes up, as a fraction of it.
+
+    Nothing at all where either half is missing, which is one answer to three questions - no
+    reference database, an endpoint that no longer lists the recorded id, a model nobody wrote a
+    window down for - because the page does the same thing with all three.
+
+    Uncapped, deliberately. A window is what a database says and the count is what a provider
+    reported, so the two can disagree and a session past 100% is a real state worth seeing said
+    rather than a figure to round back down to full. What is capped is the *gauge*, which cannot
+    draw past its own width.
+    """
+    if not context or not window:
+        return None
+    return context / window
+
+
+def portion(fraction: float) -> str:
+    """
+    A fraction as the whole numbers of percent a person reads it in.
+
+    Named as being under one rather than shown as `0%`, which is `charged`'s rule about `<$0.0001`
+    at the other end of the same problem: a long conversation on a very large window really is a
+    fraction of a percent of it, and rounding that to nothing says the window is untouched.
+    """
+    if fraction < 0.01:
+        return "<1%"
+    return f"{fraction:.0%}"
+
+
+def spend_element(
+    spent: Spent, whose: str, window: int | None = None, running: Decimal | None = None
+) -> tuple[Element, ...]:
     """
     What something cost, as counts and money, or nothing at all where it has not answered yet.
 
@@ -712,37 +746,100 @@ def spend_element(spent: Spent, whose: str) -> tuple[Element, ...]:
     The time leads the figures because it is the one a reader is usually waiting on, and it says in
     its title what it is the time *of*: the round trips to the provider and not the turn from end to
     end, since the calls a turn made in between are timed on their own panels.
+
+    **The input figure is the context and not the sum**, which is `Spent.context`'s whole argument
+    said on the page: what a reader wants off a rule is how full the window is, and a turn's
+    requests each carry the conversation again. The fraction beside it is the same fact as a
+    percentage, and the gauge on the rule itself is the same fact again as a picture - one number
+    said three ways because the question it answers is the one a long conversation ends on.
+
+    **Symbols and not words.** A rule is a single line that must not wrap, and it now carries six
+    figures where it carried three. `\N{UPWARDS ARROW}` and `\N{DOWNWARDS ARROW}` are a count of
+    tokens going up to the model and coming back, `\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}` is how much of
+    the first came out of the provider's cache instead, and `\N{GREEK CAPITAL LETTER DELTA}` against
+    `\N{N-ARY SUMMATION}` is what this one exchange added against the running total, which is that
+    pair's own notation and reads as a pair rather than as two prices to tell apart by size. Five
+    cells rather than the twenty or so the words would take, and the words are in the titles where
+    there is room to say which is which.
+
+    `running` is everything up to and including whatever this rule speaks for, which is the figure a
+    person scrolling actually wants: what one turn cost is only readable against what the
+    conversation has cost so far. It is left out where it *is* what the rule already says, since the
+    first priced turn of a session would otherwise print one number twice.
+
+    **The separator goes between the figures rather than in front of each of them.** Every one of
+    these is drawn only where there is something to say, so a dot carried by a figure is a dot that
+    appears or disappears with it: baked in, the time had none and the count after it had one, and a
+    turn nothing timed then opened with a dot standing for nothing. Interleaving it here is the one
+    place that knows what is actually being drawn.
     """
     if not spent.asked and not spent.answered:
         return ()
-    return (
-        *(
+    fraction = consumed(spent.context, window)
+    figures: list[tuple[str, str, tuple[Child, ...]]] = []
+    if spent.took is not None:
+        figures.append(("took", f"{whose} spent {elapsed(spent.took)} waiting on the model", (elapsed(spent.took),)))
+    if spent.context:
+        figures.append(
             (
-                span(
-                    cls="rule__took",
-                    attrs={"title": f"{whose} spent {elapsed(spent.took)} waiting on the model"},
-                    children=elapsed(spent.took),
+                "context",
+                f"{whose}: {spent.context:,} tokens of context",
+                (
+                    f"\N{UPWARDS ARROW}{tokens(spent.context)}",
+                    # Inside the count rather than beside it, and in brackets, because it is a fact
+                    # *about* that count and not a figure of its own: what is cached is part of the
+                    # context, the way the wire's own numbers nest. Its own element all the same, so
+                    # a phone can drop the bracket and keep the count.
+                    *(
+                        (
+                            span(
+                                cls="rule__cached",
+                                attrs={
+                                    "title": f"{spent.cached:,} of those tokens were read from the provider's cache"
+                                },
+                                children=f" (\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}{tokens(spent.cached)})",
+                            ),
+                        )
+                        if spent.cached
+                        else ()
+                    ),
                 ),
             )
-            if spent.took is not None
-            else ()
-        ),
+        )
+    if fraction is not None and window is not None:
+        figures.append(
+            (
+                "full",
+                f"{portion(fraction)} of this model's context window, which the reference gives as {window:,} tokens",
+                (portion(fraction),),
+            )
+        )
+    figures.append(
+        ("answered", f"{whose} wrote {spent.answered:,} tokens", (f"\N{DOWNWARDS ARROW}{tokens(spent.answered)}",))
+    )
+    if spent.cost is not None:
+        figures.append(
+            (
+                "cost",
+                f"{whose}, estimated from published rates and not billed: ${spent.cost:f}",
+                (f"\N{GREEK CAPITAL LETTER DELTA}{charged(spent.cost)}",),
+            )
+        )
+    if running is not None and running != spent.cost:
+        figures.append(
+            (
+                "running",
+                f"${running:f} up to and including {whose.lower()}, estimated from published rates and not billed",
+                (f"\N{N-ARY SUMMATION}{charged(running)}",),
+            )
+        )
+    return tuple(
         span(
-            cls="rule__tokens",
-            attrs={"title": f"{whose}: {spent.asked:,} tokens in, {spent.answered:,} out"},
-            children=f"{tokens(spent.asked)} in \N{MIDDLE DOT} {tokens(spent.answered)} out",
-        ),
-        *(
-            (
-                span(
-                    cls="rule__cost",
-                    attrs={"title": f"{whose}, estimated from published rates and not billed: ${spent.cost:f}"},
-                    children=f"\N{MIDDLE DOT} {charged(spent.cost)}",
-                ),
-            )
-            if spent.cost is not None
-            else ()
-        ),
+            cls=f"rule__{named}",
+            attrs={"title": title},
+            children=list(said) if at == 0 else ["\N{MIDDLE DOT} ", *said],
+        )
+        for at, (named, title, said) in enumerate(figures)
     )
 
 
@@ -1518,6 +1615,11 @@ def session_spend(spent: Spent) -> str:
 
     The time is named only where every turn in the session was timed, which is the rule the money
     follows: a total quietly missing a turn reads as the whole and understates it.
+
+    `asked` here and `context` on a rule, deliberately, and they are different numbers: this is what
+    the session has been *charged* for, which is every request's input added up, where a rule says how
+    much of the window one exchange left in use. Both are true and neither substitutes for the other,
+    so this is not the place to make them agree.
     """
     said = f"{spent.asked:,} tokens in and {spent.answered:,} out over this session"
     if spent.took is not None:
@@ -1936,7 +2038,13 @@ def missing_record(turn: int, at: int) -> Element:
 
 def record_fold(links: Links, session: str, turn: int, at: int) -> Element:
     """
-    The `r{at}` marker on a rule, and the raw record of that request behind it.
+    The `r{turn}.{at}` marker on a rule, and the raw record of that request behind it.
+
+    Named the whole way, for `Panel.label`'s reason one level along: a rule inside a turn draws no
+    `#N`, so a bare `r1` said which request without saying of what, and a reader following one
+    permalink out of several had nothing to tell them apart. The `r` is what keeps it from being
+    read as a panel, which numbers a different axis - `#3.1` is turn 3's second *panel* and `r3.1`
+    is its second *request*, and one response becomes as many panels as it has kinds of part.
 
     Fetched only when opened, because the transcript is re-rendered whenever a running turn records
     anything and the raw record is several times the size of the reading of it. `hx-preserve` is what
@@ -1962,7 +2070,7 @@ def record_fold(links: Links, session: str, turn: int, at: int) -> Element:
             summary(
                 cls="tag__summary",
                 attrs={"title": f"The {ordinal(at)} model request of turn {turn}"},
-                children=span(cls="tag__at", children=f"r{at}"),
+                children=span(cls="tag__at", children=f"r{turn}.{at}"),
             ),
             pre(cls="record__json", children=code(children="\N{HORIZONTAL ELLIPSIS}")),
         ],
@@ -1984,6 +2092,8 @@ def rule_element(
     spent: Spent | None = None,
     opens: bool = False,
     forget: bool = False,
+    window: int | None = None,
+    running: Decimal | None = None,
 ) -> Element:
     """
     A line across the conversation where one round trip to the model began.
@@ -2029,7 +2139,16 @@ def rule_element(
     thing. Continuing the conversation a forget closed is `fork` at that turn: `before` copies the
     turns below the branch point and the marker lives on the turn that opens, so the branch carries
     the whole backlog and no boundary. A control of its own would be a second name for one call.
+
+    **The line is also the gauge**, filled from the left as far as this request's context reaches
+    into the model's window and shading toward red as it goes. A rule is already a hairline drawn
+    across the whole column at every request boundary, so the one thing a long conversation most
+    wants to know - how close it is to the end of the window - costs no row and no control: a reader
+    scrolling down watches the line lengthen and warm. The fraction is the only thing the server
+    computes into the markup, as one custom property; the colours, the geometry and the cap are the
+    stylesheet's, because they are decisions rather than facts.
     """
+    filled = consumed(spent.context, window) if spent is not None else None
     return div(
         cls=("rule", "rule--turn" if opens else None, "rule--forget" if forget else None),
         attrs={
@@ -2038,6 +2157,9 @@ def rule_element(
             # Declared rather than inferred from the modifier, so the dock's column steps stops it is
             # told about the way every other arrow does. See `dock_card`.
             "data-stop": "forget" if forget else None,
+            # Capped here as well as clipped there, so a session past a window the database
+            # understates asks for no more line than there is.
+            "style": None if filled is None else f"--filled: {min(filled, 1.0):.1%}",
         },
         children=[
             *(
@@ -2063,7 +2185,6 @@ def rule_element(
                 if opens and session
                 else ()
             ),
-            *((span(cls="rule__forget", children="the model's context was cleared here"),) if forget else ()),
             # Only where there is a session to ask, which the gallery's pages are rendered without: a
             # control pointed at no conversation is a dead button rather than an offer, the same
             # reason the fork link is conditional.
@@ -2089,8 +2210,13 @@ def rule_element(
                 else ()
             ),
             span(cls="rule__span"),
+            # Between two spacers rather than beside the fork link, so it sits in the middle of the
+            # line with the turn's own controls at one end and its figures at the other. That is what
+            # a boundary is: it belongs to neither side, and drawn against the left group it read as
+            # one more thing about the turn rather than as the thing the rule is saying.
+            *((span(cls="rule__forget", children="context cleared"), span(cls="rule__span")) if forget else ()),
             *(
-                spend_element(spent, f"Turn {turn}" if opens else f"Request {turn}.{asked}")
+                spend_element(spent, f"Turn {turn}" if opens else f"Request {turn}.{asked}", window, running)
                 if spent is not None
                 else ()
             ),
@@ -2314,6 +2440,29 @@ def system_prompt_panel(turn: int, said: str | None) -> Element:
     )
 
 
+def out_on_a_call(said: Transcript) -> bool:
+    """
+    Whether the turn in flight is waiting on a tool rather than on the model.
+
+    What decides whether the transcript already says it is working. A call with no result is drawn
+    working on its own panel, and it is the model's call, so a second panel of dots under it says
+    the same thing twice and says it in a shape - an empty reply - that nothing is writing.
+
+    Asked of the turn being answered rather than of the last panel on the page, because a person can
+    type while a reply is coming: what is at the bottom may be their message, and the turn that is
+    actually out is the one above it.
+
+    A *command* running is not this. It runs outside the conversation and no model was told about
+    it, so it says nothing about whether one is answering.
+    """
+    return any(
+        isinstance(block, ToolUse) and block.returned is None
+        for panel in said.panels
+        if panel.turn == said.answering
+        for block in panel.blocks
+    )
+
+
 def waiting_panel() -> Element:
     """
     One panel for however many messages are outstanding, because one reply is what is actually
@@ -2322,6 +2471,9 @@ def waiting_panel() -> Element:
     Shut, with the working dots on its own row where the opening line goes, which is what a panel
     with nothing in it yet should cost: the wait is the whole of what this says, and a panel opened
     to show three dots spends a second row saying it again. See `panel_meta`.
+
+    Not drawn at all where a call is still out, which `out_on_a_call` decides: what this panel is for
+    is a wait nothing else on the page accounts for.
     """
     return details(
         cls="panel",
@@ -2330,7 +2482,33 @@ def waiting_panel() -> Element:
     )
 
 
-def transcript_region(links: Links, session: str, said: Transcript, stalled: str | None = None) -> Element:
+def running_to(before: Decimal | None, spent: Spent | None) -> Decimal | None:
+    """
+    What a conversation has cost once one more turn or request is counted into it.
+
+    `altogether`'s rule, applied one at a time rather than to a whole session: unknown anywhere is
+    unknown from there on, so the first unpriced turn takes the running total off every rule below
+    it rather than leaving a figure that is quietly the sum of everything else. A total missing a
+    part reads as the whole and understates it, and a reader has no way to tell that from a cheap
+    conversation.
+
+    A turn nothing is recorded for is a turn nobody has asked anything yet, which costs nothing and
+    so leaves the total where it was. That is a different answer from an unpriced turn, and the two
+    arrive here as the same `None` from two different places: one is a turn absent from the mapping,
+    the other is a cost the reference could not supply.
+    """
+    if before is None:
+        return None
+    if spent is None:
+        return before
+    if spent.cost is None:
+        return None
+    return before + spent.cost
+
+
+def transcript_region(
+    links: Links, session: str, said: Transcript, stalled: str | None = None, window: int | None = None
+) -> Element:
     """
     The conversation, and whether it is still waiting on the rest of it.
 
@@ -2354,9 +2532,23 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
     model is asked, so a turn whose first answer has not landed yet still says what it started on.
     """
     drawn: list[Element] = []
+    # What the conversation has cost by the time each rule is drawn. A turn rule carries the total
+    # through the turn it opens, exactly as it already carries that turn's own spend: both figures on
+    # it summarise what is below rather than what is above, so the pair reads as one statement about
+    # the turn. The request rules within it then step from the total the turn began at up to that
+    # same figure.
+    before: Decimal | None = Decimal(0)
     for turn, panels in groupby(said.panels, key=lambda panel: panel.turn):
         within = tuple(panels)
         asking = said.requests.get(turn, ())
+        spent = said.spent.get(turn)
+        through = running_to(before, spent)
+        # And the same total at each request within the turn, by index rather than by counting the
+        # rules that get drawn: request 0 never gets a rule of its own, since the turn's rule already
+        # stands at that boundary, and a request that produced no panel gets none either.
+        climbing: list[Decimal | None] = []
+        for one in asking:
+            climbing.append(running_to(climbing[-1] if climbing else before, one.spent))
         drawn.append(
             rule_element(
                 links,
@@ -2364,11 +2556,13 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
                 turn,
                 asked=0 if asking else None,
                 tree=within[0].tree,
-                spent=said.spent.get(turn),
+                spent=spent,
                 opens=True,
                 # Off the turn's first panel beside its tree, which is where both facts about a turn
                 # rather than about a request are carried.
                 forget=within[0].forget,
+                window=window,
+                running=through,
             )
         )
         # Directly under the rule that opens the stretch, so a reader meets the boundary, then what
@@ -2382,10 +2576,20 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
                 at = panel.asked
                 if at < len(asking):
                     drawn.append(
-                        rule_element(links, session, turn, asked=at, tree=asking[at].tree, spent=asking[at].spent)
+                        rule_element(
+                            links,
+                            session,
+                            turn,
+                            asked=at,
+                            tree=asking[at].tree,
+                            spent=asking[at].spent,
+                            window=window,
+                            running=climbing[at],
+                        )
                     )
             drawn.append(panel_element(links, session, panel))
-    if said.awaiting and stalled is None:
+        before = through
+    if said.awaiting and stalled is None and not out_on_a_call(said):
         drawn.append(waiting_panel())
     if stalled is not None:
         drawn.append(p(cls="stalled", children=stalled))
@@ -3143,7 +3347,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             showing=showing.session.id,
             reachable=reachable,
             pane=[
-                transcript_region(links, showing.session.id, showing.said, stalled),
+                transcript_region(links, showing.session.id, showing.said, stalled, showing.window),
                 composer(
                     links.to_say(showing.session.id),
                     chosen_note(showing.chosen, showing.repository, showing.worktree, showing.said.total),

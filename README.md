@@ -406,10 +406,10 @@ search, the place they had scrolled to, survives an update arriving.
 **A turn is drawn as it happens.** The responses and tool results behind a running turn are already
 in the checkpoint, recorded step by step so that a resumed pass does not pay for them twice, so the
 page reads those rather than waiting for the turn to write its messages: reasoning appears, then a
-call with its arguments, then its result, then the next request. A call still out is drawn working,
-and a message you steered into the turn is drawn the instant you send it rather than when the turn
-ends. Nothing is stored to make this work and nothing is streamed from the provider; it is the same
-checkpoint, read sooner.
+call with its arguments, then its result, then the next request. A call still out is drawn working on
+its own panel, and while one is, nothing else claims a reply is being written; a message you steered
+into the turn is drawn the instant you send it rather than when the turn ends. Nothing is stored to
+make this work and nothing is streamed from the provider; it is the same checkpoint, read sooner.
 
 A turn is drawn as panels: a coloured edge per run of one kind within one request, with the person's
 message, the model's reasoning, its calls, and its answer each in their own. The palette runs on one axis, cool
@@ -440,11 +440,21 @@ them is paid for on every request from there on.
 
 A **rule** stands at every round trip to the model, carrying what is true of that request rather than
 of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and
-money, and an `r0` fold showing the JSON the checkpoint actually holds for it. Since the checkpoint
+money, and an `r1.0` fold showing the JSON the checkpoint actually holds for it. Since the checkpoint
 *is* the conversation, that is the state itself rather than a debug view of it, and it is fetched
 only when you open it so the transcript never carries it, and it opens in place, below the rule, so
 the record and the reply it came from can be read together. A request is recorded the moment the
 provider answers, so a record can be opened while the turn is still running.
+
+The figures are symbols, because a rule is one line that must not wrap: `↑` and `↓` are the tokens
+sent and returned, `▣` is how much of the first came out of the provider's cache, and `Δ` against `Σ`
+is what this exchange cost against what the conversation has cost so far. The words are in the
+titles. The sent figure is the *context* the request carried rather than a sum, since every request
+of a turn carries the whole conversation again, so beside it is what fraction of the model's context
+window that is - and the rule's own line is a gauge of the same fraction, filled from the left and
+shading toward red as it fills, so scrolling down a long conversation shows the line lengthen and
+warm. The window is what the reference database says about the model; with none configured the counts
+are drawn and the fraction is not.
 
 The rule that opens a turn carries the turn's own facts besides: which turn it is, the `fork` link,
 and what the whole turn spent. That costs no new idea, because every rule already stood at a request

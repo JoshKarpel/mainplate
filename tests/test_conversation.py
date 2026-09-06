@@ -639,11 +639,16 @@ READ: dict[str, object] = {**REASONED, tool_key(0, "c1"): came_back("b")}
 ANSWERED: dict[str, object] = {**READ, model_key(0, 1): answered_with(THE_ANSWER)}
 
 
-def answering(asked: int, answered: int, cost: str | None, took: float | None = None) -> ModelResponse:
+def answering(asked: int, answered: int, cost: str | None, took: float | None = None, cached: int = 0) -> ModelResponse:
     """One response with the usage a wire reported for it, as the two summing rules are fed."""
     return ModelResponse(
         parts=[TextPart("said")],
-        usage=RequestUsage(input_tokens=asked, output_tokens=answered, cost=None if cost is None else Decimal(cost)),
+        usage=RequestUsage(
+            input_tokens=asked,
+            output_tokens=answered,
+            cache_read_tokens=cached,
+            cost=None if cost is None else Decimal(cost),
+        ),
         metadata=None if took is None else {TOOK: took},
     )
 
@@ -659,7 +664,23 @@ class TestWhatATurnSpent:
     def test_a_turn_is_the_sum_of_the_requests_it_took(self) -> None:
         """One exchange to a reader is one request per batch of tool calls to a provider."""
         spent = spent_on([answering(100, 20, "0.001"), answering(300, 40, "0.002")])
-        assert spent == Spent(asked=400, answered=60, cost=Decimal("0.003"))
+        assert spent == Spent(asked=400, answered=60, cost=Decimal("0.003"), context=300)
+
+    def test_the_context_is_the_last_request_rather_than_the_sum_of_them(self) -> None:
+        """
+        The one figure here that is a level and not a total, and the difference is the window.
+
+        Every request of a turn carries the whole conversation again, so summing them says what the
+        provider charged for and says it several times over about the same tokens. What a reader
+        wants off a rule is how much of the window is gone, which is where the *last* request left
+        it - and a summed figure would draw a turn of four round trips as four times as full as it
+        is, which is a gauge that lies in the direction that matters.
+        """
+        spent = spent_on(
+            [answering(100, 20, "0.001", cached=40), answering(300, 40, "0.002", cached=120)],
+        )
+        assert (spent.context, spent.cached) == (300, 120)
+        assert spent.asked == 400, "what was charged for is still the sum, because every request paid"
 
     def test_a_turn_with_no_responses_yet_has_spent_nothing(self) -> None:
         assert spent_on([]) == Spent(asked=0, answered=0, cost=None)
@@ -673,11 +694,29 @@ class TestWhatATurnSpent:
         response whatever the database knows.
         """
         spent = spent_on([answering(100, 20, "0.001"), answering(300, 40, None)])
-        assert spent == Spent(asked=400, answered=60, cost=None)
+        assert spent == Spent(asked=400, answered=60, cost=None, context=300)
 
     def test_a_session_is_the_sum_of_its_turns(self) -> None:
         total = altogether([Spent(asked=100, answered=20, cost=Decimal("0.5")), Spent(1, 2, Decimal("0.25"))])
         assert total == Spent(asked=101, answered=22, cost=Decimal("0.75"))
+
+    def test_a_session_is_as_full_as_its_most_recent_turn_left_it(self) -> None:
+        """
+        The window carries forward rather than adding up, by `spent_on`'s own rule one scale up.
+
+        A turn that made no request knows nothing about the window rather than knowing it is empty,
+        so it is passed over: what a session's figure says is where the last request that actually
+        happened left the context, which is what makes it fall after a forget instead of climbing
+        through one.
+        """
+        total = altogether(
+            [
+                Spent(asked=100, answered=20, cost=Decimal("0.5"), context=900, cached=400),
+                Spent(asked=200, answered=30, cost=Decimal("0.25"), context=300, cached=100),
+                Spent(asked=0, answered=0, cost=None),
+            ]
+        )
+        assert (total.context, total.cached) == (300, 100)
 
     def test_one_unpriced_turn_leaves_the_session_total_unknown(self) -> None:
         """The same rule one scale up: a total quietly missing a turn is worse than no total."""
@@ -837,7 +876,7 @@ class TestWatchingATurnHappen:
         nothing until `turn:0:messages` landed.
         """
         priced = {**ASKED, model_key(0, 0): answered_with({**THINKING_AND_CALL, "usage": SPENDING})}
-        assert transcript(priced).spent == {0: Spent(asked=1_200, answered=64, cost=Decimal("0.004"))}
+        assert transcript(priced).spent == {0: Spent(asked=1_200, answered=64, cost=Decimal("0.004"), context=1_200)}
 
     def test_the_turn_in_flight_is_drawn_and_the_ones_queued_behind_it_are_not(self) -> None:
         """

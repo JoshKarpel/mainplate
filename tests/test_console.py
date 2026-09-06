@@ -44,6 +44,8 @@ from mainplate.conversation import recorded_steer
 from mainplate.conversation import tool_key
 from mainplate.conversation import tree_key
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.reference import Facts
+from mainplate.reference import Reference
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
@@ -771,6 +773,17 @@ ANSWERED = [
 CALLED = {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"}
 
 
+def a_reference(context: int) -> Reference:
+    """
+    A database that knows one thing about the model these sessions run on: how big its window is.
+
+    Under the routed id, which is the key `Reference.look_up` tries first and the only one a listing
+    with no upstream name has at all. The console's own default is no database, so a test that wants
+    a window says so; every other test here is the case where nothing does.
+    """
+    return Reference(qualified={DEFAULT_CHOICE.model: Facts(context=context)}, upstream={})
+
+
 class TestForgettingFromTheComposer:
     """
     The answer that keeps the message here and drops what the model was told.
@@ -830,7 +843,7 @@ class TestForgettingFromTheComposer:
 
         region = await watched(app, session)
         assert "rule--forget" in region
-        assert "the model's context was cleared here" in region
+        assert "context cleared" in region
         # And the turn it closed is still on the page, which is the half a rendering can get wrong.
         assert "what is a mainplate" in region
 
@@ -1060,9 +1073,82 @@ class TestWhatARuleSays:
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert 'class="rule rule--turn"' in region
-        assert "5K in" in region
-        assert "640 out" in region
-        assert "$0.0123" in region
+        assert "\N{UPWARDS ARROW}5K" in region
+        assert "\N{DOWNWARDS ARROW}640" in region
+        assert "(\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}4K)" in region
+        assert "\N{GREEK CAPITAL LETTER DELTA}$0.0123" in region
+
+    async def test_a_rule_says_how_full_the_window_is_and_draws_the_same_fact_as_a_gauge(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The percentage and the `--filled` the line is drawn to are one figure said twice.
+
+        Both come from the reference's window and the last request's own input, so this is also what
+        pins that a session picks its window up from the database rather than from anything recorded:
+        nothing about the checkpoint changes between this test and the one below it.
+        """
+        service.references.current = a_reference(context=10_000)
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "53%" in region, "5,300 of 10,000 tokens"
+        assert "--filled: 53.0%" in region, "and the line drawn to the same fraction"
+
+    async def test_a_session_whose_model_nobody_wrote_a_window_down_for_draws_no_gauge(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The counts still say what they say; only the fraction goes, because nothing could compute it.
+
+        Three ways to know nothing arrive as one answer here - no database, an endpoint that no
+        longer lists the recorded id, a model with no record - and this is the first of them, which
+        is the console's own default.
+        """
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "\N{UPWARDS ARROW}5K" in region, "how much context there is is known either way"
+        assert "rule__full" not in region
+        assert "--filled" not in region
+
+    async def test_a_rule_says_what_the_conversation_has_cost_by_the_time_it_reaches_it(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        What one turn cost is only readable against what has been spent so far, so a rule says both.
+
+        The first turn is the case the running total is left off, since there it *is* the turn's own
+        figure and printing one number twice says nothing. The second turn is where it starts.
+        """
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+        assert "\N{N-ARY SUMMATION}" not in await watched(app, session), "one turn in, the total is the turn"
+        await service.say(session, "and again")
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "\N{GREEK CAPITAL LETTER DELTA}$0.0123" in region, "what this turn added"
+        assert "\N{N-ARY SUMMATION}$0.0246" in region, "and two turns at $0.0123 each"
+
+    async def test_one_unpriced_turn_takes_the_running_total_off_every_rule_below_it(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        `altogether`'s rule, one rule at a time: a total quietly missing a turn understates it.
+
+        The turn after an unpriced one is priced perfectly well and still shows no total, which is
+        the point rather than a shortcoming: what the total would say is the sum of everything the
+        reference happened to know about, and nothing on the page could say it was doing that.
+        """
+        session = await a_session(app)
+        await answered(
+            service, session, {"kind": "response", "parts": [], "usage": {"input_tokens": 300, "output_tokens": 12}}
+        )
+        await service.say(session, "and again")
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "\N{GREEK CAPITAL LETTER DELTA}$0.0123" in region, "the priced turn still says what it cost"
+        assert "\N{N-ARY SUMMATION}" not in region, "and the conversation says nothing about its total"
 
     async def test_the_fork_link_is_on_the_rule_rather_than_inside_the_turn(
         self, app: ASGIApp, service: Service
@@ -1091,8 +1177,8 @@ class TestWhatARuleSays:
             service, session, {"kind": "response", "parts": [], "usage": {"input_tokens": 300, "output_tokens": 12}}
         )
         region = await watched(app, session)
-        assert "300 in" in region
-        assert "12 out" in region
+        assert "\N{UPWARDS ARROW}300" in region
+        assert "\N{DOWNWARDS ARROW}12" in region
         assert "rule__cost" not in region
         assert "free" not in region
 
@@ -1131,6 +1217,42 @@ class TestWhatARuleSays:
         await service.checkpointer.supply(session, tool_key(0, "c1"), came_back("x", took=0.184))
         region = await watched(app, session)
         assert "184ms" in region
+
+    async def test_a_turn_out_on_a_call_says_so_on_the_call_and_nowhere_else(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The call's own panel is drawn working, so a second panel of dots under it says it twice.
+
+        And says it in a shape nothing is writing: an empty reply below a call the model is waiting
+        on reads as a turn that has started answering, where what is happening is a tool running.
+        """
+        session = await a_session(app)
+        turn = await taken(service, session)
+        await service.checkpointer.supply(
+            session,
+            model_key(turn, 0),
+            answered_with({"kind": "response", "parts": [CALLED], "usage": {"input_tokens": 1, "output_tokens": 1}}),
+        )
+        region = await watched(app, session)
+        assert 'id="waiting"' not in region, "nothing claims a reply is being written"
+        # Which the dots still on the page must therefore belong to: the call's own panel.
+        assert 'aria-label="working"' in region, "and the call is drawn as still out"
+
+    async def test_a_turn_whose_calls_have_all_come_back_is_waiting_on_the_model_again(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The control: with the result in, what is being waited on is the next request."""
+        session = await a_session(app)
+        turn = await taken(service, session)
+        await service.checkpointer.supply(
+            session,
+            model_key(turn, 0),
+            answered_with({"kind": "response", "parts": [CALLED], "usage": {"input_tokens": 1, "output_tokens": 1}}),
+        )
+        await service.checkpointer.supply(session, tool_key(turn, "c1"), came_back("x"))
+        region = await watched(app, session)
+        assert 'id="waiting"' in region
 
 
 class TestShowingWhatWasRecorded:
@@ -1179,8 +1301,8 @@ class TestShowingWhatWasRecorded:
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert "aaaaaaaa" in region, "the tree taken before the ask"
-        assert "5K in" in region, "and what the answer cost"
-        assert 'class="tag__at">r0<' in region, "and the record behind it"
+        assert "\N{UPWARDS ARROW}5K" in region, "and what the answer cost"
+        assert 'class="tag__at">r0.0<' in region, "and the record behind it, named turn and request"
 
     async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
         """
