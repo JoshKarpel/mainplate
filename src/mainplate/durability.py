@@ -623,9 +623,14 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         #
         # A `SystemPromptPart` and not a `UserPromptPart`, because nobody typed it: it is the console
         # speaking, so a reader has to be able to tell it from a message and `interjected` draws the
-        # two apart by which part carried them. It also costs the cached prefix nothing - an adapter renders a non-leading one
-        # as its own entry in the window rather than folding it into the top-level system parameter,
-        # which is exactly what appending rather than editing the instructions is for.
+        # two apart by which part carried them.
+        #
+        # What it costs the cached prefix is nothing, and that is the load-bearing half: appended it
+        # is one more entry at the end, where an instruction re-prices every request from the system
+        # block onward. How it *reaches* the model is the provider's business and varies - a real
+        # `{"role": "system"}` entry on the OpenAI wire and on the four Anthropic models that honour
+        # one, `<system>`-tagged user text everywhere else - so do not write code here that depends on
+        # which. See the guidance section in `AGENTS.md`.
         if scope.guiding is not None:
             for said in scope.guiding(request_context.messages):
                 request_context.messages.append(ModelRequest(parts=[SystemPromptPart(content=said)]))

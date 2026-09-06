@@ -45,6 +45,7 @@ from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
+from mainplate.pages import OPENING
 from mainplate.service import Service
 from mainplate.snapshots import Worktree
 from scripts.gallery import pages
@@ -879,6 +880,28 @@ class TestWhatComesOutOfACopyButton:
         # And it is the call rather than the one line of its summary: what it was handed is in there.
         assert "called with" in folded
 
+    async def test_a_stretch_of_reasoning_copies_the_same_whether_it_is_open_or_folded(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        The one fold whose summary is a *prefix of its own body*, which is what makes this worth
+        asking twice: a button reading the page rather than the source would hand back the opening
+        line and then the whole thing again behind it. It reads `data-markdown`, which is on the
+        block whichever way the fold is turned.
+        """
+        panel = await self.copying(page, gallery, "thinking")
+        fold = panel.locator("details.thinking").first
+        await expect(fold).to_have_attribute("open", "")
+        await panel.locator(".panel__meta > .copy").click()
+        open_ = await self.clipboard(page)
+        await fold.locator("summary").click()
+        await expect(fold).not_to_have_attribute("open", "")
+        await panel.locator(".panel__meta > .copy").click()
+        assert await self.clipboard(page) == open_
+        # The source, so the fence is in there as it was written and the opening is in there once.
+        assert "```html" in open_
+        assert open_.count("The trigger is") == 1
+
     async def test_the_button_says_so_and_then_stops_saying_so(self, page: Page, gallery: str) -> None:
         panel = await self.copying(page, gallery, "assistant")
         button = panel.locator(".panel__meta > .copy")
@@ -1211,6 +1234,209 @@ class TestShuttingAFoldFromItsFrame:
         await opened.locator(".tool__body pre").first.click()
 
         await expect(opened).to_have_attribute("open", "")
+
+
+class TestFoldingAStretchOfReasoning:
+    """
+    A stretch of reasoning folds, drawn open, standing for itself with its own opening line.
+
+    A browser twice over. What a shut fold shows is decided by `text-overflow`, which is the browser
+    measuring a line against a box the server cannot know the width of, so whether it clips at all is
+    invisible to any markup assertion. And the bound on what is *carried* into the summary is only
+    right if it exceeds what the widest panel can show, which is a question about rendered glyphs.
+    """
+
+    async def a_turn_that_reasoned(self, console: tuple[str, Service], page: Page, said: str) -> Locator:
+        url, service = console
+        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
+        await service.checkpointer.supply(
+            session.id,
+            model_key(0, 0),
+            answered_with({"kind": "response", "parts": [{"part_kind": "thinking", "content": said}]}),
+        )
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        return page.locator("details.thinking")
+
+    async def test_it_is_drawn_open(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        Reasoning arrives while the turn is being answered, and watching a model think is one of the
+        things a live transcript is for: rendered shut it would hide the thing being watched at the
+        moment it is worth watching.
+        """
+        fold = await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
+
+        await expect(fold).to_have_attribute("open", "")
+        await expect(fold.locator(".thinking__body")).to_be_visible()
+
+    async def test_shut_it_stands_for_itself_with_its_opening_line(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The opening rather than a count, because a stretch of reasoning has no name the way a call
+        has one, and what it opens with is what tells one stretch from the next.
+        """
+        fold = await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
+
+        await fold.locator("summary").click()
+
+        await expect(fold).not_to_have_attribute("open", "")
+        await expect(fold.locator(".opening")).to_have_text("Two files to look at, so let me read both.")
+
+    async def test_the_opening_is_shown_only_shut_and_the_mark_does_not_move(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        Open, a prefix of the body standing directly above the body says nothing twice, so it goes.
+        What must not go with it is the mark: a control that moves under the finger that pressed it
+        cannot be pressed twice, which is the rule every fold here is drawn to.
+        """
+        fold = await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
+        summary = fold.locator("summary")
+        await expect(fold.locator(".opening")).to_be_hidden()
+        was = await summary.bounding_box()
+        assert was
+
+        await summary.click()
+
+        await expect(fold.locator(".opening")).to_be_visible()
+        now = await summary.bounding_box()
+        assert now
+        assert (now["x"], now["y"]) == (was["x"], was["y"])
+
+    async def test_a_long_opening_is_clipped_at_the_width_of_the_panel(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The browser's own ellipsis, which is the whole reason no length is decided in the markup: the
+        server cannot know the window, and any character count it picked would cut in the wrong place
+        at every other width.
+        """
+        fold = await self.a_turn_that_reasoned(console, page, "The trigger is load. " * 40)
+        await fold.locator("summary").click()
+
+        opening = fold.locator(".opening")
+        clipped = await opening.evaluate("node => node.scrollWidth > node.clientWidth")
+        assert clipped, "the line runs past its box, which is what makes the ellipsis appear"
+        assert await opening.evaluate("node => getComputedStyle(node).textOverflow") == "ellipsis"
+
+    async def test_more_is_carried_than_the_widest_panel_can_ever_show(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        What keeps the clipping honest. Clipped short of `OPENING` the ellipsis says there is more,
+        and clipped *at* it with no ellipsis it would say there is not, so the bound has to exceed
+        what fits - which is a bounded question, because the transcript is capped at `--measure`.
+
+        Measured against the worst case there is: the narrowest glyph this console's prose face
+        draws, repeated. Asked of a canvas rather than of the element, since a run of 320 of anything
+        is clipped by the box being measured.
+        """
+        fold = await self.a_turn_that_reasoned(console, page, "The trigger is load. " * 40)
+        await fold.locator("summary").click()
+
+        fits = await fold.locator(".opening").evaluate("""
+            node => {
+                const style = getComputedStyle(node);
+                const ctx = document.createElement("canvas").getContext("2d");
+                ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+                let narrowest = Infinity;
+                for (let c = 33; c < 127; c++) {
+                    const per = ctx.measureText(String.fromCharCode(c).repeat(100)).width / 100;
+                    if (per > 0) narrowest = Math.min(narrowest, per);
+                }
+                return Math.ceil(node.getBoundingClientRect().width / narrowest);
+            }
+        """)
+
+        assert fits < OPENING, f"{fits} of the narrowest character fit, and only {OPENING} are carried"
+
+    async def test_a_word_in_the_opening_is_found_once_rather_than_twice(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one place in this transcript where a summary is a second copy of the body under it, so
+        the search has to skip it: found in both, the dock would step through one sentence at two
+        stops and the count would say there is twice as much of it as there is.
+        """
+        await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
+
+        await page.locator(".search__input").fill("files")
+
+        await expect(page.locator("mark.hit")).to_have_count(1)
+
+
+class TestFoldingADocumentTheConsoleHandedOver:
+    """
+    The other two folds summarised by their own opening line: the session's standing system prompt,
+    and the guidance a turn is handed when it reaches into a part of the repository carrying its own.
+
+    One shape for both, because on the page they are the same thing - a document somebody committed,
+    shown folded because it is reference rather than conversation. What separates them is where each
+    sits in the request, and that is what the panel around each says: `instructions` in front of the
+    cached prefix, against a `SystemPromptPart` at a position in the history. So they are two panel
+    kinds the key can quiet apart, drawn in one `.document` fold.
+
+    Over the gallery, which is the one place both are on a page together.
+    """
+
+    async def folds(self, page: Page, gallery: str) -> None:
+        """The gallery's own conversation, which forgets once and so carries two stretches."""
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(page.locator("details.document")).to_have_count(3)
+
+    async def test_the_two_of_them_are_one_fold_under_two_kinds_of_panel(self, page: Page, gallery: str) -> None:
+        """
+        Which is the whole of the split: one shape on the page, two words in the key, because the two
+        sit in different places in the request and a reader may want to quiet them apart.
+        """
+        await self.folds(page, gallery)
+
+        drawn = await page.locator(".panel:has(> .block > details.document)").evaluate_all(
+            "panels => panels.map(panel => panel.dataset.kind)"
+        )
+
+        assert drawn == ["system-prompt", "guidance", "system-prompt"]
+
+    async def test_both_are_drawn_shut(self, page: Page, gallery: str) -> None:
+        """
+        Both are long and both are reference, so unfolded either would be most of what a reader sees.
+        The opening line is what makes that affordable rather than a loss.
+        """
+        await self.folds(page, gallery)
+
+        for fold in await page.locator("details.document").all():
+            await expect(fold).not_to_have_attribute("open", "")
+
+    async def test_a_shut_one_names_what_is_in_it(self, page: Page, gallery: str) -> None:
+        """
+        Which is the whole reason drawing them shut costs nothing: a guidance block opens by naming
+        the file it came from, and a system prompt by saying what the session is for.
+        """
+        await self.folds(page, gallery)
+
+        told = await page.locator("details.document .opening").evaluate_all(
+            "lines => lines.map(line => line.textContent)"
+        )
+
+        assert told[0].startswith("You are a helpful assistant")
+        assert told[1].startswith("`src/mainplate/AGENTS.md`, guidance for this part of the repository:")
+
+    async def test_the_size_stays_beside_it_when_the_fold_opens(self, page: Page, gallery: str) -> None:
+        """
+        The opening line goes when the fold opens, because a prefix of the body standing above the
+        body says nothing twice. The figure is not a prefix of anything, and what it says - that this
+        is paid for on every request from here on - is worth having with the fold either way.
+        """
+        await self.folds(page, gallery)
+        fold = page.locator("details.document").first
+        await expect(fold.locator(".document__size")).to_have_text("1184 characters")
+
+        await fold.locator("summary").click()
+
+        await expect(fold).to_have_attribute("open", "")
+        await expect(fold.locator(".opening")).to_be_hidden()
+        await expect(fold.locator(".document__size")).to_have_text("1184 characters")
 
 
 class TestOpeningTheRecordBehindARequest:

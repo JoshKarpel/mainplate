@@ -1130,6 +1130,9 @@ class TestAnsweringASession:
         A steer is a `UserPromptPart` and guidance is a `SystemPromptPart`, which is the whole of why
         the delivery uses one: read as a steer it would be drawn as the person having typed what the
         console handed over, and read as prose it would be drawn as the model saying it.
+
+        Its own kind rather than the standing prompt's, because the two sit in different places in the
+        request: `instructions` in front of the cached prefix, against a part at a position here.
         """
         said: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="what is it")]),
@@ -1145,7 +1148,7 @@ class TestAnsweringASession:
 
         drawn = tuple(panelled(0, parted(said, {})))
 
-        assert [panel.kind for panel in drawn] == ["assistant", "system-prompt", "steer", "assistant"]
+        assert [panel.kind for panel in drawn] == ["assistant", "guidance", "steer", "assistant"]
         assert drawn[1].blocks == (Guidance(text="`apps/web/AGENTS.md`, guidance for this part of the repository:"),)
 
     async def test_two_messages_sent_at_once_keep_their_order_and_neither_is_lost(

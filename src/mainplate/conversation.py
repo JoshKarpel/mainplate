@@ -907,7 +907,17 @@ type Outcome = Literal["success", "failed", "denied", "interrupted"]
 # transcript is exactly the thing a reader who has read it once wants quieted - and it takes the
 # person's hue, since what is in it was written by the operator and by whoever wrote the
 # repository's `AGENTS.md`.
-type Kind = Literal["prompt", "steer", "command", "assistant", "thinking", "tool", "system-prompt"]
+#
+# `guidance` is the file the console handed over mid-turn because the model reached into a part of
+# the repository carrying its own, and it is *not* `system-prompt` even though the two hold the same
+# sort of text. What tells them apart is mechanical rather than editorial: a system prompt is
+# Pydantic AI `instructions`, a per-request parameter re-rendered on every request in front of the
+# cached prefix, where this is a `SystemPromptPart` appended into the message history at a position.
+# Two mechanisms, two places in the request, two things a reader may want to quiet separately - so
+# two words, by the same rule that keeps `steer` apart from `prompt`. How each one reaches the model
+# differs too, and by more than the wire: see the guidance section in `AGENTS.md`. It takes the
+# person's hue for the reason `system-prompt` does.
+type Kind = Literal["prompt", "steer", "command", "assistant", "thinking", "tool", "system-prompt", "guidance"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -937,9 +947,11 @@ class Guidance:
 
     Its own type rather than a `Prose` for the reason `Steering` is one: `panelled` reads a panel's
     kind off its blocks, and this drawn as prose would read as the model saying it. Nobody in the
-    conversation said it - the console did, out of a file somebody committed - which is why it takes
-    the same kind as the session's standing system prompt rather than a kind of its own. It is the
-    same thing arriving later.
+    conversation said it - the console did, out of a file somebody committed.
+
+    Its own `Kind` too, rather than the standing system prompt's, and the line between them is
+    mechanical: that one is `instructions`, a per-request parameter in front of the cached prefix,
+    where this is a `SystemPromptPart` at a position in the history. See the note above `Kind`.
     """
 
     text: str
@@ -1335,7 +1347,7 @@ def kind_of(block: Block) -> Kind:
         case Steering():
             return "steer"
         case Guidance():
-            return "system-prompt"
+            return "guidance"
         case Command():
             return "command"
         case Reasoning():

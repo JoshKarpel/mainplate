@@ -23,11 +23,12 @@
 
   const THEMES = ["system", "light", "dark"];
 
-  // Everything in the transcript that folds: a tool call, and a command the person ran. Named once
-  // because three places act on the set - noting what the reader decided, putting that back after a
-  // swap, and the dock's fold-everything buttons - and a kind added to one and not the others is a
-  // fold that reopens itself on the next render.
-  const FOLDS = "details.tool, details.ran, details.system-prompt";
+  // Everything in the transcript that folds: a tool call, a command the person ran, a stretch of the
+  // model's reasoning, and a document the console handed the model - the standing system prompt, and
+  // the guidance a turn is handed mid-way. Named once because three places act on the set - noting
+  // what the reader decided, putting that back after a swap, and the dock's fold-everything buttons -
+  // and a kind added to one and not the others is a fold that reopens itself on the next render.
+  const FOLDS = "details.tool, details.ran, details.thinking, details.document";
 
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
   // must not leave the page in a scheme it has no rules for.
@@ -698,7 +699,12 @@
         if (!parent) continue;
         // A panel's own label and permalink are chrome, not conversation, and so is the word on a
         // copy button - which is seated inside a fence, where the marks would otherwise reach it.
-        if (parent.closest(".panel__meta, [data-copy]")) continue;
+        //
+        // A fold's opening line goes with them, and it is the one entry here that is skipped for
+        // being a *second copy* rather than for not being conversation: it stands for the body a few
+        // pixels below it, so a word in the first line of one would be found twice and the dock would
+        // step through the same sentence at two stops.
+        if (parent.closest(".panel__meta, [data-copy], .opening")) continue;
         // Only the kinds the reader left in play, so the count is of what they are looking at.
         const panel = parent.closest(".panel");
         if (panel && muted.has(panel.dataset.kind)) continue;
@@ -1111,12 +1117,15 @@
     // return runs to hundreds of lines. A rule that held for one and not the other would be two
     // panels of the same shape answering the same press differently.
     //
-    // The output is the exemption, and it is the whole of what makes this safe. A click in a `pre` is
-    // usually the start of lifting a line out, and a panel that folded under somebody selecting from
-    // it would cost more than the scroll it saves. A press that *ended* a drag is out for the same
-    // reason: a browser reports one as a click on whatever the pointer came to rest over, so a
-    // selection still standing is a press that was not aimed at the frame. `said nothing` is this
-    // console's own sentence rather than the command's, so it stays part of the frame.
+    // What is *in* the box is the exemption, and it is the whole of what makes this safe. A click in
+    // there is usually the start of lifting a line out, and a panel that folded under somebody
+    // selecting from it would cost more than the scroll it saves. Two selectors because the content
+    // takes two shapes - a `pre` for a command's output and a tool's return, rendered prose for a
+    // system prompt - and the exemption is about the content rather than about either shape. A press
+    // that *ended* a drag is out for the same reason: a browser reports one as a click on whatever
+    // the pointer came to rest over, so a selection still standing is a press that was not aimed at
+    // the frame. `said nothing` is this console's own sentence rather than the command's, so it stays
+    // part of the frame.
     //
     // Shutting only. Opening is the summary's, because a shut panel is a summary and little else, and
     // this is not the toggle in another place - it is the way out of a box too tall to scroll back up.
@@ -1125,7 +1134,7 @@
       document.addEventListener("click", (event) => {
         if (!(event.target instanceof Element)) return;
         const fold = event.target.closest(FOLDS);
-        if (!fold || !fold.open || event.target.closest("summary, pre")) return;
+        if (!fold || !fold.open || event.target.closest("summary, pre, .text")) return;
         if (document.getSelection()?.isCollapsed === false) return;
         fold.open = false;
       });

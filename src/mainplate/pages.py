@@ -97,7 +97,8 @@ from mainplate.conversation import Steering
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
-from mainplate.markup import as_markup
+from mainplate.markup import as_document
+from mainplate.markup import as_message
 from mainplate.reference import Cost
 from mainplate.reference import Described
 from mainplate.reference import Reference
@@ -184,6 +185,7 @@ CHOOSING_ID: Final = "choosing"
 # cannot come to disagree about what a kind is called.
 NAMES: Final[tuple[tuple[Kind, str], ...]] = (
     ("system-prompt", "system prompt"),
+    ("guidance", "guidance"),
     ("prompt", "prompt"),
     ("steer", "steer"),
     ("command", "command"),
@@ -199,6 +201,12 @@ NAMES: Final[tuple[tuple[Kind, str], ...]] = (
 # since `aside` is taken and means a side conversation.
 TITLES: Final[dict[Kind, str]] = {
     "command": "You ran this yourself, in the session's worktree. No model was told about it.",
+    # The other kind whose label leaves something out: `guidance` says what it holds and not why it
+    # is here, which is that a tool reached into a part of the repository carrying its own.
+    "guidance": (
+        "The console handed this to the model when it reached into a part of the repository "
+        "that carries its own guidance."
+    ),
 }
 
 # Which side of the exchange a kind is on: what reached the model, and what the model produced.
@@ -209,6 +217,10 @@ SIDES: Final[dict[Kind, str]] = {
     # is in a system prompt was written by the operator and by whoever wrote the repository's own
     # guidance. The console composed it; it did not write it.
     "system-prompt": "person",
+    # The same rule one mechanism along: whoever wrote the repository's `AGENTS.md` wrote this, and
+    # the console handed it over. What separates it from the standing prompt is where it sits in the
+    # request, which is not something a hue can say.
+    "guidance": "person",
     "prompt": "person",
     "steer": "person",
     # The person's side because the axis is who produced the text, which is the same rule `steer`
@@ -1540,16 +1552,19 @@ def chosen_note(
     )
 
 
-def written(text: str) -> Element:
+def written(text: str, *, document: bool = False) -> Element:
     """
     Prose, as the Markdown its author almost certainly meant it to be.
 
-    `as_markup` is what makes putting this in a child position safe, and it is the only reason
+    The renderer is what makes putting this in a child position safe, and it is the only reason
     this is not simply escaped text: it renders the Markdown and then throws away everything the
     result is not allowed to contain, so a model that echoed a prompt back cannot put a script or
     a `javascript:` link on this page. See `markup.py` for why both halves of that are needed.
+
+    `document` says the text is a file rather than something typed into a box, which decides whether
+    its own newlines are line breaks. See `markup.py` for why that is the one difference.
     """
-    return div(cls="text", children=as_markup(text))
+    return div(cls="text", children=as_document(text) if document else as_message(text))
 
 
 def working() -> Element:
@@ -1757,7 +1772,106 @@ def command_block(ran: Command) -> Element:
     )
 
 
-def written_block(kind: str, text: str) -> Element:
+# How much of a folded block of prose is carried into the line that stands for it. Not a decision
+# about how much is *shown*: what a shut fold shows is whatever fits, clipped with an ellipsis by the
+# browser at whatever width the panel happens to have, which is the one measurement no server can
+# make. This is only the bound on what is carried, and it exists because a summary holding the whole
+# of a long block would put every word of it on the page twice, on a region that is re-rendered
+# whenever the turn in flight records anything.
+#
+# The number is what the clipping needs to stay honest: clipped short of the bound the ellipsis says
+# there is more, and clipped *at* the bound with no ellipsis it would say there is not. So it has to
+# exceed what the widest panel can show, which is a bounded question because the transcript is capped
+# at `--measure`. `TestFoldingAStretchOfReasoning` measures the worst case there is - the narrowest
+# character this console's prose face draws, repeated - and fails if it fits.
+OPENING: Final = 320
+
+
+def opening_of(text: str) -> str:
+    """
+    The front of a block of prose, as the one line a shut fold stands for.
+
+    Whitespace collapsed rather than left as written, because the summary is one line either way: a
+    browser collapses it in the markup, so a paragraph break carried here would spend the bound on
+    characters that draw as one space. Collapsing first makes `OPENING` a count of what a reader
+    could actually see.
+
+    Markdown markers are left in it. A model that opened its reasoning with a heading wrote that
+    heading, and rendering it here would need a second rendering path for a line that has nowhere to
+    put a block element; the fold under it is one press away for anybody who wants it set properly.
+    """
+    return " ".join(text.split())[:OPENING]
+
+
+def opening_line(text: str, *rest: Element) -> Element:
+    """
+    A fold's summary: the line it stands for, and whatever facts belong beside it.
+
+    One function for the three folds whose summary is a *prefix of their own body* - a stretch of
+    reasoning, the standing system prompt, and a guidance file handed over mid-turn. That shared
+    shape is what `.opening` carries: the clipping, and being hidden again once the fold is open,
+    since a prefix standing directly above the body says nothing twice. A call and a command are not
+    in it, because a tool's name and a command's line are not prefixes of anything.
+    """
+    return summary(children=[span(cls="opening", children=opening_of(text)), *rest])
+
+
+def reasoning_block(text: str, anchor: str, at: int) -> Element:
+    """
+    One stretch of the model's reasoning, folded, with its opening as the summary.
+
+    **Open, and shut by the reader.** Reasoning arrives while the turn is being answered, and
+    watching a model think is one of the things a live transcript is for, so a fold rendered shut
+    would hide the thing being watched at the moment it is worth watching. Shut afterwards it is a
+    line, which is what a reader coming back to a finished conversation wants: the dock's
+    fold-everything button puts every one of them away in one press.
+
+    **The opening alone, with no figure beside it**, which is where this parts from a document fold:
+    what a stretch of reasoning cost is on the rule already, as tokens and money for the request it
+    belongs to, where what a document costs is paid on requests the rule cannot speak for.
+
+    The id is the panel's own plus this block's place in it, stable for the reason `tool_block`'s is:
+    a panel's blocks only ever grow at the end.
+    """
+    return details(
+        cls="thinking",
+        attrs={"id": f"{anchor}-thinking-{at}", "open": True},
+        children=[opening_line(text), div(cls="thinking__body", children=written(text))],
+    )
+
+
+def document_fold(said: str, fold_id: str) -> Element:
+    """
+    A Markdown file the console handed the model, folded, standing for itself with its opening line.
+
+    One shape for both of them, because a session's standing system prompt and a guidance file
+    delivered mid-turn are the same thing on the page: a document somebody committed, shown verbatim
+    in structure and folded because it is reference rather than conversation. What differs is where
+    each sits in the request, which is what the *panel* around this says; nothing here has to know.
+
+    **Shut**, unlike reasoning and a command. Both of these are long, both are reference, and
+    unfolded either would be most of what a reader sees. The opening line is what makes that
+    affordable rather than a loss: a guidance block opens by naming the file it came from, and a
+    system prompt by saying what the session is for, so the fold is identified without being opened.
+
+    **The count stays beside it**, which is the one fact worth having without opening either: what is
+    in here is paid for on every request from here on, so a prompt or a delivered file that has grown
+    to tens of thousands of characters is worth seeing at a glance. It is not hidden when the fold
+    opens, since a figure about the whole is not a prefix of anything.
+    """
+    return details(
+        cls="document",
+        # Its own id and not the panel's, because what the script keeps a fold decision under has to
+        # name the fold rather than the thing around it.
+        attrs={"id": fold_id},
+        children=[
+            opening_line(said, span(cls="document__size", children=f"{len(said)} characters")),
+            div(cls="document__body", children=written(said, document=True)),
+        ],
+    )
+
+
+def written_block(kind: str, text: str, *, document: bool = False) -> Element:
     """
     One block of rendered Markdown, carrying the Markdown it was rendered from.
 
@@ -1770,8 +1884,11 @@ def written_block(kind: str, text: str) -> Element:
     Only the kinds that *are* Markdown. A tool's arguments and its return are shown verbatim already,
     so what is on the page is the source, and an attribute repeating it would be the second copy this
     one is not.
+
+    `document` goes straight to `written`, and says the text is a file rather than something typed
+    into a box: guidance is one, and everything else here was written in the conversation.
     """
-    return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text))
+    return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text, document=document))
 
 
 def block_element(block: Block, panel: Panel, at: int) -> Element:
@@ -1789,14 +1906,24 @@ def block_element(block: Block, panel: Panel, at: int) -> Element:
         case Steering(text=text):
             return written_block("block--text", text)
         case Guidance(text=text):
-            # Verbatim rather than rendered, which is the standing prompt's own reason one panel up:
-            # the claim it makes is that this is what was sent, and rendering the Markdown would show
-            # the reader something the model never saw.
-            return div(cls=("block", "block--guidance"), children=pre(children=code(children=text)))
+            # The same fold the standing system prompt is drawn in, because it is the same kind of
+            # thing: an `AGENTS.md` with a line of the console's own in front of it. That line is
+            # what the summary shows, so a shut block still names the file it came from.
+            return div(
+                cls=("block", "block--guidance"),
+                attrs={"data-markdown": text},
+                children=document_fold(text, f"{panel.anchor}-guidance-{at}"),
+            )
         case Command():
             return div(cls=("block", "block--ran"), children=command_block(block))
         case Reasoning(text=text):
-            return written_block("block--thinking", text)
+            # The source rides on the block as it does for every other kind of Markdown, so the copy
+            # button hands over what the model wrote and never the summary standing for it.
+            return div(
+                cls=("block", "block--thinking"),
+                attrs={"data-markdown": text},
+                children=reasoning_block(text, panel.anchor, at),
+            )
         case ToolUse():
             return div(cls=("block", "block--tool"), children=tool_block(block, panel.anchor, at))
         case _ as unreachable:
@@ -2054,15 +2181,23 @@ def system_prompt_panel(turn: int, said: str | None) -> Element:
     response arrives on, and `instructed_in` is what keeps it off a stretch nothing will ever compose
     for.
 
-    **Folded, and drawn verbatim.** Folded because it is reference rather than conversation, and it
-    is long: unfolded it would be most of what a reader sees on opening any session. Verbatim because
-    the claim it makes is that this is what was *sent*, and rendering the Markdown would show
-    something the model never saw. That is the raw record's argument, one value along.
+    **Drawn as the Markdown it is**, because what is in it is `.md` files - the operator's guidance
+    and the repository's `AGENTS.md`, concatenated - so its headings, lists and fences are the
+    structure its authors wrote, and a wall of `##` is the one reading of it nobody meant.
 
-    The copy button on it is the one seated inside the `pre`, which hands over the prompt and nothing
-    else. The panel's own is not drawn, because the script seats that one against a panel's blocks
-    and what is in here is a fold rather than a block; the two would copy the same characters anyway,
-    give or take the summary, so the absence costs a reader nothing.
+    That does not weaken the claim that this is what was *sent*. What the model was handed is the
+    source, and the source is what this hands back: the block carries `data-markdown`, so the panel's
+    copy button gives the characters rather than the rendering, and the raw record on the rule is the
+    same value one step further out.
+
+    It is a `.block` around the fold rather than the fold alone, and that is what puts the copy button
+    on the panel: the script seats one against a panel's blocks, and it is the whole prompt somebody
+    reaches for. A fence inside gets its own besides, which is the seating everywhere else.
+
+    The fold itself is `document_fold`, shared with the guidance a turn is handed mid-way: on the page
+    the two are the same thing, and what separates them is where each sits in the request, which is
+    what the panel around this says rather than anything inside it. The id names the turn the stretch
+    began at, which never moves, so a reader who shut this keeps it shut across every swap.
     """
     anchor = f"system-prompt-{turn}"
     return article(
@@ -2082,17 +2217,10 @@ def system_prompt_panel(turn: int, said: str | None) -> Element:
             ),
             div(cls=("block", "block--text"), children=working())
             if said is None
-            else details(
-                cls="system-prompt",
-                # Its own id and not the panel's, because what the script keeps a fold decision under
-                # has to name the fold rather than the thing around it. It names the turn the stretch
-                # began at, which never moves, so a reader who shut this keeps it shut across every
-                # swap.
-                attrs={"id": f"{anchor}-fold"},
-                children=[
-                    summary(children=span(cls="system-prompt__what", children=f"{len(said)} characters")),
-                    div(cls="system-prompt__body", children=pre(children=code(children=said))),
-                ],
+            else div(
+                cls=("block", "block--text"),
+                attrs={"data-markdown": said},
+                children=document_fold(said, f"{anchor}-fold"),
             ),
         ],
     )

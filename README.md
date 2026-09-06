@@ -417,6 +417,22 @@ for what reached the model and warm for what it produced, so a reader scrolling 
 apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
 page.
 
+Reasoning folds, drawn open, so watching a model think costs no clicks while the turn is running.
+Shut, a stretch stands for itself with its own opening line, clipped to whatever width the panel has
+- so coming back to a finished conversation, the dock's fold-everything button turns the thinking
+into one line apiece and leaves the answers where they were.
+
+Two more panels say what the model was *told* rather than what anyone said. The **system prompt** is
+what every request in a stretch of context carried, drawn under the rule that opens that stretch, and
+**guidance** is a repository's own `AGENTS.md` for a directory, handed over at the moment a tool
+reached into it. They are two kinds rather than one because they sit in different places in the
+request - the first is re-sent whole on every request in front of the cached prefix, the second is
+appended once into the history - so the key can quiet either without the other, and so that a reader
+can see which is which. How much authority the second one carries is the provider's answer rather
+than this console's, and it varies by model, which is another reason not to draw them as one thing.
+Both fold shut and stand for themselves the same way reasoning does, with the character count beside
+the line, because what is in them is paid for on every request from there on.
+
 A **rule** stands at every round trip to the model, carrying what is true of that request rather than
 of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and
 money, and an `r0` fold showing the JSON the checkpoint actually holds for it. Since the checkpoint
@@ -448,7 +464,7 @@ up to check, what you want to see now is the answer to what you just sent.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that steps where the model's history starts again, whole turns, every
-panel, or only what the model said, and folds every call at once, a shelf for text you have written
+panel, or only what the model said, and folds everything at once, a shelf for text you have written
 and not sent, a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
 off the console still renders, still posts messages, and every tool call is still a fold that
 opens; what goes is the rail and the keyboard send.
@@ -456,8 +472,8 @@ opens; what goes is the rail and the keyboard send.
 **Send** puts what is in the box into the conversation now. If a reply is already coming, that means
 **steering**: the message is put to the model in the turn it is answering, appended to the next
 request it makes, so it travels up with whatever tool results are going the same way and shapes that
-answer rather than the one after it. It shows in the transcript as a `you (steering)` panel the
-instant you send it, and sits below the results it travelled with and above the answer it shaped.
+answer rather than the one after it. It shows in the transcript as a `steer` panel the instant you
+send it, and sits below the results it travelled with and above the answer it shaped.
 
 You are not asked which of those it is, because you could not answer: the page you typed on was drawn
 from a checkpoint that has moved since. Neither is it decided when the message is written, because
@@ -512,15 +528,15 @@ point: the agent's shell runs behind a mount namespace with the repository's git
 read-only, so no tool can write a history no panel shows, and `git commit` and `git push` are exactly
 the things that boundary is meant to keep for you. Nothing about the run enters the conversation the
 model is given, so committing at the end of a session costs it no context and reaches no provider.
-The run is still recorded, though, so it draws as a `you (ran)` panel with the command, how long it
+The run is still recorded, though, so it draws as a `command` panel with the command, how long it
 took and what it exited with, it survives a reload, and a fork carries it. What it said is drawn
 open, where a tool call's output is folded: you asked for this one, so reading it should cost no
 clicks, and a command whose whole answer was its exit status says `said nothing` rather than showing
 an empty pane. Being open makes putting one away the press you make most, so the frame around the
 output folds it as well as the line at the top does: reading to the end of a long output does not mean
-scrolling back up to shut it. That holds for a tool call's return too, which is the other thing here
-that runs to hundreds of lines. Pressing the output itself does nothing, since that is where you
-select from. The status is shown as the number rather than as "failed", because `git diff --quiet`
+scrolling back up to shut it. That holds for everything here that folds, since a tool call's return
+and a stretch of reasoning are the other two things that run to hundreds of lines. Pressing what is
+in the box does nothing, since that is where you select from. The status is shown as the number rather than as "failed", because `git diff --quiet`
 exits 1 to say there *are* changes.
 
 `/run ` reaches it like any of the others, and `! ` into an empty box is its own shorter key: either

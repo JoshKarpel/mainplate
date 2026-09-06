@@ -1205,14 +1205,17 @@ command is a line the person typed, and what it said is the whole of why they ty
 may be several screens of output, so putting a long one away meant scrolling back up to the single
 place that would do it; the room around the output is at the *bottom* as well, which is where a reader
 who has just read to the end already is. It is every kind in `FOLDS` rather than a rule about
-commands, because it is one complaint: a command is drawn open so shutting is the press made oftenest
-there, and a call the reader opened to check the work is the one whose return runs to hundreds of
-lines. Two panels of the same shape answering the same press differently would be the thing to
-explain.
+commands, because it is one complaint: a command and a stretch of reasoning are drawn open so
+shutting is the press made oftenest there, and a call the reader opened to check the work is the one
+whose return runs to hundreds of lines. Two panels of the same shape answering the same press
+differently would be the thing to explain.
 
-The output is exempt, and that exemption is the whole of what makes this safe: a press in a `pre` is
-usually the start of lifting a line out, and a panel that folded under somebody selecting from it
-would cost more than the scroll it saves. A press that ended a drag is out for the same reason, since
+What is *in* the box is exempt, and that exemption is the whole of what makes this safe: a press in
+there is usually the start of lifting a line out, and a panel that folded under somebody selecting
+from it would cost more than the scroll it saves. Two selectors, because the content takes two shapes
+- a `pre` for a command's output and a tool's return, rendered prose for a system prompt and a
+stretch of reasoning - and the exemption is about the content rather than about either shape.
+A press that ended a drag is out for the same reason, since
 a browser reports one as a click on wherever the pointer came to rest. It shuts and never opens - a
 shut panel is a summary and little else - so this is the way out of a tall box rather than the toggle
 in a second place, and setting `open` dispatches `toggle`, so the decision is recorded exactly as a
@@ -1515,9 +1518,10 @@ never a message at a position, so they sit in front of the cached prefix. What t
 guidance is present on every request without being appended anywhere, and what it costs is that
 changing it invalidates the cache from the system block onward. Anything that arrives *mid*
 conversation therefore cannot go here: it would re-price the whole conversation, and it belongs
-appended as a `SystemPromptPart`, which the Anthropic adapter renders as its own `system` entry
-precisely so that "adding an instruction leaves the cached prefix the top-level `system` parameter
-sits in untouched". Nothing does that yet; the directory-scoped half of this is not built.
+appended as a `SystemPromptPart`, which is one more entry at the end and leaves the cached prefix the
+top-level `system` parameter sits in untouched. That is what the directory-scoped guidance below
+does; see there for how differently that part reaches the model depending on which model it is, and
+why nothing may depend on it.
 
 **Composed once per stretch of context, and recorded**, under `instructions:{n}` where `n` is the
 turn that stretch began at. Instructions sit in front of the cached prefix, so composing them again
@@ -1566,8 +1570,8 @@ block that opens the file and closes counts, so a document whose first line is a
 left as written.
 
 **The system prompt is drawn as a panel**, under the rule that opens the stretch it belongs to,
-folded, verbatim. A console that shows what a model answered and hides what it was told is showing
-half of how a turn happened. Five things there are decided:
+folded, as the Markdown it is. A console that shows what a model answered and hides what it was told
+is showing half of how a turn happened. Five things there are decided:
 
 - **It is read out of `instructions:{n}` and never out of a turn.** That record is written before the
   stretch's first request, where a turn's messages do not exist until it ends, so the panel is on the
@@ -1594,13 +1598,41 @@ half of how a turn happened. Five things there are decided:
   off a stretch nothing will ever compose for, which is every turn answered before this console
   recorded instructions at all. Those draw no panel, which is a loss taken knowingly against a
   spinner that would never resolve. `opening.html` in the gallery is that state to look at.
-- **Verbatim in a `pre`, not rendered Markdown**, because the claim it makes is that this is what was
-  *sent*. The `pre` is deliberately uncapped and does not scroll: a reader who opened the fold asked
-  for all of it, and a box that scrolls has no still corner for the copy button to pin to.
+- **Rendered as the Markdown it is, and that costs nothing about what was sent.** What is under the
+  fold is `.md` files concatenated - the operator's guidance and the repository's `AGENTS.md` - so
+  its headings, lists and fences are the structure their authors wrote, and a wall of `##` is the one
+  reading of it nobody meant. The claim that this is what was *sent* is kept by the source riding
+  along in `data-markdown`, which is what the copy button hands back, and by the raw record on the
+  rule one step further out. The block is deliberately uncapped and does not scroll: a reader who
+  opened the fold asked for all of it, and a box that scrolls has no still corner for the copy button
+  to pin to.
+
+  **It is a `.block` around the fold rather than the fold alone**, which is what puts a copy button
+  on the panel: the script seats one against a panel's blocks, and the whole prompt is what somebody
+  reaches for. Verbatim, the fold's own `pre` took the only button there was, and the panel had none.
+
+  **The fold is `document_fold`, shared with the guidance a turn is handed mid-way.** On the page the
+  two are the same thing, so they are one shape; what separates them is where each sits in the
+  request, and that is what the *panel* around each says. Its summary is the document's own opening
+  line, clipped, with the character count pushed to the end of the row - the line is what identifies
+  it without opening it, and the count is what says it is paid for on every request from here on. The
+  line goes when the fold opens and the count does not, since a figure about the whole is not a
+  prefix of anything.
 
 The panel takes the person's hue, by the same rule as `command`: the axis is who produced the text,
 and what is in a system prompt was written by the operator and by whoever wrote the repository's
 `AGENTS.md`. The console composed it; it did not write it.
+
+**A message's newlines are the author's and a document's are its wrapping**, which is the whole
+difference between `markup.py`'s two converters. A chat box promises that a newline is a newline,
+because Markdown's own rule - a line break needs two trailing spaces - is a rule about *documents*
+that nobody typing a message knows. A guidance file is a document, soft-wrapped at whatever width its
+author's editor uses, so `nl2br` there draws one paragraph as a column of ragged lines saying nothing
+about how it was written. `as_message` and `as_document` are the pair, and `written(text,
+document=...)` is where a caller says which it has. Everything else about the two is one list, the
+extensions and the sanitiser included, because the *safety* of this does not depend on where the text
+came from: a guidance file is written by whoever wrote the repository, which is the same trust as
+whatever reached the message box. `test_markup.py` asks every sanitiser question of both.
 
 ### Guidance elsewhere in the repository
 
@@ -1636,9 +1668,18 @@ decided:
   it cannot pass by comparing two empty answers.
 - **A `SystemPromptPart` rather than a `UserPromptPart`.** Nobody typed it, so `interjected` tells the
   two apart by which part carried them and the transcript draws guidance as its own kind rather than
-  as the person having said it. It is also what leaves the cached prefix alone: an adapter renders a
-  non-leading system part as its own entry in the window, which is the whole reason this is appended
-  rather than added to the instructions.
+  as the person having said it. It is also what leaves the cached prefix alone, and *that* is the
+  whole reason this is appended rather than added to the instructions: appended it is one more entry
+  at the end, where an instruction re-prices every request from the system block onward.
+
+  **How it reaches the model is the provider's business, and it varies more than is comfortable.**
+  Pydantic AI's `prepare_messages` renders a non-leading system part as a real `{"role": "system"}`
+  entry only where the profile sets `supports_inline_system_prompts`: always on the OpenAI wire, and
+  on Anthropic only for the four models in `_INLINE_SYSTEM_PROMPT_MODEL_PREFIXES` (`claude-fable-5`,
+  `claude-mythos-5`, `claude-opus-4-8`, `claude-opus-5`). Everywhere else - `claude-sonnet-4-6` and
+  `claude-sonnet-5` included, which is most of what sessions here run on - it is rewritten as a
+  `<system>`-tagged `UserPromptPart`. Nothing in this console may depend on which, and the caching
+  argument above is the one that holds either way.
 - **It is injected as `Guiding`**, symmetric with `Pricer` and `Draining` and for the same cycle:
   the capability stays ignorant of what a guidance file is and one instance still serves every
   session.
@@ -1646,9 +1687,28 @@ decided:
   model's, so a path inside it is a string this console has no business parsing. That is the hole the
   index covers, and a diff between consecutive `turn:{n}:tree:{i}` would close it for writes: the
   snapshots are already taken, so it is available whenever it earns its keep.
-- **The delivered block renders**, as a `system-prompt` panel at the position it was delivered,
-  verbatim. A console that shows what a model answered and hides what it was handed is showing half
-  of how a turn happened, and this is the half that arrives mid-turn.
+- **The delivered block renders**, as a `guidance` panel at the position it was delivered. A console
+  that shows what a model answered and hides what it was handed is showing half of how a turn
+  happened, and this is the half that arrives mid-turn. Drawn as the Markdown it is, by the standing
+  prompt's own argument one panel up: it is an `AGENTS.md` with a line of the console's own in front
+  of it, in the same `.document` fold, shut, named by the line it opens with.
+
+  **`guidance` and not `system-prompt`, and the line between them is mechanical rather than
+  editorial.** A system prompt is `instructions`, a per-request parameter re-rendered on every
+  request in front of the cached prefix; this is a `SystemPromptPart` appended into the history at a
+  position. Two mechanisms, two places in the request, two things a reader may want to quiet apart in
+  the key - so two words, by the rule that keeps `steer` apart from `prompt`. What they share is the
+  shape on the page, which is why they share a fold and not a kind.
+
+  **The two are not weighted alike by the model either, and that is an argument for the split rather
+  than against it - but it is the provider's answer and not ours.** Pydantic AI measured it and
+  recorded the result in `_INLINE_SYSTEM_PROMPT_MODEL_PREFIXES`: on `claude-opus-5` an inline system
+  entry carries enough authority to lift a restriction the top-level prompt set, every time, where
+  `claude-sonnet-5` accepts the same entry with a 200 and ignores it - so Sonnet gets the
+  `<system>`-tagged user text instead, on which a plain formatting instruction actually lands more
+  often. So the same guidance is above the standing prompt on one model and in the user's voice on
+  another. Write nothing here that turns on it; what this console owns is where each one goes, and
+  the caching consequence of that is the same everywhere.
 
 ## How a model names a line
 
@@ -2240,7 +2300,10 @@ the panel's own hands over what the panel says. Five things there are decided:
   second copy of anything: it is the same value the element was built from, put into the same render,
   and nothing else reads it. Only the kinds that *are* Markdown, since a tool's arguments and its
   return are already shown verbatim and a fence renders as the characters it was written with.
-  Measured on the gallery's own conversation, carrying the sources costs the page 9%.
+  Measured on the gallery's own conversation, carrying the sources costs the page 16%, most of that
+  the system prompt, which is the longest Markdown on any page and the one a reader is least likely to
+  be copying from. It is carried all the same: a fold nobody opened costs bytes, and a fold somebody
+  did open with no way to lift the prompt out of it costs the control.
 - **Where there is no source to carry it is `textContent`, never `innerText`.** `innerText` is what
   is *rendered*, so a folded call would copy as its summary alone and one button would answer two
   different things a click apart. The buttons are taken back out of the text first, since one seated
@@ -2518,6 +2581,51 @@ block in a reasoning panel is a quotation of something that exists, and slanting
 quotation differ from the thing quoted. It costs alignment as well: no italic face is vendored, so an
 oblique is synthesised by shearing every glyph, which leans a gutter and the sides of a box while
 leaving the horizontals flat.
+
+**A stretch of reasoning folds, drawn open**, which is the same shape as a command and for the same
+reason one along: reasoning arrives while the turn is being answered, and watching a model think is
+one of the things a live transcript is for, so a fold rendered shut would hide the thing being
+watched at the moment it is worth watching. Shut afterwards it is a line, and the dock's
+fold-everything button puts every one of them away in one press - which is what a reader coming back
+to a finished conversation wants and what `muted` could never give them, since a muted kind is
+quieted at two fifths opacity and still occupies every inch it did.
+
+**Its summary is its own opening line, clipped by the browser at the panel's width**, which is the
+shape `opening_line` gives all three folds whose summary is a prefix of their own body: a stretch of
+reasoning, the standing system prompt, and a delivered guidance file. A call and a command are not
+among them, because a tool's name and a command's line are not prefixes of anything. There is
+deliberately no length in the markup: `text-overflow: ellipsis` measures a line against a box, which
+is a measurement the server cannot make, and any character count it picked would cut in the wrong
+place at every other width. `min-width: 0` is what lets the flex item shrink below its content and so
+is the whole of what makes the ellipsis appear.
+
+Reasoning takes the line **alone**, where a document fold keeps its character count beside it. That
+is not asymmetry for its own sake: what a stretch of reasoning cost is on the rule already, as tokens
+and money for the request it belongs to, where what a document costs is paid on every request from
+here on and no rule speaks for that.
+
+`pages.OPENING` is a bound on what is *carried* rather than on what is shown, and it exists because a
+summary holding the whole of a long stretch would put every word of it on the page twice, on a region
+re-rendered whenever the turn in flight records anything. The number is what keeps the clipping
+honest: clipped short of it the ellipsis says there is more, and clipped *at* it with no ellipsis it
+would say there is not. So it has to exceed what the widest panel can show, which is a bounded
+question because the transcript is capped at `--measure`, and
+`TestFoldingAStretchOfReasoning::test_more_is_carried_than_the_widest_panel_can_ever_show` measures
+the worst case there is - the narrowest glyph the prose face draws, repeated - and fails if it fits.
+
+Three consequences of a summary being a prefix of its own body, which apply to all three of these
+folds and to nothing else here:
+
+- **It is hidden once open**, since a prefix standing directly above the body says nothing twice.
+  What stays is the mark, and the count where there is one, so the control does not move under the
+  finger that pressed it. Only reasoning tightens its open row to one glyph's height, because it is
+  the only one whose summary has no text left to set.
+- **The search skips `.opening`.** Found in both, the dock would step through one sentence at two
+  stops and the count would say there is twice as much of it as there is. It is the one entry in
+  `markHits`'s skip list that is there for being a second copy rather than for not being
+  conversation.
+- **A copy button reads `data-markdown`**, as it does for every other Markdown block, so what comes
+  out is the source and the opening is in it once.
 
 A turn is read out of the checkpoint as **panels of blocks**, not as a question-and-answer pair.
 A block is prose, reasoning, a call with its result, or a command with its own; a panel is a run of

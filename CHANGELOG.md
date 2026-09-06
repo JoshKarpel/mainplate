@@ -29,14 +29,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file itself, the model wrote the file, a fork carried it across, or a `forget` dropped it and it
   is handed over again. A `bash` command reaches none of this, because its argv is the model's and a
   path inside it is not this console's to parse; the index is what covers that.
-- The system prompt drawn as a panel, folded and verbatim, under the rule that opens the stretch of
-  context it belongs to, and again wherever guidance was handed over mid-turn. It is read from what
-  that stretch recorded rather than out of a turn's messages, so it is on the page while the first
-  turn is still being answered rather than only once one has landed; a stretch nothing has composed
-  for yet draws the panel with the working dots in it, which is where a session sits for as long as
-  its clone and its worktree take. Verbatim rather than rendered, because the claim it makes is that
-  this is what was *sent*. A console that shows what a model answered and hides what it was told is
-  showing half of how a turn happened.
+- The system prompt drawn as a panel, folded, under the rule that opens the stretch of context it
+  belongs to. It is read from what that stretch recorded rather than out of a turn's messages, so it
+  is on the page while the first turn is still being answered rather than only once one has landed; a
+  stretch nothing has composed for yet draws the panel with the working dots in it, which is where a
+  session sits for as long as its clone and its worktree take. Drawn as the Markdown it is, since
+  what is under the fold is `.md` files and a wall of `##` is the one reading of them nobody meant;
+  the source rides along as `data-markdown`, so the copy button still hands back exactly what was
+  sent. The fold is shut and stands for itself with its own opening line, clipped at the width of the
+  panel, with the character count beside it. A console that shows what a model answered and hides
+  what it was told is showing half of how a turn happened.
+- Guidance handed over mid-turn drawn as a `guidance` panel, in the same fold, at the position it was
+  delivered. Its own kind rather than the system prompt's, because the two sit in different places in
+  the request - `instructions` in front of the cached prefix against a system part appended once into
+  the history - reach the model with different authority depending on which model it is, and are two
+  things the key can quiet apart. Shut, it names the file it came from, which is the line it opens
+  with.
 - Places reached by name rather than by path: `read`, `edit` and `create` take a `root`, and a
   command finds `$MAINPLATE_WORKTREE` and `$MAINPLATE_SCRATCH` in its environment. A worktree sits
   under 32 hex characters of session id, and a model reproducing those from memory eventually
@@ -51,6 +59,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A stretch of the model's reasoning folds, drawn open, with its own opening line as the summary and
+  the browser clipping that line at whatever width the panel has. Open is what a turn being watched
+  needs, since a fold rendered shut would hide the thinking at the moment it is worth watching; shut,
+  a stretch is one line, and the dock's fold-everything button now puts every one of them away in one
+  press. What a copy button hands back is unchanged, because it reads the source rather than the page.
 - Panels are named after what they hold, in the word the page prints: `prompt` and `steer` where
   they read `you` and `you (steering)`. A reader who learns a word from a panel now finds it in the
   code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind
@@ -115,9 +128,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whatever tool results are going the same way and shapes the very next answer rather than the one
   after it. A steer arriving as the turn would end has no request left to carry it, so it redirects
   the run into one more instead of being stranded. Both are recorded steps, so a resumed pass asks
-  the same questions rather than whatever is queued by then. It reads back as a `you (steering)`
-  panel below the tool results it travelled with and above the answer it shaped, and it is on the
-  page the instant it is sent rather than when the turn ends.
+  the same questions rather than whatever is queued by then. It reads back as a `steer` panel below
+  the tool results it travelled with and above the answer it shaped, and it is on the page the
+  instant it is sent rather than when the turn ends.
 - **`Send` decides for itself whether a message steers**, because neither the button nor the reader
   can know: the page was rendered from a checkpoint that has moved by the time a paragraph has been
   typed into it, so choosing between two moments on the page is choosing against a state that no

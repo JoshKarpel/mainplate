@@ -338,12 +338,15 @@ main > * {
 /* And a command takes it too, for exactly the same reason: the person wrote it. That it is the one
    kind here no model ever saw is said by the panel's own label and by the key's chip, which is where
    a fact about who was told belongs - the palette answers who produced it. */
-/* And so does the system prompt, which the console composed but nobody here wrote: what is in it is
-   the operator's own guidance and the repository's own, both written by people. */
+/* And so do the system prompt and the guidance handed over mid-turn, which the console composed and
+   delivered but nobody here wrote: what is in both is the operator's own guidance and the
+   repository's own, written by people. They are two kinds rather than one because they sit in
+   different places in the request, which is not something a hue can say. */
 .panel[data-kind="prompt"],
 .panel[data-kind="steer"],
 .panel[data-kind="command"],
-.panel[data-kind="system-prompt"] {
+.panel[data-kind="system-prompt"],
+.panel[data-kind="guidance"] {
     --kind: var(--person-edge);
 }
 
@@ -443,7 +446,8 @@ main > * {
 .panel[data-kind="prompt"] .panel__role,
 .panel[data-kind="steer"] .panel__role,
 .panel[data-kind="command"] .panel__role,
-.panel[data-kind="system-prompt"] .panel__role {
+.panel[data-kind="system-prompt"] .panel__role,
+.panel[data-kind="guidance"] .panel__role {
     color: var(--person-edge);
 }
 
@@ -538,6 +542,30 @@ pre > .copy {
     border-color: var(--mark);
     color: var(--mark);
     opacity: 1;
+}
+
+/* --- The line a shut fold stands for ------------------------------------ */
+
+/* Three folds summarise themselves with the front of their own body: a stretch of reasoning, the
+   standing system prompt, and a guidance file handed over mid-turn. A call and a command are not
+   among them, because a tool's name and a command's line are not prefixes of anything.
+
+   Clipped by the browser at whatever width the panel has, which is the whole of why there is no
+   length in the markup: the server cannot know the window, and any character count it picked would
+   cut in the wrong place at every other width. `min-width: 0` is what lets a flex item shrink below
+   its content and so is what makes the ellipsis appear at all. */
+.opening {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* Open, it goes: a prefix of the body standing directly above the body says nothing twice. The mark
+   stays, and so does anything else on the row, so the control does not move under the finger that
+   pressed it. */
+details[open] > summary > .opening {
+    display: none;
 }
 
 /* --- Blocks ----------------------------------------------------------- */
@@ -784,6 +812,42 @@ pre > .copy {
     font-style: italic;
 }
 
+/* Reasoning folds, drawn open. It borrows neither `.tool`'s frame nor `.ran`'s, because the block
+   around it is already a box: what is wanted here is the mark and the line, not a second edge inside
+   an edge. */
+.thinking > summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    /* The whole of what the fold shuts, since the block's own padding is outside it. */
+    cursor: pointer;
+    list-style: none;
+}
+
+.thinking > summary::-webkit-details-marker {
+    display: none;
+}
+
+.thinking > summary::before {
+    content: "▾";
+    /* It never wraps and never shrinks, so the line beside it is what gives way. */
+    flex: none;
+    color: var(--thinking-edge);
+    opacity: 0.7;
+}
+
+.thinking:not([open]) > summary::before {
+    content: "▸";
+}
+
+/* Open, the row holds one glyph, so it takes the height of that glyph rather than of a line of
+   prose: left at the inherited leading it is a band of empty box between the mark and the reasoning
+   it belongs to. Only here, because a document fold keeps its size beside the mark and so keeps a
+   line of text to set. */
+.thinking[open] > summary {
+    line-height: 1;
+}
+
 /* Reasoning is set in italic, and code inside it is not. A model reasons *about* code, so a block
    in there is a quotation of something that exists, and slanting it makes the quotation differ from
    the thing quoted. It costs alignment as well as honesty: no italic face is vendored, so an
@@ -795,21 +859,9 @@ pre > .copy {
 }
 
 /* Guidance the console handed over part way through a turn, because the model reached into a part of
-   the repository that carries its own. Drawn like the session's standing system prompt, because that
-   is what it is arriving later, and verbatim for the same reason: the claim is that this is what was
-   sent, so rendering the Markdown would show something the model never saw. */
-.block--guidance pre {
-    position: relative;
-    margin: 0;
-    padding: var(--space-3) var(--space-4);
-    border-radius: calc(var(--radius) / 1.5);
-    background: var(--sunk);
-    font-family: var(--mono);
-    font-size: var(--mono-size);
-    line-height: var(--mono-line);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
+   the repository that carries its own. It needs no rules of its own: what is in it is a `.document`
+   fold, the same one the session's standing system prompt is drawn in, because on the page the two
+   are the same thing. */
 
 /* --- Tool calls ------------------------------------------------------- */
 
@@ -942,17 +994,22 @@ pre > .copy {
 
    The hue is the person's throughout. What says no model was told is the panel's label and the
    sentence under the box, not a colour: the palette answers who wrote it. */
-/* The system prompt, shut. It borrows `.ran`'s frame rather than inventing one, because it is the
-   same shape of thing on the page: a summary that says what is in the box, and a box holding text
-   that was never Markdown. What differs is the mark on the summary and that it opens shut. */
-.system-prompt {
+/* A Markdown file the console handed the model, shut: the session's standing system prompt, and the
+   guidance a turn is handed when it reaches into a part of the repository carrying its own. One set
+   of rules because on the page they are the same thing; what separates them is where each sits in
+   the request, which is the panel's business rather than the fold's.
+
+   It borrows `.ran`'s frame rather than inventing one, because it is the same shape of thing: a
+   summary that says what is in the box, and a box under it. What differs is the mark on the summary
+   and that it opens shut. */
+.document {
     margin: 0.5rem 0;
     border: 1px solid color-mix(in srgb, var(--person-edge) 35%, var(--edge-soft));
     border-radius: var(--radius);
     background: var(--raised);
 }
 
-.system-prompt > summary {
+.document > summary {
     display: flex;
     align-items: baseline;
     gap: var(--space-4);
@@ -962,55 +1019,50 @@ pre > .copy {
     list-style: none;
 }
 
-.system-prompt > summary::-webkit-details-marker {
+.document > summary::-webkit-details-marker {
     display: none;
 }
 
-.system-prompt > summary::before {
+.document > summary::before {
     content: "▸";
+    /* It never wraps and never shrinks, so the line beside it is what gives way. */
+    flex: none;
     color: var(--person-edge);
     opacity: 0.7;
 }
 
-.system-prompt[open] > summary::before {
+.document[open] > summary::before {
     content: "▾";
     opacity: 1;
 }
 
-/* How much of it there is, which is the one fact worth having without opening it: a session whose
-   prompt has grown to tens of thousands of characters is paying for that on every request. */
-.system-prompt__what {
+/* How much of it there is, which is the one fact worth having without opening it: what is in here is
+   paid for on every request from here on, so a prompt or a delivered file grown to tens of thousands
+   of characters is worth seeing at a glance. Pushed to the end of the row and never shrunk, so the
+   opening line is what gives way and the figure stays where the eye learns to find it. */
+.document__size {
+    flex: none;
+    margin-left: auto;
     font-size: 0.72rem;
     letter-spacing: 0.02em;
 }
 
-.system-prompt__body {
+.document__body {
     padding: 0 var(--space-4) var(--space-4);
     cursor: pointer;
 }
 
-.system-prompt__body pre {
-    /* What the seated copy button is positioned against. Without it the button anchors to the panel
-       instead and lands on the permalink, which is where it was found. */
-    position: relative;
-    margin: 0;
-    /* Out of the band that shuts the panel, exactly as a command's output is: a press in here is
-       usually the start of lifting a line out. */
+/* What is in the fold is `.text`, so every rule Markdown already has on this page applies to it and
+   there is nothing here to keep in step with them. Only the two things the *fold* decides: that the
+   prose is out of the band that shuts it, exactly as a command's output is, and that it is sunk
+   below the summary so the box reads as one thing rather than as a page inside a panel.
+
+   Deliberately uncapped, and the fold is why: a reader who opened this asked for all of it. */
+.document__body .text {
     cursor: auto;
-    /* On the console's own grid, and said again rather than inherited because a browser's own sheet
-       sets `pre` to `monospace` on the element. */
-    font-family: var(--mono);
-    font-size: var(--mono-size);
-    line-height: var(--mono-line);
     padding: var(--space-3) var(--space-4);
     border-radius: calc(var(--radius) / 1.5);
     background: var(--sunk);
-    /* It is prose with its own line breaks, so it wraps rather than scrolling sideways: a system
-       prompt is paragraphs, where a tool's return is columns that must not be re-flowed. */
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    /* Deliberately uncapped, and the fold is why: a reader who opened this asked for all of it, and
-       a box that scrolls has no still corner for the copy button to pin to. */
 }
 
 .ran {
@@ -2513,7 +2565,8 @@ mark.hit.current {
 .key__chip[data-kind="prompt"],
 .key__chip[data-kind="steer"],
 .key__chip[data-kind="command"],
-.key__chip[data-kind="system-prompt"] {
+.key__chip[data-kind="system-prompt"],
+.key__chip[data-kind="guidance"] {
     --kind-hue: var(--person-edge);
 }
 

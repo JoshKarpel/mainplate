@@ -273,6 +273,21 @@ class TestTheConsole:
         assert drawn.index('id="rule-0"') < drawn.index('id="system-prompt-0"')
         assert drawn.index('id="system-prompt-0"') < drawn.index('data-kind="prompt"')
 
+    async def test_the_system_prompt_is_drawn_as_the_markdown_it_is(self, app: ASGIApp, service: Service) -> None:
+        """
+        What is under the fold is `.md` files, so its headings and lists are the structure their
+        authors wrote. The source rides along as `data-markdown`, which is what the copy button hands
+        back, so drawing it costs nothing about the claim that this is what was sent.
+        """
+        said = "## Conventions\n\n- say less\n"
+        session = await a_session(app)
+        await service.checkpointer.supply(session, instructions_key(0), recorded_instructions(said))
+        drawn = await watched(app, session)
+
+        assert "<h2>Conventions</h2>" in drawn
+        assert "<li>say less</li>" in drawn
+        assert said in [held["data-markdown"] for held in blocks_carrying_markdown(drawn)]
+
     async def test_a_stretch_nothing_has_composed_for_yet_draws_the_panel_with_no_prompt_in_it(
         self, app: ASGIApp
     ) -> None:
