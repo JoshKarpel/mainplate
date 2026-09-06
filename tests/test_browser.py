@@ -53,7 +53,6 @@ from mainplate.pages import OPENING
 from mainplate.service import Service
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
-from scripts.gallery import INSTRUCTIONS
 from scripts.gallery import pages
 from scripts.gallery import write
 
@@ -293,6 +292,21 @@ class TestWhereTheReaderIs:
         await page.goto(f"{gallery}/session.html", wait_until="load")
         await page.click('button[data-step="1"][data-stop="panel"]:not([data-side])')
         await expect(page.locator(LANDED)).to_have_count(1)
+
+    async def test_leaping_to_the_start_lands_on_the_rule_that_opens_the_first_turn(
+        self, page: Page, gallery: str
+    ) -> None:
+        # The top of a conversation is that rule and not the first panel under it: the rule carries
+        # the turn's own facts and its fork link, and where the stretch has instructions there is a
+        # system prompt panel between the two, so landing on the panel left both above the reader.
+        # Asked of a browser because the two landings are the same markup and differ only in which
+        # element the script chose.
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.click('button[data-leap="start"]')
+        landed = page.locator(".rule[data-landed]")
+        await expect(landed).to_have_count(1)
+        await expect(landed).to_have_attribute("id", "rule-0")
+        await expect(page.locator(LANDED)).to_have_count(0)
 
     async def test_stepping_by_turn_lands_on_a_rule_and_not_on_a_panel(self, page: Page, gallery: str) -> None:
         # The coarse column steps the boundaries rather than the messages, which is the whole of
@@ -1589,28 +1603,6 @@ class TestFoldingADocumentTheConsoleHandedOver:
 
         assert told[0].startswith("You are a helpful assistant")
         assert told[1].startswith("`src/mainplate/AGENTS.md`, guidance for this part of the repository:")
-
-    async def test_the_size_stays_beside_it_when_the_panel_opens(self, page: Page, gallery: str) -> None:
-        """
-        The opening line goes when the panel opens, because a prefix of the body standing above the
-        body says nothing twice. The figure is not a prefix of anything, and what it says - that this
-        is paid for on every request from here on - is worth having with the panel either way.
-
-        The count comes from the fixture rather than being written down, because what is under test
-        is that the figure survives the fold and not what the gallery's system prompt happens to say:
-        a number spelled here fails whenever that text is edited, which is a test about the wrong
-        thing.
-        """
-        panels = await self.documents(page, gallery)
-        panel = panels.first
-        told = f"{len(INSTRUCTIONS)} characters"
-        await expect(panel.locator(".panel__size")).to_have_text(told)
-
-        await panel.locator(".panel__role").click()
-
-        await expect(panel).to_have_attribute("open", "")
-        await expect(panel.locator(".opening")).to_be_hidden()
-        await expect(panel.locator(".panel__size")).to_have_text(told)
 
     async def test_the_frame_around_it_shuts_the_panel_it_belongs_to(self, page: Page, gallery: str) -> None:
         """

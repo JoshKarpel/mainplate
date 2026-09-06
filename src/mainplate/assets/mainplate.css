@@ -523,16 +523,6 @@ main > * {
     color: var(--tool-edge);
 }
 
-/* How much of a document there is, which is the one fact worth having without opening it: what is
-   in there is paid for on every request from here on, so a prompt or a delivered file grown to tens
-   of thousands of characters is worth seeing at a glance. Never shrunk, so the opening line beside
-   it is what gives way, and never hidden when the panel opens, since a figure about the whole is
-   not a prefix of anything. */
-.panel__size {
-    flex: none;
-    letter-spacing: 0.02em;
-}
-
 /* Muted until hovered, so it reads as chrome rather than as prose. The `auto` is what puts it flush
    right on a row whose opening line is absent or has not been given the free space - a page with no
    `.opening` at all still reads correctly. */
@@ -622,8 +612,8 @@ pre > .copy {
    of its own prose, or - for a batch of calls or commands, which have no prose to take a front off
    - what is in it, named. See `panel_opening` in `pages.py`.
 
-   It takes the free space between the role and the figures at the end, which is what makes the
-   permalink's `margin-left: auto` unnecessary on a row that has one of these and why the anchor
+   It takes the free space between the role and what sits at the end of the row, which is what makes
+   the permalink's `margin-left: auto` unnecessary on a row that has one of these and why the anchor
    gives that up. `flex: 1` rather than letting it size to its content, or a short opening would
    leave the row's own gap doing the spacing and the permalink would sit against the text.
 
@@ -641,7 +631,7 @@ pre > .copy {
 }
 
 /* Open, it goes: a prefix of the body standing directly above the body says nothing twice. The mark
-   stays, and so does the figure and the permalink, so nothing on the row moves under the finger
+   stays, and so do the copy button and the permalink, so nothing on the row moves under the finger
    that pressed it - which is why this is `visibility` and not `display`. Removed from the flow, the
    row's free space would collapse and the permalink would slide left across the panel. */
 .panel[open] > .panel__meta > .opening {

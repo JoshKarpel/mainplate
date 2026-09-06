@@ -36,10 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session sits for as long as its clone and its worktree take. Drawn as the Markdown it is, since
   what is in it is `.md` files and a wall of `##` is the one reading of them nobody meant; the source
   rides along as `data-markdown`, so the copy button still hands back exactly what was sent. The
-  panel's row stands for it with its own opening line, clipped at the width of the panel, and the
-  character count beside it, which is what says it is paid for on every request from here on. A
-  console that shows what a model answered and hides what it was told is showing half of how a turn
-  happened.
+  panel's row stands for it with its own opening line, clipped at the width of the panel. A console
+  that shows what a model answered and hides what it was told is showing half of how a turn happened.
 - Guidance handed over mid-turn drawn as a `guidance` panel, in the same shape, at the position it
   was delivered. Its own kind rather than the system prompt's, because the two sit in different
   places in the request - `instructions` in front of the cached prefix against a system part appended
@@ -167,6 +165,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   either of them, which without it are one-way presses over a whole conversation.
 - The panel saying a reply is being written, and a stretch of context whose instructions are not
   composed yet, carry the working dots on their own row instead of opening a panel to show them.
+- The dock's leap to the start lands on the rule that opens the first turn rather than on the first
+  panel under it. That rule carries the turn's own facts and its fork link, and where the stretch has
+  instructions there is a system prompt panel between it and the message, so the top of a
+  conversation was left above the reader with nothing saying so.
 - Panels are named after what they hold, in the word the page prints: `prompt` and `steer` where
   they read `you` and `you (steering)`. A reader who learns a word from a panel now finds it in the
   code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind

@@ -455,8 +455,8 @@ request - the first is re-sent whole on every request in front of the cached pre
 appended once into the history - so the key can quiet either without the other, and so that a reader
 can see which is which. How much authority the second one carries is the provider's answer rather
 than this console's, and it varies by model, which is another reason not to draw them as one thing.
-Both are drawn shut, with the character count beside the opening line on the row, because what is in
-them is paid for on every request from there on.
+Both are drawn shut, with the line each opens with on the row, so a reader can tell what is in one
+without opening it.
 
 A **rule** stands at every round trip to the model, carrying what is true of that request rather than
 of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and

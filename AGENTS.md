@@ -2076,9 +2076,8 @@ is showing half of how a turn happened. Five things there are decided:
   **It carries no fold of its own; the panel is its fold.** It is drawn as the same `block--document`
   the guidance a turn is handed mid-way is drawn as, because on the page the two are the same thing,
   and what separates them is where each sits in the request, which is what the *panel* around each
-  says. The document's opening line and its character count are on the panel's row - the line is what
-  identifies it without opening it, and the count is what says it is paid for on every request from
-  here on. See "Every panel folds, from its own row".
+  says. The document's opening line is on the panel's row, which is what identifies it without opening
+  it. See "Every panel folds, from its own row".
 
 The panel takes the person's hue, by the same rule as `command`: the axis is who produced the text,
 and what is in a system prompt was written by the operator and by whoever wrote the repository's
@@ -3208,11 +3207,13 @@ box, which is a measurement the server cannot make, and any character count it p
 the wrong place at every other width. `min-width: 0` is what lets the flex item shrink below its
 content and so is the whole of what makes the ellipsis appear.
 
-**A document keeps its character count beside the line and nothing else does.** What a reply cost is
-on the rule already, as tokens and money for the request it belongs to, where what a system prompt or
-a delivered guidance file costs is paid on every request from here on and no rule speaks for that.
-`SIZED` is the two kinds; summed across the blocks, since a batch reaching into two parts of a
-repository is handed both files at once and they arrive as one guidance panel.
+**The row carries the line and no figure beside it, a document's included.** The tempting one is a
+character count on a system prompt or a delivered guidance file, since what is in either is paid for
+on every request from here on and no rule speaks for that. It is refused because characters are not
+the unit: every other number on this page is tokens or money, a window is measured in tokens, and a
+count that cannot be compared against the gauge on the rule below it is a number a reader converts
+rather than reads. What a request carried is a fact about the request, so it belongs on the rule with
+the rest of them.
 
 `pages.OPENING` is a bound on what is *carried* rather than on what is shown, and it exists because a
 line holding the whole of a long block would put every word of it on the page twice, on a region
@@ -3373,6 +3374,12 @@ with four round trips in it would otherwise give that column four stops.
 model's history starts again, then turns, then every panel in play, then one side of them. The forget
 column is the newest and the only one that finds its stops by an attribute a rule declares about
 itself rather than by a class; see the forget section for why it is drawn in every session.
+
+**The leap to the start lands on the rule that opens the first turn**, which is the top of the
+transcript rather than the first panel in it: a turn rule carries that turn's own facts and its fork
+link, and where the stretch has instructions there is a system prompt panel between the rule and the
+message, so landing on the panel put the reader below both with nothing saying so. The leap to the
+end is still the last panel, since nothing is drawn under one.
 
 The raw record hangs off a **model request** rather than a panel, on the rule at that request's own
 boundary; see "The record hangs off a request, not a panel" above for why. Two things about how it is

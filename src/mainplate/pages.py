@@ -264,8 +264,8 @@ SIDES: Final[dict[Kind, str]] = {
 # the same reason: a default nobody chose is worse than a page that will not draw.
 #
 # Reference is shut and conversation is open, which is the one line through every kind here. A system
-# prompt and a delivered guidance file are documents somebody committed, so they are drawn as their
-# opening line and a figure; everything else is what was said, and a conversation whose replies had
+# prompt and a delivered guidance file are documents somebody committed, so they are drawn as the
+# line they open with; everything else is what was said, and a conversation whose replies had
 # to be opened one at a time would not be a transcript. A handoff falls on the conversation side of
 # that despite reading like a document: it is a message, it is the one nobody wrote, and so it is the
 # one a reader cannot recall for themselves. A tool panel is *open* with each call inside it shut,
@@ -304,13 +304,6 @@ def opens(starts: bool) -> Attributes:
     """
     return {"open": starts, "data-opens": "open" if starts else "shut"}
 
-
-# The kinds whose row carries how much of them there is: a document the console handed the model.
-# The one fact worth having without opening either, because what is in here is paid for on every
-# request from here on, so a prompt or a delivered file grown to tens of thousands of characters is
-# worth seeing at a glance. It is not that figure for anything else on the page - what a reply cost
-# is on the rule above it, in tokens and money, which is the fact a reader actually wants there.
-SIZED: Final[frozenset[Kind]] = frozenset({"system-prompt", "guidance"})
 
 # What the link that starts one is called, and what the tab says on the page where a session does
 # not exist yet. "Session" rather than "worktree", which is the other word for this and is already
@@ -2306,22 +2299,6 @@ def panel_opening(blocks: Sequence[Block]) -> str:
             return ""
 
 
-def panel_size(kind: Kind, blocks: Sequence[Block]) -> int | None:
-    """
-    How much of a document there is, and `None` for everything that is not one. See `SIZED`.
-
-    Summed across the blocks rather than taken off the first, because a batch of calls reaching into
-    two parts of a repository is handed both files at once and they arrive as one guidance panel.
-    What is paid for on every request from here on is all of it.
-
-    Only `Guidance` is measured, and within `panel_element` that is the whole of `SIZED`: the
-    standing system prompt is not a `Panel` at all and measures its own. See `system_prompt_panel`.
-    """
-    if kind not in SIZED:
-        return None
-    return sum(len(block.text) for block in blocks if isinstance(block, Guidance))
-
-
 def panel_element(links: Links, session: str, panel: Panel) -> Element:
     """
     One run of one kind of thing, folded from the row of facts above it.
@@ -2367,7 +2344,6 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 panel_opening(panel.blocks),
                 anchor=panel.anchor,
                 label=panel.label,
-                size=panel_size(panel.kind, panel.blocks),
             ),
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
         ],
@@ -2380,7 +2356,6 @@ def panel_meta(
     *,
     anchor: str | None = None,
     label: str | None = None,
-    size: int | None = None,
 ) -> Element:
     """
     A panel's row of facts, which is also the summary that folds it.
@@ -2388,11 +2363,6 @@ def panel_meta(
     One function for all three panel shapes - a `Panel`, the standing system prompt, and the one
     saying a reply is being written - because the row is the same row and a second rendering of it
     would eventually disagree about where the marker sits or what the label is called.
-
-    `size` is how much of it there is, drawn only for a document; see `SIZED`. Pushed to the end of
-    the row and never shrunk, so the opening line is what gives way and the figure stays where the
-    eye learns to find it. It is *not* hidden when the panel opens, since a figure about the whole is
-    not a prefix of anything.
 
     `opening` is `None` where there is nothing yet to stand for, and the row carries the working dots
     in the line's own place: a reply not written yet, and a stretch of context whose instructions the
@@ -2415,7 +2385,6 @@ def panel_meta(
                 children=dict(NAMES)[kind],
             ),
             span(cls="opening", children=opening if opening is not None else working()),
-            *((span(cls="panel__size", children=f"{size} characters"),) if size is not None else ()),
             *(
                 (a(cls="panel__anchor", attrs={"href": f"#{anchor}"}, children=f"#{label or anchor}"),)
                 if anchor is not None
@@ -2486,7 +2455,6 @@ def system_prompt_panel(turn: int, said: str | None) -> Element:
                 "system-prompt",
                 opening_of(said) if said is not None else None,
                 anchor=anchor,
-                size=len(said) if said is not None else None,
             ),
             *((written_block("block--document", said, document=True),) if said is not None else ()),
         ],
@@ -2959,6 +2927,9 @@ def dock_card() -> Element:
             div(
                 cls="dock__leap",
                 children=[
+                    # The start is the rule that opens the first turn rather than the first panel
+                    # under it, which is where the turn's own facts and its fork link are, and above
+                    # whatever the stretch was told. See `wireDock`.
                     dock_button(None, "To the start", "\N{UPWARDS ARROW TO BAR}", {"data-leap": "start"}),
                     dock_button(None, "To the end", "\N{DOWNWARDS ARROW TO BAR}", {"data-leap": "end"}),
                     # A mode rather than a jump, so it says whether it is on: while it is, the end

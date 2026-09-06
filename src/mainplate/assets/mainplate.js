@@ -1093,10 +1093,17 @@
         });
       });
 
+      // The start of a conversation is the rule that opens its first turn, and not the first panel
+      // under it: a turn rule carries that turn's own facts and its fork link, and where the stretch
+      // has instructions there is a system prompt panel between the two, so a leap to the first
+      // panel left the top of the conversation above the reader with nothing saying so. The end is
+      // still the last panel, because nothing is drawn below one.
       document.querySelectorAll("[data-leap]").forEach((button) => {
         button.addEventListener("click", () => {
+          const box = transcript();
+          if (!box) return;
           const panels = panelsIn(null);
-          land(button.dataset.leap === "start" ? panels[0] : panels[panels.length - 1]);
+          land(button.dataset.leap === "start" ? box.querySelector(".rule--turn") : panels[panels.length - 1]);
         });
       });
 
