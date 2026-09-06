@@ -75,7 +75,7 @@ check:
 
 [doc('Serve the documentation site with live reload')]
 docs *args:
-    uv run --group docs mkdocs serve {{ args }}
+    uv run mkdocs serve {{ args }}
 
 alias d := docs
 
@@ -83,7 +83,7 @@ alias d := docs
 # the build rather than shipping. CI runs this same recipe.
 [doc('Build the documentation site into ./site')]
 docs-build *args:
-    uv run --group docs mkdocs build --strict {{ args }}
+    uv run mkdocs build --strict {{ args }}
 
 # Both of these restart the console whenever anything under `src/mainplate` changes, which covers
 # the stylesheet and the script as well as the Python. The assets are inventoried once at startup,

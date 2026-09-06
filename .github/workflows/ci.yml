@@ -41,7 +41,7 @@ jobs:
     # Its own job rather than a step in `check`, and it deliberately does not use
     # `./.github/actions/setup`: that installs a Chromium and a `bubblewrap` the suite needs and a
     # static site generator does not, which is minutes of download per pull request for a build that
-    # reads Markdown. `--group docs` syncs what it does need.
+    # reads Markdown. `uv run` syncs the wheels the build does need, browsers not among them.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

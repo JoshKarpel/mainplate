@@ -33,9 +33,10 @@ How the suite itself is driven, and the rule for what has to be a real browser, 
 
 ## The documentation site
 
-MkDocs Material, built by `just docs-build` and served with live reload by `just docs`. The `docs`
-dependency group is its own rather than part of `dev`, so running the tests or the console needs no
-static site generator installed.
+MkDocs Material, built by `just docs-build` and served with live reload by `just docs`. It sits in
+the `dev` dependency group with everything else, because a group of its own would save nobody
+anything: mypy walks `docs/hooks.py`, which imports MkDocs, so an environment `just test` passes in
+already has the site generator installed.
 
 **`--strict`, with `validation.anchors` on.** A broken link, a page nothing in the nav points at, or
 a `#anchor` naming a heading that has been renamed all fail the build. The anchors are the half

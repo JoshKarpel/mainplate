@@ -755,6 +755,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
     { name = "mypy" },
     { name = "playwright" },
     { name = "pre-commit" },
@@ -769,10 +771,6 @@ dev = [
     { name = "types-pygments" },
     { name = "types-pyyaml" },
     { name = "watchfiles" },
-]
-docs = [
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
 ]
 
 [package.metadata]
@@ -797,6 +795,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mkdocs", specifier = ">=1.6,<2" },
+    { name = "mkdocs-material", specifier = ">=9.7" },
     { name = "mypy", specifier = ">=2.3.0" },
     { name = "playwright", specifier = ">=1.62.0" },
     { name = "pre-commit", specifier = ">=4.4" },
@@ -811,10 +811,6 @@ dev = [
     { name = "types-pygments", specifier = ">=2.18" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260815" },
     { name = "watchfiles", specifier = ">=1.2.0" },
-]
-docs = [
-    { name = "mkdocs", specifier = ">=1.6,<2" },
-    { name = "mkdocs-material", specifier = ">=9.7" },
 ]
 
 [[package]]

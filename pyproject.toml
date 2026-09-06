@@ -103,11 +103,10 @@ dev = [
     "watchfiles>=1.2.0",
     "types-pyyaml>=6.0.12.20260815",
     "playwright>=1.62.0",
-]
-
-# Its own group rather than part of `dev`, so building the site is opt-in: nothing about running the
-# tests or the console needs a static site generator installed.
-docs = [
+    # The site generator is part of the one development environment rather than a group of its own,
+    # because there is nothing to save by separating them: mypy walks `docs/hooks.py`, which imports
+    # MkDocs, so an environment `just test` passes in is one that has it installed anyway.
+    #
     # Capped below MkDocs 2.0 deliberately rather than by habit: it removes the plugin system and
     # rewrites theming with no migration path, so `mkdocs-material` stops working on it. The cap
     # goes when there is a version of this stack that runs on it.
