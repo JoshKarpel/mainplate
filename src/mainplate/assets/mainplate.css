@@ -1492,6 +1492,35 @@ pre > .copy {
     font-size: 0.72rem;
 }
 
+/* Whether the provider still holds this conversation's prefix, and what the next request pays if it
+   does not. A figure rather than a warning, so it takes the faint ink every other figure on this page
+   takes and never a colour of its own: the palette's one red is spent on how full the window is, and
+   a second one here would read as a second kind of trouble.
+
+   Above the mode sentence, which is above the box: this is a standing fact about the conversation and
+   that is what the next press does, so the transient one sits closest to the thing it describes.
+
+   `:empty` goes away entirely, because a conversation nothing has answered yet has no prefix to have
+   cached and an empty row above the box would be a line of nothing. It is still in the document, as
+   the anchor the page's own connection swaps. */
+.cache {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    /* What puts the space in front of each `·`, which is the rule's own arrangement rather than a
+       second one: the separator rides on the figure that follows it and the gap holds them apart. */
+    gap: var(--space-2) var(--space-3);
+    margin: 0;
+    min-width: 0;
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.cache:empty {
+    display: none;
+}
+
 /* `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the
    box takes the terminal's monospace and a heavier edge. A command is a shell line, so setting it in
    the face the output will come back in is the box telling the truth about what it holds. */

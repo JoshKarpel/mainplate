@@ -4,6 +4,8 @@ import re
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
 from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler
@@ -31,6 +33,7 @@ from playwright.async_api import expect
 from without_durability.interfaces import INBOX
 from without_http import serving
 
+from mainplate.agent import RETENTION
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
@@ -45,6 +48,7 @@ from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
+from mainplate.pages import CACHE_ID
 from mainplate.pages import OPENING
 from mainplate.service import Service
 from mainplate.sessions import read_tending
@@ -1712,6 +1716,73 @@ async def a_conversation(console: tuple[str, Service], page: Page) -> str:
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
     return session.id
+
+
+class TestSayingWhetherTheCacheIsStillWarm:
+    """
+    The line above the box, where the server states a fact and the script states the reading of it.
+
+    A browser, because the whole point is that the two differ: the server can only say when the prefix
+    was written, since nothing here re-renders on the clock, and turning that into `warm as of 12m` is
+    the script's. Both are in the markup as the same element, so nothing short of running it can tell
+    which one a reader actually sees.
+    """
+
+    async def test_the_script_turns_the_written_time_into_how_long_ago_it_was(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        What no-script gets is `cached at 15:09`, which is a fact that cannot rot. What a reader with
+        the file gets is the reading of it, recomputed as the page sits there.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            recorded_turn({"kind": "response", "parts": [{"part_kind": "text", "content": "a plate"}]}),
+        )
+        await page.reload(wait_until="load")
+
+        await expect(page.locator(".cache__state")).to_contain_text("warm as of")
+
+    async def test_a_prefix_past_the_retention_stays_cold_under_the_script(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one-sided rule, driven: the script recomputes the state and must not talk a cold prefix
+        back into being warm. Aged past the retention on the record rather than by moving any clock,
+        which is what decides it.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        stale = datetime.now(UTC) - RETENTION - timedelta(minutes=1)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            recorded_turn(
+                {
+                    "kind": "response",
+                    "parts": [{"part_kind": "text", "content": "a plate"}],
+                    "timestamp": stale.isoformat(),
+                }
+            ),
+        )
+        await page.reload(wait_until="load")
+
+        await expect(page.locator(".cache__state")).to_have_text("cold")
+
+    async def test_a_conversation_nothing_has_answered_draws_no_line_at_all(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        `:empty` rather than an absent element, so the region the page's connection swaps into is
+        still there. What a reader must not see is a blank row above the box.
+        """
+        await a_conversation(console, page)
+
+        await expect(page.locator(f"#{CACHE_ID}")).to_have_count(1)
+        await expect(page.locator(f"#{CACHE_ID}")).to_be_hidden()
 
 
 class TestSettingWhenASessionHandsItselfOff:

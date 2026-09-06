@@ -16,6 +16,7 @@ from without_async import background_task
 
 from mainplate.agent import CACHE_FOR
 from mainplate.agent import EMBEDDING
+from mainplate.agent import RETENTION
 from mainplate.agent import AnthropicWire
 from mainplate.agent import Choice
 from mainplate.agent import Listed
@@ -183,6 +184,18 @@ class TestBuildingEndpoints:
 
         assert anthropic.caching() == {"anthropic_cache": CACHE_FOR}
         assert openai.caching() == {}, "this format caches a repeated prefix without being asked"
+
+    def test_the_retention_and_the_wire_parameter_are_one_duration(self) -> None:
+        """
+        Two representations of one fact with nothing enforcing the agreement, which is what this is.
+
+        The parameter has to be a literal, because the SDK types the field as `Literal['5m', '1h']`
+        and a string rendered from a `timedelta` is a `str`; the duration has to be a `timedelta`,
+        because what reads it is the composer deciding whether the next request pays full price. So
+        they are written twice, and this is what turns a drift into a failure rather than a console
+        confidently calling a dead prefix warm for as long as somebody left the two disagreeing.
+        """
+        assert f"{RETENTION // timedelta(hours=1)}h" == CACHE_FOR
 
     async def test_what_a_wire_asks_for_reaches_the_request(self) -> None:
         """

@@ -738,6 +738,99 @@ on their own panels, and adding those in would double-count a batch that ran at 
 anywhere is unknown for the whole, exactly as with the cost, so a turn recorded before this console
 timed anything shows no figure rather than a suspiciously small one.
 
+## Whether the cache is still warm, and what that is worth
+
+A conversation is re-sent whole on every turn, so a session picked up after lunch pays full input
+price for everything said in it and nothing about the request looks any different. `cache_note` is the
+line above the message box that says so, and it earns its row only because `Wire.caching` asks for a
+cache at all: with none there would be nothing to have gone cold and nothing worth saying.
+
+**A figure and not a warning, in the family of the gauge and the `▣` count.** It never tells anybody
+to `forget`: at low utilization the right move is to carry on, and picking which figure matters is the
+reader's. It says what is true and stops.
+
+**One-sided, always.** Past the retention a prefix is cold and this says so; under it nothing can be
+asserted, because eviction is unobservable from here. What it says instead is `warm as of 12m`, which
+is a claim about when the prefix was last *written* - a response landing is exactly that moment - and
+is true on any wire whatever that wire's own TTL. `RETENTION` works as the one threshold for the same
+reason: it is the longest this console asks for anywhere, so past it the prefix is gone everywhere and
+no format has to be threaded to the page to know it.
+
+**The server renders an absolute time and the script renders the relative one.** Nothing here
+re-renders on the clock - the stream sends when the session *records* something, and the interval that
+decides the answer is exactly the one where nothing is recorded - so a server-rendered `warm` would
+sit there while the retention rolled past it. `cached at 15:09` is a fact that cannot rot, which is
+what a reader with `mainplate.js` absent gets, and `warm as of 12m` is the script's reading of it.
+Cold is the one state the server *can* assert, since it was already true when the page was rendered
+and nothing makes a cold prefix warm again.
+
+**That split is also what keeps one elapsed formatter rather than two.** The server never renders a
+duration here, so `ago` exists only in the script; a server that rendered `12m` too would be the same
+three-branch format written in two languages with nothing holding them together.
+
+**What the script adds is a duration to a duration, never one clock to another.** `data-since` is how
+long ago the server measured the last response to be, and the rest is measured in the browser from the
+moment it first saw that element, so a reader whose machine disagrees with the console's is still
+right. A swap replaces the element, which gets a fresh `data-since` and a fresh stamp - which is
+exactly what should happen.
+
+**`Conversation.since` is the one place this console subtracts two clocks**, and the caveat lives on
+the field. `Transcript.answered_at` is stamped by whichever process ran the pass and `since` is taken
+in a request handler, so the difference is sound exactly as long as those are one machine, which today
+they are. Split across machines it becomes as good as the two clocks' agreement, which for a threshold
+in hours is fine and for anything finer would not be. It is measured in `Service.read` rather than on
+the page, because a page is a pure function of already-answered questions and `now()` is not one.
+
+**`ModelResponse.timestamp` rather than the store's own write time**, which `Checkpointer.history`
+would give. Pydantic AI already stamps it, it survives the checkpoint round trip, and it needs no
+second read; the store's clock has the identical split-deployment caveat, so the general shape buys
+nothing here. What it means is "when the response was received locally", which is as close as this
+console gets to when the provider last touched the prefix.
+
+**The money is a floor and says so.** What it prices is the input of the next turn's *first* request -
+re-sending what has already been said - and not the answer, the tools that turn runs, or the further
+requests it makes, any of which can dwarf it. A bare figure would read as what the next turn costs and
+understate it by however much work that turn turns out to be, so it carries a `+` and the title spells
+out what sits on top. It is the one thing about a turn nobody has started that can be stated exactly
+rather than guessed at.
+
+**Both ends are drawn, and the gap between them is the point.** `▣$0.0289 / $0.2889+` is what
+re-sending costs with the whole prefix cached against none of it, which is what makes the cost of
+*waiting* legible: on a long conversation that is a tenfold jump and nothing about the request would
+have looked any different. Neither figure claims to be the one that will be charged - how much of a
+prefix the provider still holds is unobservable, which is the same reason `warm` is never asserted in
+words - so the pair is stated and the state beside it says which end the session is nearer.
+
+`▣` for the cached end rather than the word `warm`, because the state is already one of those two
+words and the line would carry each of them twice. It is the mark the rule already uses for the part
+of an input a provider read from its cache, so it means the same thing in both places.
+
+**No warm figure where the record prices no cache.** `priced` falls back to the input rate there, so a
+warm end would be the cold one printed twice - which reads as a bug rather than as a database that
+does not say. `Resending.warm` is `None` for exactly that, and the line draws the one end it knows.
+
+**One value rather than two fields**, so the pair can never be computed from two different contexts or
+two different records, which is `facts_of`'s own argument one scale down.
+
+**It is a second partial on the page's own connection**, which is the shape `streaming.py` was built
+for and the first thing to use it. The note lives in the composer, so the transcript's swap does not
+reach it, and what it says goes stale on every turn: the context it prices grows and the moment it
+measures moves. `outerHTML` rather than the transcript's morph, since it is one short line with
+nothing in it worth preserving.
+
+**`RETENTION` and `CACHE_FOR` are one fact in two places.** The parameter has to be a literal, because
+the SDK types the field as `Literal['5m', '1h']` and a string rendered from a `timedelta` is a `str`;
+the duration has to be a `timedelta`, because that is what the comparison takes. So they are written
+twice with nothing enforcing the agreement, which is the bargain `tree_key` and `Stepping.key` already
+take, and `test_the_retention_and_the_wire_parameter_are_one_duration` is what turns a drift into a
+failure rather than a console confidently calling a dead prefix warm.
+
+**Every response fixture now carries a timestamp**, in `conftest.recorded_turn` and in
+`scripts/gallery.py`. `ModelResponse.timestamp` defaults to the moment it was constructed, so a
+fixture without one is the moment the test or the render ran: an assertion over a whole `Transcript`
+becomes a comparison against the wall clock, and two `just gallery` runs produce two different pages.
+A screenshot that differs run to run is one nobody can compare against the last.
+
 ## Forking, and where a session may change its mind
 
 A session's choice is fixed for life, so **forking is how it changes**. `Service.fork` copies every
@@ -2670,6 +2763,10 @@ every caller had one in hand and was taking it apart the same way. What the regi
 session, what was said, whether it is stalled, the model's window and where its reserve falls, and
 five arguments derived from one value are five chances for a caller to pair a transcript with another
 session's window.
+
+**One connection now drives two regions**, which is what `partial` was always for: the transcript, and
+the cache note in the composer. See "Whether the cache is still warm" for why that one cannot simply
+be rendered with the page.
 
 Three things about that connection are decided rather than incidental:
 

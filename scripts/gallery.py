@@ -69,6 +69,7 @@ from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
 from mainplate.reference import facts_of
+from mainplate.reference import resending
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.service import Conversation
@@ -80,6 +81,13 @@ from mainplate.tools import ASKING
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 
 WHEN = datetime(2031, 3, 14, 15, 9, 26, tzinfo=UTC)
+"""
+When everything in this gallery happened, which every response fixture is stamped with.
+
+`ModelResponse.timestamp` defaults to the moment it was constructed, so a fixture without one is the
+moment the gallery ran: the composer's cache note draws that time, and two runs would produce two
+different pages. A screenshot that differs run to run is one nobody can compare against the last.
+"""
 
 # The session every page below is about, named here rather than on `PARENT` because the default
 # choice needs it too: a session's branch is named after its id, so the two would otherwise be one
@@ -325,6 +333,7 @@ CONVERSATION: list[ModelMessage] = [
         instructions=INSTRUCTIONS,
     ),
     ModelResponse(
+        timestamp=WHEN,
         parts=[
             ThinkingPart(
                 content=(
@@ -371,6 +380,7 @@ CONVERSATION: list[ModelMessage] = [
         ]
     ),
     ModelResponse(
+        timestamp=WHEN,
         parts=[
             TextPart(
                 content=(
@@ -417,6 +427,7 @@ CONVERSATION: list[ModelMessage] = [
 TOOL_IN_FLIGHT: list[ModelMessage] = [
     ModelRequest(parts=[UserPromptPart(content="Now check the stylesheet handles a long line.")]),
     ModelResponse(
+        timestamp=WHEN,
         parts=[
             TextPart(content="Checking."),
             ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-2"),
@@ -430,6 +441,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
 # calls in one response because that is the case worth looking at: they run at once, so one comes
 # back while the other is still out, and the panel has to read as both at the same time.
 PARTWAY = ModelResponse(
+    timestamp=WHEN,
     parts=[
         ThinkingPart(content="Two files to look at. I can read them at the same time."),
         ToolCallPart(tool_name="read", args={"path": "src/mainplate/streaming.py"}, tool_call_id="call-7"),
@@ -516,6 +528,15 @@ def returns(messages: Sequence[ModelMessage]) -> dict[str, object]:
 # A stand-in repository and one session's worktree of it, so the pages show what a console with
 # snapshots on looks like: the tree each turn started on, beside the fork link that would put it
 # back, and the repository the session is working in.
+SINCE = timedelta(minutes=12)
+"""
+How long ago the fixtures were last answered, which is the one thing a gallery cannot measure.
+
+Under the retention, so the cache note is drawn in the state a reader is usually in - the cold one is
+what a session looks like after lunch, and drawing it everywhere would make a page of fixtures look
+like a console nobody had touched.
+"""
+
 REPOSITORY = "JoshKarpel/mainplate"
 WORKSPACE = Path("/home/you/.local/share/mainplate/workspaces/worktrees")
 
@@ -561,6 +582,7 @@ def showing(
     working: bool = True,
     started: bool = True,
     refused: records.Refused | None = None,
+    since: timedelta | None = SINCE,
 ) -> Conversation:
     """
     One session as a page sees it.
@@ -569,11 +591,18 @@ def showing(
     yet: a session whose message is still queued has no turn, so it has no tree recorded before a
     request nobody has made, and a fixture that gave it one would be a checkpoint no pass could
     write.
+
+    `since` is how long ago it was last answered, which is the one thing here a page cannot read out
+    of a checkpoint: `Service.read` measures it against a clock, and a gallery has none. Given rather
+    than computed for that reason, and given a value under the retention by default so the cache note
+    is drawn in the state a reader is usually in.
     """
     chosen = CATALOGUE.default if working else replace(CATALOGUE.default, repository=None)
+    said = transcript(snapshotted(written) if working and started else written)
+    facts = facts_of(CATALOGUE, REFERENCE, chosen)
     return Conversation(
         session=session,
-        said=transcript(snapshotted(written) if working and started else written),
+        said=said,
         chosen=chosen,
         answerable=answerable,
         refused=refused,
@@ -585,7 +614,13 @@ def showing(
         runnable=working,
         # Looked up here rather than written down, exactly as `Service.read` does it, so the gauge
         # on every rule is drawn against the same number the model's own card shows.
-        window=facts.context if (facts := facts_of(CATALOGUE, REFERENCE, chosen)) is not None else None,
+        window=facts.context if facts is not None else None,
+        since=since if said.answered_at is not None else None,
+        resending=(
+            resending(facts.cost, said.total.context)
+            if facts is not None and facts.cost is not None and said.total.context
+            else None
+        ),
     )
 
 

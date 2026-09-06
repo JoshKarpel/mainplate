@@ -13,6 +13,7 @@ import pytest
 from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
 from conftest import INSTRUCTIONS
+from conftest import WHEN
 from conftest import Provider
 from conftest import Refusing
 from conftest import Scripted
@@ -413,6 +414,9 @@ class TestForgettingWhatCameBefore:
             # it absent is a turn that has recorded no response at all, not one that cost nothing.
             spent={0: Spent(asked=0, answered=0, cost=None)},
             requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None)),)},
+            # When the last response landed, which is what the composer reads to say whether the
+            # provider still holds this conversation's prefix.
+            answered_at=WHEN,
         )
 
     def test_a_panel_is_a_run_of_one_kind_in_the_order_the_model_worked(self) -> None:

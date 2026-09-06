@@ -73,6 +73,7 @@ from without_html import ul
 from without_web import Reversible
 from without_web import url_for
 
+from mainplate.agent import RETENTION
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
@@ -177,6 +178,13 @@ BRANCHES_ID: Final = "branches"
 FOUND_ID: Final = "branches-found"
 
 SENDING_ID: Final = "sending"
+
+# Whether the provider still holds this conversation's prefix, and what the next request pays if it
+# does not. A region of its own with an id, because it sits in the composer and the composer is not
+# what the stream replaces: what it says goes stale on every turn, since the context it prices grows
+# with each one. So the page's one connection carries it as a second partial, which is the shape
+# `streaming.py` was built for. See `cache_note`.
+CACHE_ID: Final = "cache"
 
 # The form the picker's controls belong to, named because on the start page they do not sit inside
 # it. There the choosing fills `main`'s growing row and the box is pinned under it, so the endpoint
@@ -2551,6 +2559,109 @@ def running_to(before: Decimal | None, spent: Spent | None) -> Decimal | None:
     return before + spent.cost
 
 
+def cache_note(showing: Conversation) -> Element:
+    """
+    Whether the provider still holds this conversation's prefix, and what the next request pays if not.
+
+    Meaningless before there was a cache, and worth a line now that there is one: a conversation picked
+    up after lunch pays full input price for everything said in it, and nothing about the request looks
+    any different. On a long conversation that is most of the bill.
+
+    **A figure rather than a warning, in the family of the gauge and the `▣` count.** It does not tell
+    anybody to `forget`: at low utilization the right move is to carry on, and choosing which figure
+    matters is the reader's. So it says what is true and stops.
+
+    **One-sided, always.** Past the retention a prefix is cold and this says so; under it nothing can
+    be asserted, because eviction is unobservable from here, so what it says is `warm as of 12m` - a
+    claim about when the prefix was last *written*, which is what a response landing is, and which is
+    true on any wire whatever that wire's own TTL. `RETENTION` works as the one threshold for the same
+    reason: it is the longest this console asks for anywhere, so past it the prefix is gone everywhere.
+
+    **The server renders an absolute time and the script renders the relative one.** Nothing here is
+    re-rendered on the clock - the stream sends this when the session *records* something, and the
+    interval that matters is exactly the one where nothing is recorded - so a server-rendered `warm`
+    would sit there while the retention rolled past it. `cached at 15:09` is a fact that cannot rot,
+    which is what a reader with no script gets; `data-since` and `data-retention` are what the script
+    needs to say `cold` or `warm as of 12m`, and it measures the rest against its own clock from the
+    moment it first saw them, so no two machines' clocks are ever subtracted. See `wireCache`.
+
+    Cold is the one state the server *can* assert, since it was already true when this was rendered
+    and nothing makes a cold prefix warm again.
+
+    **The money is a floor and says so.** What it prices is the input of the next turn's *first*
+    request - re-sending what has already been said - and not the answer, the tools that turn runs, or
+    the further requests it makes, any of which can dwarf it. A bare figure would read as what the
+    next turn costs and understate it by however much work that turn turns out to be, so it carries a
+    `+` and the title spells out what sits on top. That is the one thing about a turn nobody has
+    started that can be stated exactly rather than guessed at.
+
+    **The money is absent where the price is**, exactly as the gauge's fraction is: no reference
+    database, an endpoint that no longer lists the recorded id, a model with no record, or a record
+    with no price. What is left is when the prefix was written, which is worth saying on its own.
+
+    Empty before anything has been answered, and empty rather than absent because it is what the
+    stream's partial targets - the same reason `starting_at` leaves a block behind with no repository.
+    """
+    if showing.said.answered_at is None or showing.since is None:
+        return p(cls="cache", attrs={"id": CACHE_ID})
+    context = showing.said.total.context
+    figures: list[Element] = [
+        span(
+            cls="cache__state",
+            attrs={"title": f"This conversation's prefix was last written at {showing.said.answered_at:%H:%M}"},
+            children="cold" if showing.since >= RETENTION else f"cached at {showing.said.answered_at:%H:%M}",
+        )
+    ]
+    if showing.resending is not None:
+        held = showing.resending
+        # `▣` for the cached end, which is the mark the rule already uses for the part of an input a
+        # provider read from its cache. Labelling them `warm` and `cold` instead would put those two
+        # words on the line twice over, since the state beside them is already one of the two.
+        said = (
+            charged(held.cold)
+            if held.warm is None
+            else f"\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}{charged(held.warm)} / {charged(held.cold)}"
+        )
+        spread = (
+            f"${held.cold:f} with none of it read from a cache"
+            if held.warm is None
+            else f"between ${held.warm:f} with all of it read from a cache and ${held.cold:f} with none of it"
+        )
+        figures.append(
+            span(
+                cls="cache__cost",
+                attrs={
+                    "title": (
+                        f"Re-sending the {context:,} tokens already said costs {spread}, estimated from "
+                        f"published rates and not billed. That is where the next turn *starts*: what it "
+                        f"answers with, the tools it runs and any further requests it makes are all on top."
+                    )
+                },
+                children=[
+                    "\N{MIDDLE DOT} ",
+                    # The `+` is the whole of what keeps this honest on the line, and it applies to both
+                    # ends. What they price is the *input of the next turn's first request* and nothing
+                    # else - not the answer, not the tool calls, not the further requests a turn of any
+                    # size makes - so a bare figure would read as what the next turn costs and understate
+                    # it by however much work the turn turns out to be. A floor is what can be said
+                    # exactly, and the pair is what says what waiting costs.
+                    f"\N{UPWARDS ARROW}{tokens(context)} at {said}+",
+                ],
+            )
+        )
+    return p(
+        cls="cache",
+        attrs={
+            "id": CACHE_ID,
+            # Seconds rather than the absolute time, so the script adds to a duration the server
+            # measured instead of subtracting one clock from another. See the docstring.
+            "data-since": str(int(showing.since.total_seconds())),
+            "data-retention": str(int(RETENTION.total_seconds())),
+        },
+        children=figures,
+    )
+
+
 def reserve_mark(showing: Conversation) -> float | None:
     """
     Where on a rule's gauge this session's reserve falls, or nothing at all where no mark belongs.
@@ -3654,6 +3765,10 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     # Only where there are files to run in. A session with no repository has no
                     # worktree, so `Run` would be an offer with nowhere to honour it.
                     running=showing.runnable,
+                    # Above the box, where the mode sentence already is, and above that sentence: this
+                    # is a standing fact about the conversation and that is what the next press does,
+                    # so the transient one sits closest to the thing it describes.
+                    above=cache_note(showing),
                 ),
             ],
             # Only where there is a conversation to navigate. On the page where a session does not

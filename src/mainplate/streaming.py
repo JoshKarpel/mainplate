@@ -29,9 +29,11 @@ from without_html import Node
 from without_html import element
 from without_html import render
 
+from mainplate.pages import CACHE_ID
 from mainplate.pages import SWAP
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.pages import Links
+from mainplate.pages import cache_note
 from mainplate.pages import transcript_region
 from mainplate.service import Service
 
@@ -76,6 +78,18 @@ async def watching(service: Service, links: Links, session: str, every: timedelt
             showing = await service.read(session)
             if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
                 return
-            drawn = transcript_region(links, showing)
-            yield Event(data=render(partial(TRANSCRIPT_ID, SWAP, drawn)), id=str(now))
+            # Two regions on one connection, which is what `partial` exists for. The cache note lives
+            # in the composer rather than in the transcript, so nothing else replaces it, and what it
+            # says goes stale on every turn: the context it prices grows, and when the prefix was last
+            # written moves. `outerHTML` rather than the transcript's morph, because it is one short
+            # line with nothing in it worth preserving across a swap.
+            yield Event(
+                data=render(
+                    [
+                        partial(TRANSCRIPT_ID, SWAP, transcript_region(links, showing)),
+                        partial(CACHE_ID, "outerHTML", cache_note(showing)),
+                    ]
+                ),
+                id=str(now),
+            )
         await asyncio.sleep(every.total_seconds())

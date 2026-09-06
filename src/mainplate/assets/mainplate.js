@@ -788,6 +788,41 @@
       paintSearch(go);
     };
 
+    // How long ago, in the words the cache note uses. Under an hour is the case that matters, since
+    // the retention this console asks for is one, and the hours branch is here so that a longer one
+    // would read correctly rather than as three digits of minutes.
+    const ago = (seconds) => {
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 1) return "just now";
+      if (minutes < 60) return `${minutes}m`;
+      const spare = minutes % 60;
+      return spare ? `${Math.floor(minutes / 60)}h ${spare}m` : `${Math.floor(minutes / 60)}h`;
+    };
+
+    // Whether the provider still holds this conversation's prefix, said against the clock rather
+    // than against the checkpoint. The server sends this region when the session *records* something,
+    // and the interval that decides the answer is exactly the one where nothing is recorded - somebody
+    // reading, thinking, going for lunch - so a server-rendered state would sit there while the
+    // retention rolled past it.
+    //
+    // **What it adds is a duration to a duration, never one clock to another.** `data-since` is how
+    // long ago the server measured the last response to be, and the rest is measured here from the
+    // moment this element was first seen, so a browser whose clock disagrees with the console's is
+    // still right. The stamp goes on the element because a swap replaces it: a new element carries a
+    // fresh `data-since` and gets a fresh stamp, which is exactly what should happen.
+    //
+    // One-sided, like the server: `cold` is asserted and `warm` never is, because eviction cannot be
+    // observed from here. What is said instead is when the prefix was last written.
+    const paintCache = () => {
+      const note = document.getElementById("cache");
+      const state = note?.querySelector(".cache__state");
+      if (!note || !state || note.dataset.since === undefined) return;
+      if (note.seenAt === undefined) note.seenAt = Date.now();
+      const since = Number(note.dataset.since) + (Date.now() - note.seenAt) / 1000;
+      const retention = Number(note.dataset.retention);
+      state.textContent = since >= retention ? "cold" : `warm as of ${ago(since)}`;
+    };
+
     // `announce` is false exactly once, on the first render: every panel is new to this file then,
     // and a conversation that flashed itself top to bottom on being opened would be pointing at
     // everything, which is pointing at nothing.
@@ -802,6 +837,7 @@
       paintBranches();
       paintCopies();
       paintCopied();
+      paintCache();
       research(false);
       if (following) toEnd();
     };
@@ -1538,6 +1574,13 @@
       });
     };
 
+    const wireCache = () => {
+      // On a timer as well as on every swap, because between turns nothing is recorded and so nothing
+      // is sent: the whole point is a state that changes while the page holds still. Finer than the
+      // minute the words move in, so a reader watching does not see one arrive late.
+      setInterval(paintCache, 15_000);
+    };
+
     const wireSwaps = () => {
       document.addEventListener("htmx:before:swap", (event) => {
         if (event.target !== transcript()) return;
@@ -1562,6 +1605,7 @@
     wireFolding();
     wireFilter();
     wireReserve();
+    wireCache();
     wireSend();
     wireCopy();
     wireFresh();

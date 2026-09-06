@@ -40,6 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Final
 from typing import Protocol
@@ -349,12 +350,32 @@ class Wire(Protocol):
 # carry them at all.
 EMBEDDING: Final = "embedding"
 
-# How long a cached prefix is kept where the format lets this console ask. An hour rather than the
-# five minutes that is the default, and the trade is stated because it is a real one: an hour's
-# retention is written at 2x base input against 1.25x, so it pays only where a conversation is picked
-# up again after a pause. That is what a chat console is - somebody reads an answer, thinks, and
-# replies - and five minutes barely outlasts one long turn, let alone the walk to the kettle.
+RETENTION: Final = timedelta(hours=1)
+"""
+How long a cached prefix is kept where the format lets this console ask.
+
+An hour rather than the five minutes that is the default, and the trade is stated because it is a
+real one: an hour's retention is written at 2x base input against 1.25x, so it pays only where a
+conversation is picked up again after a pause. That is what a chat console is - somebody reads an
+answer, thinks, and replies - and five minutes barely outlasts one long turn, let alone the walk to
+the kettle.
+
+A duration rather than the string the wire takes, because two things read it: the parameter below,
+and the page saying whether the next request will pay full price. It is **the longest retention this
+console asks for on any wire**, which is what makes it usable as one threshold everywhere - past it
+a prefix is cold whatever answered the conversation, where under it nothing can be asserted at all.
+"""
+
 CACHE_FOR: Final = "1h"
+"""
+The same duration as the parameter the Anthropic wire takes, in the vocabulary that wire accepts.
+
+Written out rather than rendered from `RETENTION`, because the SDK types this field as
+`Literal['5m', '1h'] | bool` and a derived string is a `str`: deriving it would trade a checked value
+for an unchecked one to save a line. So the two are one fact in two places with nothing enforcing the
+agreement, which is the bargain `tree_key` and `Stepping.key` already take, and
+`test_the_retention_and_the_wire_parameter_are_one_duration` is what turns a drift into a failure.
+"""
 
 
 def provider_of(model_id: str, format_name: str) -> str:

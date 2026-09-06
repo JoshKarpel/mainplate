@@ -49,7 +49,9 @@ from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.reference import References
+from mainplate.reference import Resending
 from mainplate.reference import facts_of
+from mainplate.reference import resending
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
@@ -145,6 +147,35 @@ class Conversation:
     `None` for each of the three ways to know nothing - no database configured, an endpoint that no
     longer lists the recorded id, a model with no record - and the page draws the counts with no
     fraction beside them, which is what it drew before there was one.
+    """
+
+    since: timedelta | None = None
+    """
+    How long ago this conversation was last answered, as of this read, or nothing where it never was.
+
+    **The one place this console subtracts two clocks**, and the caveat is worth having here rather
+    than in a comment somewhere downstream. `Transcript.answered_at` is stamped by whichever process
+    ran the pass and this is taken in a request handler, so the difference is sound exactly as long as
+    those are one machine - which today they are, since the console, the worker and the file are one
+    process. Split across machines it becomes as approximate as the two clocks' agreement, which for a
+    threshold measured in hours is still fine and for anything finer would not be.
+
+    Measured *here* rather than on the page, because a page is a pure function of already-answered
+    questions and `datetime.now()` is not one of those. The page turns it into words and the script
+    keeps it current; see `cache_note`.
+    """
+
+    resending: Resending | None = None
+    """
+    What putting this conversation to the model again costs, cached and uncached.
+
+    A **floor on the next turn** at either end rather than a price for one: both figures are the input
+    of that turn's first request and nothing else, so the answer, the tools and any further requests
+    are on top of both. The composer draws them with a `+` for exactly that reason; see `Resending`.
+
+    Absent for the same three reasons `window` is, and for a fourth - a model whose record carries no
+    price at all - so the composer says how long ago the prefix was written without saying what that
+    is worth, which is what it says with no reference database configured.
     """
 
 
@@ -247,9 +278,13 @@ class Service:
         chosen = choice_of(recorded)
         working = chosen is not None and chosen.repository is not None
         facts = facts_of(self.catalogues.current, self.references.current, chosen) if chosen is not None else None
+        said = transcript(recorded)
+        # The one subtraction of two clocks in this console, taken here rather than on the page
+        # because a page is a pure function of already-answered questions. See `Conversation.since`.
+        since = None if said.answered_at is None else self.now() - said.answered_at
         return Conversation(
             session=found,
-            said=transcript(recorded),
+            said=said,
             chosen=chosen,
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             refused=refusal_in(recorded),
@@ -257,6 +292,12 @@ class Service:
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
             runnable=self.commands is not None and self.workspaces is not None and working,
             window=facts.context if facts is not None else None,
+            since=since,
+            resending=(
+                resending(facts.cost, said.total.context)
+                if facts is not None and facts.cost is not None and said.total.context
+                else None
+            ),
         )
 
     async def token(self, session: str) -> int:

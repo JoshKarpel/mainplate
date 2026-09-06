@@ -488,6 +488,17 @@ for shows its token counts and no money. The time is what the turn spent waiting
 summed over its round trips; the calls it made in between carry their own, beside the tool's name on
 the panel that drew it. The session's own total sits under the message box.
 
+Above the box is the other half of the money: **whether the provider still holds this conversation's
+prefix**, and what re-sending it costs with none of it cached. A conversation is re-sent whole on every
+turn, so one picked up after lunch pays full input price for everything said in it and nothing about
+the request looks any different. It is one-sided on purpose: past the cache's retention the prefix is
+cold and the line says so, and under it what it says is when the prefix was last *written*, because
+whether a provider has evicted one cannot be observed from here. Both ends are priced, with the whole
+prefix cached and with none of it, because the gap between them is what waiting costs and on a long
+conversation it is tenfold. Both carry a `+` because both are floors: they price re-sending what has
+already been said, where the answer, the tools the turn runs and any further requests it makes are all
+on top.
+
 A panel that arrives, or whose blocks say something different, is **marked for a beat** in its own
 kind's hue. A turn fills in over several renders, and a reader watching one needs to be told which
 part moved rather than left to spot it. It is worked out from what a panel says, so unfolding a

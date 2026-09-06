@@ -95,6 +95,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the reserve are per session and changeable while it runs, in the rail's own card; where the reserve
   falls is marked on every rule's gauge, so watching the line grow toward the mark is watching the
   handoff approach.
+- A line above the message box saying whether the provider still holds this conversation's prefix, and
+  what re-sending it costs with none of it cached. Meaningless before there was a cache and worth a row
+  now that there is one: a conversation picked up after lunch pays full input price for everything said
+  in it, and nothing about the request looks any different. One-sided, always - past the retention a
+  prefix is cold and this says so, and under it what it says is when the prefix was last *written*,
+  because eviction cannot be observed from here. Both ends are priced - with the whole prefix cached
+  and with none of it - because the gap between them is what waiting actually costs, and on a long
+  conversation it is a tenfold jump. Both are floors and carry a `+`: they price the input of the next
+  turn's first request, where the answer, the tools it runs and any further requests are all on top.
+  The server renders an absolute time, which cannot rot, and the script renders the reading of it
+  against the clock, since nothing here re-renders while somebody is away.
 - A session the provider will never accept a request from says so and stops, rather than spinning.
   What it names is `fork`, because nothing can be put back: what was turned down is the recorded
   history itself, and forking at the turn drops that turn's own requests while keeping everything

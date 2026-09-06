@@ -335,8 +335,22 @@ def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:
 
 
 def recorded_turn(*said: object) -> dict[str, object]:
-    """Message dicts written out by hand, as the record a turn keeps them in."""
-    return records.Messages(messages=list(said)).recorded()
+    """
+    Message dicts written out by hand, as the record a turn keeps them in.
+
+    Every response is stamped with `WHEN` where it does not stamp itself, which is the same moment
+    `Ticking` starts at. `ModelResponse.timestamp` otherwise defaults to the moment it was
+    constructed, so a fixture without one is the moment the test ran: `Transcript.answered_at` reads
+    it, and any assertion over a whole transcript would be a comparison against the clock.
+
+    Written on the way in rather than patched on the way out, so what the fixture holds is what a
+    real record holds and nothing downstream has to know these came from a test.
+    """
+    stamped = [
+        {"timestamp": WHEN.isoformat(), **one} if isinstance(one, dict) and one.get("kind") == "response" else one
+        for one in said
+    ]
+    return records.Messages(messages=stamped).recorded()
 
 
 def answered_with(response: object) -> dict[str, object]:

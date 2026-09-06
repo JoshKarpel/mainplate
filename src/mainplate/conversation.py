@@ -86,6 +86,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 from enum import Enum
@@ -1438,6 +1439,22 @@ class Transcript:
     stored on the other.
     """
 
+    answered_at: datetime | None = None
+    """
+    When the last response of this conversation came back, or nothing where none has.
+
+    What the page reads to say whether the provider's cache still holds this conversation's prefix,
+    since a response landing *is* the moment that prefix was last written. `ModelResponse.timestamp`
+    rather than a key of its own, for `response_took`'s reason one field along: Pydantic AI already
+    stamps it, it survives the checkpoint round trip, and it is on the response whether that came back
+    from `turn:{n}:messages` or from the `turn:{n}:model:{i}` step behind it.
+
+    **It is the clock of whichever process ran the pass**, which is the caveat to know before this
+    grows a second reader. Today the console, the worker and the file are one process on one machine,
+    so it is comparable with a `now()` taken in a request handler; split across machines it would be
+    two clocks, and `Conversation.since` is where that subtraction actually happens.
+    """
+
     @property
     def total(self) -> Spent:
         """What the whole conversation has cost, which is every turn's spend under one rule."""
@@ -2067,6 +2084,11 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     spent: dict[int, Spent] = {}
     asking: dict[int, tuple[Request, ...]] = {}
     turn = 0
+    # When the newest response landed, which is when this conversation's cached prefix was last
+    # written. Carried out of both walks rather than recovered from the panels, because a panel holds
+    # what was said and not when: turns are in order and responses within a turn are, so the last one
+    # either walk sees is the last one there is.
+    latest: datetime | None = None
     while turn < len(opened) and (answered := recorded.get(messages_key(turn))) is not None:
         held = owned_in(recorded, inbox, opened, turn, listening=False)
         said = parse_messages(answered)
@@ -2076,6 +2098,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
         spent[turn] = spent_on(answering)
         asking[turn] = requests_in(recorded, turn, answering)
+        latest = answering[-1].timestamp if answering else latest
         turn += 1
     running = turn if turn < len(opened) else None
     if running is not None:
@@ -2091,6 +2114,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         if answering:
             spent[turn] = spent_on(answering)
             asking[turn] = requests_in(recorded, turn, answering)
+            latest = answering[-1].timestamp
         turn += 1
     # A person can type again while a reply is still coming, and what they type has no turn of its own
     # until a pass opens one. Drawn all the same, and in order, because a transcript showing only what
@@ -2115,6 +2139,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answering=running,
         requests=asking,
         system_prompts=instructed_in(recorded, turn),
+        answered_at=latest,
     )
 
 
