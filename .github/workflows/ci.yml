@@ -35,3 +35,28 @@ jobs:
 
       - name: Run type checking and tests
         run: just test --cov --durations 20 -vvv
+
+  docs:
+    name: Docs
+    # Its own job rather than a step in `check`, and it deliberately does not use
+    # `./.github/actions/setup`: that installs a Chromium and a `bubblewrap` the suite needs and a
+    # static site generator does not, which is minutes of download per pull request for a build that
+    # reads Markdown. `uv run` syncs the wheels the build does need, browsers not among them.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Build the documentation site
+        run: just docs-build

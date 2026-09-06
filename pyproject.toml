@@ -103,6 +103,15 @@ dev = [
     "watchfiles>=1.2.0",
     "types-pyyaml>=6.0.12.20260815",
     "playwright>=1.62.0",
+    # The site generator is part of the one development environment rather than a group of its own,
+    # because there is nothing to save by separating them: mypy walks `docs/hooks.py`, which imports
+    # MkDocs, so an environment `just test` passes in is one that has it installed anyway.
+    #
+    # Capped below MkDocs 2.0 deliberately rather than by habit: it removes the plugin system and
+    # rewrites theming with no migration path, so `mkdocs-material` stops working on it. The cap
+    # goes when there is a version of this stack that runs on it.
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.7",
 ]
 
 [tool.pytest.ini_options]
@@ -136,11 +145,13 @@ plugins = ["pydantic.mypy"]
 
 files = ["."]
 
-# The clones and worktrees a local console makes, which land beside the database and so land here
-# whenever `just serve` or `just demo` is run from this directory. They hold *other people's*
-# repositories, checked out by a session, so type-checking them is checking somebody else's code
-# against this project's settings. `.gitignore` does not reach mypy, which walks the tree itself.
-exclude = "^workspaces/"
+# `workspaces/` is the clones and worktrees a local console makes, which land beside the database and
+# so land here whenever `just serve` or `just demo` is run from this directory. They hold *other
+# people's* repositories, checked out by a session, so type-checking them is checking somebody else's
+# code against this project's settings. `site/` is the built documentation, which carries a copy of
+# `docs/hooks.py` and so collides with it by module name. `.gitignore` does not reach mypy, which
+# walks the tree itself.
+exclude = ["^workspaces/", "^site/"]
 
 check_untyped_defs = true
 disallow_incomplete_defs = true

@@ -73,6 +73,18 @@ check:
     uv run pre-commit run --all-files
     uv run mypy
 
+[doc('Serve the documentation site with live reload')]
+docs *args:
+    uv run mkdocs serve {{ args }}
+
+alias d := docs
+
+# `--strict` so a link to a page that does not exist, or a page nothing in the nav points at, fails
+# the build rather than shipping. CI runs this same recipe.
+[doc('Build the documentation site into ./site')]
+docs-build *args:
+    uv run mkdocs build --strict {{ args }}
+
 # Both of these restart the console whenever anything under `src/mainplate` changes, which covers
 # the stylesheet and the script as well as the Python. The assets are inventoried once at startup,
 # deliberately, so a CSS edit is only visible to a *new* process: without a watcher, looking at a

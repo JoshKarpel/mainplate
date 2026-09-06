@@ -982,7 +982,7 @@ type Outcome = Literal["success", "failed", "denied", "interrupted"]
 # cached prefix, where this is a `SystemPromptPart` appended into the message history at a position.
 # Two mechanisms, two places in the request, two things a reader may want to quiet separately - so
 # two words, by the same rule that keeps `steer` apart from `prompt`. How each one reaches the model
-# differs too, and by more than the wire: see the guidance section in `AGENTS.md`. It takes the
+# differs too, and by more than the wire: see `docs/design/guidance.md`. It takes the
 # person's hue for the reason `system-prompt` does.
 #
 # `handoff` is the one kind nobody wrote: the console asks for a handoff in a message of its own, and

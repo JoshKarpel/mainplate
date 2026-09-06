@@ -18,10 +18,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   does not survive turning mainplate off, which is the whole reason to write it in the repository
   rather than in a prompt. A leading YAML block is taken off, so a `paths:` list never reaches a
   context window.
-- An index of the guidance elsewhere in the repository, one row per file with the `description` from
-  its own frontmatter, carried in the instructions on every request. That a directory *has*
-  conventions is one line and what they are is a page, so the line rides in the prompt and the page
-  is read when it is wanted. It is asked of git rather than walked, so a `.venv` is never descended.
+- An index of the guidance elsewhere in the repository, one row per directory with the `description`
+  from that file's own frontmatter, carried in the instructions on every request. That a directory
+  *has* conventions is one line and what they are is a page, so the line rides in the prompt and the
+  page is read when it is wanted. It is asked of git rather than walked, so a `.venv` is never
+  descended. A directory holding both names is indexed once, under the same first-name-wins rule
+  that decides which one is read: a repository pairing an `AGENTS.md` with a `CLAUDE.md` importing
+  it would otherwise get a second row pointing at a file whose whole content names the first.
 - The guidance covering a directory, handed over on the request after a file tool reaches into it,
   as a system-voice message rather than an edit to the instructions, so the cached prefix is left
   alone. Whether it has already been handed over is asked of the history the model is about to be
@@ -108,6 +111,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   What it names is `fork`, because nothing can be put back: what was turned down is the recorded
   history itself, and forking at the turn drops that turn's own requests while keeping everything
   under them.
+- A documentation site, one page per part of the console, built by `just docs-build` and published
+  to GitHub Pages on a push to `main`. It is where the design narrative now lives, with `README.md`
+  as its home page: `AGENTS.md` is the map, `PHILOSOPHY.md` is the one idea and the rules every page
+  cites rather than restates, and several directories carry an `AGENTS.md` saying what a change
+  *there* must not break, which is a different thing from the page that argues why.
 
 ### Fixed
 
