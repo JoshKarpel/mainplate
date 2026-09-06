@@ -29,8 +29,8 @@
 # So readers parse by key, where the caller already knows what it asked for, and `Step` is for the
 # places that take a bag of records rather than one - a dump, an export, a migration.
 #
-# **Three checkpoint values are deliberately not records here, and all three are cursors.**
-# `turn:{n}:opened`, `turn:{n}:heard:{i}` and `turn:{n}:late:{k}` hold the key of the last inbox entry
+# **Two checkpoint values are deliberately not records here, and both are cursors.**
+# `turn:{n}:opened` and `turn:{n}:heard:{i}` hold the key of the last inbox entry
 # a pass took, written by `Run.receive` and `Run.pending` rather than by anything in this console. The
 # shape argument does not reach them: their value is the store's, under the store's own semantics, so
 # there is no second field this console could ever want to put beside one. Wrapping them would mean
@@ -73,9 +73,9 @@ different strings from opposite ends, which is a hazard those two carried with n
 
 The two halves no longer line up member for member, and that is the inbox rather than untidiness.
 `prompt`, `steer` and `command` name *records* and no key at all: what a person says and what they
-run are entries in the session's inbox, filed under a key the store mints. `opened`, `heard` and
-`late` are the other way round: they name keys whose value is a **cursor**, which is the store's own
-value rather than one of ours, so they have no record here. See the note on cursors below.
+run are entries in the session's inbox, filed under a key the store mints. `opened` and `heard` are
+the other way round: they name keys whose value is a **cursor**, which is the store's own value
+rather than one of ours, so they have no record here. See the note on cursors below.
 
 Not to be confused with the panel `Kind` in `conversation.py`, which is a rendering vocabulary. Both
 are called `kind` because it is a generic word and each is unambiguous where it is used; they overlap

@@ -566,6 +566,19 @@ class Prices:
     catalogues: Catalogues
     references: References
 
+    def facts(self, chosen: Choice) -> Facts | None:
+        """
+        What is known about this session's model as things stand, or nothing where nothing is.
+
+        One record read for however many fields a caller wants, which is `facts_of`'s own argument
+        said one layer in: what a turn is priced by and how big its window is come off the same
+        lookup, so asking twice is how the two would come to disagree about which record that is.
+
+        Read at the moment of the question rather than at the top of the pass, because both holders
+        under it are reloadable configuration and a pass outlives a refresh of either.
+        """
+        return facts_of(self.catalogues.current, self.references.current, chosen)
+
     def pricer(self, chosen: Choice) -> Pricer:
         """
         What one session's requests are priced by, which is as fixed as the choice it is built from.
@@ -581,7 +594,7 @@ class Prices:
         """
 
         def price(usage: RequestUsage) -> Decimal | None:
-            facts = facts_of(self.catalogues.current, self.references.current, chosen)
+            facts = self.facts(chosen)
             if facts is None or facts.cost is None:
                 return None
             return priced(facts.cost, usage)

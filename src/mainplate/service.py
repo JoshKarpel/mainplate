@@ -38,6 +38,7 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import opening_tree_key
+from mainplate.conversation import recorded_ask
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_prompt
@@ -57,8 +58,10 @@ from mainplate.sessions import name_from
 from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
+from mainplate.sessions import tend
 from mainplate.settings import DEFAULT_WATCHING
-from mainplate.tools import ASKING
+from mainplate.tending import TENDED
+from mainplate.tending import Tending
 
 # How many steps a session has recorded. A count and not a hash of them, because what it is asked
 # for is whether to look again rather than what changed, and the store's own primary key already
@@ -293,7 +296,7 @@ class Service:
             return None
         return requested_at(await self.checkpointer.load(session), turn, at)
 
-    async def start(self, said: str, chosen: Choice, title: str | None = None) -> Session:
+    async def start(self, said: str, chosen: Choice, title: str | None = None, tended: Tending = TENDED) -> Session:
         """
         A new session on `chosen`, named `title` or after the first thing said in it, with that
         message sent.
@@ -313,6 +316,13 @@ class Service:
         Nothing renames a session afterwards, and that is why the index may hold the title at all:
         it is a copy of something settled rather than of something that changes. Naming it here does
         not alter that, because this is still the one moment it is decided.
+
+        `tended` is written **only where it differs from the shipped defaults**, and that is what keeps
+        `NULL` meaning "nobody has said anything". The picker posts this pair on every session, so
+        recording it unconditionally would make every column explicit, leave a moved constant reaching
+        nothing, and make the defaulting branch a path only a database written before this existed can
+        take - which is a path nothing exercises. Somebody who sets exactly the defaults is
+        indistinguishable from somebody who left them, which is the correct reading of both.
         """
         named = name_from(title) if title else ""
         # Settled here rather than taken as posted, which is the same stance that stops a form with
@@ -330,6 +340,8 @@ class Service:
         # own id and `settled` is a rule about a choice rather than about a session.
         chosen = chosen.branching(session.id)
         await enrol(self.database, session)
+        if tended != TENDED:
+            await tend(self.database, session.id, tended)
         # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
         # already lives. Until then the session renders, names its repository, and has no files.
@@ -338,7 +350,14 @@ class Service:
         return session
 
     async def fork(
-        self, session: str, *, at: int, chosen: Choice, said: str | None = None, aside: bool = False
+        self,
+        session: str,
+        *,
+        at: int,
+        chosen: Choice,
+        said: str | None = None,
+        aside: bool = False,
+        tended: Tending = TENDED,
     ) -> Session | None:
         """
         A new session carrying this one's turns before `at`, on `chosen`, and asking `said` next.
@@ -412,6 +431,11 @@ class Service:
         # exactly where somebody carries on working and therefore commits.
         chosen = chosen.branching(forked.id)
         await enrol(self.database, forked)
+        # By `start`'s rule, and a fork settles this afresh rather than inheriting it: a reserve is a
+        # decision about how much room one conversation's context has left, and a branch's context is
+        # not that conversation's.
+        if tended != TENDED:
+            await tend(self.database, forked.id, tended)
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
         # The tree of the turn being re-asked, carried across on its own even though that turn's
@@ -497,9 +521,27 @@ class Service:
 
         No boundary on the ask, and one on what comes back. The context has to survive long enough
         to be summarised, so it is the *document* that clears it, which the tool records for itself.
+
+        What it says is `recorded_ask`'s rather than this method's, because a pass that finds its own
+        reserve crossed asks for exactly the same thing: two writers of one record, and the words in
+        one place so they cannot come apart.
         """
-        said = ASKING if not (steer := (guiding or "").strip()) else f"{ASKING}\n\n{steer}"
-        await self.durable.deliver(session, records.Handoff(said=said).recorded())
+        await self.durable.deliver(session, recorded_ask(guiding))
+
+    async def tend(self, session: str, tending: Tending) -> None:
+        """
+        Say what this console should do for a session unasked, which the next pass reads.
+
+        The one write here that is not an append, and the one that has nowhere else to go: a
+        checkpoint keeps the value a key was first given, so a setting saved twice there would keep
+        its first answer for ever, and `localStorage` is in a browser where the worker that acts on
+        this may be another process. So it is a column, and this is the only thing that writes one.
+
+        Next pass rather than at once, and that is the value the pass took saying so: a pass snapshots
+        these on its way in, so a switch flicked while a turn is being answered reaches the turn after
+        it. Nothing here waits for that, exactly as nothing here waits for a message to be answered.
+        """
+        await tend(self.database, session, tending)
 
     async def say(self, session: str, said: str, *, forget: bool = False) -> None:
         """

@@ -1564,81 +1564,81 @@ wheels = [
 
 [[package]]
 name = "without-asgi"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "brotli" },
     { name = "without-async" },
     { name = "without-streams" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/46/06/991f8cc8fb1257b67483defbb2329d6576b3a9e7cc1638345f19a14a2054/without_asgi-0.0.7.tar.gz", hash = "sha256:8239a4caf8112c9350a51bce2af15ba0dab6478ab56581ec57734a5b41b18f41", size = 69920, upload-time = "2026-09-05T15:16:26.709Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/26/97080aaceed6cdfe4260ad0c13b0b6231630610f2e521c249315c23198a4/without_asgi-0.0.8.tar.gz", hash = "sha256:0fb1ac0ee06d90f6ac6d3c3b42407cd735eff3e200067a380eebf175abade2a5", size = 69917, upload-time = "2026-09-06T17:31:24.309Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/aa/47738ecf65d32eeba4571ff2fab9963737def35d981c6b957515d452784a/without_asgi-0.0.7-py3-none-any.whl", hash = "sha256:bd58a2593c1afcbdf8e22b68fde4feb947c92f23011618c93e3627a80e8bdfe0", size = 79054, upload-time = "2026-09-05T15:14:21.636Z" },
+    { url = "https://files.pythonhosted.org/packages/81/9f/43e9bfe8700245d11c25f14a9059dcb6fba6d22e95e8174d960e4e34caf6/without_asgi-0.0.8-py3-none-any.whl", hash = "sha256:9aa86d2f2a1821365150b4fb19845d5f0b6a3a6de7a4596dcc026d4c54764131", size = 79055, upload-time = "2026-09-06T17:31:11.065Z" },
 ]
 
 [[package]]
 name = "without-async"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9b/5d/18ed14a6f96fcafee5f14c51520a2eac0ce0234fcfee108fa1301e4b093f/without_async-0.0.7.tar.gz", hash = "sha256:ee1e960c76de90e98c9e6fb00d9a496131c3fdd2ec3f8b7eb9eca0d223816d97", size = 6233, upload-time = "2026-09-05T15:16:27.324Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f1/72/4bae83f81a3962d2c6b71a5acef77ecc0bc5db0fd4ffb874dfa90d0cc859/without_async-0.0.8.tar.gz", hash = "sha256:8eb6d098293425ce578080dfc397ed3f652b611d987c8e4c9b33ca633c8e7629", size = 6238, upload-time = "2026-09-06T17:31:25.016Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/12/62/c25bf53f4f03c28bcb1d637f1bd8caaf520a8fc9285f431b820b9232c5d0/without_async-0.0.7-py3-none-any.whl", hash = "sha256:732b51af993757fe1186e24c4e3c66a0dc72137969fcd42d49f10c826fac5196", size = 7959, upload-time = "2026-09-05T15:14:22.621Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/b9/51e224ba8f03e01505f64cb1bfbea9b50a1e42627561ed11449d6363c13c/without_async-0.0.8-py3-none-any.whl", hash = "sha256:d01cb8b0bf9335bad84588a28f3f7e69d7f75621ab044410b1a8a305af656575", size = 7959, upload-time = "2026-09-06T17:31:12.065Z" },
 ]
 
 [[package]]
 name = "without-dag"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "without-streams" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/42/1e3c52e8dcefad10087aa8fbd4ffd411354ecdfb102b8277f3c47cb79611/without_dag-0.0.7.tar.gz", hash = "sha256:c1063d7525ab7fd998eb773940ff300a1bb428c3a79110a21455703fa8992597", size = 9696, upload-time = "2026-09-05T15:16:29.084Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/fa/e03f8086a611b31195d5dcdc36c3672d2bee54ba6ca230333f4948abd575/without_dag-0.0.8.tar.gz", hash = "sha256:0b9d76ba346d6978f5f98afea39b05c61ecb91922923c3570b17e606f2888e64", size = 9700, upload-time = "2026-09-06T17:31:26.819Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/de/ed7656577574c10bd734bb65ed335e1764c187dd655a7ff929b13984763d/without_dag-0.0.7-py3-none-any.whl", hash = "sha256:2f2cb7eb42ce466614a768bd66c5651c02c2c447781f5066afc39e4eccb41e0e", size = 11436, upload-time = "2026-09-05T15:16:16.372Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/77/f3e300fb959aa5777aba57f30383ae41dbbe67e9053efa72641e8b269a08/without_dag-0.0.8-py3-none-any.whl", hash = "sha256:b73e64cafd428b4e271490f26e2993283a71e71843c003a247bf8c61debbfb07", size = 11436, upload-time = "2026-09-06T17:31:14.655Z" },
 ]
 
 [[package]]
 name = "without-durability"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "without-async" },
     { name = "without-dag" },
     { name = "without-streams" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/e6/9d5e3619016ded214ad4a327daa72164cc3a2802f37caa2b5849bd261911/without_durability-0.0.7.tar.gz", hash = "sha256:cc9a57404d669e243956aed0f2fd56898ad928c734469bfe5fce3ca05fd70fc2", size = 42310, upload-time = "2026-09-05T15:16:29.638Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/19/16df59cb1db33e9b7825d2132f0e3f147c51a4d7280c0aba94486dc4cef9/without_durability-0.0.8.tar.gz", hash = "sha256:b2b236f0c711c5bf9f01fd0aeddb6575c9416f5e3ece36f9304216ff0007416b", size = 45459, upload-time = "2026-09-06T17:31:27.383Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/ad/66bc2b39537af8dd1d4a0a211858299978bc9651898b6f627d988987f32c/without_durability-0.0.7-py3-none-any.whl", hash = "sha256:d6be6b52d0244684d63fabb6595a1d4e91d8a317582b15f013637d75aff57ed7", size = 48180, upload-time = "2026-09-05T15:16:17.278Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/00/3d055bab279c1a8a73fa9d076aa90480240dae7a5122b054113cb4e2e388/without_durability-0.0.8-py3-none-any.whl", hash = "sha256:cd9ab5ed1b77dbf72cd4c0fc9c9757e637b369bb6b3cd0a3ddce0bd522a4deeb", size = 51523, upload-time = "2026-09-06T17:31:15.559Z" },
 ]
 
 [[package]]
 name = "without-durability-sqlite"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "without-async" },
     { name = "without-durability" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ac/a4/2593a72f216ca0e4a0f7fda6a29a13118e5e8bb992520d42a40ca0194bfa/without_durability_sqlite-0.0.7.tar.gz", hash = "sha256:47c489285ae2be7b1454e196bbae975d283fba2766306dce7e1b98635b5fcdfe", size = 14363, upload-time = "2026-09-05T15:16:31.724Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/df/90/7b142f269724e693ee043095358b650df269b5be03867d0d646f8e980d7b/without_durability_sqlite-0.0.8.tar.gz", hash = "sha256:e68595fb479dd053b871c5006da694de81bee15241c91c0883ad91739b0560f6", size = 15710, upload-time = "2026-09-06T17:31:29.346Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/75/12e1bc313be8a1914cba4eecc366be58348498f6c0a68a39617373e4edc1/without_durability_sqlite-0.0.7-py3-none-any.whl", hash = "sha256:9d9ee22849b986a952620d67ebd9b87fcdf3bc6d6475c6a9a75d6dac2ad8f4f6", size = 15906, upload-time = "2026-09-05T15:16:20.043Z" },
+    { url = "https://files.pythonhosted.org/packages/16/88/2c43fcce8a3a409e16d435466d2a963f88ac692b3b5cfcf87b3ea6182ae8/without_durability_sqlite-0.0.8-py3-none-any.whl", hash = "sha256:0c6f599024f13f3e8de4d040ef258082223f3083947140c77c451034457870a5", size = 17241, upload-time = "2026-09-06T17:31:18.213Z" },
 ]
 
 [[package]]
 name = "without-html"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markupsafe" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4b/a0/8bbd99c4a8fcc9c332c51a90409544f96ecf21e5917a2461b942378f7795/without_html-0.0.7.tar.gz", hash = "sha256:9c3cd5c49d751e0bdc39fab5c00d6b305ef2d79af8c323bc66403026c0f3e832", size = 19410, upload-time = "2026-09-05T15:16:32.769Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/cf/824d551f266d940007b82bdc046acf9fa19b7f41af3ab137752d7ce4e5e9/without_html-0.0.8.tar.gz", hash = "sha256:301afe07cc50ed6c15ec71067e98facd5779cdc933171d42e7a80946cb270453", size = 19412, upload-time = "2026-09-06T17:31:30.579Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/03/c8/41095b7f3705ae71100c83e185248da3120ba9228ab64edf05df001a6c71/without_html-0.0.7-py3-none-any.whl", hash = "sha256:5ee1d58cff9ca00dc7abf78ef9cae0ce33d15c1c96ae586f4ef65f4a9defb9e1", size = 21748, upload-time = "2026-09-05T15:16:21.552Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/d6/4c1a7928beb4ca15a735d1710c227523e20d85a6f37c081d045c0a4cef55/without_html-0.0.8-py3-none-any.whl", hash = "sha256:d5e15fbfdc8e02307b5a61fe031f3f0d6b77859079a66757c81b96b36d46eedf", size = 21746, upload-time = "2026-09-06T17:31:19.716Z" },
 ]
 
 [[package]]
 name = "without-http"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
@@ -1650,34 +1650,34 @@ dependencies = [
     { name = "without-streams" },
     { name = "wsproto" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/e4/6bd4e954d8f53ed65a5756302e94a46b5750dd4cfcf65cfe973b0b63d40e/without_http-0.0.7.tar.gz", hash = "sha256:12fa420ae3b9376328ae30189d433752d13d6e2d82790c86c8bbcdd0301aefc6", size = 70417, upload-time = "2026-09-05T15:16:33.356Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/69/a112108735246765dcf379485401360255f5fceb514e8445414986d785a6/without_http-0.0.8.tar.gz", hash = "sha256:4c0445485350947c879fa307828af26d4083272de68251dbccb296cbd39d0f4b", size = 70433, upload-time = "2026-09-06T17:31:31.251Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/db/abf604cc378a95780536b699e422cec943455a2f607a766e6d6e3dcdeafd/without_http-0.0.7-py3-none-any.whl", hash = "sha256:20053f3ade0ae1d20aed50955517e1b505bc014ec6ad59eca17370ace4d62dc7", size = 77649, upload-time = "2026-09-05T15:16:22.551Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/07/da41e9ad00a4091023d7c3b05b8b562f420069748c27bcba912e196bbe0f/without_http-0.0.8-py3-none-any.whl", hash = "sha256:2127e9dc3f121551d0f6f0213d81b69ca5ba618d08e7a5bedf6e0b2dd76591fa", size = 77648, upload-time = "2026-09-06T17:31:20.549Z" },
 ]
 
 [[package]]
 name = "without-streams"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "without-async" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/de/3de975cd26c1a5c92fc3fb8dd1a74ddafbe53a28cda719a37104cc5f1249/without_streams-0.0.7.tar.gz", hash = "sha256:7d6a5cc4e9fb764a1baba012c1a9747bdf54d9b676c71984bd2bb5d7ef40f46c", size = 14142, upload-time = "2026-09-05T15:16:34.618Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/c2/b70b0cf0c244ffe9513709d8a8504972f7cf2637da9e7c568bc9fac4adba/without_streams-0.0.8.tar.gz", hash = "sha256:c341b8f9b0b18202fef26917ea2856ebaf6113ea4c6877602d313bebb993a5f1", size = 14143, upload-time = "2026-09-06T17:31:32.409Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/a3/406bba982fe80adaf007627ce3edb5d4e8542df5a858683b9109ed2566a1/without_streams-0.0.7-py3-none-any.whl", hash = "sha256:7a8aeaa2cc52323b11ef3d4103d0c6660a721e9f3484395dda6224e6bf0d1d8f", size = 15852, upload-time = "2026-09-05T15:16:24.811Z" },
+    { url = "https://files.pythonhosted.org/packages/01/ee/9c03aa5daab2556b3727448dbef6f8d2a791aceb247123c7b7a6c544db95/without_streams-0.0.8-py3-none-any.whl", hash = "sha256:cd229b57f6c9d457784eb58ff9507d174289f7eacb4eaa48eb12a67719dc1be0", size = 15852, upload-time = "2026-09-06T17:31:22.499Z" },
 ]
 
 [[package]]
 name = "without-web"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "without-asgi" },
     { name = "without-streams" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/97/87/fbd27fc567986368e758c75faf66398fceb99c4617f507567de27c935e44/without_web-0.0.7.tar.gz", hash = "sha256:c42d3209a6586627bcb566be3f3c494081264b4825323cb0669da23c9cd9b3ab", size = 31377, upload-time = "2026-09-05T15:16:35.265Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/67/4a/7cf9b6d6d5e186552fd61e881b37ce120e2a9b7774bf82e6f18e35073498/without_web-0.0.8.tar.gz", hash = "sha256:7e8894c9d8d11232d480a9f4b1314d4ff743204ed145be0bdc6833bdf03b8899", size = 31380, upload-time = "2026-09-06T17:31:33.014Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/cf/37dc5ee17e863f3aa06e91fb7c9b4eb1940d8d3f577b0ca0be423fa4ec50/without_web-0.0.7-py3-none-any.whl", hash = "sha256:5cab0b0eb57433fd5e340a6077a9c0026c8ec155e375b484c87f86b9e18e7ebc", size = 37238, upload-time = "2026-09-05T15:16:25.756Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/a0/f6558e837445391f7706395ee45391e8297cf54505a960ee6dae1cba787d/without_web-0.0.8-py3-none-any.whl", hash = "sha256:583011de6f0ac137cc9e46d22ec62b9556b388bb71e3dc1157b00cd92ccc5113", size = 37237, upload-time = "2026-09-06T17:31:23.464Z" },
 ]
 
 [[package]]

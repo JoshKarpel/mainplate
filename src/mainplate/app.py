@@ -69,11 +69,13 @@ from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
 from mainplate.console import page_response
 from mainplate.console import recover
+from mainplate.conversation import Crossed
 from mainplate.conversation import Ended
 from mainplate.conversation import Progressed
 from mainplate.conversation import Stalled
 from mainplate.conversation import conversing
 from mainplate.conversation import handing_through
+from mainplate.conversation import recorded_ask
 from mainplate.exe import ExeDevGitHub
 from mainplate.forge import Clones
 from mainplate.forge import Forge
@@ -91,6 +93,7 @@ from mainplate.sandbox import NoSandbox
 from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import prepare
+from mainplate.sessions import read_tending
 from mainplate.settings import DEFAULT_PATIENCE
 from mainplate.settings import DEFAULT_WATCHING
 from mainplate.settings import Settings
@@ -279,6 +282,11 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                     # that only appended would leave the session waiting on a message already in its
                     # own inbox.
                     handoffs=partial(handing_through, service.durable),
+                    # The database rather than the `Service`, because what a pass needs is one row of
+                    # one table and a `Service` is every question a request handler may ask. Given
+                    # this, a pass can read what the console is doing for a session unasked; given
+                    # nothing, it tends nothing at all.
+                    tendings=partial(read_tending, service.database),
                 ),
             ),
             limit=settings.passes,
@@ -317,6 +325,16 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
     the worker's own answer for a raised pass - leave the delivery unanswered, redeliver when the
     lease elapses - that is a session retried for ever with only a log line to show for it.
 
+    **`Crossed` is the arm that writes rather than schedules**, and it is here for the reason the
+    other two are: what a session whose reserve is crossed is owed is a message in its own inbox, and
+    putting one there is queueing, which is this function's whole subject. Delivering is the only one
+    of the three that needs no `make_ready` beside it, because `deliver` appends the entry and queues
+    the session in a single commit.
+
+    What it asks for is `recorded_ask`, which is the same composition the button in the rail posts
+    through `Service.hand_off`: two writers, one set of words, so a handoff nobody asked for and one
+    somebody pressed for cannot come to say different things.
+
     Here rather than in `conversation.py`, because the body is about answering a session and this is
     about the queue in front of it. That split is what lets one console run the worker beside the
     console and another run it somewhere else entirely.
@@ -328,6 +346,9 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
                 await durable.scheduler.make_ready(run.workflow)
             case Stalled():
                 logger.warning(f"{run.workflow} stalled on a request no pass can make; not waking it again")
+            case Crossed():
+                logger.info(f"{run.workflow} reached its reserve; asking it to hand itself off")
+                await durable.deliver(run.workflow, recorded_ask())
             case _ as unreachable:
                 assert_never(unreachable)
 

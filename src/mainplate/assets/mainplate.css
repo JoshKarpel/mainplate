@@ -1473,6 +1473,7 @@ pre > .copy {
    rather than of a chosen one, which is what makes that a failing build. */
 .composer[data-leading="next"] :is(.sender__leader, .leading)[data-leader="next"],
 .composer[data-leading="forget"] :is(.sender__leader, .leading)[data-leader="forget"],
+.composer[data-leading="handoff"] :is(.sender__leader, .leading)[data-leader="handoff"],
 .composer[data-leading="aside"] :is(.sender__leader, .leading)[data-leader="aside"],
 .composer[data-leading="fork"] :is(.sender__leader, .leading)[data-leader="fork"],
 .composer[data-leading="parent"] :is(.sender__leader, .leading)[data-leader="parent"],
@@ -2484,15 +2485,12 @@ mark.hit.current {
     gap: var(--space-2);
 }
 
-/* The one card here that acts on the session rather than moving around inside it, so it is pinned to
-   the bottom of the column and away from the reading controls: a button that spends money should not
-   share an edge with one that scrolls. `margin-top: auto` is the whole of the pinning, which needs no
-   second region and no rule about where the rail's other cards go. */
+/* Under the shelf, which is the boundary in this column: everything above reads the conversation and
+   this is the first thing that changes how it is run. */
 .handoff {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    margin-top: auto;
 }
 
 .handoff__head {
@@ -2501,10 +2499,50 @@ mark.hit.current {
     text-transform: uppercase;
 }
 
-/* Optional, and drawn as one: neutral where the button beside it is edged, and never wider than the
-   card it sits in. `min-width: 0` is what actually lets it shrink, since an input's default width is
-   a content-based floor a flex column would otherwise widen the whole rail to fit. */
-.handoff__note {
+/* What the card is actually about, so it takes the ordinary ink where the head above it is faint:
+   how much room is left is the thing somebody reads before deciding to touch either control. It
+   wraps, because every one of the things it can say is a phrase rather than a figure. */
+.handoff__standing {
+    margin: 0;
+    color: var(--ink-soft);
+}
+
+/* Two rows rather than a wrap, and the shape is decided rather than whatever the rail's width leaves.
+   Wrapped, `Set` lands on a line of its own reading as a third setting; laid out, it sits beside the
+   number it applies, and the switch above takes the full width because it is a sentence. */
+.handoff__tending {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.handoff__tending .tending__switch {
+    grid-column: 1 / -1;
+}
+
+/* `min-width: 0` on the label as well as on the box inside it, and both are load-bearing: a grid
+   item's own floor is its content, so without it the number's track refuses to shrink and pushes
+   `Set` out of the card entirely rather than out of its column. */
+.tending__switch,
+.tending__reserve {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+    color: var(--ink-soft);
+    cursor: pointer;
+}
+
+/* The box takes what the label and the unit leave. `min-width: 0` is what actually lets it, since a
+   number input's own content-based floor is wider than the rail and would push `Set` out of the
+   card. */
+/* Four digits and no more, which is a bound rather than a guess: the reserve is in thousands and a
+   context window past 1000K is not a thing to size a box for today. Sized rather than stretched, so
+   the box says how much it expects and `Set` sits against it instead of across the card. */
+.tending__reserve input {
+    flex: none;
+    inline-size: calc(4ch + 1.2rem);
     min-width: 0;
     padding: 0.2rem 0.35rem;
     border: 1px solid var(--edge);
@@ -2512,14 +2550,46 @@ mark.hit.current {
     background: var(--sunk);
     color: var(--ink);
     font: inherit;
+
+    /* No spinner, because there is no increment that is right: a step of 1 is a hundred presses to
+       move a reserve anywhere worth moving it, and any larger one is a number this console would have
+       to invent. What the arrows cost is real - they sit inside the box and take the room a third
+       digit needs - so the type stays `number`, for the keypad it asks for on a phone and the `min`
+       it validates against, and the arrows go. */
+    appearance: textfield;
 }
 
-/* Edged in the person's hue rather than the neutral one, by the composer's own rule: what this
-   produces is a message on that side of the palette, written by this session rather than by the
-   model about to be handed it. */
-.handoff__now {
+.tending__reserve input::-webkit-outer-spin-button,
+.tending__reserve input::-webkit-inner-spin-button {
+    appearance: none;
+    margin: 0;
+}
+
+/* The unit reads as part of the figure rather than as a word beside it, so it takes the ink the
+   number does and sits tight against the box. */
+.tending__unit {
+    flex: none;
+    color: var(--ink);
+}
+
+/* The same pair as the picker's last question, in a column because there is no `Set` beside them
+   there: the form that posts them is the one the message goes with, so the reserve takes the width
+   rather than leaving an empty second track. */
+.tending {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.tending__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.handoff__set {
     padding: 0.25rem 0.4rem;
-    border: 1px solid var(--person-edge);
+    border: 1px solid var(--edge);
     border-radius: 0.35rem;
     background: transparent;
     color: var(--ink-soft);
@@ -2527,10 +2597,28 @@ mark.hit.current {
     cursor: pointer;
 }
 
-.handoff__now:hover,
-.handoff__now:focus-visible {
+.handoff__set:hover,
+.handoff__set:focus-visible {
     background: var(--sunk);
     color: var(--mark);
+}
+
+/* The switch takes effect on the press and the number does not, so the button has to say when there
+   is something in the box that has not been recorded. `--mark` is the same gold every control on this
+   page draws its focus ring in, which is what makes it read as "this wants a press" rather than as a
+   warning; the border alone, since filling it would make an unpressed button look pressed.
+
+   With `mainplate.js` absent nothing sets `data-dirty` and the button is simply always plain, which
+   is the state it was in before there was a mark. */
+.handoff__tending[data-dirty] .handoff__set {
+    border-color: var(--mark);
+    color: var(--mark);
+}
+
+.handoff__ask {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
 }
 
 .shelf__title {
@@ -2724,10 +2812,15 @@ mark.hit.current {
 
 /* --- The theme toggle -------------------------------------------------- */
 
+/* Pinned to the bottom of the rail, because it is the one card here that is not about this
+   conversation: the theme is the reader's, across every session, so it is what somebody scanning the
+   column for something about *this* session can skip. `margin-top: auto` is the whole of the pinning
+   and needs no rule about where the cards above it go. */
 .theme {
     display: flex;
     justify-content: center;
     gap: var(--space-1);
+    margin-top: auto;
 }
 
 .theme button {
@@ -2817,6 +2910,29 @@ mark.hit.current {
     block-size: 1px;
     background-image: linear-gradient(to right, var(--gauge-from), var(--vermilion));
     clip-path: inset(0 calc(100% - var(--filled, 0%)) 0 0);
+}
+
+/* Where the reserve opens, on the same scale as the fill: a short bar standing across the rule, so
+   the fill growing toward it is the whole of what the handoff card used to say in words.
+
+   An element rather than a second pseudo, because it is *conditional*. The fill is unconditional and
+   draws nothing at 0%, where a mark has no position to fall back on: keyed off the style attribute it
+   would be a selector matching on the text of one, and given a fallback offset it would be a bar
+   parked somewhere rather than absent. Drawn only where there is one to draw, which is `reserve_mark`.
+
+   Across the line rather than along it, and taller than the rule is thick, because a mark the same
+   height as what it marks is invisible against it. It rises and falls by the same amount, so the rule
+   itself stays on its baseline and a run of rules keeps reading as evenly spaced.
+
+   `--ink-faint` rather than a colour of its own: the gauge already spends the palette's one red on
+   how far the context has got, and a second hue here would read as a second kind of trouble. */
+.rule__reserve {
+    position: absolute;
+    inset-block-start: -3px;
+    inset-inline-start: var(--reserved);
+    block-size: 5px;
+    inline-size: 1px;
+    background: var(--ink-faint);
 }
 
 /* More air above a turn than above a request within one, because the two are boundaries of

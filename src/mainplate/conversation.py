@@ -146,7 +146,10 @@ from mainplate.sandbox import Isolation
 from mainplate.snapshots import Worktree
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
+from mainplate.tending import Tending
+from mainplate.tending import standing
 from mainplate.thinking import BY_LEVEL
+from mainplate.tools import ASKING
 from mainplate.tools import Handing
 
 CHOICE_KEY: StepKey = "choice"
@@ -176,12 +179,6 @@ NETWORK_FIELD: Final = "network"
 # named here rather than in `console.py` because the page renders the control and the boundary parses
 # it, and `pages.py` cannot import the console without closing a ring.
 DISPOSITION_FIELD: Final = "disposition"
-
-# What a person wants a handoff pointed at, posted by the rail's own card and appended to the
-# standing ask. Here for the reason above it, and a *length* beside the name because this is the one
-# posted field with a control that bounds it in the markup as well as at the boundary.
-GUIDING_FIELD: Final = "guiding"
-GUIDING_LENGTH: Final = 200
 
 
 class Disposition(Enum):
@@ -234,6 +231,25 @@ class Disposition(Enum):
     Continuing the conversation it closed is `fork` at that turn, which the rule already offers: the
     branch carries every turn above the boundary and leaves the marker behind, since `before` copies
     what is below the branch point and the record rides on the message that opens the turn."""
+
+    HANDOFF = "handoff"
+    """`Service.hand_off`, which asks this session to write down where it has got to and start again
+    from that document.
+
+    **The one answer where the box may be empty**, and that is what makes it an answer here at all
+    rather than a control of its own. What a handoff takes is an optional note saying what it should
+    dwell on, appended to the standing ask rather than replacing it, and the box is exactly where such
+    a note is written: `/handoff` on its own hands off, and `/handoff` with a paragraph hands off
+    pointed at what the paragraph says.
+
+    That the ordinary case types nothing is why the button carries `formnovalidate`. The box is
+    `required`, which is right for every other answer and would refuse the common case here, so this
+    is the browser's own way of saying that this submitter does not need it; the boundary allows an
+    empty message for this disposition and no other.
+
+    It is *not* a message going anywhere, which it shares with `RUN`: what gets sent is the console's
+    own ask, and the text rides along as guidance. Being in this field all the same is the menu's own
+    premise, that the question is what happens to what you typed."""
 
     FORK = "fork"
     """`Service.fork` at the end, carrying the whole conversation, with this message asked there.
@@ -615,6 +631,28 @@ def recorded_steer(said: str) -> dict[str, object]:
     be a way to have a message answered on its own that somebody meant as a steer.
     """
     return records.Steer(said=said).recorded()
+
+
+def recorded_ask(guiding: str | None = None) -> dict[str, object]:
+    """
+    The message that opens a handoff turn, as the value the store's codec will take.
+
+    Composed here rather than at either of the two places that deliver it, and that is the point: a
+    person pressing the button in the rail and a pass finding its reserve crossed are asking for the
+    same thing, so the words have to be one string. Two writers, one composition; see `Service.hand_off`
+    and `readying`.
+
+    `guiding` is whatever a person wants this handoff pointed at, **appended** to the standing ask
+    rather than replacing it, because the two say different things: the base is what a handoff *is*
+    and has to be there whether or not anybody adds to it, where a note like "dwell on the parser" on
+    its own is an instruction to summarise a summary. Nothing at all is the automatic case, which is
+    also the ordinary one.
+
+    No boundary on it, which is the asymmetry that makes a handoff work: the context has to survive
+    long enough to be summarised, so it is the *document* that clears it - see `handing_through`.
+    """
+    said = ASKING if not (steer := (guiding or "").strip()) else f"{ASKING}\n\n{steer}"
+    return records.Handoff(said=said).recorded()
 
 
 def parse_delivered(recorded: object) -> records.Delivered:
@@ -2230,6 +2268,50 @@ def handing_through(durable: Durable, session: str) -> Handing:
     return hand
 
 
+type Tendings = Callable[[str], Awaitable[Tending]]
+"""
+What this console is doing for a session unasked, as a function from the session to its settings.
+
+Injected rather than reached for, symmetric with `Handoffs`, `Pricer`, `Draining` and `Guiding`, and
+for the plainest reason of the five: a pass holds a checkpoint, and these live on the session index,
+which is a table it has no business knowing the shape of.
+
+`None` is a console that was never given a way to read them, and such a console tends nothing. That
+is the same reading `prices` and `handoffs` already take - a capability absent is the feature absent -
+and it is what keeps the arithmetic inert in every test that does not ask for it, by construction
+rather than by the accident of some other value being missing.
+"""
+
+
+def crossed(asked: records.Delivered, said: Sequence[ModelMessage], window: int | None, tended: Tending) -> bool:
+    """
+    Whether the turn that just ended is the one that should be followed by a handoff.
+
+    **Read at the boundary that crosses the reserve, rather than at the start of the next turn**, and
+    that is about the cache rather than about promptness: the conversation's prefix is warm right now,
+    where by the time somebody comes back and types it may not be, and a handoff run is several
+    requests over the whole window. The same argument that makes a handoff cheap in-session makes it
+    cheap *here*.
+
+    **A turn that opened on a handoff never triggers another**, which is the whole of what stops this
+    recursing. The reserve is crossed for as long as the context stays large, so without it the ask
+    turn - whose own context is the conversation it is summarising - would cross it again the instant
+    it ended, and so would the one after that. Asking about the message the turn opened on is enough
+    for both cases: the ask carries no boundary and the document carries one, and neither should be
+    followed by a second ask. A model that answered the ask in prose rather than by calling the tool
+    is therefore not asked again until a person says something, which is a retry per human action
+    rather than one per turn - the rule a refusal already follows.
+
+    The context is this turn's *last* request rather than a sum, by `Spent.context`'s own rule: every
+    request carries the whole conversation, so what says how much of the window is gone is where the
+    turn left it.
+    """
+    if isinstance(asked, records.Handoff):
+        return False
+    context = spent_on(responses_in(said)).context
+    return standing(context, window, tended.reserve) == "due"
+
+
 def draining_inbox(run: Run, turn: int) -> Draining:
     """
     What to put to the model now, recorded as how far down the inbox this turn has read.
@@ -2297,12 +2379,35 @@ class Stalled:
     """
 
 
-type Ended = Progressed | Stalled
+@dataclass(frozen=True, slots=True)
+class Crossed:
+    """
+    What a pass whose session reached its reserve comes back with: it is owed a handoff, then a turn.
+
+    The third instruction, and the one that is not about this pass at all. `Progressed` and `Stalled`
+    both say what to do with a conversation that is where the pass left it; this says the conversation
+    has run far enough into its model's window that the next thing it should be asked is to write down
+    where it has got to.
+
+    **A value rather than a delivery made from inside the loop**, which is the same split `Progressed`
+    already makes and for a stronger reason. Asking for a handoff means putting a message in the
+    session's inbox, and putting a message in an inbox *queues* the session: that is a fact about the
+    queue in front of a pass rather than about answering one, so it belongs where `make_ready` already
+    is. It is also what makes the decision testable as a value - a test drives one pass and reads what
+    came back, with no store and no scheduler anywhere near the arithmetic.
+
+    It carries nothing, because there is nothing here that the composition root does not already have.
+    What the ask says is `recorded_ask`'s, so a person pressing the button in the rail and this cannot
+    come to ask for two different things.
+    """
+
+
+type Ended = Progressed | Stalled | Crossed
 """
 What one pass ends as, and the whole of what the worker owes each.
 
-Two arms rather than a boolean, so `readying` reads what happened rather than a flag saying what to
-do about it, and so a third answer is a type error at the match rather than a session that quietly
+Arms rather than a boolean, so `readying` reads what happened rather than a flag saying what to do
+about it, and so a fourth answer is a type error at the match rather than a session that quietly
 stops being woken.
 
 Named for the pass rather than `Outcome`, which in this module already means how one tool call went
@@ -2319,6 +2424,7 @@ def conversing(
     prices: Prices | None = None,
     allowance: int | None = None,
     handoffs: Handoffs | None = None,
+    tendings: Tendings | None = None,
 ) -> Callable[[Run], Awaitable[Ended]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -2345,6 +2451,12 @@ def conversing(
     turn back, and `None` is unbounded, which is a pass answering a whole turn however many round
     trips that takes. It is one number rather than two code paths, which is what keeps the choice a
     thing to turn rather than a thing to maintain; see `Settings.allowance` for what it trades.
+
+    `tendings` is where a session's own settings are read, once at the top of a pass. Once, rather
+    than at each boundary, because a setting read twice inside one pass is a place rather than a
+    value: a switch turned while a turn was being answered would have that turn answered under one
+    answer and judged under another, which is precisely the escaping mutation a value is for. What it
+    costs is that a change takes effect on the next pass, which is the next turn.
     """
 
     async def converse(run: Run) -> Ended:
@@ -2377,6 +2489,11 @@ def conversing(
         # runs. A pass that finds two prompts waiting answers two turns, and a fresh count per turn
         # would let it make one live request for each of them under a lease sized for one.
         spending = Allowance(limit=allowance)
+        # Once, at the top, and held as a value for the rest of the pass. A setting re-read at each
+        # turn boundary would be a place two writers share, so a switch flicked while a turn was in
+        # flight would have that turn answered under one answer and judged under another. `None` is a
+        # console that was given no way to read these at all, and such a console tends nothing.
+        tended = None if tendings is None else await tendings(run.workflow)
         at = reached(run.recorded)
         while True:
             asked = await opening_turn(run, at.turn)
@@ -2483,5 +2600,14 @@ def conversing(
                     return Stalled()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             at = Reached(turn=at.turn + 1, history=(*at.history, *said))
+            # After the turn is recorded rather than before, so the context this is read against is
+            # the one the turn actually left behind, and so a crash between the two loses nothing: the
+            # pass that resumes replays the step, reaches here, and asks the same question of the same
+            # numbers. The window is asked for now rather than at the top of the pass because the
+            # reference under it is reloadable configuration, exactly as the rates are.
+            if tended is not None and tended.hands_off:
+                facts = None if prices is None else prices.facts(chosen)
+                if crossed(asked, said, facts.context if facts is not None else None, tended):
+                    return Crossed()
 
     return converse

@@ -34,7 +34,6 @@ from mainplate.agent import Choice
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
-from mainplate.conversation import GUIDING_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Disposition
@@ -43,6 +42,7 @@ from mainplate.pages import WORKSPACE_FIELD
 from mainplate.pages import Links
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
+from mainplate.pages import handoff_card
 from mainplate.pages import missing_record
 from mainplate.pages import model_cards
 from mainplate.pages import record_json
@@ -59,6 +59,11 @@ from mainplate.sessions import TITLE_FIELD
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
 from mainplate.streaming import watching
+from mainplate.tending import HANDS_OFF_FIELD
+from mainplate.tending import LEAST_ROOM
+from mainplate.tending import RESERVE_FIELD
+from mainplate.tending import THOUSAND
+from mainplate.tending import Tending
 from mainplate.thinking import DEFAULT_THINKING
 from mainplate.thinking import UnknownThinking
 from mainplate.thinking import thinking_named
@@ -97,18 +102,33 @@ class NotAMessage(ValueError):
     """A form post that did not carry a message this console could send."""
 
 
-def parse_form_prompt(raw: bytes) -> str:
+def fields_in(raw: bytes) -> Mapping[str, list[str]]:
     """
-    The message a form carried, parsed at the boundary and refused if it is not one.
+    A posted form as its fields, bounded so that a request which is not one cannot be buffered whole.
 
-    `parse_qs` drops empty values, so a form submitted with an empty box arrives as no field at
-    all rather than as an empty string, and both are the same refusal here. Refusing is what lets
-    everything downstream treat a prompt as text somebody meant to send.
+    The one place a body's size is checked, because it is the one place a body is read. Generous by
+    the standards of a chat box and small by the standards of anything else.
     """
     if len(raw) > LONGEST_PROMPT:
-        raise NotAMessage(f"a message may be at most {LONGEST_PROMPT} bytes")
-    fields = parse_qs(raw.decode("utf-8", errors="replace"))
-    said = fields.get("prompt", [""])[0].strip()
+        raise NotAMessage(f"a form may be at most {LONGEST_PROMPT} bytes")
+    return parse_qs(raw.decode("utf-8", errors="replace"))
+
+
+def said_in(fields: Mapping[str, list[str]]) -> str:
+    """
+    The message a form carried, or the empty string where the box was empty.
+
+    `parse_qs` drops empty values, so a form submitted with an empty box arrives as no field at all
+    rather than as an empty string, and both are the same answer here. Whether an empty one is a
+    refusal is the caller's, because it depends on where the message was going: every disposition but
+    `HANDOFF` demands one.
+    """
+    return fields.get("prompt", [""])[0].strip()
+
+
+def parse_form_prompt(raw: bytes) -> str:
+    """The message a form carried, refused if there is not one. What starting a session takes."""
+    said = said_in(fields_in(raw))
     if not said:
         raise NotAMessage("a message cannot be empty")
     return said
@@ -117,21 +137,55 @@ def parse_form_prompt(raw: bytes) -> str:
 prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
 
 
-def parse_form_guiding(raw: bytes) -> str:
+def posted_tending(fields: Mapping[str, list[str]]) -> Tending:
     """
-    What a person wants a handoff pointed at, which is optional and empty where they said nothing.
+    What a form asked this console to do for a session unasked, from wherever it was asked.
 
-    Empty rather than refused, unlike a message: the whole control works with nothing typed into it,
-    and `parse_qs` drops an empty value anyway, so an absent field and a blank one are the same
-    answer and neither is a fault. Bounded by the same length a message is, since it goes to a model
-    the same way.
+    Three forms carry this pair now - the one that starts a session, the one that forks one, and the
+    rail's own card - so it is read here once rather than at each of them, exactly as `posted_workspace`
+    and `posted_thinking` are.
+
+    **An absent switch is off**, because an unchecked checkbox posts no field, and there is no third
+    reading available to a form: this is what somebody just said, where the column's own absence is
+    what nobody has ever said. See `HANDS_OFF_FIELD`.
+
+    **The box is in thousands and the record is in tokens**, so this is where the multiplication
+    happens and the card is where the division does. See `THOUSAND` for why the control is
+    denominated differently from the value behind it.
+
+    **An empty reserve is the default and an unusable one is refused**, which is `posted_ref`'s split
+    exactly: a cleared box is somebody taking what the console ships, where `4o` in it is somebody who
+    meant something, and quietly saving a number they did not type is how a setting stops meaning what
+    it says. A reserve below the room a handoff needs at all is refused here rather than left to
+    `standing` - it would be stored, read back, and answer that the console cannot say where the
+    session stands, with nothing saying the number was the reason.
     """
-    if len(raw) > LONGEST_PROMPT:
-        raise NotAMessage(f"a handoff note may be at most {LONGEST_PROMPT} bytes")
-    return parse_qs(raw.decode("utf-8", errors="replace")).get(GUIDING_FIELD, [""])[0].strip()
+    written = fields.get(RESERVE_FIELD, [""])[0].strip()
+    if not written:
+        return Tending(hands_off=HANDS_OFF_FIELD in fields)
+    try:
+        reserve = int(written) * THOUSAND
+    except ValueError:
+        raise NotAMessage(f"{written!r} is not a number of thousands of tokens") from None
+    if reserve < LEAST_ROOM:
+        raise NotAMessage(
+            f"a reserve of {reserve // THOUSAND}K leaves less room than a handoff needs, "
+            f"which is {LEAST_ROOM // THOUSAND}K"
+        )
+    return Tending(hands_off=HANDS_OFF_FIELD in fields, reserve=reserve)
 
 
-guiding = body(parse_form_guiding, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
+def parse_form_tending(raw: bytes) -> Tending:
+    """
+    The rail card's own post, which is the one here that carries no message at all.
+
+    A route of its own for that reason: what it changes is the session rather than the conversation
+    in it, where the same pair on the start and fork forms is part of deciding what a session *is*.
+    """
+    return posted_tending(fields_in(raw))
+
+
+tending = body(parse_form_tending, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,15 +205,21 @@ def parse_form_send(raw: bytes) -> Sending:
     posts a message and means what Send has always meant; a field naming something this console does
     not offer is a refusal, because guessing which destination somebody meant is the one thing that
     could silently put a message in the wrong conversation.
+
+    **The disposition is read first, because it decides whether an empty box is a fault.** Every
+    answer demands a message except `HANDOFF`, whose text is an optional note saying what the handoff
+    should dwell on, and the ordinary handoff has nothing typed into it. That is the same split the
+    button carries as `formnovalidate`: the browser refuses an empty box for every other submitter,
+    and this is where the exception is honoured rather than trusted.
     """
-    said = parse_form_prompt(raw)
-    fields = parse_qs(raw.decode("utf-8", errors="replace"))
+    fields = fields_in(raw)
     named = fields.get(DISPOSITION_FIELD, [""])[0].strip()
-    if not named:
-        return Sending(said=said, where=Disposition.HERE)
-    where = parse_disposition(named)
+    where = Disposition.HERE if not named else parse_disposition(named)
     if where is None:
         raise NotAMessage(f"{named!r} is not somewhere a message can be sent")
+    said = said_in(fields)
+    if not said and where is not Disposition.HANDOFF:
+        raise NotAMessage("a message cannot be empty")
     return Sending(said=said, where=where)
 
 
@@ -186,8 +246,10 @@ def parse_form_start(raw: bytes) -> Started:
     started somewhere else. Both become `git` arguments, so refusing here is also what keeps a
     leading `-` from ever reaching one.
     """
-    said = parse_form_prompt(raw)
-    fields = parse_qs(raw.decode("utf-8", errors="replace"))
+    fields = fields_in(raw)
+    said = said_in(fields)
+    if not said:
+        raise NotAMessage("a message cannot be empty")
     endpoint = fields.get("endpoint", [""])[0].strip()
     model = fields.get("model", [""])[0].strip()
     if not endpoint or not model:
@@ -199,6 +261,7 @@ def parse_form_start(raw: bytes) -> Started:
         # bounded by the message bound above, and cut to a name by `Service.start`, which is where
         # the one rule about what a session name is already lives.
         title=fields.get(TITLE_FIELD, [""])[0].strip() or None,
+        tending=posted_tending(fields),
         chosen=Choice(
             endpoint=endpoint,
             model=model,
@@ -293,6 +356,7 @@ class Started:
 
     said: str
     chosen: Choice
+    tending: Tending
 
     title: str | None = None
     """What to call it, or nothing at all to name it after its first message as every session was."""
@@ -308,6 +372,7 @@ class Forking:
     at: int
     chosen: Choice
     said: str | None
+    tending: Tending
 
 
 def parse_form_fork(raw: bytes) -> Forking:
@@ -343,7 +408,8 @@ def parse_form_fork(raw: bytes) -> Forking:
             isolation=posted_isolation(fields),
             thinking=posted_thinking(fields),
         ),
-        said=fields.get("prompt", [""])[0].strip() or None,
+        said=said_in(fields) or None,
+        tending=posted_tending(fields),
     )
 
 
@@ -446,7 +512,7 @@ async def start(service: Service, started: Started) -> Response:
     # session, and this console answered nothing else until repositories existed.
     if started.chosen.repository is not None and not service.reaches(started.chosen.repository):
         return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {started.chosen.repository}"))
-    session = await service.start(started.said, started.chosen, started.title)
+    session = await service.start(started.said, started.chosen, started.title, started.tending)
     return seeing(LINKS.to_session(session.id))
 
 
@@ -499,7 +565,7 @@ async def fork(service: Service, session: str, branch: Forking) -> Response:
     # is already in; a posted repository for a session that has one is ignored rather than refused.
     if branch.chosen.repository is not None and not service.reaches(branch.chosen.repository):
         return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {branch.chosen.repository}"))
-    forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said)
+    forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said, tended=branch.tending)
     if forked is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return seeing(LINKS.to_session(forked.id))
@@ -651,7 +717,7 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, session, asked.said, stalled_by(asked), asked.window)
+            drawn = transcript_region(LINKS, asked)
             return page_response(200, fragment(drawn))
         case Disposition.NEXT | Disposition.FORGET:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
@@ -661,7 +727,7 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, session, asked.said, stalled_by(asked), asked.window)
+            drawn = transcript_region(LINKS, asked)
             return page_response(200, fragment(drawn))
         case Disposition.FORK | Disposition.ASIDE:
             # The parent's own choice, not a posted one: a fork from the composer offers no picker,
@@ -692,7 +758,23 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, session, asked.said, stalled_by(asked), asked.window)
+            drawn = transcript_region(LINKS, asked)
+            return page_response(200, fragment(drawn))
+        case Disposition.HANDOFF:
+            # Not a message going anywhere: what is delivered is the console's own ask, and whatever
+            # was typed rides along as the note saying what it should dwell on. The empty box is the
+            # ordinary case, which is why the boundary lets this one arm through without a message.
+            #
+            # A session nobody can answer is refused rather than asked, because a handoff nothing will
+            # ever write is a panel that waits for ever - the one state the stall sentence exists to
+            # prevent, reached from the other direction.
+            if stalled_by(found) is not None:
+                return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
+            await service.hand_off(session, sending.said)
+            asked = await service.read(session)
+            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+            drawn = transcript_region(LINKS, asked)
             return page_response(200, fragment(drawn))
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
@@ -709,39 +791,28 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             assert_never(unreachable)
 
 
-@post(t"/sessions/{session_id}/handoffs", session_id, guiding, summary="Ask a session to hand itself off")
-async def hand_off(service: Service, session: str, guiding: str) -> Response:
+@post(t"/sessions/{session_id}/tending", session_id, tending, summary="Set what a session is tended with")
+async def tend(service: Service, session: str, wanted: Tending) -> Response:
     """
-    Ask this session to write down where it has got to and carry on from that.
+    Say whether this session hands itself off unasked, and how much room it keeps to do it in.
 
-    It takes no *message*, which is why it is a route of its own rather than one more answer in the
-    sending menu: every arm of that menu is a decision about what happens to the text somebody typed,
-    and this one ignores it. The control lives in the rail beside the settings that govern the
-    automatic version, so what a person presses and what a threshold fires are visibly one thing.
+    Answered with the card rather than with the transcript, which is the one thing separating this
+    from every other write here: nothing about the conversation changed, so swapping the transcript
+    would replace the whole region to show what is already in the rail. What the card comes back
+    holding is the value as it was recorded, which is what the reserve box being denominated in
+    thousands makes worth doing rather than leaving the browser's own state alone.
 
-    What it does take is an optional note, which is why the card carries a field of its own rather
-    than borrowing the message box: the box is `required`, so a handoff sent from there would refuse
-    the empty case, which is the ordinary one. A note is appended to the standing ask rather than
-    replacing it; see `Service.hand_off`.
+    Taken whatever the session's state, unlike `/handoff`: a session nobody can answer is exactly one
+    somebody might want to stop the console spending anything on, and refusing to record that would
+    be refusing the only useful thing left to do with it.
 
-    Answered with the transcript rather than a redirect, exactly as `HERE` is: the ask is a message,
-    so the page shows it waiting for a turn straight away and the live connection sends the same
-    thing a moment later, which morphs to nothing.
-
-    A session that cannot be answered is refused rather than asked, because a handoff nobody will
-    ever write is a panel that waits for ever - which is the one state the stall sentence exists to
-    prevent, arrived at from the other direction.
+    The session is read for the reason every write here reads one, which is that a URL naming nothing
+    must be a `404` rather than a silent write to a row that is not there.
     """
-    found = await service.read(session)
-    if found is None:
+    if await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    if stalled_by(found) is not None:
-        return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
-    await service.hand_off(session, guiding)
-    asked = await service.read(session)
-    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(transcript_region(LINKS, session, asked.said, None, asked.window)))
+    await service.tend(session, wanted)
+    return page_response(200, fragment(handoff_card(LINKS, session, wanted)))
 
 
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
@@ -754,7 +825,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     fork_form,
     fork,
     say,
-    hand_off,
+    tend,
     request_record,
 )
 
@@ -769,6 +840,6 @@ LINKS = Links(
     workspace_branches=workspace_branches,
     fork_form=fork_form,
     fork=fork,
-    hand_off=hand_off,
+    tend=tend,
     assets=ASSETS,
 )

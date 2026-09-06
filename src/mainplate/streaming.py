@@ -32,7 +32,6 @@ from without_html import render
 from mainplate.pages import SWAP
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.pages import Links
-from mainplate.pages import stalled_by
 from mainplate.pages import transcript_region
 from mainplate.service import Service
 
@@ -77,6 +76,6 @@ async def watching(service: Service, links: Links, session: str, every: timedelt
             showing = await service.read(session)
             if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
                 return
-            drawn = transcript_region(links, session, showing.said, stalled_by(showing), showing.window)
+            drawn = transcript_region(links, showing)
             yield Event(data=render(partial(TRANSCRIPT_ID, SWAP, drawn)), id=str(now))
         await asyncio.sleep(every.total_seconds())

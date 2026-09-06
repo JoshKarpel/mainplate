@@ -1522,6 +1522,22 @@
     // the incoming markup into the DOM already on screen, and elements this file put there are not
     // in that markup, so leaving them would make the merge reconcile nodes the server has never
     // heard of.
+    // The reserve is the one control here that is typed rather than set, so it does not take effect
+    // on a keystroke and the button beside it has to say there is something to press. `defaultValue`
+    // is exactly the `value` attribute the server rendered, so this compares what is in the box
+    // against what was recorded rather than against anything kept here - which is why a swap needs no
+    // repaint: the box that comes back is a new element carrying the new default and no mark.
+    //
+    // Delegated, because that swap replaces the form: a listener wired to the box at load would be
+    // pointing at a box that no longer exists after the first press.
+    const wireReserve = () => {
+      document.addEventListener("input", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".tending__reserve")) return;
+        box.form?.toggleAttribute("data-dirty", box.value !== box.defaultValue);
+      });
+    };
+
     const wireSwaps = () => {
       document.addEventListener("htmx:before:swap", (event) => {
         if (event.target !== transcript()) return;
@@ -1545,6 +1561,7 @@
     wireClasp();
     wireFolding();
     wireFilter();
+    wireReserve();
     wireSend();
     wireCopy();
     wireFresh();

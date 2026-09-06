@@ -79,9 +79,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   because a model asked for one in prose writes "Here is the handoff: ... what next?", and the
   framing then becomes durably part of what the next model is told. Neither the ask nor the tool
   prescribes a shape: what a refactor needs handed over and what an investigation needs are different
-  documents. The rail's card carries an optional note for pointing one somewhere, appended to the
-  standing ask rather than replacing it. The two messages the console writes are drawn as their own
-  `handoff` kind, because every other message in a conversation was typed by somebody.
+  documents. `/handoff` in the composer asks for one, and it is the one answer in that menu whose box
+  may be empty: what it does with the text is point the handoff at something, appended to the standing
+  ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
+  the console writes are drawn as their own `handoff` kind, because every other message in a
+  conversation was typed by somebody.
+- **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
+  writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
+  handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
+  window rather than a threshold - one turn can cross the reserve and overshoot it - and past the far
+  end the console asks for nothing rather than spending a request on a handoff that cannot land. On by
+  default, which is safe only here: a handoff is an append, so the whole conversation stays in the
+  transcript and a fork above the boundary recovers it, where every other harness's compaction
+  defaults on as a bet that its summary is good enough because the original is gone. The switch and
+  the reserve are per session and changeable while it runs, in the rail's own card; where the reserve
+  falls is marked on every rule's gauge, so watching the line grow toward the mark is watching the
+  handoff approach.
 - A session the provider will never accept a request from says so and stops, rather than spinning.
   What it names is `fork`, because nothing can be put back: what was turned down is the recorded
   history itself, and forking at the turn drops that turn's own requests while keeping everything

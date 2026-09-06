@@ -47,6 +47,7 @@ from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
 from mainplate.pages import OPENING
 from mainplate.service import Service
+from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
 from scripts.gallery import INSTRUCTIONS
 from scripts.gallery import pages
@@ -1713,6 +1714,70 @@ async def a_conversation(console: tuple[str, Service], page: Page) -> str:
     return session.id
 
 
+class TestSettingWhenASessionHandsItselfOff:
+    """
+    The rail's own card, where the two controls deliberately do not behave the same way.
+
+    A browser, twice over: which of them takes effect on the press is htmx's trigger rather than
+    anything in the markup, and whether the button says there is something unsaved is a comparison
+    against a property no server renders. Both look identical in what is sent either way.
+    """
+
+    async def test_the_switch_takes_effect_on_the_press(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        A checkbox says the whole of what it means the moment it moves, so waiting for `Set` leaves a
+        console that looks switched off and is not. What proves it landed is the mark on every rule's
+        gauge, which is drawn only where the switch is on.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        await expect(page.locator(".tending__switch input")).to_be_checked()
+
+        await page.uncheck(".tending__switch input")
+
+        await expect(page.locator(".rule__reserve")).to_have_count(0)
+        assert not (await read_tending(service.database, session)).hands_off
+
+    async def test_the_number_waits_to_be_set_and_says_that_it_is_waiting(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The other half, and why the two differ: a number is half-written for as long as somebody is
+        writing it, so it cannot take effect on a keystroke - which leaves the button beside it to say
+        there is something to press. Nothing is recorded until it is.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        before = await read_tending(service.database, session)
+
+        await page.fill(".tending__reserve input", "120")
+
+        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        assert await read_tending(service.database, session) == before, "typing records nothing"
+
+        await page.click(".handoff__set")
+
+        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
+        assert (await read_tending(service.database, session)).reserve == 120_000
+
+    async def test_typing_the_recorded_value_back_leaves_nothing_to_press(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The mark is a comparison against what was rendered rather than a flag set by the first
+        keystroke, so undoing a change unmarks the button rather than leaving it lit for ever.
+        """
+        await a_conversation(console, page)
+        box = page.locator(".tending__reserve input")
+        recorded = await box.input_value()
+
+        await box.fill("120")
+        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        await box.fill(recorded)
+
+        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
+
+
 class TestWhereTheComposerSendsTo:
     """
     That pressing Fork lands the reader in a *different* session, driven by a real htmx.
@@ -1780,6 +1845,40 @@ class TestWhereTheComposerSendsTo:
 
         await expect(page.locator("#transcript")).to_contain_text("and another thing")
         assert session in page.url, "sending swaps the conversation rather than leaving it"
+
+    async def test_handing_off_from_an_empty_box_is_taken_rather_than_refused(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one answer whose box may be empty, and the whole of what `formnovalidate` has to buy.
+
+        A browser, because everything that decides this is the browser's: the box is `required`, so a
+        form submitted without one is refused before any request leaves, and what lifts that for one
+        submitter and no other is an attribute on the button. Nothing in the markup distinguishes a
+        control that works here from one that silently does nothing, and no in-memory test can see the
+        difference because neither ever reaches the boundary.
+        """
+        await a_conversation(console, page)
+        await page.click(".sender__caret")
+        await page.click('.sender__option[value="handoff"]')
+
+        await expect(page.locator('.panel[data-kind="handoff"]')).to_have_count(1)
+
+    async def test_a_handoff_carries_what_was_typed_as_what_to_dwell_on(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The other half of the same control: the box is optional here rather than ignored, and what is
+        in it is appended to the standing ask rather than replacing it.
+        """
+        await a_conversation(console, page)
+        await page.fill(".composer textarea", "dwell on the parser work")
+        await page.click(".sender__caret")
+        await page.click('.sender__option[value="handoff"]')
+
+        asked = page.locator('.panel[data-kind="handoff"]')
+        await expect(asked).to_contain_text("dwell on the parser work")
+        await expect(asked).to_contain_text("Hand this conversation off")
 
     async def test_sending_into_a_turn_being_answered_steers_it_and_shows_the_message_at_once(
         self, page: Page, console: tuple[str, Service]

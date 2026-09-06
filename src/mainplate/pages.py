@@ -82,8 +82,6 @@ from mainplate.commands import UNFINISHED
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
-from mainplate.conversation import GUIDING_FIELD
-from mainplate.conversation import GUIDING_LENGTH
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
@@ -111,6 +109,13 @@ from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import Session
 from mainplate.snapshots import LONGEST_REF
+from mainplate.tending import HANDS_OFF_FIELD
+from mainplate.tending import LEAST_ROOM
+from mainplate.tending import RESERVE_FIELD
+from mainplate.tending import TENDED
+from mainplate.tending import THOUSAND
+from mainplate.tending import Tending
+from mainplate.tending import reserving
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
 
@@ -336,7 +341,7 @@ class Links:
     workspace_branches: Reversible
     fork_form: Reversible
     fork: Reversible
-    hand_off: Reversible
+    tend: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -402,8 +407,8 @@ class Links:
     def to_fork(self, session: str) -> str:
         return url_for(self.fork, {"session": session})
 
-    def to_hand_off(self, session: str) -> str:
-        return url_for(self.hand_off, {"session": session})
+    def to_tend(self, session: str) -> str:
+        return url_for(self.tend, {"session": session})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -729,6 +734,17 @@ def consumed(context: int, window: int | None) -> float | None:
     if not context or not window:
         return None
     return context / window
+
+
+def along(fraction: float) -> str:
+    """
+    One fraction as a distance along a rule, capped because a gauge cannot draw past its own width.
+
+    A session past a window the database understates asks for no more line than there is, and a
+    reserve is capped by the same rule rather than because it can exceed one: `reserving` already
+    refuses an interval that does not fit.
+    """
+    return f"{min(fraction, 1.0):.1%}"
 
 
 def portion(fraction: float) -> str:
@@ -1557,6 +1573,7 @@ def picker(
     reachable: Reachable | None,
     reference: Reference | None,
     chosen: Choice | None = None,
+    tended: Tending = TENDED,
 ) -> Element:
     """
     Everything a session is decided by, laid out as the question it actually is.
@@ -1623,6 +1640,7 @@ def picker(
             ),
             model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
             thinking_cards(starting.thinking),
+            tending_group(tended),
         ],
     )
 
@@ -2112,6 +2130,7 @@ def rule_element(
     forget: bool = False,
     window: int | None = None,
     running: Decimal | None = None,
+    reserved: float | None = None,
 ) -> Element:
     """
     A line across the conversation where one round trip to the model began.
@@ -2177,9 +2196,17 @@ def rule_element(
             "data-stop": "forget" if forget else None,
             # Capped here as well as clipped there, so a session past a window the database
             # understates asks for no more line than there is.
-            "style": None if filled is None else f"--filled: {min(filled, 1.0):.1%}",
+            "style": None if filled is None else f"--filled: {along(filled)}",
         },
         children=[
+            # Where the reserve opens, on the same scale the fill is drawn against, so watching the
+            # line grow toward it is watching the handoff approach. An element rather than a second
+            # pseudo because it is conditional; see `.rule__reserve`.
+            *(
+                (span(cls="rule__reserve", attrs={"style": f"--reserved: {along(reserved)}"}),)
+                if reserved is not None
+                else ()
+            ),
             *(
                 (a(cls="rule__at", attrs={"href": f"#rule-{turn}", "title": f"Turn {turn}"}, children=f"#{turn}"),)
                 if opens
@@ -2524,11 +2551,34 @@ def running_to(before: Decimal | None, spent: Spent | None) -> Decimal | None:
     return before + spent.cost
 
 
-def transcript_region(
-    links: Links, session: str, said: Transcript, stalled: str | None = None, window: int | None = None
-) -> Element:
+def reserve_mark(showing: Conversation) -> float | None:
+    """
+    Where on a rule's gauge this session's reserve falls, or nothing at all where no mark belongs.
+
+    The same scale `--filled` is on, so the mark and the fill are read against one another: the fill
+    says how far this request got and the mark says where the handoff would be asked for. That is the
+    whole of what the card's line used to say in words, and it says it once per rule instead of once
+    per page, on the control a reader is already watching lengthen.
+
+    Nothing where the switch is off, because a mark for something that will not happen is a line to
+    explain. Nothing where the reserve describes no interval either, which is `reserving`'s answer and
+    the same one the pass acts on, so the page cannot draw a boundary the worker will not use.
+    """
+    if not showing.session.tending.hands_off:
+        return None
+    held = reserving(showing.window, showing.session.tending.reserve)
+    return None if held is None else consumed(held.opens, showing.window)
+
+
+def transcript_region(links: Links, showing: Conversation) -> Element:
     """
     The conversation, and whether it is still waiting on the rest of it.
+
+    A whole `Conversation` rather than the four things drawn out of one, because every caller had one
+    in hand and was taking them apart the same way: what the region needs is the session, what was
+    said, whether it is stalled, the model's window and where its reserve falls, and five arguments
+    derived from one value are five chances for a caller to pair a transcript with another session's
+    window.
 
     Markup and nothing else: it carries no `hx-` attribute at all, because it neither asks for
     itself nor decides when to. The page's one connection sends this region whenever the session
@@ -2549,6 +2599,11 @@ def transcript_region(
     holds the same key. The panel has it a request earlier: `turn:{n}:tree:0` is written *before* the
     model is asked, so a turn whose first answer has not landed yet still says what it started on.
     """
+    session = showing.session.id
+    said = showing.said
+    window = showing.window
+    stalled = stalled_by(showing)
+    reserved = reserve_mark(showing)
     drawn: list[Element] = []
     # What the conversation has cost by the time each rule is drawn. A turn rule carries the total
     # through the turn it opens, exactly as it already carries that turn's own spend: both figures on
@@ -2581,6 +2636,7 @@ def transcript_region(
                 forget=within[0].forget,
                 window=window,
                 running=through,
+                reserved=reserved,
             )
         )
         # Directly under the rule that opens the stretch, so a reader meets the boundary, then what
@@ -2603,6 +2659,7 @@ def transcript_region(
                             spent=asking[at].spent,
                             window=window,
                             running=climbing[at],
+                            reserved=reserved,
                         )
                     )
             drawn.append(panel_element(links, session, panel))
@@ -2847,74 +2904,160 @@ def theme_card() -> Element:
     )
 
 
-def handoff_card(links: Links, session: str) -> Element:
+HANDOFF_ID: Final = "handoff"
+"""The card's own id, because the card is what its settings form swaps: see `handoff_card`."""
+
+SWITCH_CLASS: Final = "tending__switch"
+"""
+What the switch is called, named once because two things reach it by that name.
+
+The card's `hx-trigger` listens for a `change` from it, and the stylesheet draws it; a class the
+script or a trigger depends on is a name to write down rather than to spell twice.
+"""
+
+
+def tending_fields(tended: Tending, form: str | None = None) -> tuple[Element, Element]:
     """
-    Ask this conversation to write down where it has got to and carry on from that.
+    The switch and the reserve, drawn once for the three places that ask them.
 
-    **In the rail rather than in the sending menu**, and the test is the menu's own premise: every
-    answer there is a decision about what happens to the text somebody typed, and this one ignores
-    it. It would also have to sit beside `Keep`, which is the only row that sends the text nowhere -
-    close enough to look like a fourth answer to one question and far enough to confuse it.
+    The rail's card changes a running session's; the start page and the fork page decide a new one's
+    before it exists. One question asked in three places is one control rendered three times, exactly
+    as `model_cards` serves both a page and the swap that replaces it - and what a card posts and what
+    a picker posts then cannot come apart, because they are the same two names from the same call.
 
-    Here it sits with the settings that decide when the console does this by itself, which is the
-    more useful adjacency: what a person presses and what a threshold fires are one call, and a
-    control that says so is a control nobody has to be told twice about.
+    `form` is what associates them with a form they are not nested inside, which the picker needs and
+    the card does not: on the start page every control is a sibling of the form that posts them. It is
+    the same `form="choosing"` every other question in the picker carries.
+
+    The reserve's own value is the record divided down, since the box is denominated in thousands and
+    the record is in tokens. See `THOUSAND`.
+    """
+    return (
+        label(
+            cls=SWITCH_CLASS,
+            children=[
+                input_(
+                    attrs={
+                        "type": "checkbox",
+                        "name": HANDS_OFF_FIELD,
+                        # The state, not a default: an unchecked box posts no field, so what comes
+                        # back is exactly what the box shows.
+                        "checked": tended.hands_off,
+                        "form": form,
+                    }
+                ),
+                span(children="auto at reserve"),
+            ],
+        ),
+        label(
+            cls="tending__reserve",
+            children=[
+                span(children="reserve"),
+                input_(
+                    attrs={
+                        "type": "number",
+                        "name": RESERVE_FIELD,
+                        "value": str(tended.reserve // THOUSAND),
+                        # The floor the boundary refuses below, said to the browser as well so the
+                        # refusal usually happens before the post rather than only after it. One
+                        # number, in `tending.py`, read by both.
+                        "min": str(LEAST_ROOM // THOUSAND),
+                        "form": form,
+                        "aria-label": "Thousands of tokens kept free for writing a handoff",
+                    }
+                ),
+                # The unit, which is what lets the box hold two digits instead of six. Not part of the
+                # label's own words, because it belongs after the number rather than before it.
+                span(cls="tending__unit", children="K"),
+            ],
+        ),
+    )
+
+
+def tending_group(tended: Tending) -> Element:
+    """
+    The pair as the picker's last question, which is what a session is tended with from its first turn.
+
+    Last, by the picker's own widest-first order taken to its end: the workspace decides what a session
+    can touch, the network what it can do with that, the endpoint and model who answers, the thinking
+    level how hard, and this how long the conversation gets before the console writes it down. It is
+    the only one of the six measured against the model above it, which is the other reason it follows.
+
+    Not a `choosing` group, for `starting_at`'s reason: `choosing` is the component for a question with
+    a closed set of answers to draw, and a number of tokens has none. It takes the heading that group
+    would have had, because `auto at reserve` on its own says nothing about what is being automated -
+    in the rail the card's own head says `handoff` and here nothing else would.
+    """
+    return div(
+        cls="tending",
+        children=[span(cls="tending__head", children="Handoff"), *tending_fields(tended, form=CHOOSING_ID)],
+    )
+
+
+def handoff_card(links: Links, session: str, tended: Tending) -> Element:
+    """
+    When this session hands itself off unasked, and how much room it keeps to do it in.
+
+    **Settings only, because asking for one is `/handoff` in the box.** A handoff takes an optional
+    note saying what it should dwell on, and the box is exactly where such a note is written, so it
+    is one more answer to what happens to what you typed rather than a button of its own; see
+    `Disposition.HANDOFF`. What is left here is the pair of settings, which are about the session
+    rather than about anything typed.
 
     **The rail's own docstring says "navigates", and this does not.** Widening that is the deliberate
     half of putting it here: what the rail holds is conversation controls, which is what its
     `aria-label` has always said, and a second region pinned to the same edge would be one piece of
     chrome too many for the sake of a word.
 
-    A form and not a scripted button, so it works with `mainplate.js` absent. Its swap is the
-    composer's, because what comes back is the same transcript with one more message waiting in it.
+    A form and not a scripted control, so it works with `mainplate.js` absent, and it swaps *itself*
+    rather than the transcript: nothing about the conversation changed, and the only thing that did is
+    the line above the controls.
+
+    The line comes before them rather than after, because it is what somebody reads before deciding to
+    touch either: how much room is left is the question, and the switch and the number are the two
+    answers to it.
     """
-    return form(
+    return div(
         cls="handoff",
-        attrs={
-            "method": "post",
-            "action": links.to_hand_off(session),
-            "hx-post": links.to_hand_off(session),
-            "hx-target": f"#{TRANSCRIPT_ID}",
-            "hx-swap": SEND_SWAP,
-            # A refusal is not a transcript, exactly as it is not one for the composer: a session
-            # nobody can answer refuses this, and leaving the conversation on screen is the honest
-            # answer to that.
-            "hx-status:4xx": "swap:none",
-            "hx-status:5xx": "swap:none",
-            "aria-label": "Handoff",
-        },
+        attrs={"id": HANDOFF_ID},
         children=[
             div(cls="handoff__head", children="handoff"),
-            # Its own field rather than the message box, because the box is `required` and the
-            # ordinary handoff has nothing typed into it: borrowing it would refuse the common case
-            # to serve the rare one. What goes in here is appended to the standing ask rather than
-            # replacing it, so leaving it empty is a whole answer.
-            input_(
-                cls="handoff__note",
+            form(
+                cls="handoff__tending",
                 attrs={
-                    "type": "text",
-                    "name": GUIDING_FIELD,
-                    "maxlength": str(GUIDING_LENGTH),
-                    "placeholder": "What to dwell on (optional)",
-                    "aria-label": "What the handoff should dwell on",
+                    "method": "post",
+                    "action": links.to_tend(session),
+                    "hx-post": links.to_tend(session),
+                    # Itself, because the card is what this changes: the standing line is read off
+                    # the reserve, so a swap that left the card alone would save a number and go on
+                    # showing the answer to the old one.
+                    "hx-target": f"#{HANDOFF_ID}",
+                    "hx-swap": "outerHTML",
+                    "hx-status:4xx": "swap:none",
+                    "hx-status:5xx": "swap:none",
+                    # **The switch takes effect on the press and the number does not**, which is the
+                    # difference between a control you set and one you type into. A checkbox says the
+                    # whole of what it means the moment it moves, so waiting for `Set` leaves a
+                    # console that looks switched and is not; a number is half-written for as long as
+                    # somebody is writing it, so a `change` on the box would post whatever was in it
+                    # when they tabbed away.
+                    #
+                    # `submit` stays beside it, because `Set` is what the number is sent with and what
+                    # this form does with no script at all. Either way the whole form posts, so a
+                    # number typed and then a switch flicked saves both rather than losing the typing.
+                    "hx-trigger": f"submit, change from:.{SWITCH_CLASS}",
+                    "aria-label": "When this session hands itself off",
                 },
-            ),
-            button(
-                cls="handoff__now",
-                attrs={
-                    "type": "submit",
-                    "title": (
-                        "Ask this session to write down where it has got to, then carry on from that "
-                        "document with everything above it cleared from the model's context."
-                    ),
-                },
-                children="Hand off now",
+                children=[
+                    *tending_fields(tended),
+                    button(cls="handoff__set", attrs={"type": "submit"}, children="Set"),
+                ],
             ),
         ],
     )
 
 
-def rail(links: Links, session: str) -> Element:
+def rail(links: Links, session: str, tended: Tending) -> Element:
     """
     Everything that navigates the conversation, in one column outside the region that swaps.
 
@@ -2929,9 +3072,13 @@ def rail(links: Links, session: str) -> Element:
 
     **What it holds is conversation controls, which is wider than navigating and always was**: the
     `aria-label` has said so since there was a rail, and the handoff card is the first thing here
-    that acts on a session rather than moving around inside one. It goes last, pinned to the bottom
-    by the stylesheet, because it is the one card that *does* something: putting it among the reading
-    controls would mean a button that spends money sharing an edge with one that scrolls.
+    that is about a session rather than about moving around inside one. It sits under the shelf,
+    which is the boundary: everything above it reads the conversation, and it is the first thing that
+    changes how the conversation is run.
+
+    **The theme goes last, pinned to the bottom by the stylesheet**, because it is the one card here
+    that is not about this conversation at all - it is the reader's, across every session - so it is
+    the one thing a reader scanning the rail for something about *this* session can skip.
     """
     return section(
         cls="rail",
@@ -2946,8 +3093,8 @@ def rail(links: Links, session: str) -> Element:
             key_card(),
             dock_card(),
             shelf_card(),
+            handoff_card(links, session, tended),
             theme_card(),
-            handoff_card(links, session),
         ],
     )
 
@@ -3007,19 +3154,35 @@ class Answer:
     posts: Mapping[str, str | int | bool | None]
     staying: bool
 
+    demands: bool = True
+    """
+    Whether this answer needs something in the box, which every one of them does but `handoff`.
+
+    The box is `required`, which is right for a message and wrong for a handoff: what a handoff takes
+    is an optional note saying what to dwell on, and the ordinary one has nothing typed into it. So
+    the answer that does not demand a message says so, and both of its renderings carry
+    `formnovalidate` - the browser's own way of saying that this submitter does not need the form's
+    required fields, which is a mechanism rather than a script toggling an attribute under a reader.
+
+    Both renderings, because both submit: a menu row is a submit button exactly as the mode's own
+    button is, so an exception on one of them would be a control that refuses from the menu and works
+    from the keyboard.
+    """
+
     @property
     def named(self) -> str:
         """What it is called, which is its own word: there is no second name to drift from."""
         return self.leader.capitalize()
 
 
-def dispatched(disposition: Disposition, saying: str, *, staying: bool = False) -> Answer:
+def dispatched(disposition: Disposition, saying: str, *, staying: bool = False, demands: bool = True) -> Answer:
     """One answer that posts a disposition, named after the value it posts."""
     return Answer(
         leader=disposition.value,
         saying=saying,
         posts={"type": "submit", "name": DISPOSITION_FIELD, "value": disposition.value},
         staying=staying,
+        demands=demands,
     )
 
 
@@ -3033,9 +3196,15 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
     same bargain the branch field takes in rendering one list as a `<datalist>` and a narrowed list.
 
     Ordered by how far the text travels: waiting for the next turn keeps it here and merely later,
-    `Forget` keeps it here and drops what the model was told, an `Aside` is a step out you mean to
+    `Forget` keeps it here and drops what the model was told, a `Handoff` keeps it here and has the
+    session write down what the model should be told instead, an `Aside` is a step out you mean to
     come back from, a `Fork` is a conversation of its own, `Parent` reaches the one this came out of,
     `Run` is not a message at all, and `Keep` sends it nowhere.
+
+    `Handoff` sits beside `Forget` because they are the same family: both end a stretch of context
+    where they stand, and what separates them is who writes what the next one opens on. It is also
+    the one answer whose box may be empty, since what it does with the text is point the handoff at
+    something rather than send it anywhere.
     """
     return (
         *(
@@ -3051,6 +3220,11 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
         dispatched(
             Disposition.FORGET,
             "Ask it with the model's context cleared, leaving the whole conversation on the page",
+        ),
+        dispatched(
+            Disposition.HANDOFF,
+            "Have it write down where it has got to and carry on from that, dwelling on anything you typed",
+            demands=False,
         ),
         dispatched(Disposition.ASIDE, "Step out into a side conversation you mean to come back from"),
         dispatched(Disposition.FORK, "Ask it in a new session carrying this whole conversation"),
@@ -3093,7 +3267,12 @@ def sending_option(answer: Answer, refusing: bool) -> Element:
     """
     return button(
         cls="sender__option",
-        attrs={**answer.posts, "disabled": refusing, "data-leader": answer.leader},
+        attrs={
+            **answer.posts,
+            "disabled": refusing,
+            "data-leader": answer.leader,
+            "formnovalidate": not answer.demands,
+        },
         children=[
             span(
                 cls="sender__option-head",
@@ -3127,6 +3306,7 @@ def sending_leader(answer: Answer, refusing: bool) -> Element:
             "disabled": refusing,
             "data-leader": answer.leader,
             "data-staying": answer.staying,
+            "formnovalidate": not answer.demands,
             "title": "Shift-Enter \N{MIDDLE DOT} Escape to go back to a message",
         },
         children=answer.named,
@@ -3456,7 +3636,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             showing=showing.session.id,
             reachable=reachable,
             pane=[
-                transcript_region(links, showing.session.id, showing.said, stalled, showing.window),
+                transcript_region(links, showing),
                 composer(
                     links.to_say(showing.session.id),
                     chosen_note(showing.chosen, showing.repository, showing.worktree, showing.said.total),
@@ -3479,7 +3659,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             # Only where there is a conversation to navigate. On the page where a session does not
             # exist yet every control in it would be pointed at an empty transcript, which is a
             # row of dead buttons rather than an offer.
-            aside_rail=[rail(links, showing.session.id)],
+            aside_rail=[rail(links, showing.session.id, showing.session.tending)],
         ),
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,
@@ -3602,7 +3782,17 @@ def fork_page(
                         # One already in a repository inherits it, so there is nothing to choose;
                         # one in none may pick a repository up here, which is the ordinary shape
                         # of having thought something through and then going to work on it.
-                        picker(links, catalogue, attachable(showing, reachable), reference, showing.chosen),
+                        picker(
+                            links,
+                            catalogue,
+                            attachable(showing, reachable),
+                            reference,
+                            showing.chosen,
+                            # The parent's own, so a branch that wants what the session it came from
+                            # had needs nothing touched. It is settled afresh rather than inherited by
+                            # the service, for `Service.fork`'s reason, so the page is what carries it.
+                            showing.session.tending,
+                        ),
                         div(
                             cls="forking__act",
                             children=[
