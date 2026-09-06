@@ -28,6 +28,7 @@ from without_durability_sqlite import Database
 from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
@@ -37,16 +38,20 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import opening_tree_key
+from mainplate.conversation import recorded_ask
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
+from mainplate.conversation import refusal_in
 from mainplate.conversation import requested_at
 from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.reference import References
+from mainplate.reference import Resending
 from mainplate.reference import facts_of
+from mainplate.reference import resending
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
@@ -55,7 +60,10 @@ from mainplate.sessions import name_from
 from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
+from mainplate.sessions import tend
 from mainplate.settings import DEFAULT_WATCHING
+from mainplate.tending import TENDED
+from mainplate.tending import Tending
 
 # How many steps a session has recorded. A count and not a hash of them, because what it is asked
 # for is whether to look again rather than what changed, and the store's own primary key already
@@ -83,6 +91,20 @@ class Conversation:
     said: Transcript
     chosen: Choice | None
     answerable: bool
+
+    refused: records.Refused | None = None
+    """
+    Why the turn being answered stopped and will not start again, where one did.
+
+    A second way to be stuck, and a different question from `answerable`: that one asks whether the
+    endpoint still exists, and this asks whether the provider took the request. Both end in the same
+    place - a sentence in place of a spinner - because a spinner that will never resolve is the one
+    state a person cannot diagnose.
+
+    It is about the turn being answered rather than about any turn in the conversation. A refusal
+    recorded against a turn that later answered is history, and history is what the transcript is
+    for; only a refusal on the turn nothing has got past says the session has stopped.
+    """
 
     repository: str | None = None
     """
@@ -125,6 +147,35 @@ class Conversation:
     `None` for each of the three ways to know nothing - no database configured, an endpoint that no
     longer lists the recorded id, a model with no record - and the page draws the counts with no
     fraction beside them, which is what it drew before there was one.
+    """
+
+    since: timedelta | None = None
+    """
+    How long ago this conversation was last answered, as of this read, or nothing where it never was.
+
+    **The one place this console subtracts two clocks**, and the caveat is worth having here rather
+    than in a comment somewhere downstream. `Transcript.answered_at` is stamped by whichever process
+    ran the pass and this is taken in a request handler, so the difference is sound exactly as long as
+    those are one machine - which today they are, since the console, the worker and the file are one
+    process. Split across machines it becomes as approximate as the two clocks' agreement, which for a
+    threshold measured in hours is still fine and for anything finer would not be.
+
+    Measured *here* rather than on the page, because a page is a pure function of already-answered
+    questions and `datetime.now()` is not one of those. The page turns it into words and the script
+    keeps it current; see `cache_note`.
+    """
+
+    resending: Resending | None = None
+    """
+    What putting this conversation to the model again costs, cached and uncached.
+
+    A **floor on the next turn** at either end rather than a price for one: both figures are the input
+    of that turn's first request and nothing else, so the answer, the tools and any further requests
+    are on top of both. The composer draws them with a `+` for exactly that reason; see `Resending`.
+
+    Absent for the same three reasons `window` is, and for a fourth - a model whose record carries no
+    price at all - so the composer says how long ago the prefix was written without saying what that
+    is worth, which is what it says with no reference database configured.
     """
 
 
@@ -227,15 +278,26 @@ class Service:
         chosen = choice_of(recorded)
         working = chosen is not None and chosen.repository is not None
         facts = facts_of(self.catalogues.current, self.references.current, chosen) if chosen is not None else None
+        said = transcript(recorded)
+        # The one subtraction of two clocks in this console, taken here rather than on the page
+        # because a page is a pure function of already-answered questions. See `Conversation.since`.
+        since = None if said.answered_at is None else self.now() - said.answered_at
         return Conversation(
             session=found,
-            said=transcript(recorded),
+            said=said,
             chosen=chosen,
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
+            refused=refusal_in(recorded),
             repository=self.repository_of(chosen),
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
             runnable=self.commands is not None and self.workspaces is not None and working,
             window=facts.context if facts is not None else None,
+            since=since,
+            resending=(
+                resending(facts.cost, said.total.context)
+                if facts is not None and facts.cost is not None and said.total.context
+                else None
+            ),
         )
 
     async def token(self, session: str) -> int:
@@ -275,7 +337,7 @@ class Service:
             return None
         return requested_at(await self.checkpointer.load(session), turn, at)
 
-    async def start(self, said: str, chosen: Choice, title: str | None = None) -> Session:
+    async def start(self, said: str, chosen: Choice, title: str | None = None, tended: Tending = TENDED) -> Session:
         """
         A new session on `chosen`, named `title` or after the first thing said in it, with that
         message sent.
@@ -295,6 +357,13 @@ class Service:
         Nothing renames a session afterwards, and that is why the index may hold the title at all:
         it is a copy of something settled rather than of something that changes. Naming it here does
         not alter that, because this is still the one moment it is decided.
+
+        `tended` is written **only where it differs from the shipped defaults**, and that is what keeps
+        `NULL` meaning "nobody has said anything". The picker posts this pair on every session, so
+        recording it unconditionally would make every column explicit, leave a moved constant reaching
+        nothing, and make the defaulting branch a path only a database written before this existed can
+        take - which is a path nothing exercises. Somebody who sets exactly the defaults is
+        indistinguishable from somebody who left them, which is the correct reading of both.
         """
         named = name_from(title) if title else ""
         # Settled here rather than taken as posted, which is the same stance that stops a form with
@@ -312,6 +381,8 @@ class Service:
         # own id and `settled` is a rule about a choice rather than about a session.
         chosen = chosen.branching(session.id)
         await enrol(self.database, session)
+        if tended != TENDED:
+            await tend(self.database, session.id, tended)
         # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
         # already lives. Until then the session renders, names its repository, and has no files.
@@ -320,7 +391,14 @@ class Service:
         return session
 
     async def fork(
-        self, session: str, *, at: int, chosen: Choice, said: str | None = None, aside: bool = False
+        self,
+        session: str,
+        *,
+        at: int,
+        chosen: Choice,
+        said: str | None = None,
+        aside: bool = False,
+        tended: Tending = TENDED,
     ) -> Session | None:
         """
         A new session carrying this one's turns before `at`, on `chosen`, and asking `said` next.
@@ -394,6 +472,11 @@ class Service:
         # exactly where somebody carries on working and therefore commits.
         chosen = chosen.branching(forked.id)
         await enrol(self.database, forked)
+        # By `start`'s rule, and a fork settles this afresh rather than inheriting it: a reserve is a
+        # decision about how much room one conversation's context has left, and a branch's context is
+        # not that conversation's.
+        if tended != TENDED:
+            await tend(self.database, forked.id, tended)
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
         # The tree of the turn being re-asked, carried across on its own even though that turn's
@@ -445,6 +528,61 @@ class Service:
         entry = await self.checkpointer.append(session, recorded_command(said))
         self.commands.start(Slot(session=session, entry=entry.key), said, where)
         return entry.key
+
+    async def hand_off(self, session: str, guiding: str | None = None) -> None:
+        """
+        Ask this session to write down where it has got to, and to start its context again from that.
+
+        `guiding` is whatever the person wants the handoff pointed at, appended to the standing ask
+        rather than replacing it. Appended, because the two say different things: the base is what a
+        handoff *is* and has to be there whether or not anybody adds to it, and this is what this one
+        should dwell on. Replacing it would make a note like "focus on the parser" the whole of the
+        instruction, which is a summary of a summary nobody asked for.
+
+        Deliberately not a template with a slot in it. What somebody picking up a refactor needs and
+        what somebody picking up an investigation needs are different documents, so the ask says what
+        a handoff is about and leaves the shape to the model that read the conversation.
+
+        A message like any other, which is what makes this cheap: the turn it opens is answered by
+        the same pass, on the same agent, over the prefix already cached, and what comes back is
+        recorded by the same tool machinery as every other call. Nothing here is a second mechanism
+        for summarising a conversation - the summariser is the session itself, with its own tools, so
+        it can check the working tree rather than recalling it.
+
+        **In this session rather than in an aside**, which was the first design and was worse in four
+        ways at once. An aside plants a fresh worktree at a recorded tree, so the agent asked to
+        describe the work would be looking at a directory without any of it in it; its cost would
+        land on a different session's total; it would need its own settings copied and its auto
+        handoff turned off so it could not recurse; and its first request would pay full price,
+        because instructions differ per session and sit in front of the whole cached prefix. Here
+        there is no aside, no copy, and no cold read.
+
+        Delivered rather than appended, because nothing else is going to queue this: `Service.run`
+        appends since a command reaches no model, and this is a message that must be answered.
+
+        No boundary on the ask, and one on what comes back. The context has to survive long enough
+        to be summarised, so it is the *document* that clears it, which the tool records for itself.
+
+        What it says is `recorded_ask`'s rather than this method's, because a pass that finds its own
+        reserve crossed asks for exactly the same thing: two writers of one record, and the words in
+        one place so they cannot come apart.
+        """
+        await self.durable.deliver(session, recorded_ask(guiding))
+
+    async def tend(self, session: str, tending: Tending) -> None:
+        """
+        Say what this console should do for a session unasked, which the next pass reads.
+
+        The one write here that is not an append, and the one that has nowhere else to go: a
+        checkpoint keeps the value a key was first given, so a setting saved twice there would keep
+        its first answer for ever, and `localStorage` is in a browser where the worker that acts on
+        this may be another process. So it is a column, and this is the only thing that writes one.
+
+        Next pass rather than at once, and that is the value the pass took saying so: a pass snapshots
+        these on its way in, so a switch flicked while a turn is being answered reaches the turn after
+        it. Nothing here waits for that, exactly as nothing here waits for a message to be answered.
+        """
+        await tend(self.database, session, tending)
 
     async def say(self, session: str, said: str, *, forget: bool = False) -> None:
         """

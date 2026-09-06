@@ -86,6 +86,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 from enum import Enum
@@ -113,6 +114,7 @@ from pydantic_ai.run import AgentRunResult
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_core import to_json
 from without_durability.interfaces import INBOX
+from without_durability.interfaces import Durable
 from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
@@ -126,7 +128,9 @@ from mainplate.durability import TOOK
 from mainplate.durability import Allowance
 from mainplate.durability import AllowanceSpent
 from mainplate.durability import Draining
+from mainplate.durability import RequestRefused
 from mainplate.durability import parse_model_response
+from mainplate.durability import parse_refused
 from mainplate.durability import parse_returned
 from mainplate.durability import parse_took
 from mainplate.durability import parse_tree
@@ -143,7 +147,11 @@ from mainplate.sandbox import Isolation
 from mainplate.snapshots import Worktree
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
+from mainplate.tending import Tending
+from mainplate.tending import standing
 from mainplate.thinking import BY_LEVEL
+from mainplate.tools import ASKING
+from mainplate.tools import Handing
 
 CHOICE_KEY: StepKey = "choice"
 
@@ -224,6 +232,25 @@ class Disposition(Enum):
     Continuing the conversation it closed is `fork` at that turn, which the rule already offers: the
     branch carries every turn above the boundary and leaves the marker behind, since `before` copies
     what is below the branch point and the record rides on the message that opens the turn."""
+
+    HANDOFF = "handoff"
+    """`Service.hand_off`, which asks this session to write down where it has got to and start again
+    from that document.
+
+    **The one answer where the box may be empty**, and that is what makes it an answer here at all
+    rather than a control of its own. What a handoff takes is an optional note saying what it should
+    dwell on, appended to the standing ask rather than replacing it, and the box is exactly where such
+    a note is written: `/handoff` on its own hands off, and `/handoff` with a paragraph hands off
+    pointed at what the paragraph says.
+
+    That the ordinary case types nothing is why the button carries `formnovalidate`. The box is
+    `required`, which is right for every other answer and would refuse the common case here, so this
+    is the browser's own way of saying that this submitter does not need it; the boundary allows an
+    empty message for this disposition and no other.
+
+    It is *not* a message going anywhere, which it shares with `RUN`: what gets sent is the console's
+    own ask, and the text rides along as guidance. Being in this field all the same is the menu's own
+    premise, that the question is what happens to what you typed."""
 
     FORK = "fork"
     """`Service.fork` at the end, carrying the whole conversation, with this message asked there.
@@ -544,6 +571,22 @@ def model_key(turn: int, at: int) -> StepKey:
     return f"{turn_prefix(turn)}:model:{at}"
 
 
+def refused_key(turn: int, at: int) -> StepKey:
+    """
+    Why the `at`-th model request of this turn will never be accepted, where one never was.
+
+    Named after the *request* rather than after the turn, so a pass that reached further than the one
+    before it records against the request that actually failed. It shares its index with
+    `model_key(turn, at)` on purpose: the two are the question and the reason there is no answer, and
+    exactly one of them exists for any given request.
+
+    Absent is the ordinary case, and reading it is how the page tells a session that stopped from one
+    that is still being answered. The counterpart of `Stepping.identified("refused", str(at))`, with
+    the same drift hazard as `model_key`.
+    """
+    return f"{turn_prefix(turn)}:refused:{at}"
+
+
 def tool_key(turn: int, call: str) -> StepKey:
     """
     What one call of this turn came back with and how long it took, named by the call's own id.
@@ -589,6 +632,28 @@ def recorded_steer(said: str) -> dict[str, object]:
     be a way to have a message answered on its own that somebody meant as a steer.
     """
     return records.Steer(said=said).recorded()
+
+
+def recorded_ask(guiding: str | None = None) -> dict[str, object]:
+    """
+    The message that opens a handoff turn, as the value the store's codec will take.
+
+    Composed here rather than at either of the two places that deliver it, and that is the point: a
+    person pressing the button in the rail and a pass finding its reserve crossed are asking for the
+    same thing, so the words have to be one string. Two writers, one composition; see `Service.hand_off`
+    and `readying`.
+
+    `guiding` is whatever a person wants this handoff pointed at, **appended** to the standing ask
+    rather than replacing it, because the two say different things: the base is what a handoff *is*
+    and has to be there whether or not anybody adds to it, where a note like "dwell on the parser" on
+    its own is an instruction to summarise a summary. Nothing at all is the automatic case, which is
+    also the ordinary one.
+
+    No boundary on it, which is the asymmetry that makes a handoff work: the context has to survive
+    long enough to be summarised, so it is the *document* that clears it - see `handing_through`.
+    """
+    said = ASKING if not (steer := (guiding or "").strip()) else f"{ASKING}\n\n{steer}"
+    return records.Handoff(said=said).recorded()
 
 
 def parse_delivered(recorded: object) -> records.Delivered:
@@ -776,11 +841,13 @@ def forgets(recorded: Mapping[str, object], turn: int) -> bool:
     A turn nobody has opened forgets nothing, so an absent one is `False` rather than a failure:
     `reached` asks this about the turn it is about to return, which is often one no pass has reached.
 
-    Only a `Prompt` can carry the flag, which is not a special case but the same fact twice: forget
-    is never a steer, so what asks for it is delivered as a message that must open a turn.
+    Only a message a turn opens on can carry the flag, which is not a special case but the same fact
+    twice: forget is never a steer, so what asks for it is delivered as a message that must open a
+    turn. Which records those are is `records.forgets`'s to say, so a session's own `/forget` and the
+    boundary a handoff carries are one question here rather than two.
     """
     said = opening(recorded, turn)
-    return isinstance(said, records.Prompt) and said.forget
+    return said is not None and records.forgets(said)
 
 
 def instructions_key(began: int) -> StepKey:
@@ -917,7 +984,17 @@ type Outcome = Literal["success", "failed", "denied", "interrupted"]
 # two words, by the same rule that keeps `steer` apart from `prompt`. How each one reaches the model
 # differs too, and by more than the wire: see the guidance section in `AGENTS.md`. It takes the
 # person's hue for the reason `system-prompt` does.
-type Kind = Literal["prompt", "steer", "command", "assistant", "thinking", "tool", "system-prompt", "guidance"]
+#
+# `handoff` is the one kind nobody wrote: the console asks for a handoff in a message of its own, and
+# what comes back opens the next turn on a cleared context. A reader has to be able to tell that at a
+# glance, which is the whole of why it is a kind rather than a `prompt` with a flag - the same
+# argument that keeps `steer` apart. It is on the person's side because the axis is who produced the
+# text, and what a handoff holds was produced by this session rather than by the model about to be
+# handed it; the `title` on its role is what says the console composed it, exactly as `command`'s says
+# no model was told.
+type Kind = Literal[
+    "prompt", "handoff", "steer", "command", "assistant", "thinking", "tool", "system-prompt", "guidance"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1362,6 +1439,22 @@ class Transcript:
     stored on the other.
     """
 
+    answered_at: datetime | None = None
+    """
+    When the last response of this conversation came back, or nothing where none has.
+
+    What the page reads to say whether the provider's cache still holds this conversation's prefix,
+    since a response landing *is* the moment that prefix was last written. `ModelResponse.timestamp`
+    rather than a key of its own, for `response_took`'s reason one field along: Pydantic AI already
+    stamps it, it survives the checkpoint round trip, and it is on the response whether that came back
+    from `turn:{n}:messages` or from the `turn:{n}:model:{i}` step behind it.
+
+    **It is the clock of whichever process ran the pass**, which is the caveat to know before this
+    grows a second reader. Today the console, the worker and the file are one process on one machine,
+    so it is comparable with a `now()` taken in a request handler; split across machines it would be
+    two clocks, and `Conversation.since` is where that subtraction actually happens.
+    """
+
     @property
     def total(self) -> Spent:
         """What the whole conversation has cost, which is every turn's spend under one rule."""
@@ -1681,15 +1774,17 @@ def unread_in(
     """
     What nobody has read, split into what this turn could still take and what will open its own turn.
 
-    **A prompt is the boundary and a steer is not**, which is the difference between the two records
-    said one more way: a steer is a message the running turn may fold in, so it is drawn where it
-    would go if it did; a prompt cannot be folded in by anybody, so it and everything behind it are
-    messages waiting for turns of their own.
+    **A message that must open a turn is the boundary and a steer is not**, which is the difference
+    between the records said one more way: a steer is a message the running turn may fold in, so it
+    is drawn where it would go if it did; a `Prompt` or a `Handoff` cannot be folded in by anybody, so
+    one of those and everything behind it are messages waiting for turns of their own. `records.opens`
+    is what decides which, here as in the drain, so the page and the pass cannot come to disagree
+    about where a turn's reading stops.
 
-    A steer behind a prompt is drawn as waiting for a turn too, even though the pass will fold it
-    into the turn that prompt opens. That is the honest reading rather than a shortcoming: what a
-    page can say is that neither has been read and that the prompt between them is where this turn's
-    reading stops.
+    A steer behind one is drawn as waiting for a turn too, even though the pass will fold it into the
+    turn that boundary opens. That is the honest reading rather than a shortcoming: what a page can
+    say is that neither has been read and that the message between them is where this turn's reading
+    stops.
 
     `listening` is whether this turn is still being answered, and with nothing listening every unread
     message is one waiting for a turn. Without it a message that arrived just after a turn ended
@@ -1704,9 +1799,7 @@ def unread_in(
     # A turn still being answered reaches everything up to the first message it may not fold in; one
     # that has finished reaches no message at all, and still owns the commands run beside it.
     reaching = (
-        (lambda at: not isinstance(at.what, records.Prompt))
-        if listening
-        else (lambda at: isinstance(at.what, records.Command))
+        (lambda at: not records.opens(at.what)) if listening else (lambda at: isinstance(at.what, records.Command))
     )
     reachable = tuple(takewhile(reaching, unread))
     return tuple(at.what.said for at in reachable if isinstance(at.what, records.Steer)), unread[len(reachable) :]
@@ -1766,6 +1859,27 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
     while (answered := recorded.get(model_key(turn, len(responses)))) is not None:
         responses.append(parse_model_response(answered))
     return tuple(responses)
+
+
+def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
+    """
+    Why this conversation stopped and will not start again on its own, or nothing where it has not.
+
+    Asked of the turn being answered and of no other. A refusal recorded against a turn that later
+    answered is history and the transcript is where history goes; only one on the turn nothing has
+    got past means the session has stopped.
+
+    Neither index is searched for. The turn is the first with no messages, which is what a pass would
+    open next, and the request is the one after the last that answered, which is what `responded`
+    already counts. The turn walk is `reached`'s without the history: this needs the number and not
+    the messages, and parsing every turn's messages is the expensive half of that function, on a path
+    a page takes on every render.
+    """
+    turn = 0
+    while messages_key(turn) in recorded:
+        turn += 1
+    said = recorded.get(refused_key(turn, len(responded(recorded, turn))))
+    return None if said is None else parse_refused(said)
 
 
 def called_in(responses: Sequence[ModelResponse]) -> Iterator[str]:
@@ -1924,19 +2038,24 @@ def panelled(turn: int, sourced: Sequence[Sourced]) -> Iterator[Panel]:
 
 def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Panel:
     """
-    A turn's opening panel, which is the person's own message and is always its first.
+    A turn's opening panel, which is whatever message it opened on and is always its first.
 
-    Either kind of message can open one, and that is the inbox rather than a looseness: a `Steer`
-    that arrived with nothing running opens the next turn, which is what `Send` means when a session
-    is idle. Only a `Prompt` carries a boundary, so only a `Prompt` can draw one.
+    Any kind of message can open one, and that is the inbox rather than a looseness: a `Steer` that
+    arrived with nothing running opens the next turn, which is what `Send` means when a session is
+    idle. Only a message that *must* open one can carry a boundary, so only one of those draws one.
+
+    **A `Handoff` is drawn as its own kind**, because nobody typed it and a reader has to be able to
+    tell that at a glance. It stays on the person's side of the palette all the same: the axis is who
+    produced the text, and what a handoff holds was produced by this session rather than by the model
+    about to be handed it.
     """
     return Panel(
         turn=turn,
         at=0,
-        kind="prompt",
+        kind="handoff" if isinstance(said, records.Handoff) else "prompt",
         blocks=(Prose(text=said.said),),
         tree=tree,
-        forget=isinstance(said, records.Prompt) and said.forget,
+        forget=records.forgets(said),
     )
 
 
@@ -1965,6 +2084,11 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     spent: dict[int, Spent] = {}
     asking: dict[int, tuple[Request, ...]] = {}
     turn = 0
+    # When the newest response landed, which is when this conversation's cached prefix was last
+    # written. Carried out of both walks rather than recovered from the panels, because a panel holds
+    # what was said and not when: turns are in order and responses within a turn are, so the last one
+    # either walk sees is the last one there is.
+    latest: datetime | None = None
     while turn < len(opened) and (answered := recorded.get(messages_key(turn))) is not None:
         held = owned_in(recorded, inbox, opened, turn, listening=False)
         said = parse_messages(answered)
@@ -1974,6 +2098,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
         spent[turn] = spent_on(answering)
         asking[turn] = requests_in(recorded, turn, answering)
+        latest = answering[-1].timestamp if answering else latest
         turn += 1
     running = turn if turn < len(opened) else None
     if running is not None:
@@ -1989,6 +2114,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         if answering:
             spent[turn] = spent_on(answering)
             asking[turn] = requests_in(recorded, turn, answering)
+            latest = answering[-1].timestamp
         turn += 1
     # A person can type again while a reply is still coming, and what they type has no turn of its own
     # until a pass opens one. Drawn all the same, and in order, because a transcript showing only what
@@ -2013,6 +2139,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answering=running,
         requests=asking,
         system_prompts=instructed_in(recorded, turn),
+        answered_at=latest,
     )
 
 
@@ -2127,6 +2254,89 @@ async def opening_turn(run: Run, turn: int) -> records.Delivered:
     return taken(took)[-1]
 
 
+type Handoffs = Callable[[str], Handing]
+"""
+Where a session's handoffs go, as a function from the session to the tool's own hook.
+
+Injected into `conversing` rather than built inside it, symmetric with `Pricer`, `Draining` and
+`Guiding` and for a plainer reason than a cycle: writing a handoff means *queueing* the session, and
+a pass holds a checkpoint rather than the scheduler in front of it.
+"""
+
+
+def handing_through(durable: Durable, session: str) -> Handing:
+    """
+    Where a handoff written inside a pass goes, which is this session's own inbox.
+
+    **Delivered and not appended**, which is the whole of what the queue is for here. An entry
+    appended mid-pass is invisible to the pass that appended it - `receive` reads the snapshot loaded
+    at the top, which is what makes a drain replayable - and an append queues nothing, so a handoff
+    written that way leaves the session `Blocked` on a message already sitting in its inbox, with
+    nothing that will ever wake it. Delivering makes the session ready again, and the pass that takes
+    it reads a fresh snapshot with the document in it.
+
+    The cost, stated: a handoff always crosses a pass boundary. That is the same bargain a steer
+    already takes, one direction along, and it costs a claim rather than a round trip.
+
+    The write is an *effect inside a step*, since `wrap_tool_execute` records what the tool returned:
+    a resumed pass replays the return and does not write a second entry. That is what stops a crash
+    between the delivery and the record leaving a conversation with two handoffs in it.
+
+    `forget=True` is why this is worth a mechanism at all. A handoff that did not clear the context
+    would be a summary of the conversation appended to the conversation, which is the one shape that
+    costs tokens and buys nothing.
+    """
+
+    async def hand(document: str) -> None:
+        await durable.deliver(session, records.Handoff(said=document, forget=True).recorded())
+
+    return hand
+
+
+type Tendings = Callable[[str], Awaitable[Tending]]
+"""
+What this console is doing for a session unasked, as a function from the session to its settings.
+
+Injected rather than reached for, symmetric with `Handoffs`, `Pricer`, `Draining` and `Guiding`, and
+for the plainest reason of the five: a pass holds a checkpoint, and these live on the session index,
+which is a table it has no business knowing the shape of.
+
+`None` is a console that was never given a way to read them, and such a console tends nothing. That
+is the same reading `prices` and `handoffs` already take - a capability absent is the feature absent -
+and it is what keeps the arithmetic inert in every test that does not ask for it, by construction
+rather than by the accident of some other value being missing.
+"""
+
+
+def crossed(asked: records.Delivered, said: Sequence[ModelMessage], window: int | None, tended: Tending) -> bool:
+    """
+    Whether the turn that just ended is the one that should be followed by a handoff.
+
+    **Read at the boundary that crosses the reserve, rather than at the start of the next turn**, and
+    that is about the cache rather than about promptness: the conversation's prefix is warm right now,
+    where by the time somebody comes back and types it may not be, and a handoff run is several
+    requests over the whole window. The same argument that makes a handoff cheap in-session makes it
+    cheap *here*.
+
+    **A turn that opened on a handoff never triggers another**, which is the whole of what stops this
+    recursing. The reserve is crossed for as long as the context stays large, so without it the ask
+    turn - whose own context is the conversation it is summarising - would cross it again the instant
+    it ended, and so would the one after that. Asking about the message the turn opened on is enough
+    for both cases: the ask carries no boundary and the document carries one, and neither should be
+    followed by a second ask. A model that answered the ask in prose rather than by calling the tool
+    is therefore not asked again until a person says something, which is a retry per human action
+    rather than one per turn - the rule a refusal already follows.
+
+    The context is this turn's *last* request rather than a sum, by `Spent.context`'s own rule: every
+    request carries the whole conversation, so what says how much of the window is gone is where the
+    turn left it.
+    """
+    if isinstance(asked, records.Handoff):
+        return False
+    context = spent_on(responses_in(said)).context
+    return standing(context, window, tended.reserve) == "due"
+
+
 def draining_inbox(run: Run, turn: int) -> Draining:
     """
     What to put to the model now, recorded as how far down the inbox this turn has read.
@@ -2136,10 +2346,12 @@ def draining_inbox(run: Run, turn: int) -> Draining:
     after the last drain is not lost to a closed turn, it is simply still in the queue, and the next
     turn opens on it.
 
-    **It stops at a prompt**, which is the one thing this has to get right: a message delivered as a
-    `Prompt` is one somebody asked to be answered on its own, so folding it into the turn already
-    running would be answering a question they did not ask. Everything up to that point is taken,
-    including the commands in between, which are passed over rather than told.
+    **It stops at a message that must open a turn**, which is the one thing this has to get right: a
+    `Prompt` is one somebody asked to be answered on its own and a `Handoff` is one this console
+    wrote to end a stretch of context, so folding either into the turn already running would be
+    answering a question nobody put. Which records those are is `records.opens`'s to say rather than
+    this function's, so a fifth kind of entry is answered in one place. Everything up to that point is
+    taken, including the commands in between, which are passed over rather than told.
 
     The cursor comes out of the pass's own snapshot, which is current within the pass because a step
     writes back into it: two drains in one turn read where the one before them stopped without asking
@@ -2149,7 +2361,7 @@ def draining_inbox(run: Run, turn: int) -> Draining:
     async def drain(key: StepKey) -> Sequence[str]:
         since = since_last(run.recorded, turn)
         available = taken(run.delivered(since or None, None))
-        wanted = len(tuple(takewhile(lambda what: not isinstance(what, records.Prompt), available)))
+        wanted = len(tuple(takewhile(lambda what: not records.opens(what), available)))
         took = await run.pending(key, after=since or None, limit=wanted)
         return tuple(what.said for what in taken(took) if isinstance(what, records.Steer))
 
@@ -2171,6 +2383,64 @@ class Progressed:
     """
 
 
+@dataclass(frozen=True, slots=True)
+class Stalled:
+    """
+    What a pass that hit an unanswerable request comes back with: the session is owed nothing.
+
+    The other way this body returns, and the opposite instruction to `Progressed`. A pass that
+    refuses to go on must not be made ready again, because the next one would ask the identical
+    question of the identical recorded history and be refused identically - which, left to the
+    worker's own redelivery, is a session retried once per lease for ever with nothing saying so.
+
+    The reason is already in the checkpoint by the time this is returned, under
+    `refused_key(turn, at)`, so this carries none: what the page draws it reads for itself, and a
+    value passed back through the worker would be a second copy of it that no restart survives.
+
+    A person can still ask again, and that is the point rather than a gap: writing a message queues
+    the session, so a refusal costs one attempt per human action instead of one per lease. What gets
+    a conversation *past* a refused turn is `fork` at it, which drops the turn's own requests while
+    keeping everything under them - see `before`.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Crossed:
+    """
+    What a pass whose session reached its reserve comes back with: it is owed a handoff, then a turn.
+
+    The third instruction, and the one that is not about this pass at all. `Progressed` and `Stalled`
+    both say what to do with a conversation that is where the pass left it; this says the conversation
+    has run far enough into its model's window that the next thing it should be asked is to write down
+    where it has got to.
+
+    **A value rather than a delivery made from inside the loop**, which is the same split `Progressed`
+    already makes and for a stronger reason. Asking for a handoff means putting a message in the
+    session's inbox, and putting a message in an inbox *queues* the session: that is a fact about the
+    queue in front of a pass rather than about answering one, so it belongs where `make_ready` already
+    is. It is also what makes the decision testable as a value - a test drives one pass and reads what
+    came back, with no store and no scheduler anywhere near the arithmetic.
+
+    It carries nothing, because there is nothing here that the composition root does not already have.
+    What the ask says is `recorded_ask`'s, so a person pressing the button in the rail and this cannot
+    come to ask for two different things.
+    """
+
+
+type Ended = Progressed | Stalled | Crossed
+"""
+What one pass ends as, and the whole of what the worker owes each.
+
+Arms rather than a boolean, so `readying` reads what happened rather than a flag saying what to do
+about it, and so a fourth answer is a type error at the match rather than a session that quietly
+stops being woken.
+
+Named for the pass rather than `Outcome`, which in this module already means how one tool call went
+and in `without-durability` already means what the mechanism made of a pass. Three things, three
+words.
+"""
+
+
 def conversing(
     endpoints: Wires,
     instructions: str,
@@ -2178,7 +2448,9 @@ def conversing(
     bwrap: str | None = None,
     prices: Prices | None = None,
     allowance: int | None = None,
-) -> Callable[[Run], Awaitable[Progressed]]:
+    handoffs: Handoffs | None = None,
+    tendings: Tendings | None = None,
+) -> Callable[[Run], Awaitable[Ended]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
 
@@ -2204,9 +2476,15 @@ def conversing(
     turn back, and `None` is unbounded, which is a pass answering a whole turn however many round
     trips that takes. It is one number rather than two code paths, which is what keeps the choice a
     thing to turn rather than a thing to maintain; see `Settings.allowance` for what it trades.
+
+    `tendings` is where a session's own settings are read, once at the top of a pass. Once, rather
+    than at each boundary, because a setting read twice inside one pass is a place rather than a
+    value: a switch turned while a turn was being answered would have that turn answered under one
+    answer and judged under another, which is precisely the escaping mutation a value is for. What it
+    costs is that a change takes effect on the next pass, which is the next turn.
     """
 
-    async def converse(run: Run) -> Progressed:
+    async def converse(run: Run) -> Ended:
         chosen = choice_of(run.recorded)
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no endpoint, so it was never started by this console")
@@ -2236,6 +2514,11 @@ def conversing(
         # runs. A pass that finds two prompts waiting answers two turns, and a fresh count per turn
         # would let it make one live request for each of them under a lease sized for one.
         spending = Allowance(limit=allowance)
+        # Once, at the top, and held as a value for the rest of the pass. A setting re-read at each
+        # turn boundary would be a place two writers share, so a switch flicked while a turn was in
+        # flight would have that turn answered under one answer and judged under another. `None` is a
+        # console that was given no way to read these at all, and such a console tends nothing.
+        tended = None if tendings is None else await tendings(run.workflow)
         at = reached(run.recorded)
         while True:
             asked = await opening_turn(run, at.turn)
@@ -2243,7 +2526,7 @@ def conversing(
             # which is the whole reason the boundary rides on the message itself: a pass carries its
             # history forward between turns, so a marker delivered beside the message while it was
             # waiting here would be invisible to it and seen by the pass that resumed.
-            if isinstance(asked, records.Prompt) and asked.forget:
+            if records.forgets(asked):
                 at = Reached(turn=at.turn, history=())
             # Cloning and checking out happen *here* rather than when the session was created,
             # because creating one is a request somebody is waiting on and a clone is a network
@@ -2307,6 +2590,7 @@ def conversing(
                 worktree=worktree,
                 scratch=scratch,
                 bwrap=bwrap,
+                handing=None if handoffs is None else handoffs(run.workflow),
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
@@ -2333,7 +2617,22 @@ def conversing(
                     # the pass and not the request: every step this turn has taken is recorded, so
                     # the pass that follows replays them and reaches the request this one refused.
                     return Progressed()
+                except RequestRefused:
+                    # The same shape one answer along, and the answer is the opposite one. The
+                    # provider will not take this request on any pass, so asking for another is
+                    # asking to be refused again; the reason is already recorded, so the page can
+                    # say what happened without this carrying anything back.
+                    return Stalled()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             at = Reached(turn=at.turn + 1, history=(*at.history, *said))
+            # After the turn is recorded rather than before, so the context this is read against is
+            # the one the turn actually left behind, and so a crash between the two loses nothing: the
+            # pass that resumes replays the step, reaches here, and asks the same question of the same
+            # numbers. The window is asked for now rather than at the top of the pass because the
+            # reference under it is reloadable configuration, exactly as the rates are.
+            if tended is not None and tended.hands_off:
+                facts = None if prices is None else prices.facts(chosen)
+                if crossed(asked, said, facts.context if facts is not None else None, tended):
+                    return Crossed()
 
     return converse

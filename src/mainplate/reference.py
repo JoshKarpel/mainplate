@@ -553,6 +553,61 @@ def priced(cost: Cost, usage: RequestUsage) -> Decimal | None:
 
 
 @dataclass(frozen=True, slots=True)
+class Resending:
+    """
+    What putting this conversation to the model again costs, at both ends of what a cache might hold.
+
+    Two figures rather than one, because the difference between them is the whole of what the
+    composer's line is for: a conversation picked up after a pause pays the second where it would have
+    paid the first, and on a long one that gap is most of the bill. Seeing both is seeing what waiting
+    costs.
+
+    One value rather than two fields on a `Conversation`, so the pair can never be computed from two
+    different contexts or two different records - which is `facts_of`'s own argument one scale down.
+
+    **Both are floors, and both answer a narrower question than "what will the next turn cost".** What
+    they price is the *input of that turn's first request*: not the answer, not the tools the turn
+    runs, and not the further requests it makes, any of which can dwarf either. That is why the page
+    draws them with a `+`. It is also the only thing about a turn nobody has started that can be
+    stated exactly rather than guessed at.
+    """
+
+    cold: Decimal
+    """With none of the prefix read from a cache, which is what a session pays after a long enough pause."""
+
+    warm: Decimal | None = None
+    """
+    With the whole prefix read from a cache, or nothing where the record publishes no rate for that.
+
+    The optimistic end rather than a prediction: how much of a prefix the provider still holds is
+    unobservable from here, so this is what it costs if all of it is. Absent where `Cost.cache_read`
+    is, because `priced` falls back to the input rate there and the two figures would print
+    identically - which reads as a bug rather than as a record that does not say.
+    """
+
+
+def resending(cost: Cost, context: int) -> Resending | None:
+    """
+    Both ends of what re-sending this much context costs, or nothing where the arithmetic cannot run.
+
+    `priced` with a usage rather than a multiplication of its own, because what a request costs is one
+    piece of arithmetic and this is that arithmetic asked two hypothetical questions. A request with no
+    output is exactly the shape of what a turn opens with, before anybody has typed into it; the two
+    differ only in how much of the input the provider is told it already had.
+
+    The counts nest, which is what makes the warm case one line: `input_tokens` includes the cache
+    reads, so a request claiming to have read all of its input from cache has no fresh input at all.
+    """
+    cold = priced(cost, RequestUsage(input_tokens=context))
+    if cold is None:  # pragma: no cover - `priced` answers `None` only on counts this cannot produce
+        return None
+    warm = (
+        None if cost.cache_read is None else priced(cost, RequestUsage(input_tokens=context, cache_read_tokens=context))
+    )
+    return Resending(cold=cold, warm=warm)
+
+
+@dataclass(frozen=True, slots=True)
 class Prices:
     """
     Where a session's model is priced: what its endpoint lists, and what the database says of it.
@@ -565,6 +620,19 @@ class Prices:
 
     catalogues: Catalogues
     references: References
+
+    def facts(self, chosen: Choice) -> Facts | None:
+        """
+        What is known about this session's model as things stand, or nothing where nothing is.
+
+        One record read for however many fields a caller wants, which is `facts_of`'s own argument
+        said one layer in: what a turn is priced by and how big its window is come off the same
+        lookup, so asking twice is how the two would come to disagree about which record that is.
+
+        Read at the moment of the question rather than at the top of the pass, because both holders
+        under it are reloadable configuration and a pass outlives a refresh of either.
+        """
+        return facts_of(self.catalogues.current, self.references.current, chosen)
 
     def pricer(self, chosen: Choice) -> Pricer:
         """
@@ -581,7 +649,7 @@ class Prices:
         """
 
         def price(usage: RequestUsage) -> Decimal | None:
-            facts = facts_of(self.catalogues.current, self.references.current, chosen)
+            facts = self.facts(chosen)
             if facts is None or facts.cost is None:
                 return None
             return priced(facts.cost, usage)

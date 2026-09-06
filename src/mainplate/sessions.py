@@ -19,9 +19,16 @@
 #
 # It is also what lets a read here reach *into* a checkpoint rather than copying out of one. A
 # session's repository is recorded in its `choice`, and a checkpoint is a row per key rather than
-# one value, so one join reads that one small row per session and this table stays the three
-# settled facts it holds. A sixth column would be the second copy the whole console is built to
-# avoid.
+# one value, so one join reads that one small row per session and this table stays the settled
+# facts it holds. A column copying something already recorded would be the second copy the whole
+# console is built to avoid.
+#
+# `Tending` is the one thing here that is *not* settled, and it is not that second copy either: it
+# has no other home. A session's own settings have to be mutable to be settings at all, and the two
+# places this console otherwise keeps things both refuse them - the checkpoint keeps the value a key
+# was first given, so a setting saved twice would keep its first answer for ever, and `localStorage`
+# is in a browser where the worker that reads this may be another process entirely. So it is a
+# column, and the table that already answers "which sessions are there" is where it goes.
 
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ import secrets
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field
 from datetime import UTC
 from datetime import datetime
 from typing import Final
@@ -37,6 +45,8 @@ from without_durability_sqlite import Database
 
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import REPOSITORY_FIELD
+from mainplate.tending import Tending
+from mainplate.tending import parse_tending
 
 # Created here rather than in the store's own `migrate`, which owns three tables of its own and
 # knows nothing about sessions. Both run at startup and both are idempotent.
@@ -53,7 +63,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     title       TEXT NOT NULL,
     forked_from TEXT,
     forked_at   INTEGER,
-    forked_aside INTEGER
+    forked_aside INTEGER,
+    hands_off   INTEGER,
+    reserve     INTEGER
 ) STRICT;
 """
 
@@ -64,6 +76,8 @@ ADDED = (
     ("forked_from", "ALTER TABLE sessions ADD COLUMN forked_from TEXT"),
     ("forked_at", "ALTER TABLE sessions ADD COLUMN forked_at INTEGER"),
     ("forked_aside", "ALTER TABLE sessions ADD COLUMN forked_aside INTEGER"),
+    ("hands_off", "ALTER TABLE sessions ADD COLUMN hands_off INTEGER"),
+    ("reserve", "ALTER TABLE sessions ADD COLUMN reserve INTEGER"),
 )
 
 # Long enough that an id is not guessable, which matters because a session id *is* its URL: this
@@ -141,6 +155,17 @@ class Session:
     `owner/repo` a person recognises.
     """
 
+    tending: Tending = field(default_factory=Tending)
+    """
+    What this console is doing for the session unasked, which is the one field here that moves.
+
+    A default rather than a demand, because both columns behind it are nullable and `NULL` reads as
+    the constant: a session written before this existed has neither, and reading it as the default is
+    ordinary parsing of an optional rather than a guess. `tend` is the only thing that ever writes
+    them, so a session nobody has told anything is a session on the defaults for as long as it lives,
+    and moving a default moves every such session with it.
+    """
+
 
 def mint_session_id() -> str:
     return secrets.token_hex(ID_BYTES)
@@ -186,6 +211,8 @@ SELECT sessions.id,
        sessions.forked_from,
        sessions.forked_at,
        sessions.forked_aside,
+       sessions.hands_off,
+       sessions.reserve,
        json_extract(choice.value, :repository_path)
   FROM sessions
   LEFT JOIN workflow_checkpoint AS choice
@@ -234,7 +261,52 @@ async def read_session(database: Database, session: str) -> Session | None:
     return parse_session(rows[0]) if rows else None
 
 
-type Row = tuple[str, str, str, str | None, int | None, int | None, str | None]
+# The two columns on their own, without the join every other read here makes. A pass wants a
+# session's settings and nothing else about it, and what the join fetches is the repository, which
+# the pass already has out of the recorded choice.
+TENDING = "SELECT hands_off, reserve FROM sessions WHERE id = ?"
+
+
+async def read_tending(database: Database, session: str) -> Tending:
+    """
+    What this console is doing for one session unasked, as the pass that answers it reads.
+
+    A session this console has never heard of reads as the defaults rather than raising. Nothing here
+    can produce one - a session is enrolled before its first message and a message is what queues a
+    pass - so what a raise would buy is a stalled conversation in exchange for a state that cannot
+    arise, and the answer to "nobody has said" is the same answer either way.
+    """
+
+    def query(connection: sqlite3.Connection) -> Tending:
+        for hands_off, reserve in connection.execute(TENDING, (session,)):
+            return parse_tending(
+                None if hands_off is None else int(hands_off),
+                None if reserve is None else int(reserve),
+            )
+        return Tending()
+
+    return await database.run(query)
+
+
+async def tend(database: Database, session: str, tending: Tending) -> None:
+    """
+    Say what this console should do for a session unasked, which is the one row here ever rewritten.
+
+    Both columns in one statement, always, so the pair cannot be half applied: a switch saved without
+    the amount beside it would leave a session running on a reserve nobody had looked at.
+
+    What it writes is the value rather than the difference from the default, so a session somebody has
+    set stops following the constant. That is the point of having said something.
+    """
+    await database.run(
+        lambda connection: connection.execute(
+            "UPDATE sessions SET hands_off = ?, reserve = ? WHERE id = ?",
+            (int(tending.hands_off), tending.reserve, session),
+        )
+    )
+
+
+type Row = tuple[str, str, str, str | None, int | None, int | None, int | None, int | None, str | None]
 
 
 async def selecting(database: Database, statement: str, parameters: Mapping[str, str]) -> list[Row]:
@@ -254,18 +326,28 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 None if forked_from is None else str(forked_from),
                 None if forked_at is None else int(forked_at),
                 None if forked_aside is None else int(forked_aside),
+                None if hands_off is None else int(hands_off),
+                None if reserve is None else int(reserve),
                 None if repository is None else str(repository),
             )
-            for identifier, created_at, title, forked_from, forked_at, forked_aside, repository in connection.execute(
-                statement, parameters
-            )
+            for (
+                identifier,
+                created_at,
+                title,
+                forked_from,
+                forked_at,
+                forked_aside,
+                hands_off,
+                reserve,
+                repository,
+            ) in connection.execute(statement, parameters)
         ]
 
     return await database.run(query)
 
 
 def parse_session(row: Row) -> Session:
-    identifier, created_at, title, forked_from, forked_at, forked_aside, repository = row
+    identifier, created_at, title, forked_from, forked_at, forked_aside, hands_off, reserve, repository = row
     return Session(
         id=identifier,
         created_at=datetime.fromisoformat(created_at),
@@ -275,6 +357,7 @@ def parse_session(row: Row) -> Session:
         # quieter wrong answer; this says so instead.
         forked=parse_origin(identifier, forked_from, forked_at, forked_aside),
         repository=repository,
+        tending=parse_tending(hands_off, reserve),
     )
 
 

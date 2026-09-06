@@ -69,16 +69,25 @@ from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
 from mainplate.reference import facts_of
+from mainplate.reference import resending
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.service import Conversation
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.snapshots import branch_named
+from mainplate.tools import ASKING
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 
 WHEN = datetime(2031, 3, 14, 15, 9, 26, tzinfo=UTC)
+"""
+When everything in this gallery happened, which every response fixture is stamped with.
+
+`ModelResponse.timestamp` defaults to the moment it was constructed, so a fixture without one is the
+moment the gallery ran: the composer's cache note draws that time, and two runs would produce two
+different pages. A screenshot that differs run to run is one nobody can compare against the last.
+"""
 
 # The session every page below is about, named here rather than on `PARENT` because the default
 # choice needs it too: a session's branch is named after its id, so the two would otherwise be one
@@ -263,13 +272,12 @@ TIMINGS = {"call-1": 0.184, "call-7": 12.65}
 INSTRUCTIONS = """\
 You are a helpful assistant, working with a software engineer. Be concise and direct.
 
-You are working in a git worktree at /var/lib/mainplate/worktrees/2f9c1a, which is called
-`worktree`. The file tools take paths relative to it and reach nothing outside it. Changes you make
-there are snapshotted automatically; you never need to commit, and you should not run git commands
-to record your work. You also have a scratch directory at /var/lib/mainplate/scratch/2f9c1a, called
-`scratch`, outside the worktree and outside every snapshot. Reach it by passing `root: "scratch"` to
-`read`, `edit` or `create` rather than by writing that path out; in a command it is
-`$MAINPLATE_SCRATCH`, and the worktree is `$MAINPLATE_WORKTREE`.
+You are working in a git worktree, which is called `worktree`. The file tools take paths relative to
+it and reach nothing outside it. Changes you make there are snapshotted automatically; you never
+need to commit, and you should not run git commands to record your work. You also have a scratch
+directory called `scratch`, outside the worktree and outside every snapshot. Reach it by passing
+`root: "scratch"` to `read`, `edit` or `create`; in a command it is `$MAINPLATE_SCRATCH`, and the
+worktree is `$MAINPLATE_WORKTREE`.
 
 Commands you run cannot reach the network: no fetching, no installing, no cloning. Something that
 needs one fails rather than hanging.
@@ -285,12 +293,47 @@ nothing to get wrong.
 Run `just test` before saying anything is done.
 """
 
+HANDED_OVER = (
+    "## Objective\n"
+    "\n"
+    "Find out why the transcript stops updating after the first answer, and fix it.\n"
+    "\n"
+    "## What is settled\n"
+    "\n"
+    "The connection is held by the page rather than by the transcript, so a swap of the transcript"
+    " no longer tears it down. `streaming.py` sends a whole current render on every change rather"
+    " than a delta, which is why a reconnect needs no cursor.\n"
+    "\n"
+    "## Ruled out\n"
+    "\n"
+    "An `hx-trigger` on the transcript itself. It has to be `every` rather than `load`, because"
+    " morphing keeps the element and a `load` poll fires once and then waits for ever on an answer"
+    " that already arrived, invisibly to any markup assertion.\n"
+    "\n"
+    "## Next\n"
+    "\n"
+    "Read `src/mainplate/streaming.py`, then `transcript_region` in `pages.py`. The change token is"
+    " `Service.token`, which counts recorded rows.\n"
+)
+"""
+A handoff as one actually reads: what the task is, what is settled, what was ruled out, what is next.
+
+Written out rather than generated, because what a screenshot has to show is a document long enough to
+need the panel it is drawn in and structured enough that its Markdown is doing something.
+
+Joined from single logical lines rather than written as a wrapped triple-quoted string, and that is
+about the rendering rather than about the source. A message's newlines are the author's, so
+`as_message` draws every one of them as a break; a fixture wrapped to fit this file would put a break
+mid-sentence in the screenshot and misrepresent what a model's own paragraph looks like.
+"""
+
 CONVERSATION: list[ModelMessage] = [
     ModelRequest(
         parts=[UserPromptPart(content="Why does the poll stop after one answer?")],
         instructions=INSTRUCTIONS,
     ),
     ModelResponse(
+        timestamp=WHEN,
         parts=[
             ThinkingPart(
                 content=(
@@ -337,6 +380,7 @@ CONVERSATION: list[ModelMessage] = [
         ]
     ),
     ModelResponse(
+        timestamp=WHEN,
         parts=[
             TextPart(
                 content=(
@@ -383,6 +427,7 @@ CONVERSATION: list[ModelMessage] = [
 TOOL_IN_FLIGHT: list[ModelMessage] = [
     ModelRequest(parts=[UserPromptPart(content="Now check the stylesheet handles a long line.")]),
     ModelResponse(
+        timestamp=WHEN,
         parts=[
             TextPart(content="Checking."),
             ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-2"),
@@ -396,6 +441,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
 # calls in one response because that is the case worth looking at: they run at once, so one comes
 # back while the other is still out, and the panel has to read as both at the same time.
 PARTWAY = ModelResponse(
+    timestamp=WHEN,
     parts=[
         ThinkingPart(content="Two files to look at. I can read them at the same time."),
         ToolCallPart(tool_name="read", args={"path": "src/mainplate/streaming.py"}, tool_call_id="call-7"),
@@ -482,6 +528,15 @@ def returns(messages: Sequence[ModelMessage]) -> dict[str, object]:
 # A stand-in repository and one session's worktree of it, so the pages show what a console with
 # snapshots on looks like: the tree each turn started on, beside the fork link that would put it
 # back, and the repository the session is working in.
+SINCE = timedelta(minutes=12)
+"""
+How long ago the fixtures were last answered, which is the one thing a gallery cannot measure.
+
+Under the retention, so the cache note is drawn in the state a reader is usually in - the cold one is
+what a session looks like after lunch, and drawing it everywhere would make a page of fixtures look
+like a console nobody had touched.
+"""
+
 REPOSITORY = "JoshKarpel/mainplate"
 WORKSPACE = Path("/home/you/.local/share/mainplate/workspaces/worktrees")
 
@@ -526,6 +581,8 @@ def showing(
     answerable: bool = True,
     working: bool = True,
     started: bool = True,
+    refused: records.Refused | None = None,
+    since: timedelta | None = SINCE,
 ) -> Conversation:
     """
     One session as a page sees it.
@@ -534,13 +591,21 @@ def showing(
     yet: a session whose message is still queued has no turn, so it has no tree recorded before a
     request nobody has made, and a fixture that gave it one would be a checkpoint no pass could
     write.
+
+    `since` is how long ago it was last answered, which is the one thing here a page cannot read out
+    of a checkpoint: `Service.read` measures it against a clock, and a gallery has none. Given rather
+    than computed for that reason, and given a value under the retention by default so the cache note
+    is drawn in the state a reader is usually in.
     """
     chosen = CATALOGUE.default if working else replace(CATALOGUE.default, repository=None)
+    said = transcript(snapshotted(written) if working and started else written)
+    facts = facts_of(CATALOGUE, REFERENCE, chosen)
     return Conversation(
         session=session,
-        said=transcript(snapshotted(written) if working and started else written),
+        said=said,
         chosen=chosen,
         answerable=answerable,
+        refused=refused,
         repository=REPOSITORY if working else None,
         worktree=WORKSPACE / session.id if working else None,
         # Which follows the repository, because a command runs in a session's worktree: it is what
@@ -549,7 +614,13 @@ def showing(
         runnable=working,
         # Looked up here rather than written down, exactly as `Service.read` does it, so the gauge
         # on every rule is drawn against the same number the model's own card shows.
-        window=facts.context if (facts := facts_of(CATALOGUE, REFERENCE, chosen)) is not None else None,
+        window=facts.context if facts is not None else None,
+        since=since if said.answered_at is not None else None,
+        resending=(
+            resending(facts.cost, said.total.context)
+            if facts is not None and facts.cost is not None and said.total.context
+            else None
+        ),
     )
 
 
@@ -599,7 +670,27 @@ def pages() -> dict[str, str]:
     # been sent and not yet heard reads as one.
     answering[inbox_key(6)] = recorded_steer("and while you are there, check the phone width")
 
+    # A handoff, which is two panels of a kind nobody typed: the console's own ask, and the document
+    # that came back and starts the model's history again. Turn 1's opener is replaced rather than a
+    # turn being added, so the ask sits under a turn that actually worked - which is what a handoff
+    # turn looks like, and what a screenshot has to show is that the two panels read as the console's
+    # rather than as somebody's. The document is left unread, since a message waiting for its turn is
+    # both the honest state a moment after a handoff and the one that draws the boundary on the page.
+    handed = dict(settled)
+    handed[inbox_key(1)] = records.Handoff(said=ASKING).recorded()
+    handed[inbox_key(7)] = records.Handoff(said=HANDED_OVER, forget=True).recorded()
+
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
+    # The other way to be stopped, which points somewhere different because nothing can be put back:
+    # what the provider turned down is the recorded history itself, so the sentence names the fork.
+    turned_down = showing(
+        LISTED[3],
+        recorded(CONVERSATION),
+        refused=records.Refused(
+            why="prompt is too long: 214331 tokens > 200000 maximum",
+            status=400,
+        ),
+    )
     # The state every session opens in, and stays in for as long as the clone and the worktree take:
     # the message is there to be drawn and what the session is answered under is not, because
     # composing that reads a repository the pass is the one to fetch. The system prompt panel is
@@ -618,7 +709,9 @@ def pages() -> dict[str, str]:
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),
         "answering.html": session_page(LINKS, LISTED, showing(PARENT, answering), REACHABLE),
+        "handed-off.html": session_page(LINKS, LISTED, showing(PARENT, handed), REACHABLE),
         "stalled.html": session_page(LINKS, LISTED, stalled, REACHABLE),
+        "refused.html": session_page(LINKS, LISTED, turned_down, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one.

@@ -36,10 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session sits for as long as its clone and its worktree take. Drawn as the Markdown it is, since
   what is in it is `.md` files and a wall of `##` is the one reading of them nobody meant; the source
   rides along as `data-markdown`, so the copy button still hands back exactly what was sent. The
-  panel's row stands for it with its own opening line, clipped at the width of the panel, and the
-  character count beside it, which is what says it is paid for on every request from here on. A
-  console that shows what a model answered and hides what it was told is showing half of how a turn
-  happened.
+  panel's row stands for it with its own opening line, clipped at the width of the panel. A console
+  that shows what a model answered and hides what it was told is showing half of how a turn happened.
 - Guidance handed over mid-turn drawn as a `guidance` panel, in the same shape, at the position it
   was delivered. Its own kind rather than the system prompt's, because the two sit in different
   places in the request - `instructions` in front of the cached prefix against a system part appended
@@ -70,6 +68,60 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the bottom of a conversation somebody is reading the middle of. It follows the same rule the session
   total does: the first unpriced turn takes it off every rule below, because a total quietly missing a
   turn reads as the whole and understates it.
+- **Handoff**: ask a session to write down where it has got to, and carry on from that document with
+  everything above it out of the model's context. The summariser is the session itself, with the
+  tools it already had, so it checks the working tree rather than recalling it - which is the failure
+  mode a summary has, and the one nothing else can catch. It happens in the session rather than in a
+  branch, so the cost lands on the session's own total, the worktree is the one the work is in, and
+  the turn is answered on the prefix already cached. `hand_off` takes the document as an argument
+  because a model asked for one in prose writes "Here is the handoff: ... what next?", and the
+  framing then becomes durably part of what the next model is told. Neither the ask nor the tool
+  prescribes a shape: what a refactor needs handed over and what an investigation needs are different
+  documents. `/handoff` in the composer asks for one, and it is the one answer in that menu whose box
+  may be empty: what it does with the text is point the handoff at something, appended to the standing
+  ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
+  the console writes are drawn as their own `handoff` kind, because every other message in a
+  conversation was typed by somebody.
+- **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
+  writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
+  handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
+  window rather than a threshold - one turn can cross the reserve and overshoot it - and past the far
+  end the console asks for nothing rather than spending a request on a handoff that cannot land. On by
+  default, which is safe only here: a handoff is an append, so the whole conversation stays in the
+  transcript and a fork above the boundary recovers it, where every other harness's compaction
+  defaults on as a bet that its summary is good enough because the original is gone. The switch and
+  the reserve are per session and changeable while it runs, in the rail's own card; where the reserve
+  falls is marked on every rule's gauge, so watching the line grow toward the mark is watching the
+  handoff approach.
+- A line above the message box saying whether the provider still holds this conversation's prefix, and
+  what re-sending it costs with none of it cached. Meaningless before there was a cache and worth a row
+  now that there is one: a conversation picked up after lunch pays full input price for everything said
+  in it, and nothing about the request looks any different. One-sided, always - past the retention a
+  prefix is cold and this says so, and under it what it says is when the prefix was last *written*,
+  because eviction cannot be observed from here. Both ends are priced - with the whole prefix cached
+  and with none of it - because the gap between them is what waiting actually costs, and on a long
+  conversation it is a tenfold jump. Both are floors and carry a `+`: they price the input of the next
+  turn's first request, where the answer, the tools it runs and any further requests are all on top.
+  The server renders an absolute time, which cannot rot, and the script renders the reading of it
+  against the clock, since nothing here re-renders while somebody is away.
+- A session the provider will never accept a request from says so and stops, rather than spinning.
+  What it names is `fork`, because nothing can be put back: what was turned down is the recorded
+  history itself, and forking at the turn drops that turn's own requests while keeping everything
+  under them.
+
+### Fixed
+
+- **Prompt caching is on.** It is opt-in on the Anthropic wire and was never asked for, so every
+  request paid full input price for the whole conversation - and since a conversation is re-sent
+  whole on every turn, on a long turn that is most of the bill. Nothing about the request looked any
+  different, which is why the wire now answers a question about it rather than a setting sitting
+  somewhere it can be forgotten. An hour's retention rather than the default five minutes, which is a
+  stated bet: it is written at 2x base input against 1.25x, so it pays where a conversation is picked
+  up again after a pause, and that is what a chat console is.
+- The instructions no longer print a session's own directories. They named the worktree and the
+  scratch by absolute path, which is 32 hex characters of session id sitting in front of the entire
+  cached prefix, so no two sessions could share one and a fork could never read its parent's. The
+  root names and `$MAINPLATE_WORKTREE` were already the way to reach both, so nothing was given up.
 
 ### Changed
 
@@ -113,6 +165,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   either of them, which without it are one-way presses over a whole conversation.
 - The panel saying a reply is being written, and a stretch of context whose instructions are not
   composed yet, carry the working dots on their own row instead of opening a panel to show them.
+- The dock's leap to the start lands on the rule that opens the first turn rather than on the first
+  panel under it. That rule carries the turn's own facts and its fork link, and where the stretch has
+  instructions there is a system prompt panel between it and the message, so the top of a
+  conversation was left above the reader with nothing saying so.
 - Panels are named after what they hold, in the word the page prints: `prompt` and `steer` where
   they read `you` and `you (steering)`. A reader who learns a word from a panel now finds it in the
   code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind

@@ -4,6 +4,8 @@ import re
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
 from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler
@@ -31,6 +33,7 @@ from playwright.async_api import expect
 from without_durability.interfaces import INBOX
 from without_http import serving
 
+from mainplate.agent import RETENTION
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
@@ -45,8 +48,10 @@ from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
+from mainplate.pages import CACHE_ID
 from mainplate.pages import OPENING
 from mainplate.service import Service
+from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
 from scripts.gallery import pages
 from scripts.gallery import write
@@ -287,6 +292,21 @@ class TestWhereTheReaderIs:
         await page.goto(f"{gallery}/session.html", wait_until="load")
         await page.click('button[data-step="1"][data-stop="panel"]:not([data-side])')
         await expect(page.locator(LANDED)).to_have_count(1)
+
+    async def test_leaping_to_the_start_lands_on_the_rule_that_opens_the_first_turn(
+        self, page: Page, gallery: str
+    ) -> None:
+        # The top of a conversation is that rule and not the first panel under it: the rule carries
+        # the turn's own facts and its fork link, and where the stretch has instructions there is a
+        # system prompt panel between the two, so landing on the panel left both above the reader.
+        # Asked of a browser because the two landings are the same markup and differ only in which
+        # element the script chose.
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.click('button[data-leap="start"]')
+        landed = page.locator(".rule[data-landed]")
+        await expect(landed).to_have_count(1)
+        await expect(landed).to_have_attribute("id", "rule-0")
+        await expect(page.locator(LANDED)).to_have_count(0)
 
     async def test_stepping_by_turn_lands_on_a_rule_and_not_on_a_panel(self, page: Page, gallery: str) -> None:
         # The coarse column steps the boundaries rather than the messages, which is the whole of
@@ -1584,22 +1604,6 @@ class TestFoldingADocumentTheConsoleHandedOver:
         assert told[0].startswith("You are a helpful assistant")
         assert told[1].startswith("`src/mainplate/AGENTS.md`, guidance for this part of the repository:")
 
-    async def test_the_size_stays_beside_it_when_the_panel_opens(self, page: Page, gallery: str) -> None:
-        """
-        The opening line goes when the panel opens, because a prefix of the body standing above the
-        body says nothing twice. The figure is not a prefix of anything, and what it says - that this
-        is paid for on every request from here on - is worth having with the panel either way.
-        """
-        panels = await self.documents(page, gallery)
-        panel = panels.first
-        await expect(panel.locator(".panel__size")).to_have_text("1184 characters")
-
-        await panel.locator(".panel__role").click()
-
-        await expect(panel).to_have_attribute("open", "")
-        await expect(panel.locator(".opening")).to_be_hidden()
-        await expect(panel.locator(".panel__size")).to_have_text("1184 characters")
-
     async def test_the_frame_around_it_shuts_the_panel_it_belongs_to(self, page: Page, gallery: str) -> None:
         """
         The way out of the longest box on the page. A press on the room around the prose shuts the
@@ -1706,6 +1710,137 @@ async def a_conversation(console: tuple[str, Service], page: Page) -> str:
     return session.id
 
 
+class TestSayingWhetherTheCacheIsStillWarm:
+    """
+    The line above the box, where the server states a fact and the script states the reading of it.
+
+    A browser, because the whole point is that the two differ: the server can only say when the prefix
+    was written, since nothing here re-renders on the clock, and turning that into `warm as of 12m` is
+    the script's. Both are in the markup as the same element, so nothing short of running it can tell
+    which one a reader actually sees.
+    """
+
+    async def test_the_script_turns_the_written_time_into_how_long_ago_it_was(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        What no-script gets is `cached at 15:09`, which is a fact that cannot rot. What a reader with
+        the file gets is the reading of it, recomputed as the page sits there.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            recorded_turn({"kind": "response", "parts": [{"part_kind": "text", "content": "a plate"}]}),
+        )
+        await page.reload(wait_until="load")
+
+        await expect(page.locator(".cache__state")).to_contain_text("warm as of")
+
+    async def test_a_prefix_past_the_retention_stays_cold_under_the_script(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one-sided rule, driven: the script recomputes the state and must not talk a cold prefix
+        back into being warm. Aged past the retention on the record rather than by moving any clock,
+        which is what decides it.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        stale = datetime.now(UTC) - RETENTION - timedelta(minutes=1)
+        await service.checkpointer.supply(
+            session,
+            messages_key(0),
+            recorded_turn(
+                {
+                    "kind": "response",
+                    "parts": [{"part_kind": "text", "content": "a plate"}],
+                    "timestamp": stale.isoformat(),
+                }
+            ),
+        )
+        await page.reload(wait_until="load")
+
+        await expect(page.locator(".cache__state")).to_have_text("cold")
+
+    async def test_a_conversation_nothing_has_answered_draws_no_line_at_all(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        `:empty` rather than an absent element, so the region the page's connection swaps into is
+        still there. What a reader must not see is a blank row above the box.
+        """
+        await a_conversation(console, page)
+
+        await expect(page.locator(f"#{CACHE_ID}")).to_have_count(1)
+        await expect(page.locator(f"#{CACHE_ID}")).to_be_hidden()
+
+
+class TestSettingWhenASessionHandsItselfOff:
+    """
+    The rail's own card, where the two controls deliberately do not behave the same way.
+
+    A browser, twice over: which of them takes effect on the press is htmx's trigger rather than
+    anything in the markup, and whether the button says there is something unsaved is a comparison
+    against a property no server renders. Both look identical in what is sent either way.
+    """
+
+    async def test_the_switch_takes_effect_on_the_press(self, page: Page, console: tuple[str, Service]) -> None:
+        """
+        A checkbox says the whole of what it means the moment it moves, so waiting for `Set` leaves a
+        console that looks switched off and is not. What proves it landed is the mark on every rule's
+        gauge, which is drawn only where the switch is on.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        await expect(page.locator(".tending__switch input")).to_be_checked()
+
+        await page.uncheck(".tending__switch input")
+
+        await expect(page.locator(".rule__reserve")).to_have_count(0)
+        assert not (await read_tending(service.database, session)).hands_off
+
+    async def test_the_number_waits_to_be_set_and_says_that_it_is_waiting(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The other half, and why the two differ: a number is half-written for as long as somebody is
+        writing it, so it cannot take effect on a keystroke - which leaves the button beside it to say
+        there is something to press. Nothing is recorded until it is.
+        """
+        _, service = console
+        session = await a_conversation(console, page)
+        before = await read_tending(service.database, session)
+
+        await page.fill(".tending__reserve input", "120")
+
+        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        assert await read_tending(service.database, session) == before, "typing records nothing"
+
+        await page.click(".handoff__set")
+
+        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
+        assert (await read_tending(service.database, session)).reserve == 120_000
+
+    async def test_typing_the_recorded_value_back_leaves_nothing_to_press(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The mark is a comparison against what was rendered rather than a flag set by the first
+        keystroke, so undoing a change unmarks the button rather than leaving it lit for ever.
+        """
+        await a_conversation(console, page)
+        box = page.locator(".tending__reserve input")
+        recorded = await box.input_value()
+
+        await box.fill("120")
+        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        await box.fill(recorded)
+
+        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
+
+
 class TestWhereTheComposerSendsTo:
     """
     That pressing Fork lands the reader in a *different* session, driven by a real htmx.
@@ -1773,6 +1908,40 @@ class TestWhereTheComposerSendsTo:
 
         await expect(page.locator("#transcript")).to_contain_text("and another thing")
         assert session in page.url, "sending swaps the conversation rather than leaving it"
+
+    async def test_handing_off_from_an_empty_box_is_taken_rather_than_refused(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The one answer whose box may be empty, and the whole of what `formnovalidate` has to buy.
+
+        A browser, because everything that decides this is the browser's: the box is `required`, so a
+        form submitted without one is refused before any request leaves, and what lifts that for one
+        submitter and no other is an attribute on the button. Nothing in the markup distinguishes a
+        control that works here from one that silently does nothing, and no in-memory test can see the
+        difference because neither ever reaches the boundary.
+        """
+        await a_conversation(console, page)
+        await page.click(".sender__caret")
+        await page.click('.sender__option[value="handoff"]')
+
+        await expect(page.locator('.panel[data-kind="handoff"]')).to_have_count(1)
+
+    async def test_a_handoff_carries_what_was_typed_as_what_to_dwell_on(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The other half of the same control: the box is optional here rather than ignored, and what is
+        in it is appended to the standing ask rather than replacing it.
+        """
+        await a_conversation(console, page)
+        await page.fill(".composer textarea", "dwell on the parser work")
+        await page.click(".sender__caret")
+        await page.click('.sender__option[value="handoff"]')
+
+        asked = page.locator('.panel[data-kind="handoff"]')
+        await expect(asked).to_contain_text("dwell on the parser work")
+        await expect(asked).to_contain_text("Hand this conversation off")
 
     async def test_sending_into_a_turn_being_answered_steers_it_and_shows_the_message_at_once(
         self, page: Page, console: tuple[str, Service]

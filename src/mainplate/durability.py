@@ -39,6 +39,7 @@ from datetime import timedelta
 from decimal import Decimal
 from time import monotonic
 from typing import Any
+from typing import Final
 
 from pydantic import TypeAdapter
 from pydantic_ai.capabilities import AbstractCapability
@@ -46,6 +47,7 @@ from pydantic_ai.capabilities import CapabilityOrdering
 from pydantic_ai.capabilities import WrapModelRequestHandler
 from pydantic_ai.capabilities.abstract import ValidatedToolArgs
 from pydantic_ai.capabilities.abstract import WrapToolExecuteHandler
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
@@ -129,6 +131,22 @@ def parse_returned(recorded: object) -> records.Returned:
     return records.Returned.model_validate(recorded)
 
 
+async def as_recorded(record: records.Record) -> object:
+    """
+    A record already in hand, as the effect `Run.step` takes.
+
+    Every other step here wraps work that has yet to happen, so its effect is where the work goes. A
+    refusal is the one whose value is known before the step is taken, because the thing it records is
+    the exception being handled.
+    """
+    return record.recorded()
+
+
+def parse_refused(recorded: object) -> records.Refused:
+    """Why a model request will never be accepted, as the record the pass that hit it wrote."""
+    return records.Refused.model_validate(recorded)
+
+
 def snapshotting(worktree: Worktree | None, why: str) -> Callable[[], Awaitable[object]]:
     """
     What the worktree looked like at one model request, as the effect `Run.step` takes.
@@ -146,6 +164,58 @@ def snapshotting(worktree: Worktree | None, why: str) -> Callable[[], Awaitable[
         return records.Tree(tree=None if worktree is None else await worktree.capture(why)).recorded()
 
     return capture
+
+
+class RequestRefused(Exception):
+    """
+    The provider will not accept this request, and will not accept it on a later pass either.
+
+    Raised from `CheckpointedModel.request` after the refusal has been recorded, so it unwinds
+    `agent.run` the way `AllowanceSpent` does and `conversing` catches it outside the run. What it
+    reports is not the same thing, though: an allowance spent means the session is owed another pass
+    at once, and this means the session is owed nothing, because another pass would ask the identical
+    question and get the identical answer.
+
+    **The bug it exists to close is a retry loop nobody can see.** `without-durability`'s worker
+    leaves a delivery unanswered when a pass raises, deliberately, since it cannot tell a workflow's
+    own failure from a store that was briefly unreachable - and its own docstring says the cost out
+    loud: "a workflow that fails on every pass is retried for as long as it keeps failing, once per
+    lease, and nothing here backs that off or gives up. A deployment that needs a limit keeps the
+    count where it keeps everything else it needs to survive a crash, which is the checkpoint." This
+    is that count, in the only form a refusal needs: written down once, and never asked again.
+
+    Terminal is decided by `terminally`, and the split is between an answer that will not change and
+    one that might. A 400 for a prompt over the window is arithmetic on values already recorded; a
+    429 or a 503 is a fact about the next few seconds.
+    """
+
+
+def terminally(error: Exception) -> records.Refused | None:
+    """
+    What to record about an error that will never come out differently, or nothing for one that may.
+
+    **The default is transient**, which is the safe way round: a transient error read as terminal
+    stalls a session that would have recovered on its own, where a terminal one read as transient
+    costs a redelivery per lease until somebody looks. Only what is positively known to be settled is
+    named here.
+
+    A 4xx is the provider saying the request itself is wrong, which no amount of asking again fixes:
+    a prompt over the context window, a model the endpoint will not route, a malformed body, a
+    credential it will not accept. The exceptions are the 4xx codes that are about *now* rather than
+    about the request - `408` timed out, `409` collided, `425` was too early, `429` was too fast -
+    and every one of those is what a redelivery is for.
+
+    A 5xx is never terminal. It is the provider saying it failed, which is the case a retry answers.
+    """
+    if not isinstance(error, ModelHTTPError):
+        return None
+    if not (400 <= error.status_code < 500) or error.status_code in RETRYABLE:
+        return None
+    return records.Refused(why=str(error), status=error.status_code)
+
+
+RETRYABLE: Final = frozenset({408, 409, 425, 429})
+"""The 4xx codes that describe the moment rather than the request, so asking again is the answer."""
 
 
 class AllowanceSpent(Exception):
@@ -317,6 +387,16 @@ class Stepping:
         """The key the next step of this kind will take, without taking it."""
         return f"{self.prefix}:{kind}:{self.taken[kind]}"
 
+    def at(self, kind: StepKind) -> int:
+        """
+        Which position the next step of this kind will take, for a second key that must ride beside it.
+
+        A refusal is named after the *request* it refused rather than after its own position, so that
+        a pass which reaches further than the last one records it under the request that actually
+        failed. Two counters would drift the moment a turn refused anywhere but its first request.
+        """
+        return self.taken[kind]
+
     def allow(self, key: StepKey) -> None:
         """
         Account for the model request named by `key`, refusing the one past this pass's allowance.
@@ -355,6 +435,27 @@ class Stepping:
         """
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
+
+    def refused(self, at: int) -> records.Refused | None:
+        """
+        Why request `at` of this turn was refused before, where a pass has already been refused it.
+
+        Read straight off the snapshot rather than through `step`, because what it decides is whether
+        to take a step at all. A replay that asked again would be putting an identical question to
+        the provider - same recorded history, same recorded message - and paying for the identical
+        refusal, once per pass, for as long as anybody keeps the session queued.
+        """
+        said = self.run.recorded.get(self.identified("refused", str(at)))
+        return None if said is None else parse_refused(said)
+
+    async def refuse(self, at: int, refused: records.Refused) -> None:
+        """
+        Write down that request `at` of this turn will never be accepted, under that request's own key.
+
+        Keyed by the request's position, so that the pass which replays this turn reaches the same
+        request and finds the answer already under the key it is about to use.
+        """
+        await self.step(self.identified("refused", str(at)), lambda: as_recorded(refused), parse_refused)
 
     async def steering(self) -> tuple[str, ...]:
         """
@@ -512,7 +613,21 @@ class CheckpointedModel(WrapperModel):
         The allowance is spent *before* any of that, so a request that was never made leaves no tree
         recorded in front of it. It is ordinarily spent earlier still, in `before_model_request`,
         because that runs before this and records a cursor of its own; see `Stepping.allowed`.
+
+        A refusal the provider will never take back is recorded here and re-raised as
+        `RequestRefused`, which is the one failure this console answers for rather than letting the
+        worker retry: see that exception for the loop it closes. Everything else propagates exactly
+        as it did, because a redelivery is the right answer to an error that might come out
+        differently.
+
+        A request already known to be refused is not made again, which is the first thing checked
+        and therefore ahead of the allowance and the snapshot alike: a pass must spend nothing on a
+        question whose answer is recorded, and a tree captured in front of a request nobody makes is
+        a record of a moment that did not happen.
         """
+        at = self.scope.at("model")
+        if (already := self.scope.refused(at)) is not None:
+            raise RequestRefused(already.why)
         key = self.scope.key("model")
         self.scope.allow(key)
         await self.scope.snapshot()
@@ -524,7 +639,14 @@ class CheckpointedModel(WrapperModel):
             self.scope.price(answered)
             return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
 
-        return await self.scope.step(key, ask, parse_model_response)
+        try:
+            return await self.scope.step(key, ask, parse_model_response)
+        except Exception as error:
+            refused = terminally(error)
+            if refused is None:
+                raise
+            await self.scope.refuse(at, refused)
+            raise RequestRefused(refused.why) from error
 
     @asynccontextmanager
     async def request_stream(

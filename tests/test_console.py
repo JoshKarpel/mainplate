@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import timedelta
 from html.parser import HTMLParser
 from re import sub
 
@@ -18,6 +19,8 @@ from conftest import snapshotted
 from without_asgi import ASGIApp
 from without_durability.interfaces import INBOX
 
+from mainplate import records
+from mainplate.agent import RETENTION
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.app import build_app
@@ -41,9 +44,12 @@ from mainplate.conversation import opened_key
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
+from mainplate.conversation import refused_key
 from mainplate.conversation import tool_key
 from mainplate.conversation import tree_key
+from mainplate.pages import CACHE_ID
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
 from mainplate.sandbox import Filesystem
@@ -663,6 +669,30 @@ class TestTheConsole:
         assert "no longer declares" in answered.text
         assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
 
+    async def test_a_session_the_provider_refused_says_so_and_points_at_the_fork(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The second way to be stuck, drawn the same way and pointing somewhere different.
+
+        A missing endpoint is a configuration file somebody can put back. A refused request cannot be
+        put back at all, because what the provider turned down is the recorded history itself, so the
+        sentence names the one thing that does work: forking at the turn drops that turn's own
+        requests and keeps everything under them.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session, refused_key(0, 0), records.Refused(why="prompt is too long", status=400).recorded()
+        )
+
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/{session}")
+
+        assert "prompt is too long" in answered.text, "the provider's own words rather than a code standing in"
+        assert "(400)" in answered.text
+        assert "Fork at this turn" in answered.text
+        assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
+
     async def test_a_session_on_a_model_the_picker_stopped_listing_is_not_stuck(
         self, app: ASGIApp, service: Service
     ) -> None:
@@ -1058,6 +1088,138 @@ class TestSteppingOutAndComingBack:
         async with calling(app) as caller:
             branched = await caller.get(f"/sessions/{stepped}")
         assert 'value="parent"' in branched.text
+
+
+class TestSayingWhetherTheCacheIsStillWarm:
+    """
+    The line above the box, which says whether the next request pays full price for the whole context.
+
+    Read from the last response's own timestamp against the service's clock, so what these fix is the
+    one-sided rule: `cold` is asserted where it is certain, and `warm` never is.
+    """
+
+    async def test_a_conversation_answered_just_now_says_when_its_prefix_was_written(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        An absolute time and not a relative one, because nothing here re-renders on the clock: what
+        the server can say without rotting is when the prefix was last written, and the script is what
+        turns that into `warm as of 12m`.
+        """
+        service.references.current = a_reference(context=200_000)
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+
+        region = await watched(app, session)
+
+        assert f'id="{CACHE_ID}"' in region
+        assert f"cached at {WHEN:%H:%M}" in region
+        assert "cold" not in region, "warm is never asserted, so neither is its opposite while it holds"
+
+    async def test_a_conversation_older_than_the_retention_is_cold(self, app: ASGIApp, service: Service) -> None:
+        """
+        The one state the server can assert, because it was already true when this was rendered and
+        nothing makes a cold prefix warm again.
+
+        The *response* is aged rather than the clock moved, which is both the real case and the only
+        one available: a `Service` is frozen, and what decides this is when the prefix was written.
+        """
+        service.references.current = a_reference(context=200_000)
+        session = await a_session(app)
+        stale = WHEN - RETENTION - timedelta(seconds=1)
+        await answered(service, session, {**ANSWERED[0], "timestamp": stale.isoformat()})
+
+        region = await watched(app, session)
+
+        assert "cold" in region
+        assert "cached at" not in region
+
+    async def test_it_prices_re_sending_at_both_ends_of_what_a_cache_might_hold(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The pair is the point: what it costs now against what it costs once the prefix is gone, which
+        is what makes the cost of waiting legible. `ANSWERED` leaves 5,300 tokens of context at $3 per
+        million and a tenth of that cached, so re-sending it is $0.0016 or $0.0159.
+
+        The `+` matters as much as either number: what these price is the input of the next turn's
+        first request, and the answer, the tools and any further requests are all on top, so a bare
+        figure would read as what the next turn costs.
+        """
+        service.references.current = Reference(
+            qualified={DEFAULT_CHOICE.model: Facts(context=200_000, cost=Cost(input=3, output=15, cache_read=0.3))},
+            upstream={},
+        )
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+
+        region = await watched(app, session)
+
+        assert "\N{UPWARDS ARROW}5K at \N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}$0.0016 / $0.0159+" in region
+
+    async def test_a_model_whose_record_prices_no_cache_shows_one_figure_rather_than_two_alike(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        `priced` falls back to the input rate where a record publishes no cache one, so a warm figure
+        there would be the cold figure printed twice - which reads as a bug rather than as a database
+        that does not say. What is drawn is the one end that is known.
+        """
+        service.references.current = Reference(
+            qualified={DEFAULT_CHOICE.model: Facts(context=200_000, cost=Cost(input=3, output=15))},
+            upstream={},
+        )
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+
+        region = await watched(app, session)
+
+        assert "\N{UPWARDS ARROW}5K at $0.0159+" in region
+        assert "\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}$" not in region
+
+    async def test_a_model_nobody_wrote_a_price_for_still_says_when_the_prefix_was_written(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The money goes and the state stays, exactly as the gauge's fraction goes while its counts stay:
+        when the prefix was last written is worth saying whether or not anything can price it.
+        """
+        service.references.current = a_reference(context=200_000)
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+
+        region = await watched(app, session)
+
+        assert f"cached at {WHEN:%H:%M}" in region
+        assert "at $" not in region
+
+    async def test_a_conversation_nothing_has_answered_says_nothing_and_still_leaves_the_anchor(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        There is no prefix to have been cached before the first answer. The region stays all the same,
+        because it is what the page's own connection swaps into once there is.
+        """
+        session = await a_session(app)
+
+        region = await watched(app, session)
+
+        assert f'<p class="cache" id="{CACHE_ID}"></p>' in region
+
+    async def test_the_stream_carries_it_beside_the_transcript(self, app: ASGIApp, service: Service) -> None:
+        """
+        Two regions on one connection, which is what the partial exists for. It has to be sent rather
+        than rendered once: it lives in the composer, so nothing else replaces it, and what it prices
+        is the context, which grows with every turn.
+        """
+        service.references.current = a_reference(context=200_000)
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+
+        region = await watched(app, session)
+
+        assert f'hx-target="#{TRANSCRIPT_ID}"' in region
+        assert f'hx-target="#{CACHE_ID}"' in region
 
 
 class TestWhatARuleSays:

@@ -7,12 +7,15 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from itertools import pairwise
+from typing import get_args
 
 import pytest
 from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
 from conftest import INSTRUCTIONS
+from conftest import WHEN
 from conftest import Provider
+from conftest import Refusing
 from conftest import Scripted
 from conftest import answered_with
 from conftest import calls
@@ -22,6 +25,7 @@ from conftest import recorded_turn
 from conftest import said_at
 from conftest import steered_at
 from pydantic import ValidationError
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
@@ -47,6 +51,7 @@ from without_durability.stepwise import resume
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import Ended
 from mainplate.conversation import Guidance
 from mainplate.conversation import NeverStarted
 from mainplate.conversation import Panel
@@ -57,6 +62,7 @@ from mainplate.conversation import Reasoning
 from mainplate.conversation import Request
 from mainplate.conversation import Returned
 from mainplate.conversation import Spent
+from mainplate.conversation import Stalled
 from mainplate.conversation import Steering
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
@@ -77,6 +83,8 @@ from mainplate.conversation import parted
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_instructions
+from mainplate.conversation import refusal_in
+from mainplate.conversation import refused_key
 from mainplate.conversation import requested_at
 from mainplate.conversation import responded
 from mainplate.conversation import so_far
@@ -88,7 +96,9 @@ from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
 from mainplate.conversation import turn_prefix
 from mainplate.durability import TOOK
+from mainplate.durability import parse_refused
 from mainplate.durability import stepping
+from mainplate.durability import terminally
 from mainplate.forge import Workspaces
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
@@ -124,8 +134,8 @@ async def started(service: Service, said: str, session: str = SESSION) -> None:
 
 
 async def pass_at(
-    service: Service, body: Callable[[Run], Awaitable[Progressed]], session: str = SESSION
-) -> Completed[Progressed] | Sleeping | Blocked:
+    service: Service, body: Callable[[Run], Awaitable[Ended]], session: str = SESSION
+) -> Completed[Ended] | Sleeping | Blocked:
     """One pass at a session, claimed and released the way the worker does it."""
     holder = await claimed(service.checkpointer, session)
     try:
@@ -135,8 +145,8 @@ async def pass_at(
 
 
 async def passes_at(
-    service: Service, body: Callable[[Run], Awaitable[Progressed]], session: str = SESSION
-) -> tuple[Completed[Progressed] | Sleeping | Blocked, ...]:
+    service: Service, body: Callable[[Run], Awaitable[Ended]], session: str = SESSION
+) -> tuple[Completed[Ended] | Sleeping | Blocked, ...]:
     """
     Every pass it takes to reach a stop, which is what the worker does with `Progressed`.
 
@@ -144,7 +154,7 @@ async def passes_at(
     so this is `readying` in `app.py` with the queue taken out: the same loop, driven by hand, so a
     test can count the passes and say what each one did.
     """
-    made: list[Completed[Progressed] | Sleeping | Blocked] = []
+    made: list[Completed[Ended] | Sleeping | Blocked] = []
     while True:
         made.append(await pass_at(service, body, session))
         if not isinstance(made[-1], Completed):
@@ -207,6 +217,25 @@ def conversation_of(*turns: Turn) -> dict[str, object]:
     }
 
 
+# One of every record this console writes, which is what the round trip below is parametrised over
+# and what the completeness check holds against `records.Step`. A constant rather than a literal
+# inside the parametrise, because two tests want it: one asks whether each survives the codec, and
+# the other whether there is one for every arm.
+EVERY_RECORD: tuple[records.Step, ...] = (
+    records.Prompt(said="go", forget=True),
+    records.Handoff(said="where the work got to", forget=True),
+    records.Steer(said="be brief"),
+    records.Command(said="git status"),
+    records.Result(status=1, output="", took=timedelta(seconds=0.08)),
+    records.Tree(tree="a" * 40),
+    records.Response(response={"kind": "response", "parts": []}),
+    records.Refused(why="prompt is too long", status=400),
+    records.Returned(returned={"lines": [1, 2]}, took=timedelta(seconds=0.25)),
+    records.Messages(messages=[]),
+    records.Instructions(said="answer as a fixture would"),
+)
+
+
 class TestWhatAStepHolds:
     """
     Every checkpoint value as a record, told apart by its own tag.
@@ -216,22 +245,25 @@ class TestWhatAStepHolds:
     first dump or migration needed it.
     """
 
-    @pytest.mark.parametrize(
-        "held",
-        [
-            pytest.param(records.Prompt(said="go", forget=True), id="prompt"),
-            pytest.param(records.Steer(said="be brief"), id="steer"),
-            pytest.param(records.Command(said="git status"), id="command"),
-            pytest.param(records.Result(status=1, output="", took=timedelta(seconds=0.08)), id="result"),
-            pytest.param(records.Tree(tree="a" * 40), id="tree"),
-            pytest.param(records.Response(response={"kind": "response", "parts": []}), id="model"),
-            pytest.param(records.Returned(returned={"lines": [1, 2]}, took=timedelta(seconds=0.25)), id="tool"),
-            pytest.param(records.Messages(messages=[]), id="messages"),
-        ],
-    )
+    @pytest.mark.parametrize("held", EVERY_RECORD, ids=lambda each: str(each.kind))
     def test_a_record_comes_back_as_itself_through_the_union(self, held: records.Step) -> None:
         """The round trip the codec makes, read back by tag rather than by the key it was under."""
         assert records.STEP.validate_python(held.recorded()) == held
+
+    def test_every_arm_of_the_union_is_one_of_them(self) -> None:
+        """
+        The check that keeps the list above honest, because nothing else was making it complete.
+
+        An arm added without a case here is not a failing test but a *silent* one: the suite goes on
+        passing and the record nobody round-tripped is the one a dump or a migration finds out about.
+        Three arms had already arrived that way before this asked.
+
+        Asked of `Step` itself rather than against a written-down count, so adding an arm is one line
+        here and adding a number somewhere is never the fix.
+        """
+        arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
+
+        assert {type(each).__name__ for each in EVERY_RECORD} == arms
 
     def test_a_choice_is_deliberately_not_an_arm(self) -> None:
         """
@@ -382,6 +414,9 @@ class TestForgettingWhatCameBefore:
             # it absent is a turn that has recorded no response at all, not one that cost nothing.
             spent={0: Spent(asked=0, answered=0, cost=None)},
             requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None)),)},
+            # When the last response landed, which is what the composer reads to say whether the
+            # provider still holds this conversation's prefix.
+            answered_at=WHEN,
         )
 
     def test_a_panel_is_a_run_of_one_kind_in_the_order_the_model_worked(self) -> None:
@@ -1306,10 +1341,14 @@ class TestWhatOnePassDoes:
         recorded = await planting.checkpointer.load(session.id)
         told = system_prompt_in(parse_messages(recorded[messages_key(0)]))
         assert told is not None, "the control: nothing carried means nothing to differ over"
-        assert str(workspaces.root / session.id) in told, (
-            "the other control: the note about this session's own worktree is the part that used to "
-            "be composed after the record was written, so without it the two agree by having no "
+        assert "You are working in a git worktree" in told, (
+            "the other control: the note about this session's places is the part that used to be "
+            "composed after the record was written, so without it the two agree by having no "
             "chance to disagree"
+        )
+        assert str(workspaces.root / session.id) not in told, (
+            "and it names those places rather than pathing them, which is what lets two sessions of "
+            "one shape compose the same string and share a cached prefix"
         )
         assert parse_instructions(recorded[instructions_key(0)]) == told
 
@@ -1439,3 +1478,149 @@ class TestReadingBackWhatWasAlreadyRecorded:
         """Reading a retired name back is not the same as accepting anything at all."""
         with pytest.raises(TypeError, match="is not a filesystem this console knows"):
             parse_choice({"endpoint": "here", "model": "m", "isolation": {"filesystem": "everywhere"}})
+
+
+class TestARequestTheProviderWillNotTake:
+    """
+    What happens to a session asking something no pass can ever get an answer to.
+
+    The failure this closes is invisible rather than loud. `without-durability`'s worker leaves a
+    delivery unanswered when a pass raises, because it cannot tell a workflow's own failure from a
+    store that was briefly unreachable, so a deterministic refusal is retried once per lease for as
+    long as anybody keeps the session around - and its own docstring says the count belongs in the
+    checkpoint. This is that count, in the only form a refusal needs.
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "settled"),
+        [
+            (400, True),
+            (404, True),
+            (413, True),
+            (422, True),
+            (408, False),
+            (429, False),
+            (500, False),
+            (503, False),
+        ],
+    )
+    def test_a_4xx_is_the_request_and_a_5xx_is_the_moment(self, status: int, settled: bool) -> None:
+        """
+        The split, said as the codes themselves: what is wrong with the request, or what is wrong now.
+
+        `408`, `409`, `425` and `429` are the 4xx codes that describe the moment rather than the
+        request, and a redelivery is exactly what each of them asks for.
+        """
+        refused = terminally(ModelHTTPError(status_code=status, model_name="fixture", body="no"))
+
+        assert (refused is not None) is settled
+        assert refused is None or refused.status == status
+
+    def test_anything_that_is_not_the_provider_refusing_is_left_to_be_retried(self) -> None:
+        """
+        The default is transient, which is the safe way round.
+
+        A transient error read as terminal stalls a session that would have recovered on its own,
+        where a terminal one read as transient costs a redelivery per lease until somebody looks.
+        """
+        assert terminally(TimeoutError("the socket went away")) is None
+
+    async def test_a_refused_turn_stalls_the_session_rather_than_asking_to_be_woken(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The whole point: a pass that cannot go on must not come back asking for another one.
+
+        `Progressed` is what `readying` turns into `make_ready`, so a refusal reported as one is the
+        retry loop with extra steps. The control is the same session answered by a provider that
+        works, which comes back `Blocked` on the next message.
+        """
+        await started(service, "hello")
+        await started(service, "hello", session="answerable")
+
+        stalled = await pass_at(service, Refusing(status=400).body())
+        working = await pass_at(service, provider.body(), session="answerable")
+
+        assert stalled == Completed(Stalled()), "nothing is owed, so nothing wakes it"
+        assert working == Blocked(listening=frozenset({opened_key(1)})), (
+            "the control: the same message answered by a provider that takes it waits for the next one"
+        )
+
+    async def test_the_reason_is_written_down_under_the_refused_requests_own_key(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        Recorded, because a session that stopped with nothing saying so is the one nobody can diagnose.
+
+        The literal key rather than a round trip through the writer, which is what turns a drift
+        between `refused_key` and `Stepping.identified("refused", ...)` into a failure here rather
+        than a record nothing can find.
+        """
+        await started(service, "hello")
+
+        await pass_at(service, Refusing(status=400).body())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert refused_key(0, 0) == "turn:0:refused:0"
+        assert model_key(0, 0) not in recorded, "there is no answer, so nothing pretends there is one"
+        refused = parse_refused(recorded[refused_key(0, 0)])
+        assert refused.status == 400
+        assert "prompt is too long" in refused.why, "the provider's own words, not a code standing in for them"
+
+    async def test_it_is_named_after_the_request_that_hit_it_and_not_after_the_turn(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        A turn's second request being refused must record against the second request.
+
+        Numbered by the turn instead, a pass that reached further than the one before it would write
+        its refusal over an earlier request's answer - or, under a write-once store, fail to write it
+        at all and report the wrong reason for ever.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        refusing = Refusing(status=400, after=1)
+
+        ended = await pass_at(planting, conversing(refusing.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        assert ended == Completed(Stalled())
+        assert model_key(0, 0) in recorded, "the request that was answered is recorded as answered"
+        assert refused_key(0, 0) not in recorded, "and is not also recorded as refused"
+        assert parse_refused(recorded[refused_key(0, 1)]).status == 400
+
+    async def test_a_later_pass_does_not_ask_the_question_again(self, service: Service) -> None:
+        """
+        The saving that makes the record worth keeping, and the reason it is read before the request.
+
+        A person writing into a stalled session queues it, so a second pass happens whatever the
+        worker does. What it must not do is put the identical question - same recorded history, same
+        recorded message - back to the provider and pay for the identical refusal.
+        """
+        await started(service, "hello")
+        refusing = Refusing(status=400)
+
+        first = await pass_at(service, refusing.body())
+        asked_once = refusing.asked
+        second = await pass_at(service, refusing.body())
+
+        assert asked_once == 1, "the control: the first pass really did reach the provider"
+        assert first == Completed(Stalled())
+        assert second == Completed(Stalled()), "and comes to the same answer"
+        assert refusing.asked == 1, "off the record the second time, so the provider was never asked again"
+
+    async def test_the_page_is_told_which_turn_stopped_and_why(self, service: Service) -> None:
+        """
+        What `Service.read` asks, and the two states it has to tell apart.
+
+        A conversation nobody refused reports nothing, so the sentence is drawn only where there is
+        something to say - which is the same bargain the missing-endpoint sentence takes.
+        """
+        await started(service, "hello")
+        assert refusal_in(await service.checkpointer.load(SESSION)) is None, "the control: nothing has stopped"
+
+        await pass_at(service, Refusing(status=400).body())
+
+        refused = refusal_in(await service.checkpointer.load(SESSION))
+        assert refused is not None
+        assert refused.status == 400

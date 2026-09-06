@@ -8,10 +8,15 @@ import pytest
 from conftest import CATALOGUE
 from conftest import CONFIG
 from conftest import OFFERED
+from conftest import Stand
+from conftest import Watching
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.settings import ModelSettings
 from without_async import background_task
 
+from mainplate.agent import CACHE_FOR
 from mainplate.agent import EMBEDDING
+from mainplate.agent import RETENTION
 from mainplate.agent import AnthropicWire
 from mainplate.agent import Choice
 from mainplate.agent import Listed
@@ -50,6 +55,9 @@ class Says:
         if self.refusing is not None:
             raise self.refusing
         return self.offers
+
+    def caching(self) -> ModelSettings:  # pragma: no cover - nothing here builds an agent
+        return ModelSettings()
 
 
 ONE = Listed(id="vendor/quick", label="Quick", provider="vendor")
@@ -162,6 +170,48 @@ class TestBuildingEndpoints:
         with pytest.raises(UnknownChoice, match="elsewhere"):
             agent_for(endpoints, Choice(endpoint="elsewhere", model="anything"), "be terse")
 
+    def test_the_anthropic_wire_asks_for_caching_and_the_openai_one_has_nothing_to_ask(self) -> None:
+        """
+        Caching is opt-in on one of these formats and automatic on the other, and the difference costs money.
+
+        A conversation is re-sent whole every turn, so a session with no breakpoint pays full input
+        price for everything said so far, over and over. Nothing about the request *looks* different
+        when it goes missing, which is why the wire answers a question rather than a setting being
+        left somewhere it might not be noticed.
+        """
+        anthropic = build_wire(Endpoint.model_validate({"format": "anthropic", "url": "https://gw.invalid"}))
+        openai = build_wire(Endpoint.model_validate({"format": "openai", "url": "https://gw.invalid/v1"}))
+
+        assert anthropic.caching() == {"anthropic_cache": CACHE_FOR}
+        assert openai.caching() == {}, "this format caches a repeated prefix without being asked"
+
+    def test_the_retention_and_the_wire_parameter_are_one_duration(self) -> None:
+        """
+        Two representations of one fact with nothing enforcing the agreement, which is what this is.
+
+        The parameter has to be a literal, because the SDK types the field as `Literal['5m', '1h']`
+        and a string rendered from a `timedelta` is a `str`; the duration has to be a `timedelta`,
+        because what reads it is the composer deciding whether the next request pays full price. So
+        they are written twice, and this is what turns a drift into a failure rather than a console
+        confidently calling a dead prefix warm for as long as somebody left the two disagreeing.
+        """
+        assert f"{RETENTION // timedelta(hours=1)}h" == CACHE_FOR
+
+    async def test_what_a_wire_asks_for_reaches_the_request(self) -> None:
+        """
+        The other end of it: a setting built and never passed on would look exactly like this one does.
+
+        Beside the choice's own rather than instead of it, because the two answer different questions
+        and a session asks both: what the person picked, and what the format needs to be told.
+        """
+        watcher = Watching()
+        caching = Stand(offers=OFFERED["here"], responding=watcher, asking=ModelSettings(temperature=0.5))
+        endpoints = Wires(by_endpoint={"here": caching})
+
+        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful", thinking="high"), "be terse").run("hi")
+
+        assert watcher.seen == [{"temperature": 0.5, "thinking": "high"}]
+
 
 class TestDiscovering:
     async def test_every_profile_is_asked_and_what_it_says_is_what_is_offered(self) -> None:
@@ -232,6 +282,9 @@ class Rounds:
         if isinstance(self.answering, Exception):
             raise self.answering
         return self.answering
+
+    def caching(self) -> ModelSettings:  # pragma: no cover - nothing here builds an agent
+        return ModelSettings()
 
 
 # Short enough that the test never waits on it, since every wait below is on a round beginning

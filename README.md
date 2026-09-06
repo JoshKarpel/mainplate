@@ -63,9 +63,11 @@ the heading the model cards are grouped under.
 
 A session records what it is answered on at the moment it is created: its workspace, whether its
 commands may reach the network, the endpoint, the model, and a thinking level. All of it is fixed for
-its life. The workspace is one question rather than two: a repository this console can reach, or no
-files, or this whole machine, and picking one settles both what the session works in and what its
-tools may touch. The endpoint is what carries the API format, which is why it is recorded rather than
+its life, and forking is how it changes. The one thing about a session that *does* change is when it
+hands itself off, which is answered on the same page and can be answered again at any point while the
+session runs - it has to be, or it is not a setting. The workspace is one question rather than two: a
+repository this console can reach, or no files, or this whole machine, and picking one settles both
+what the session works in and what its tools may touch. The endpoint is what carries the API format, which is why it is recorded rather than
 looked up later: the same model id genuinely does sit behind two formats, and the two serialize a
 conversation differently.
 
@@ -83,9 +85,9 @@ there would fail to get files at all. One says where to begin, the other says wh
 The starting point is a **search over the branches the repository actually has**, read from the
 repository itself rather than from this console's copy of it, so it works on the very first session
 you start on one. Typing narrows them under the box, matching anywhere in a name rather than at the
-front, and the arrow keys step what is left. It is the one control in the picker that is not cards,
-because it is the one question with no closed set of answers: a tag, a hash or `main~3` is still
-typed, and with JavaScript off the browser completes from the same names.
+front, and the arrow keys step what is left. It is not cards, because there is no closed set of
+answers to draw as them: a tag, a hash or `main~3` is still typed, and with JavaScript off the browser
+completes from the same names.
 
 **Starting a session is also when this console's copy of a repository catches up.** It clones once
 and nothing else ever refreshes that, so planting a session's worktree fetches first: a new session
@@ -95,11 +97,13 @@ the same question.
 
 You pick all of it on the new-session page, ordered widest first. The endpoints are cards naming the
 API format each speaks and the URL each points at, and the models are cards carrying what they cost,
-how much they read, and what they can do, grouped by the vendor each comes from. Every one of those
-questions is the same component: a group of cards **folded down to the one you picked**, with the
-count of what else is on offer beside it and a box that narrows the group as you type. A gateway
-serves seventy models, and a wall of seventy cards is not a page you can see the rest of your choices
-on; shut, the whole of what a session is decided by is five lines. Opening a group is a checkbox and
+how much they read, and what they can do, grouped by the vendor each comes from. Every question with a
+set of answers to show is the same component: a group of cards **folded down to the one you picked**,
+with the count of what else is on offer beside it and a box that narrows the group as you type. A
+gateway serves seventy models, and a wall of seventy cards is not a page you can see the rest of your
+choices on; shut, each of those is one line. The two that are not cards are the ones with nothing to
+draw - where in a repository to start, and how much of the window to keep free for a handoff, neither
+of which has a set of answers so much as a box. Opening a group is a checkbox and
 the folding is a CSS `:has()` rule, so it works with JavaScript off and a shut group can never name
 something other than what is actually checked. After that the session says what it is on rather than
 offering a control that could not change it. A conversation that switched model halfway would replay
@@ -427,6 +431,22 @@ console had it. A tool call and a command keep a fold of their own inside the pa
 their summary says is the outcome and the status rather than the first line of the body, and a panel
 holds a whole batch of either.
 
+A **handoff** is the one panel nobody typed. `/handoff` asks a session to write down where the work
+has got to, checking the working tree rather than recalling it, and the document it writes opens the
+next turn with everything above it out of the model's context - still in the transcript for you to
+read, and no longer in what the model is told. Both the ask and the document are drawn as their own
+kind, on the person's side of the palette because that is who produced the text, with the panel
+saying outright that the console composed it.
+
+It also happens without being asked. Every session keeps a **reserve** of the model's window free for
+writing one, and reaching it is what fires the handoff: a short bar on each rule's gauge marks where
+that falls, so watching the line grow toward it is watching the handoff approach. The reserve is in
+tokens rather than a fraction, because what has to be true is that the run has room to do its work,
+and that is the same quantity on every model. It is on by default, which is safe only because a
+handoff destroys nothing - the whole conversation stays on the page, and forking above the boundary
+carries all of it into a session whose context has it too. The switch and the amount are per session,
+answerable when you start one and changeable while it runs.
+
 Two more panels say what the model was *told* rather than what anyone said. The **system prompt** is
 what every request in a stretch of context carried, drawn under the rule that opens that stretch, and
 **guidance** is a repository's own `AGENTS.md` for a directory, handed over at the moment a tool
@@ -435,8 +455,8 @@ request - the first is re-sent whole on every request in front of the cached pre
 appended once into the history - so the key can quiet either without the other, and so that a reader
 can see which is which. How much authority the second one carries is the provider's answer rather
 than this console's, and it varies by model, which is another reason not to draw them as one thing.
-Both are drawn shut, with the character count beside the opening line on the row, because what is in
-them is paid for on every request from there on.
+Both are drawn shut, with the line each opens with on the row, so a reader can tell what is in one
+without opening it.
 
 A **rule** stands at every round trip to the model, carrying what is true of that request rather than
 of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and
@@ -453,8 +473,9 @@ titles. The sent figure is the *context* the request carried rather than a sum, 
 of a turn carries the whole conversation again, so beside it is what fraction of the model's context
 window that is - and the rule's own line is a gauge of the same fraction, filled from the left and
 shading toward red as it fills, so scrolling down a long conversation shows the line lengthen and
-warm. The window is what the reference database says about the model; with none configured the counts
-are drawn and the fraction is not.
+warm. The reserve is marked on that same line, where a handoff would be asked for, so the two are read
+against one another. The window is what the reference database says about the model; with none
+configured the counts are drawn, and the fraction, the gauge and the mark are not.
 
 The rule that opens a turn carries the turn's own facts besides: which turn it is, the `fork` link,
 and what the whole turn spent. That costs no new idea, because every rule already stood at a request
@@ -466,6 +487,17 @@ and not a bill, since no gateway reports what it actually charged; a model nobod
 for shows its token counts and no money. The time is what the turn spent waiting on the provider,
 summed over its round trips; the calls it made in between carry their own, beside the tool's name on
 the panel that drew it. The session's own total sits under the message box.
+
+Above the box is the other half of the money: **whether the provider still holds this conversation's
+prefix**, and what re-sending it costs with none of it cached. A conversation is re-sent whole on every
+turn, so one picked up after lunch pays full input price for everything said in it and nothing about
+the request looks any different. It is one-sided on purpose: past the cache's retention the prefix is
+cold and the line says so, and under it what it says is when the prefix was last *written*, because
+whether a provider has evicted one cannot be observed from here. Both ends are priced, with the whole
+prefix cached and with none of it, because the gap between them is what waiting costs and on a long
+conversation it is tenfold. Both carry a `+` because both are floors: they price re-sending what has
+already been said, where the answer, the tools the turn runs and any further requests it makes are all
+on top.
 
 A panel that arrives, or whose blocks say something different, is **marked for a beat** in its own
 kind's hue. A turn fills in over several renders, and a reader watching one needs to be told which
@@ -481,9 +513,12 @@ Beside the conversation is a rail: find-and-step search, a key that filters by k
 the colour legend, a dock that steps where the model's history starts again, whole turns, every
 panel, or only what the model said, and folds everything at once or puts every fold back where the
 console had it, a shelf for text you have written
-and not sent, a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
-off the console still renders, still posts messages, and every panel and every tool call is still a
-fold that opens; what goes is the rail and the keyboard send.
+and not sent, a follow-the-end toggle, when this session hands itself off, and, at the foot of it, a
+light/dark/system theme. The shelf is the boundary: everything above it reads the conversation, the
+handoff card is the first thing that changes how the conversation is run, and the theme is the one
+card there that is not about this conversation at all. Everything is an enhancement: with JavaScript
+off the console still renders, still posts messages, still hands off, and every panel and every tool
+call is still a fold that opens; what goes is the reading controls and the keyboard send.
 
 **Send** puts what is in the box into the conversation now. If a reply is already coming, that means
 **steering**: the message is put to the model in the turn it is answering, appended to the next
@@ -510,6 +545,12 @@ the session has cost, and still comes across if you fork. The transcript draws a
 happened saying so, and the dock's leftmost column steps between those lines. To carry on the
 conversation one of them closed, press `fork` on that line: the branch takes the whole backlog with
 it and leaves the boundary behind.
+
+**Handoff** is the same family one step along: where `Forget` drops the backlog and asks your
+question, this has the session write the backlog down first and start again from that. It is the one
+answer whose box may be empty, because what it does with what you typed is point the handoff at
+something rather than send it anywhere - so `/handoff` on its own hands off, and `/handoff` with a
+paragraph hands off dwelling on what the paragraph says.
 
 **Aside** steps out into a side conversation you mean to come back from, and **Fork** starts one you
 do not. Both carry the whole conversation and leave the original where it is; the only difference is

@@ -73,6 +73,7 @@ from without_html import ul
 from without_web import Reversible
 from without_web import url_for
 
+from mainplate.agent import RETENTION
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
@@ -109,6 +110,13 @@ from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import Session
 from mainplate.snapshots import LONGEST_REF
+from mainplate.tending import HANDS_OFF_FIELD
+from mainplate.tending import LEAST_ROOM
+from mainplate.tending import RESERVE_FIELD
+from mainplate.tending import TENDED
+from mainplate.tending import THOUSAND
+from mainplate.tending import Tending
+from mainplate.tending import reserving
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
 
@@ -171,6 +179,13 @@ FOUND_ID: Final = "branches-found"
 
 SENDING_ID: Final = "sending"
 
+# Whether the provider still holds this conversation's prefix, and what the next request pays if it
+# does not. A region of its own with an id, because it sits in the composer and the composer is not
+# what the stream replaces: what it says goes stale on every turn, since the context it prices grows
+# with each one. So the page's one connection carries it as a second partial, which is the shape
+# `streaming.py` was built for. See `cache_note`.
+CACHE_ID: Final = "cache"
+
 # The form the picker's controls belong to, named because on the start page they do not sit inside
 # it. There the choosing fills `main`'s growing row and the box is pinned under it, so the endpoint
 # radios, the model radios and the two selects are *siblings* of the form that posts them; without
@@ -187,6 +202,7 @@ NAMES: Final[tuple[tuple[Kind, str], ...]] = (
     ("system-prompt", "system prompt"),
     ("guidance", "guidance"),
     ("prompt", "prompt"),
+    ("handoff", "handoff"),
     ("steer", "steer"),
     ("command", "command"),
     ("thinking", "thinking"),
@@ -207,6 +223,9 @@ TITLES: Final[dict[Kind, str]] = {
         "The console handed this to the model when it reached into a part of the repository "
         "that carries its own guidance."
     ),
+    # The third, and the one where leaving it out would be worst: every other message in a
+    # conversation was typed by somebody, so a reader has no reason to suspect this one was not.
+    "handoff": "The console wrote this itself, so that the conversation could carry on with a cleared context.",
 }
 
 # Which side of the exchange a kind is on: what reached the model, and what the model produced.
@@ -222,6 +241,10 @@ SIDES: Final[dict[Kind, str]] = {
     # request, which is not something a hue can say.
     "guidance": "person",
     "prompt": "person",
+    # The person's side because the axis is who produced the *text*, and what a handoff holds was
+    # produced by this session rather than by the model about to be handed it. Its `title` says the
+    # console composed it, exactly as `command`'s says no model was told.
+    "handoff": "person",
     "steer": "person",
     # The person's side because the axis is who produced the text, which is the same rule `steer`
     # follows. It is the one kind on that side the model never saw, and the panel's own `title` says
@@ -240,16 +263,20 @@ SIDES: Final[dict[Kind, str]] = {
 # without an entry here is a `KeyError` at render, which is the same bargain `SIDES` takes and for
 # the same reason: a default nobody chose is worse than a page that will not draw.
 #
-# Reference is shut and conversation is open, which is the one line through all eight. A system
-# prompt and a delivered guidance file are documents somebody committed, so they are drawn as their
-# opening line and a figure; everything else is what was said, and a conversation whose replies had
-# to be opened one at a time would not be a transcript. A tool panel is *open* with each call inside
-# it shut, which is today's rendering exactly: the calls are listed, and what each was handed is a
-# press away.
+# Reference is shut and conversation is open, which is the one line through every kind here. A system
+# prompt and a delivered guidance file are documents somebody committed, so they are drawn as the
+# line they open with; everything else is what was said, and a conversation whose replies had
+# to be opened one at a time would not be a transcript. A handoff falls on the conversation side of
+# that despite reading like a document: it is a message, it is the one nobody wrote, and so it is the
+# one a reader cannot recall for themselves. A tool panel is *open* with each call inside it shut,
+# which is today's rendering exactly: the calls are listed, and what each was handed is a press away.
 OPENS: Final[dict[Kind, bool]] = {
     "system-prompt": False,
     "guidance": False,
     "prompt": True,
+    # Open, because it is a message and not reference material: what it says is why the turn under it
+    # goes the way it does, and it is the one message a reader did not write and so cannot recall.
+    "handoff": True,
     "steer": True,
     "command": True,
     "thinking": True,
@@ -277,13 +304,6 @@ def opens(starts: bool) -> Attributes:
     """
     return {"open": starts, "data-opens": "open" if starts else "shut"}
 
-
-# The kinds whose row carries how much of them there is: a document the console handed the model.
-# The one fact worth having without opening either, because what is in here is paid for on every
-# request from here on, so a prompt or a delivered file grown to tens of thousands of characters is
-# worth seeing at a glance. It is not that figure for anything else on the page - what a reply cost
-# is on the rule above it, in tokens and money, which is the fact a reader actually wants there.
-SIZED: Final[frozenset[Kind]] = frozenset({"system-prompt", "guidance"})
 
 # What the link that starts one is called, and what the tab says on the page where a session does
 # not exist yet. "Session" rather than "worktree", which is the other word for this and is already
@@ -322,6 +342,7 @@ class Links:
     workspace_branches: Reversible
     fork_form: Reversible
     fork: Reversible
+    tend: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -386,6 +407,9 @@ class Links:
 
     def to_fork(self, session: str) -> str:
         return url_for(self.fork, {"session": session})
+
+    def to_tend(self, session: str) -> str:
+        return url_for(self.tend, {"session": session})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -711,6 +735,17 @@ def consumed(context: int, window: int | None) -> float | None:
     if not context or not window:
         return None
     return context / window
+
+
+def along(fraction: float) -> str:
+    """
+    One fraction as a distance along a rule, capped because a gauge cannot draw past its own width.
+
+    A session past a window the database understates asks for no more line than there is, and a
+    reserve is capped by the same rule rather than because it can exceed one: `reserving` already
+    refuses an interval that does not fit.
+    """
+    return f"{min(fraction, 1.0):.1%}"
 
 
 def portion(fraction: float) -> str:
@@ -1539,6 +1574,7 @@ def picker(
     reachable: Reachable | None,
     reference: Reference | None,
     chosen: Choice | None = None,
+    tended: Tending = TENDED,
 ) -> Element:
     """
     Everything a session is decided by, laid out as the question it actually is.
@@ -1605,6 +1641,7 @@ def picker(
             ),
             model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
             thinking_cards(starting.thinking),
+            tending_group(tended),
         ],
     )
 
@@ -2094,6 +2131,7 @@ def rule_element(
     forget: bool = False,
     window: int | None = None,
     running: Decimal | None = None,
+    reserved: float | None = None,
 ) -> Element:
     """
     A line across the conversation where one round trip to the model began.
@@ -2159,9 +2197,17 @@ def rule_element(
             "data-stop": "forget" if forget else None,
             # Capped here as well as clipped there, so a session past a window the database
             # understates asks for no more line than there is.
-            "style": None if filled is None else f"--filled: {min(filled, 1.0):.1%}",
+            "style": None if filled is None else f"--filled: {along(filled)}",
         },
         children=[
+            # Where the reserve opens, on the same scale the fill is drawn against, so watching the
+            # line grow toward it is watching the handoff approach. An element rather than a second
+            # pseudo because it is conditional; see `.rule__reserve`.
+            *(
+                (span(cls="rule__reserve", attrs={"style": f"--reserved: {along(reserved)}"}),)
+                if reserved is not None
+                else ()
+            ),
             *(
                 (a(cls="rule__at", attrs={"href": f"#rule-{turn}", "title": f"Turn {turn}"}, children=f"#{turn}"),)
                 if opens
@@ -2253,22 +2299,6 @@ def panel_opening(blocks: Sequence[Block]) -> str:
             return ""
 
 
-def panel_size(kind: Kind, blocks: Sequence[Block]) -> int | None:
-    """
-    How much of a document there is, and `None` for everything that is not one. See `SIZED`.
-
-    Summed across the blocks rather than taken off the first, because a batch of calls reaching into
-    two parts of a repository is handed both files at once and they arrive as one guidance panel.
-    What is paid for on every request from here on is all of it.
-
-    Only `Guidance` is measured, and within `panel_element` that is the whole of `SIZED`: the
-    standing system prompt is not a `Panel` at all and measures its own. See `system_prompt_panel`.
-    """
-    if kind not in SIZED:
-        return None
-    return sum(len(block.text) for block in blocks if isinstance(block, Guidance))
-
-
 def panel_element(links: Links, session: str, panel: Panel) -> Element:
     """
     One run of one kind of thing, folded from the row of facts above it.
@@ -2314,7 +2344,6 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 panel_opening(panel.blocks),
                 anchor=panel.anchor,
                 label=panel.label,
-                size=panel_size(panel.kind, panel.blocks),
             ),
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
         ],
@@ -2327,7 +2356,6 @@ def panel_meta(
     *,
     anchor: str | None = None,
     label: str | None = None,
-    size: int | None = None,
 ) -> Element:
     """
     A panel's row of facts, which is also the summary that folds it.
@@ -2335,11 +2363,6 @@ def panel_meta(
     One function for all three panel shapes - a `Panel`, the standing system prompt, and the one
     saying a reply is being written - because the row is the same row and a second rendering of it
     would eventually disagree about where the marker sits or what the label is called.
-
-    `size` is how much of it there is, drawn only for a document; see `SIZED`. Pushed to the end of
-    the row and never shrunk, so the opening line is what gives way and the figure stays where the
-    eye learns to find it. It is *not* hidden when the panel opens, since a figure about the whole is
-    not a prefix of anything.
 
     `opening` is `None` where there is nothing yet to stand for, and the row carries the working dots
     in the line's own place: a reply not written yet, and a stretch of context whose instructions the
@@ -2362,7 +2385,6 @@ def panel_meta(
                 children=dict(NAMES)[kind],
             ),
             span(cls="opening", children=opening if opening is not None else working()),
-            *((span(cls="panel__size", children=f"{size} characters"),) if size is not None else ()),
             *(
                 (a(cls="panel__anchor", attrs={"href": f"#{anchor}"}, children=f"#{label or anchor}"),)
                 if anchor is not None
@@ -2433,7 +2455,6 @@ def system_prompt_panel(turn: int, said: str | None) -> Element:
                 "system-prompt",
                 opening_of(said) if said is not None else None,
                 anchor=anchor,
-                size=len(said) if said is not None else None,
             ),
             *((written_block("block--document", said, document=True),) if said is not None else ()),
         ],
@@ -2506,11 +2527,137 @@ def running_to(before: Decimal | None, spent: Spent | None) -> Decimal | None:
     return before + spent.cost
 
 
-def transcript_region(
-    links: Links, session: str, said: Transcript, stalled: str | None = None, window: int | None = None
-) -> Element:
+def cache_note(showing: Conversation) -> Element:
+    """
+    Whether the provider still holds this conversation's prefix, and what the next request pays if not.
+
+    Meaningless before there was a cache, and worth a line now that there is one: a conversation picked
+    up after lunch pays full input price for everything said in it, and nothing about the request looks
+    any different. On a long conversation that is most of the bill.
+
+    **A figure rather than a warning, in the family of the gauge and the `▣` count.** It does not tell
+    anybody to `forget`: at low utilization the right move is to carry on, and choosing which figure
+    matters is the reader's. So it says what is true and stops.
+
+    **One-sided, always.** Past the retention a prefix is cold and this says so; under it nothing can
+    be asserted, because eviction is unobservable from here, so what it says is `warm as of 12m` - a
+    claim about when the prefix was last *written*, which is what a response landing is, and which is
+    true on any wire whatever that wire's own TTL. `RETENTION` works as the one threshold for the same
+    reason: it is the longest this console asks for anywhere, so past it the prefix is gone everywhere.
+
+    **The server renders an absolute time and the script renders the relative one.** Nothing here is
+    re-rendered on the clock - the stream sends this when the session *records* something, and the
+    interval that matters is exactly the one where nothing is recorded - so a server-rendered `warm`
+    would sit there while the retention rolled past it. `cached at 15:09` is a fact that cannot rot,
+    which is what a reader with no script gets; `data-since` and `data-retention` are what the script
+    needs to say `cold` or `warm as of 12m`, and it measures the rest against its own clock from the
+    moment it first saw them, so no two machines' clocks are ever subtracted. See `wireCache`.
+
+    Cold is the one state the server *can* assert, since it was already true when this was rendered
+    and nothing makes a cold prefix warm again.
+
+    **The money is a floor and says so.** What it prices is the input of the next turn's *first*
+    request - re-sending what has already been said - and not the answer, the tools that turn runs, or
+    the further requests it makes, any of which can dwarf it. A bare figure would read as what the
+    next turn costs and understate it by however much work that turn turns out to be, so it carries a
+    `+` and the title spells out what sits on top. That is the one thing about a turn nobody has
+    started that can be stated exactly rather than guessed at.
+
+    **The money is absent where the price is**, exactly as the gauge's fraction is: no reference
+    database, an endpoint that no longer lists the recorded id, a model with no record, or a record
+    with no price. What is left is when the prefix was written, which is worth saying on its own.
+
+    Empty before anything has been answered, and empty rather than absent because it is what the
+    stream's partial targets - the same reason `starting_at` leaves a block behind with no repository.
+    """
+    if showing.said.answered_at is None or showing.since is None:
+        return p(cls="cache", attrs={"id": CACHE_ID})
+    context = showing.said.total.context
+    figures: list[Element] = [
+        span(
+            cls="cache__state",
+            attrs={"title": f"This conversation's prefix was last written at {showing.said.answered_at:%H:%M}"},
+            children="cold" if showing.since >= RETENTION else f"cached at {showing.said.answered_at:%H:%M}",
+        )
+    ]
+    if showing.resending is not None:
+        held = showing.resending
+        # `▣` for the cached end, which is the mark the rule already uses for the part of an input a
+        # provider read from its cache. Labelling them `warm` and `cold` instead would put those two
+        # words on the line twice over, since the state beside them is already one of the two.
+        said = (
+            charged(held.cold)
+            if held.warm is None
+            else f"\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}{charged(held.warm)} / {charged(held.cold)}"
+        )
+        spread = (
+            f"${held.cold:f} with none of it read from a cache"
+            if held.warm is None
+            else f"between ${held.warm:f} with all of it read from a cache and ${held.cold:f} with none of it"
+        )
+        figures.append(
+            span(
+                cls="cache__cost",
+                attrs={
+                    "title": (
+                        f"Re-sending the {context:,} tokens already said costs {spread}, estimated from "
+                        f"published rates and not billed. That is where the next turn *starts*: what it "
+                        f"answers with, the tools it runs and any further requests it makes are all on top."
+                    )
+                },
+                children=[
+                    "\N{MIDDLE DOT} ",
+                    # The `+` is the whole of what keeps this honest on the line, and it applies to both
+                    # ends. What they price is the *input of the next turn's first request* and nothing
+                    # else - not the answer, not the tool calls, not the further requests a turn of any
+                    # size makes - so a bare figure would read as what the next turn costs and understate
+                    # it by however much work the turn turns out to be. A floor is what can be said
+                    # exactly, and the pair is what says what waiting costs.
+                    f"\N{UPWARDS ARROW}{tokens(context)} at {said}+",
+                ],
+            )
+        )
+    return p(
+        cls="cache",
+        attrs={
+            "id": CACHE_ID,
+            # Seconds rather than the absolute time, so the script adds to a duration the server
+            # measured instead of subtracting one clock from another. See the docstring.
+            "data-since": str(int(showing.since.total_seconds())),
+            "data-retention": str(int(RETENTION.total_seconds())),
+        },
+        children=figures,
+    )
+
+
+def reserve_mark(showing: Conversation) -> float | None:
+    """
+    Where on a rule's gauge this session's reserve falls, or nothing at all where no mark belongs.
+
+    The same scale `--filled` is on, so the mark and the fill are read against one another: the fill
+    says how far this request got and the mark says where the handoff would be asked for. That is the
+    whole of what the card's line used to say in words, and it says it once per rule instead of once
+    per page, on the control a reader is already watching lengthen.
+
+    Nothing where the switch is off, because a mark for something that will not happen is a line to
+    explain. Nothing where the reserve describes no interval either, which is `reserving`'s answer and
+    the same one the pass acts on, so the page cannot draw a boundary the worker will not use.
+    """
+    if not showing.session.tending.hands_off:
+        return None
+    held = reserving(showing.window, showing.session.tending.reserve)
+    return None if held is None else consumed(held.opens, showing.window)
+
+
+def transcript_region(links: Links, showing: Conversation) -> Element:
     """
     The conversation, and whether it is still waiting on the rest of it.
+
+    A whole `Conversation` rather than the four things drawn out of one, because every caller had one
+    in hand and was taking them apart the same way: what the region needs is the session, what was
+    said, whether it is stalled, the model's window and where its reserve falls, and five arguments
+    derived from one value are five chances for a caller to pair a transcript with another session's
+    window.
 
     Markup and nothing else: it carries no `hx-` attribute at all, because it neither asks for
     itself nor decides when to. The page's one connection sends this region whenever the session
@@ -2531,6 +2678,11 @@ def transcript_region(
     holds the same key. The panel has it a request earlier: `turn:{n}:tree:0` is written *before* the
     model is asked, so a turn whose first answer has not landed yet still says what it started on.
     """
+    session = showing.session.id
+    said = showing.said
+    window = showing.window
+    stalled = stalled_by(showing)
+    reserved = reserve_mark(showing)
     drawn: list[Element] = []
     # What the conversation has cost by the time each rule is drawn. A turn rule carries the total
     # through the turn it opens, exactly as it already carries that turn's own spend: both figures on
@@ -2563,6 +2715,7 @@ def transcript_region(
                 forget=within[0].forget,
                 window=window,
                 running=through,
+                reserved=reserved,
             )
         )
         # Directly under the rule that opens the stretch, so a reader meets the boundary, then what
@@ -2585,6 +2738,7 @@ def transcript_region(
                             spent=asking[at].spent,
                             window=window,
                             running=climbing[at],
+                            reserved=reserved,
                         )
                     )
             drawn.append(panel_element(links, session, panel))
@@ -2773,6 +2927,9 @@ def dock_card() -> Element:
             div(
                 cls="dock__leap",
                 children=[
+                    # The start is the rule that opens the first turn rather than the first panel
+                    # under it, which is where the turn's own facts and its fork link are, and above
+                    # whatever the stretch was told. See `wireDock`.
                     dock_button(None, "To the start", "\N{UPWARDS ARROW TO BAR}", {"data-leap": "start"}),
                     dock_button(None, "To the end", "\N{DOWNWARDS ARROW TO BAR}", {"data-leap": "end"}),
                     # A mode rather than a jump, so it says whether it is on: while it is, the end
@@ -2829,7 +2986,160 @@ def theme_card() -> Element:
     )
 
 
-def rail() -> Element:
+HANDOFF_ID: Final = "handoff"
+"""The card's own id, because the card is what its settings form swaps: see `handoff_card`."""
+
+SWITCH_CLASS: Final = "tending__switch"
+"""
+What the switch is called, named once because two things reach it by that name.
+
+The card's `hx-trigger` listens for a `change` from it, and the stylesheet draws it; a class the
+script or a trigger depends on is a name to write down rather than to spell twice.
+"""
+
+
+def tending_fields(tended: Tending, form: str | None = None) -> tuple[Element, Element]:
+    """
+    The switch and the reserve, drawn once for the three places that ask them.
+
+    The rail's card changes a running session's; the start page and the fork page decide a new one's
+    before it exists. One question asked in three places is one control rendered three times, exactly
+    as `model_cards` serves both a page and the swap that replaces it - and what a card posts and what
+    a picker posts then cannot come apart, because they are the same two names from the same call.
+
+    `form` is what associates them with a form they are not nested inside, which the picker needs and
+    the card does not: on the start page every control is a sibling of the form that posts them. It is
+    the same `form="choosing"` every other question in the picker carries.
+
+    The reserve's own value is the record divided down, since the box is denominated in thousands and
+    the record is in tokens. See `THOUSAND`.
+    """
+    return (
+        label(
+            cls=SWITCH_CLASS,
+            children=[
+                input_(
+                    attrs={
+                        "type": "checkbox",
+                        "name": HANDS_OFF_FIELD,
+                        # The state, not a default: an unchecked box posts no field, so what comes
+                        # back is exactly what the box shows.
+                        "checked": tended.hands_off,
+                        "form": form,
+                    }
+                ),
+                span(children="auto at reserve"),
+            ],
+        ),
+        label(
+            cls="tending__reserve",
+            children=[
+                span(children="reserve"),
+                input_(
+                    attrs={
+                        "type": "number",
+                        "name": RESERVE_FIELD,
+                        "value": str(tended.reserve // THOUSAND),
+                        # The floor the boundary refuses below, said to the browser as well so the
+                        # refusal usually happens before the post rather than only after it. One
+                        # number, in `tending.py`, read by both.
+                        "min": str(LEAST_ROOM // THOUSAND),
+                        "form": form,
+                        "aria-label": "Thousands of tokens kept free for writing a handoff",
+                    }
+                ),
+                # The unit, which is what lets the box hold two digits instead of six. Not part of the
+                # label's own words, because it belongs after the number rather than before it.
+                span(cls="tending__unit", children="K"),
+            ],
+        ),
+    )
+
+
+def tending_group(tended: Tending) -> Element:
+    """
+    The pair as the picker's last question, which is what a session is tended with from its first turn.
+
+    Last, by the picker's own widest-first order taken to its end: the workspace decides what a session
+    can touch, the network what it can do with that, the endpoint and model who answers, the thinking
+    level how hard, and this how long the conversation gets before the console writes it down. It is
+    the only one of the six measured against the model above it, which is the other reason it follows.
+
+    Not a `choosing` group, for `starting_at`'s reason: `choosing` is the component for a question with
+    a closed set of answers to draw, and a number of tokens has none. It takes the heading that group
+    would have had, because `auto at reserve` on its own says nothing about what is being automated -
+    in the rail the card's own head says `handoff` and here nothing else would.
+    """
+    return div(
+        cls="tending",
+        children=[span(cls="tending__head", children="Handoff"), *tending_fields(tended, form=CHOOSING_ID)],
+    )
+
+
+def handoff_card(links: Links, session: str, tended: Tending) -> Element:
+    """
+    When this session hands itself off unasked, and how much room it keeps to do it in.
+
+    **Settings only, because asking for one is `/handoff` in the box.** A handoff takes an optional
+    note saying what it should dwell on, and the box is exactly where such a note is written, so it
+    is one more answer to what happens to what you typed rather than a button of its own; see
+    `Disposition.HANDOFF`. What is left here is the pair of settings, which are about the session
+    rather than about anything typed.
+
+    **The rail's own docstring says "navigates", and this does not.** Widening that is the deliberate
+    half of putting it here: what the rail holds is conversation controls, which is what its
+    `aria-label` has always said, and a second region pinned to the same edge would be one piece of
+    chrome too many for the sake of a word.
+
+    A form and not a scripted control, so it works with `mainplate.js` absent, and it swaps *itself*
+    rather than the transcript: nothing about the conversation changed, and the only thing that did is
+    the line above the controls.
+
+    The line comes before them rather than after, because it is what somebody reads before deciding to
+    touch either: how much room is left is the question, and the switch and the number are the two
+    answers to it.
+    """
+    return div(
+        cls="handoff",
+        attrs={"id": HANDOFF_ID},
+        children=[
+            div(cls="handoff__head", children="handoff"),
+            form(
+                cls="handoff__tending",
+                attrs={
+                    "method": "post",
+                    "action": links.to_tend(session),
+                    "hx-post": links.to_tend(session),
+                    # Itself, because the card is what this changes: the standing line is read off
+                    # the reserve, so a swap that left the card alone would save a number and go on
+                    # showing the answer to the old one.
+                    "hx-target": f"#{HANDOFF_ID}",
+                    "hx-swap": "outerHTML",
+                    "hx-status:4xx": "swap:none",
+                    "hx-status:5xx": "swap:none",
+                    # **The switch takes effect on the press and the number does not**, which is the
+                    # difference between a control you set and one you type into. A checkbox says the
+                    # whole of what it means the moment it moves, so waiting for `Set` leaves a
+                    # console that looks switched and is not; a number is half-written for as long as
+                    # somebody is writing it, so a `change` on the box would post whatever was in it
+                    # when they tabbed away.
+                    #
+                    # `submit` stays beside it, because `Set` is what the number is sent with and what
+                    # this form does with no script at all. Either way the whole form posts, so a
+                    # number typed and then a switch flicked saves both rather than losing the typing.
+                    "hx-trigger": f"submit, change from:.{SWITCH_CLASS}",
+                    "aria-label": "When this session hands itself off",
+                },
+                children=[
+                    *tending_fields(tended),
+                    button(cls="handoff__set", attrs={"type": "submit"}, children="Set"),
+                ],
+            ),
+        ],
+    )
+
+
+def rail(links: Links, session: str, tended: Tending) -> Element:
     """
     Everything that navigates the conversation, in one column outside the region that swaps.
 
@@ -2841,6 +3151,16 @@ def rail() -> Element:
     The clasp comes first so that on a window too narrow to stand the rail beside the conversation
     it is left where the cards' head was, and the cards slide off. Which width that is stays the
     stylesheet's to say.
+
+    **What it holds is conversation controls, which is wider than navigating and always was**: the
+    `aria-label` has said so since there was a rail, and the handoff card is the first thing here
+    that is about a session rather than about moving around inside one. It sits under the shelf,
+    which is the boundary: everything above it reads the conversation, and it is the first thing that
+    changes how the conversation is run.
+
+    **The theme goes last, pinned to the bottom by the stylesheet**, because it is the one card here
+    that is not about this conversation at all - it is the reader's, across every session - so it is
+    the one thing a reader scanning the rail for something about *this* session can skip.
     """
     return section(
         cls="rail",
@@ -2855,6 +3175,7 @@ def rail() -> Element:
             key_card(),
             dock_card(),
             shelf_card(),
+            handoff_card(links, session, tended),
             theme_card(),
         ],
     )
@@ -2915,19 +3236,35 @@ class Answer:
     posts: Mapping[str, str | int | bool | None]
     staying: bool
 
+    demands: bool = True
+    """
+    Whether this answer needs something in the box, which every one of them does but `handoff`.
+
+    The box is `required`, which is right for a message and wrong for a handoff: what a handoff takes
+    is an optional note saying what to dwell on, and the ordinary one has nothing typed into it. So
+    the answer that does not demand a message says so, and both of its renderings carry
+    `formnovalidate` - the browser's own way of saying that this submitter does not need the form's
+    required fields, which is a mechanism rather than a script toggling an attribute under a reader.
+
+    Both renderings, because both submit: a menu row is a submit button exactly as the mode's own
+    button is, so an exception on one of them would be a control that refuses from the menu and works
+    from the keyboard.
+    """
+
     @property
     def named(self) -> str:
         """What it is called, which is its own word: there is no second name to drift from."""
         return self.leader.capitalize()
 
 
-def dispatched(disposition: Disposition, saying: str, *, staying: bool = False) -> Answer:
+def dispatched(disposition: Disposition, saying: str, *, staying: bool = False, demands: bool = True) -> Answer:
     """One answer that posts a disposition, named after the value it posts."""
     return Answer(
         leader=disposition.value,
         saying=saying,
         posts={"type": "submit", "name": DISPOSITION_FIELD, "value": disposition.value},
         staying=staying,
+        demands=demands,
     )
 
 
@@ -2941,9 +3278,15 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
     same bargain the branch field takes in rendering one list as a `<datalist>` and a narrowed list.
 
     Ordered by how far the text travels: waiting for the next turn keeps it here and merely later,
-    `Forget` keeps it here and drops what the model was told, an `Aside` is a step out you mean to
+    `Forget` keeps it here and drops what the model was told, a `Handoff` keeps it here and has the
+    session write down what the model should be told instead, an `Aside` is a step out you mean to
     come back from, a `Fork` is a conversation of its own, `Parent` reaches the one this came out of,
     `Run` is not a message at all, and `Keep` sends it nowhere.
+
+    `Handoff` sits beside `Forget` because they are the same family: both end a stretch of context
+    where they stand, and what separates them is who writes what the next one opens on. It is also
+    the one answer whose box may be empty, since what it does with the text is point the handoff at
+    something rather than send it anywhere.
     """
     return (
         *(
@@ -2959,6 +3302,11 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
         dispatched(
             Disposition.FORGET,
             "Ask it with the model's context cleared, leaving the whole conversation on the page",
+        ),
+        dispatched(
+            Disposition.HANDOFF,
+            "Have it write down where it has got to and carry on from that, dwelling on anything you typed",
+            demands=False,
         ),
         dispatched(Disposition.ASIDE, "Step out into a side conversation you mean to come back from"),
         dispatched(Disposition.FORK, "Ask it in a new session carrying this whole conversation"),
@@ -3001,7 +3349,12 @@ def sending_option(answer: Answer, refusing: bool) -> Element:
     """
     return button(
         cls="sender__option",
-        attrs={**answer.posts, "disabled": refusing, "data-leader": answer.leader},
+        attrs={
+            **answer.posts,
+            "disabled": refusing,
+            "data-leader": answer.leader,
+            "formnovalidate": not answer.demands,
+        },
         children=[
             span(
                 cls="sender__option-head",
@@ -3035,6 +3388,7 @@ def sending_leader(answer: Answer, refusing: bool) -> Element:
             "disabled": refusing,
             "data-leader": answer.leader,
             "data-staying": answer.staying,
+            "formnovalidate": not answer.demands,
             "title": "Shift-Enter \N{MIDDLE DOT} Escape to go back to a message",
         },
         children=answer.named,
@@ -3320,19 +3674,36 @@ def stalled_by(showing: Conversation) -> str | None:
     """
     Why this session cannot be answered, or nothing at all when it can.
 
-    One sentence naming the endpoint, because that is the only thing a person can act on: the
-    endpoint was configured when the session started, so putting it back in the configuration file
-    is what makes the conversation continue exactly where it stopped.
+    Two ways to be stopped, and each says the one thing a person can act on. The endpoint is a
+    configuration file somebody can put back, so the conversation continues exactly where it left
+    off. A refused request cannot be put back at all, because what the provider turned down is the
+    recorded history itself, so what it names is `fork`: forking at the refused turn drops that
+    turn's own requests and keeps everything under them, which is the shape that fits again.
+
+    The endpoint is asked first because it is the cheaper failure to fix, and because a session whose
+    endpoint is gone has no provider to have been refused by.
 
     It names the endpoint and not the model on purpose. A model missing from the picker does not
     stop a session, since an endpoint routes more ids than it advertises, so saying so here would
     tell somebody to fix something that is not broken.
     """
-    if showing.answerable or showing.chosen is None:
+    if showing.chosen is None:
         return None
+    if not showing.answerable:
+        return (
+            f"This session was started on endpoint {showing.chosen.endpoint!r}, which the configuration "
+            f"no longer declares. Put it back to carry on, or start a new session."
+        )
+    if showing.refused is None:
+        return None
+    # The status where there is one, because the number is what somebody looks up, and never in
+    # place of the provider's own words: a refusal says which of the several things a 400 can mean
+    # this one was, and flattening that to a code would take the answer away.
+    said = showing.refused.why
+    coded = "" if showing.refused.status is None else f" ({showing.refused.status})"
     return (
-        f"This session was started on endpoint {showing.chosen.endpoint!r}, which the configuration "
-        f"no longer declares. Put it back to carry on, or start a new session."
+        f"The provider refused this turn{coded} and would refuse it again, so nothing is waiting on "
+        f"it: {said}. Fork at this turn to carry on without the requests it made."
     )
 
 
@@ -3347,7 +3718,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             showing=showing.session.id,
             reachable=reachable,
             pane=[
-                transcript_region(links, showing.session.id, showing.said, stalled, showing.window),
+                transcript_region(links, showing),
                 composer(
                     links.to_say(showing.session.id),
                     chosen_note(showing.chosen, showing.repository, showing.worktree, showing.said.total),
@@ -3365,12 +3736,16 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     # Only where there are files to run in. A session with no repository has no
                     # worktree, so `Run` would be an offer with nowhere to honour it.
                     running=showing.runnable,
+                    # Above the box, where the mode sentence already is, and above that sentence: this
+                    # is a standing fact about the conversation and that is what the next press does,
+                    # so the transient one sits closest to the thing it describes.
+                    above=cache_note(showing),
                 ),
             ],
             # Only where there is a conversation to navigate. On the page where a session does not
             # exist yet every control in it would be pointed at an empty transcript, which is a
             # row of dead buttons rather than an offer.
-            aside_rail=[rail()],
+            aside_rail=[rail(links, showing.session.id, showing.session.tending)],
         ),
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,
@@ -3493,7 +3868,17 @@ def fork_page(
                         # One already in a repository inherits it, so there is nothing to choose;
                         # one in none may pick a repository up here, which is the ordinary shape
                         # of having thought something through and then going to work on it.
-                        picker(links, catalogue, attachable(showing, reachable), reference, showing.chosen),
+                        picker(
+                            links,
+                            catalogue,
+                            attachable(showing, reachable),
+                            reference,
+                            showing.chosen,
+                            # The parent's own, so a branch that wants what the session it came from
+                            # had needs nothing touched. It is settled afresh rather than inherited by
+                            # the service, for `Service.fork`'s reason, so the page is what carries it.
+                            showing.session.tending,
+                        ),
                         div(
                             cls="forking__act",
                             children=[

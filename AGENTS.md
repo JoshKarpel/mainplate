@@ -203,6 +203,13 @@ was acted on. Two failures, and the second is the one that keeps happening here:
 Neither is an argument for jargon this console made up, and it does not license the second word the
 rule above refuses. It is the plain name of a thing that already has one.
 
+**Name the trigger, never an actor.** Nothing in this console decides anything, and a word implying
+otherwise is wrong about the mechanism as well as grandiose: what happens is that a recorded number is
+crossed and a message is delivered. So the auto-handoff switch says `auto at reserve` and not `by
+itself`, which reads as the console choosing or - worse, since it is the party that *does* choose
+things here - as the model having decided to wrap up. The trigger is also the more useful half, since
+a reader who knows what fires it knows what to change.
+
 **Prose may inflect where a control may not.** English makes a noun of an act, so a fork produces a
 branch and a session forked at turn three has a branch point. That is ordinary writing and not a
 second term. What must not vary is the label on a button, the name of an identifier, and the word a
@@ -222,7 +229,9 @@ console names.
 
 ```text
 inbox:{n}            a message or a command, filed in the order it arrived; appended from outside a
-                     pass, by `Service.say`, `Service.send` and `Service.run`
+                     pass, by `Service.say`, `Service.send`, `Service.run` and `Service.hand_off`,
+                     and from inside one by the `hand_off` tool
+
 result:{entry}       what the command delivered under `{entry}` exited with, said and took; written
                      by `Commands` when it finishes
 choice               the endpoint, model, repository, base, branch, isolation and thinking level;
@@ -235,6 +244,8 @@ turn:{n}:tree:{i}    the worktree before the i-th model request; written by `Ste
 turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request, recorded by
                      `Run.pending` through `StepwiseDurability`
 turn:{n}:model:{i}   the i-th model response of that turn; written by `StepwiseDurability`
+turn:{n}:refused:{i} why the i-th request will never be accepted, where one never was; written by
+                     `StepwiseDurability`, and exclusive with `model:{i}`
 turn:{n}:tool:{id}   what one tool call returned and how long it ran; written by
                      `StepwiseDurability`
 turn:{n}:messages    what the agent run produced; written by the conversation body
@@ -381,9 +392,16 @@ step because `StepKind` is one vocabulary the key builders and the discriminator
 
 **In the inbox it is not a second copy at all, and that is where it earns most.** The store names an
 entry, so nothing in the key says whether what is in it is a message that must open a turn, one a
-running turn may fold in, or a command no model will ever see. `records.Delivered` is the union of
-the three and the tag is the whole of what tells them apart, which is why a pass draining its queue
-can stop at a prompt and pass over a command.
+running turn may fold in, a message the console wrote itself, or a command no model will ever see.
+`records.Delivered` is the union of the four and the tag is the whole of what tells them apart, which
+is why a pass draining its queue can stop at a prompt and pass over a command.
+
+**Which questions a reader asks of that tag are `records.opens` and `records.forgets`**, and they are
+functions rather than an `isinstance` chain repeated at five call sites. `opens` is whether a
+draining pass must stop here, which a `Prompt` and a `Handoff` answer alike; `forgets` is that and
+the field together, since only a message a turn opens on can carry a boundary. `opens` is a `TypeIs`
+so the union it names is written once and every caller that goes on to read `forget` is narrowed by
+asking rather than by repeating it.
 
 **Not to be confused with the panel `Kind`.** Both are called `kind` because it is a generic word and
 each is unambiguous where it is used; they overlap on `command` and `tool` meaning different things,
@@ -447,9 +465,29 @@ each reaches models the other does not. It also decides what `url` means: the An
 `/v1/messages`, so it wants the host; the OpenAI SDK appends `/chat/completions`, so it wants the
 host and `/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
 
-`agent.py` holds one `Wire` class per format, and it holds *both* format-specific things: how to
-name a model over it and how to ask it what it serves. A third format is one class, not an edit in
-three files.
+`agent.py` holds one `Wire` class per format, and it holds *all three* format-specific things: how to
+name a model over it, how to ask it what it serves, and what it has to be told to reuse a
+conversation's prefix. A third format is one class, not an edit in three files.
+
+**`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
+conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input
+price for everything said so far, over and over - on a long turn that is most of the bill, and
+nothing about the request looks any different. It is opt-in on the Anthropic wire
+(`anthropic_cache`, a top-level `cache_control` whose breakpoint the server moves forward as the
+conversation grows) and automatic and uncontrollable on the OpenAI one, which answers with an empty
+`ModelSettings`. Empty rather than absent, because what has to be true is that every wire *answers*:
+a format added later is then a `caching` somebody had to write rather than a session quietly paying
+full price.
+
+`CACHE_FOR` is `1h` rather than the default five minutes, and the trade is stated because it is real:
+an hour's retention is written at 2x base input against 1.25x, so it pays only where a conversation
+is picked up again after a pause. That is what a chat console *is* - somebody reads an answer, thinks,
+and replies - where five minutes barely outlasts one long turn.
+
+`agent_for` merges the wire's answer under the session's own, so a recorded choice always wins. The
+two do not overlap today; if they ever do, the thing somebody picked should be the thing that
+happens. `test_what_a_wire_asks_for_reaches_the_request` is what fails when the merge goes, because a
+setting built and never passed on looks exactly like one that was.
 `chat_models` is the pure half of the OpenAI side and is where its two exclusions live: exe.dev
 publishes every OpenAI model twice (bare and prefixed) and mixes embedding models in with chat
 ones. The embedding rule is a rule over names because that list carries no capability to ask;
@@ -700,6 +738,99 @@ on their own panels, and adding those in would double-count a batch that ran at 
 anywhere is unknown for the whole, exactly as with the cost, so a turn recorded before this console
 timed anything shows no figure rather than a suspiciously small one.
 
+## Whether the cache is still warm, and what that is worth
+
+A conversation is re-sent whole on every turn, so a session picked up after lunch pays full input
+price for everything said in it and nothing about the request looks any different. `cache_note` is the
+line above the message box that says so, and it earns its row only because `Wire.caching` asks for a
+cache at all: with none there would be nothing to have gone cold and nothing worth saying.
+
+**A figure and not a warning, in the family of the gauge and the `▣` count.** It never tells anybody
+to `forget`: at low utilization the right move is to carry on, and picking which figure matters is the
+reader's. It says what is true and stops.
+
+**One-sided, always.** Past the retention a prefix is cold and this says so; under it nothing can be
+asserted, because eviction is unobservable from here. What it says instead is `warm as of 12m`, which
+is a claim about when the prefix was last *written* - a response landing is exactly that moment - and
+is true on any wire whatever that wire's own TTL. `RETENTION` works as the one threshold for the same
+reason: it is the longest this console asks for anywhere, so past it the prefix is gone everywhere and
+no format has to be threaded to the page to know it.
+
+**The server renders an absolute time and the script renders the relative one.** Nothing here
+re-renders on the clock - the stream sends when the session *records* something, and the interval that
+decides the answer is exactly the one where nothing is recorded - so a server-rendered `warm` would
+sit there while the retention rolled past it. `cached at 15:09` is a fact that cannot rot, which is
+what a reader with `mainplate.js` absent gets, and `warm as of 12m` is the script's reading of it.
+Cold is the one state the server *can* assert, since it was already true when the page was rendered
+and nothing makes a cold prefix warm again.
+
+**That split is also what keeps one elapsed formatter rather than two.** The server never renders a
+duration here, so `ago` exists only in the script; a server that rendered `12m` too would be the same
+three-branch format written in two languages with nothing holding them together.
+
+**What the script adds is a duration to a duration, never one clock to another.** `data-since` is how
+long ago the server measured the last response to be, and the rest is measured in the browser from the
+moment it first saw that element, so a reader whose machine disagrees with the console's is still
+right. A swap replaces the element, which gets a fresh `data-since` and a fresh stamp - which is
+exactly what should happen.
+
+**`Conversation.since` is the one place this console subtracts two clocks**, and the caveat lives on
+the field. `Transcript.answered_at` is stamped by whichever process ran the pass and `since` is taken
+in a request handler, so the difference is sound exactly as long as those are one machine, which today
+they are. Split across machines it becomes as good as the two clocks' agreement, which for a threshold
+in hours is fine and for anything finer would not be. It is measured in `Service.read` rather than on
+the page, because a page is a pure function of already-answered questions and `now()` is not one.
+
+**`ModelResponse.timestamp` rather than the store's own write time**, which `Checkpointer.history`
+would give. Pydantic AI already stamps it, it survives the checkpoint round trip, and it needs no
+second read; the store's clock has the identical split-deployment caveat, so the general shape buys
+nothing here. What it means is "when the response was received locally", which is as close as this
+console gets to when the provider last touched the prefix.
+
+**The money is a floor and says so.** What it prices is the input of the next turn's *first* request -
+re-sending what has already been said - and not the answer, the tools that turn runs, or the further
+requests it makes, any of which can dwarf it. A bare figure would read as what the next turn costs and
+understate it by however much work that turn turns out to be, so it carries a `+` and the title spells
+out what sits on top. It is the one thing about a turn nobody has started that can be stated exactly
+rather than guessed at.
+
+**Both ends are drawn, and the gap between them is the point.** `▣$0.0289 / $0.2889+` is what
+re-sending costs with the whole prefix cached against none of it, which is what makes the cost of
+*waiting* legible: on a long conversation that is a tenfold jump and nothing about the request would
+have looked any different. Neither figure claims to be the one that will be charged - how much of a
+prefix the provider still holds is unobservable, which is the same reason `warm` is never asserted in
+words - so the pair is stated and the state beside it says which end the session is nearer.
+
+`▣` for the cached end rather than the word `warm`, because the state is already one of those two
+words and the line would carry each of them twice. It is the mark the rule already uses for the part
+of an input a provider read from its cache, so it means the same thing in both places.
+
+**No warm figure where the record prices no cache.** `priced` falls back to the input rate there, so a
+warm end would be the cold one printed twice - which reads as a bug rather than as a database that
+does not say. `Resending.warm` is `None` for exactly that, and the line draws the one end it knows.
+
+**One value rather than two fields**, so the pair can never be computed from two different contexts or
+two different records, which is `facts_of`'s own argument one scale down.
+
+**It is a second partial on the page's own connection**, which is the shape `streaming.py` was built
+for and the first thing to use it. The note lives in the composer, so the transcript's swap does not
+reach it, and what it says goes stale on every turn: the context it prices grows and the moment it
+measures moves. `outerHTML` rather than the transcript's morph, since it is one short line with
+nothing in it worth preserving.
+
+**`RETENTION` and `CACHE_FOR` are one fact in two places.** The parameter has to be a literal, because
+the SDK types the field as `Literal['5m', '1h']` and a string rendered from a `timedelta` is a `str`;
+the duration has to be a `timedelta`, because that is what the comparison takes. So they are written
+twice with nothing enforcing the agreement, which is the bargain `tree_key` and `Stepping.key` already
+take, and `test_the_retention_and_the_wire_parameter_are_one_duration` is what turns a drift into a
+failure rather than a console confidently calling a dead prefix warm.
+
+**Every response fixture now carries a timestamp**, in `conftest.recorded_turn` and in
+`scripts/gallery.py`. `ModelResponse.timestamp` defaults to the moment it was constructed, so a
+fixture without one is the moment the test or the render ran: an assertion over a whole `Transcript`
+becomes a comparison against the wall clock, and two `just gallery` runs produce two different pages.
+A screenshot that differs run to run is one nobody can compare against the last.
+
 ## Forking, and where a session may change its mind
 
 A session's choice is fixed for life, so **forking is how it changes**. `Service.fork` copies every
@@ -777,6 +908,12 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   where the message goes, and being a `Prompt` is what makes it possible: a boundary between turns is
   the only place one can be, so it must never be folded into a turn already running. See the forget
   section below.
+- `handoff` is `Service.hand_off`, and it is **the one answer whose box may be empty**. What it does
+  with the text is point the handoff at something rather than send it anywhere, and the ordinary
+  handoff has nothing typed into it, so the button carries `formnovalidate` and the boundary allows an
+  empty message for this disposition alone. It shares the family `forget` is in - both end a stretch
+  of context where they stand - and differs in who writes what the next one opens on. See the handoff
+  section.
 - `fork` is `Service.fork(at=turns, said=...)`, which is pi's `/clone` and needed a control rather
   than a mechanism: the fork route already accepts `at == said.turns`, so forking the end has always
   been reachable by URL and offered by nothing. It is called `fork` and not `branch` because it is
@@ -1063,6 +1200,289 @@ that appeared with the first forget would not appear until a reload. Its stops a
 transcript the way every other column's are, by the `data-stop` a rule declares about itself, so one
 recorded mid-session is reachable at once; its upper terminus is the top of the transcript, which is
 what "before any forget" means.
+
+### Handoff
+
+**A forget whose message the session wrote itself.** The console asks a session to write down where
+it has got to; the model does that with its own tools, calls `hand_off` with the document, and the
+document is delivered back as a message carrying a boundary. What the next model is told is the
+document and nothing above it.
+
+**It happens in the session, not in an aside**, which was the first design and was worse in four ways
+at once:
+
+- **The worktree.** A fork plants a fresh one at a recorded tree, and an end-fork has no recorded
+  tree at all, so it falls through to the repository's default branch. The agent asked to describe
+  the work would have been looking at a directory with none of it in it - and "check rather than
+  recall" is the whole reason for letting it use tools.
+- **The cost.** `altogether` sums a session's own turns, so a handoff's spend would have landed on a
+  different total, and the parent's running figures would have been quietly missing it.
+- **The recursion.** An aside inherits its parent's settings, and it carries the parent's whole
+  window, so it starts near any reserve by construction. Turning auto-handoff off on the copy is one
+  line and exactly the kind that gets forgotten until it recurses in production.
+- **The cache.** Instructions are the per-request parameter Pydantic AI renders in front of the whole
+  cached prefix, so a fork's first request pays full price for the window unless its composed
+  instructions come out byte-identical. In-session there is no second prefix: the handoff turn is the
+  next turn on the one already cached.
+
+**The tool is in every session's prefix**, and that is arithmetic rather than convenience. Tool
+definitions sit above the system prompt in the cached prefix, so adding one invalidates the whole
+conversation beneath it: introduced at handoff time it would cost a full uncached read of the window,
+where a permanent one costs its own description at cache-read prices on every request. Four orders of
+magnitude. `agent_for` therefore adds it unconditionally, and unlike the file tools it is not
+conditioned on the isolation, because what it reaches is the conversation rather than the machine.
+
+**A tool rather than the turn's prose, because models leak the framing.** Asked for a handoff in
+words, a model writes "Here is the handoff document: ... What would you like next?", and the framing
+is then durably part of what the next model is told. An argument splits the document from the chat
+around it, and `hand_off` refuses anything under `LEAST` characters, which is what catches the model
+that acknowledges the ask instead of answering it.
+
+**Neither the ask nor the tool prescribes a shape**, and that is a decision rather than an omission.
+What somebody picking up a refactor needs handed over and what somebody picking up an investigation
+needs are different documents, so a fixed set of headings would have every session filling in the
+ones it has nothing to say under. `ASKING` says what a handoff is about - where the work got to, what
+was decided and why, what to do next - and stops; the tool's description carries the parts that are
+*mechanical* rather than editorial (the document becomes the whole context, pass it alone, check
+rather than recall) and says outright that the shape is the model's.
+
+**A person who wants it pointed somewhere types it in the box**, and it is appended to the standing
+ask rather than replacing it: "dwell on the parser work" on its own is an instruction to summarise a
+summary. Both writers compose through `recorded_ask`, which takes the note where there is one and the
+bare ask where there is not, so a handoff nobody asked for and one somebody typed a paragraph into
+cannot come to say different things about what a handoff *is*.
+
+**It is delivered and not appended, and that costs a pass boundary.** An entry appended mid-pass is
+invisible to the pass that appended it, since `receive` reads the snapshot loaded at the top - which
+is what makes a drain replayable - and an append queues nothing. A handoff written that way leaves
+the session `Blocked` on a message already sitting in its own inbox with nothing that will ever wake
+it. `handing_through` therefore takes the whole `Durable` rather than the checkpointer a pass holds.
+
+**`records.Handoff` is an arm of `Delivered` rather than a flag on `Prompt`.** Every other message in
+a conversation was typed by somebody, so a reader has to be able to tell at a glance that this one
+was not; the tag is what the panel's kind is read off, which is the same argument that made `Steer`
+its own record. It behaves exactly as a `Prompt` otherwise, and `records.opens` and `records.forgets`
+are where that "exactly as" is written once rather than as an `isinstance` chain at each of the five
+readers. Both uses are `handoff` because both are the handoff: the ask carries no boundary and the
+document carries one.
+
+The panel takes the person's hue, by `command`'s rule: the axis is who produced the text, and what a
+handoff holds was produced by this session rather than by the model about to be handed it. Its
+`TITLES` entry is what says the console composed it, which is the one thing the label leaves out.
+
+**Asking for one is `/handoff` in the composer**, which is an answer in the sending menu like every
+other. The menu's premise is that its rows are decisions about the text somebody typed, and this one
+is: a handoff takes an optional note saying what it should dwell on, and the box is exactly where such
+a note is written. `/handoff` on its own hands off, and `/handoff` with a paragraph hands off pointed
+at what the paragraph says.
+
+**The box may be empty for this answer and no other**, which is what the row's `formnovalidate` buys.
+The box is `required`, which is right for a message and would refuse the ordinary handoff, so the
+button says it does not need the form's required fields and the boundary allows an empty message for
+this disposition alone. That is the browser's own mechanism rather than the script toggling an
+attribute under a reader, which is the same reason every mode's button is drawn by the server.
+
+`Answer.demands` is where an answer says so, and it is read by *both* renderings: a menu row is a
+submit button exactly as a mode's own button is, so an exception on one of them would be a control
+that refuses from the menu and works from the keyboard. `TestWhereTheComposerSendsTo` drives it in a
+real Chromium, because a form refused before any request leaves and a control that silently does
+nothing look identical in the markup.
+
+It sits beside `Forget` in the menu because they are the same family: both end a stretch of context
+where they stand, and what separates them is who writes what the next one opens on.
+
+### Handing off without being asked
+
+The same call as `/handoff`, fired by a number rather than by a person: both go through
+`recorded_ask`, so the words a handoff is asked for in are in one place and cannot come apart. What
+the rail's card holds is the two settings that decide when.
+
+**`Tending` is the one thing about a session that changes, and it has nowhere else to live.** A
+session's `Choice` is recorded before the first message and fixed for life; this is what is being done
+*to* a running session, so it has to be changeable or it is not a setting. Neither place this console
+otherwise keeps things will take it: `without-durability-sqlite` writes steps with `ON CONFLICT ... DO
+UPDATE SET value = workflow_checkpoint.value`, so a key keeps the value it was first given and a
+setting saved twice would keep its first answer for ever; and `localStorage` is in a browser where the
+worker that acts on this may be another process. So it is two columns on the `sessions` row, arriving
+through `ADDED` the way `forked_aside` did, and `tend` is the only thing that writes them.
+
+That is not the second copy the index otherwise refuses. The rule is against copying something already
+recorded elsewhere, and this is recorded nowhere else.
+
+**`NULL` reads as a module constant rather than a `Settings` field.** A process-wide answer would be a
+second place a session's question is answered, exactly as a process-wide model would be, and nobody
+has asked to set these per console. Moving a constant therefore moves every session nobody has told
+anything, and a session somebody *has* told stops following it, which is the point of having said
+something. `parse_tending` defaults each column on its own, unlike `parse_origin`, which demands its
+pair: half an origin is a row nothing here could have written, where a session told one setting and
+not the other is ordinary.
+
+**A fork starts on the defaults rather than inheriting.** A reserve is a decision about how much room
+one conversation's context has left, and a fork's context is not that conversation's, so carrying the
+number across would be carrying an answer to a question the branch has not been asked yet. The default
+is on, so what a fork inherits is being looked after.
+
+**Headroom in tokens, never a percentage.** What has to be true is that the handoff run has room to do
+its work: the ask, a few tool calls, the returns they bring back, and the document. That is an absolute
+quantity and the same one on every model, where a fifth of the window is 40k on a 200k model and 200k
+on a 1M one - the same setting re-tuned per model, by somebody who would have to know the absolute
+number anyway in order to pick the fraction.
+
+**A window and not a threshold**, which is `Reserve` in `tending.py`: `opens` is where a handoff
+becomes worth asking for and `shuts` is where there is no longer room to write one. Two bounds because
+a single turn can cross the first and overshoot the second, which one large tool return is enough to
+do. `LEAST_ROOM` is the second bound and is a constant rather than a setting, because it is not a
+preference: below it a handoff is a request nobody should pay for.
+
+**Past the close the console stops offering, and reaches for nothing smaller.** A cheaper non-agentic
+summariser would be a second path that only ever runs when the first is already failing, so nothing
+would exercise it and its bugs would surface during the one moment a conversation is least able to
+absorb them. What is left is the person's - `forget`, or `fork` - and both cost nothing. There is
+deliberately no second stall mechanism either: a request that no longer fits is refused by the
+provider, and `turn:{n}:refused:{i}` already says so in the same sentence-instead-of-a-spinner shape.
+
+**`standing` is asked of the reserve rather than of a whole `Tending`**, because where a conversation
+is and whether the console will act on it are two questions, and the gauge answers only the first.
+
+**Off where the model has no reference record.** `Conversation.window` is `None` for a model the
+database has never heard of, so there is no fraction, no way to know a reserve was crossed, and no
+gauge on any rule either - which is what a session showed before there was one.
+
+**Where it says so is the gauge on every rule, not a line in the card.** `reserve_mark` puts a short
+bar across the rule at the fraction the reserve opens at, on the same scale `--filled` is drawn
+against, so watching the line lengthen toward the mark is watching the handoff approach. That costs no
+row and no words, on a control a reader is already reading, where a sentence in the rail said the same
+thing once per page in a place nobody is looking. It is drawn only where the switch is on, because a
+mark for something that will not happen is a line to explain.
+
+It is an element rather than a second pseudo, and that is forced: the fill is unconditional and draws
+nothing at 0%, where a mark has no position to fall back on. Keyed off the style attribute it would be
+a selector matching on the text of one, and given a fallback offset it would be a bar parked somewhere
+rather than absent.
+
+**The pass decides and the composition root writes**, which is `Crossed`. Asking for a handoff means
+putting a message in an inbox, and that *queues* the session, so it is a fact about the queue in front
+of a pass rather than about answering one and it belongs where `make_ready` already is. It is also
+what makes the decision testable as a value: a test drives one pass and reads what came back, with no
+store and no scheduler anywhere near the arithmetic.
+
+**Fired at the boundary that crosses the reserve, not at the start of the next turn**, because the
+conversation's prefix is warm right then and may not be when somebody comes back and types. The same
+argument that makes a handoff cheap in-session makes it cheap here.
+
+**A turn that opened on a handoff never triggers another**, and that is the whole of what stops this
+recursing. The reserve stays crossed for as long as the context is large, so without it the ask turn -
+whose own context is the conversation it is summarising - would cross it again the instant it ended,
+and so would every turn after that. Asking about the message the turn opened on covers both the ask
+and the document. A model that answers the ask in prose instead of calling the tool is therefore not
+asked again until a person says something, which is a retry per human action rather than one per turn:
+the rule a refusal already follows.
+
+**The settings are snapshotted once at the top of a pass**, injected as `Tendings` the way `Handoffs`,
+`Pricer`, `Draining` and `Guiding` are. Once, because a setting re-read at each turn boundary is a
+place two writers share, so a switch flicked while a turn was in flight would have that turn answered
+under one answer and judged under another. What it costs is that a change takes effect on the next
+pass, which is the next turn. `None` is a console that was never given a way to read them, and such a
+console tends nothing - the same reading `prices` and `handoffs` already take, and what keeps the
+arithmetic inert in every test that does not ask for it by construction rather than by the accident of
+some other value being missing.
+
+**The window is asked for at the boundary rather than at the top of the pass**, because the reference
+under it is reloadable configuration exactly as the rates are. `Prices.facts` is that one lookup, and
+`pricer` now reads it too: what a turn is priced by and how big its window is are the same record read
+for two fields, which is `facts_of`'s own argument said one layer in.
+
+**Safe to default on, and only here.** Every other harness defaults its compaction on as a bet that the
+summary is good enough, because what the summary replaces is gone. A handoff replaces nothing: it is an
+append, the whole conversation stays in the transcript, it still counts toward what the session cost, it
+still comes across on a fork, and forking above the boundary carries the entire backlog into a session
+whose context holds all of it. The worst a wrong default costs is one turn nobody asked for.
+
+**The pair is asked in three places and rendered once**, which is `tending_fields`: the rail's card
+changes a running session's, and the start page and the fork page decide a new one's before it exists.
+What a card posts and what a picker posts then cannot come apart, because they are the same two names
+from the same call. `form="choosing"` is the only difference, and it is what associates the picker's
+copy with a form it is not nested inside, exactly as every other question there does it.
+
+**In the picker it is the last question**, by that page's widest-first order taken to its end: the
+workspace decides what a session can touch, the network what it can do with that, the endpoint and
+model who answers, the thinking level how hard, and this how long the conversation gets before the
+console writes it down. It is also the only one of the six measured against the model above it. Not a
+`choosing` group, for `starting_at`'s reason - a number of tokens has no closed set of answers to draw
+- so it takes the heading that group would have had, because `auto at reserve` alone says nothing
+about what is being automated.
+
+**A fork settles it afresh rather than inheriting it**, and the fork page starts the control on the
+parent's so that wanting the same thing needs nothing touched. A reserve is a decision about how much
+room one conversation's context has left, and a branch's context is not that conversation's, so
+carrying the number across by *default* would be carrying an answer to a question the branch has not
+been asked.
+
+**Starting on the defaults writes no column at all.** The picker posts this pair on every session, so
+recording it unconditionally would make every column explicit, leave a moved constant reaching
+nothing, and make the defaulting branch a path only a database written before this existed can take -
+which is a path nothing exercises. Somebody who sets exactly the defaults is indistinguishable from
+somebody who left them, and that is the correct reading of both.
+
+**The switch takes effect on the press and the number does not**, which is the difference between a
+control you set and one you type into. A checkbox says the whole of what it means the moment it moves,
+so waiting for `Set` leaves a console that looks switched off and is not; a number is half-written for
+as long as somebody is writing it, so a `change` on that box would post whatever was in it when they
+tabbed away. The form's `hx-trigger` is `submit, change from:.tending__switch` for exactly that, and
+`submit` stays beside it because `Set` is what the number is sent with and what the form does with no
+script at all. Either way the whole form posts, so a number typed and then a switch flicked saves
+both rather than losing the typing.
+
+**Which leaves `Set` to say there is something to press.** `data-dirty` is the mark, set by comparing
+the box against its own `defaultValue` - which is exactly the `value` the server rendered, so nothing
+is kept anywhere and a swap needs no repaint: the box that comes back is a new element carrying the
+new default and no mark. Undoing a change unmarks it, because it is a comparison rather than a flag
+the first keystroke sets. `--mark` is the gold every control here draws its focus ring in, and the
+border alone rather than a fill, since a filled button reads as pressed.
+
+**No spinner on the box, because no increment is right**: a step of 1 is a hundred presses to move a
+reserve anywhere worth moving it, and any larger one is a number this console would have to invent.
+The type stays `number` for the keypad it asks for on a phone and the `min` it validates against, and
+the arrows go - they sit inside the box and take the room a fourth digit needs. Four digits is the
+width, which is a bound rather than a guess: the reserve is in thousands and a context window past
+1000K is not a thing to size a box for today.
+
+**The card answers itself rather than the transcript.** Nothing about the conversation changed, so
+swapping the transcript would replace the whole region in order to show what is already in the rail.
+What comes back is the box holding the value as it was recorded, which is worth doing rather than
+leaving the browser's own state alone precisely because the box is denominated in thousands.
+
+**The box is in thousands and the record is in tokens.** A reserve is only ever chosen in round
+thousands and six digits is a number to count the zeroes of, so the control holds `40` with a `K`
+beside it while the value behind it stays in the unit every other figure on the page is in. `THOUSAND`
+is the multiplier, named once, so the boundary and the card cannot disagree about which way it goes.
+
+**An unchecked checkbox posts no field**, so an absent `hands_off` on a *form* means off where an absent
+`hands_off` in the *column* means the default. Those answer two different questions - what this form
+said, against what anybody has ever said - and nothing has to reconcile them, because the boundary
+resolves a form to a whole `Tending` and `tend` writes both columns in one statement.
+
+**An empty reserve box is the default and an unusable one is refused**, which is `posted_ref`'s split
+exactly. A reserve below `LEAST_ROOM` is refused at the boundary rather than stored and left to
+`reserving`, which would answer that the console cannot say where the session stands with nothing
+saying the number was why. A *stored* one is never clamped, for the same reason: correcting a number
+somebody typed into the shape this console prefers is how a setting stops meaning what it says.
+
+**A session nobody can answer may still be tended**, unlike `/handoff`, which such a session refuses.
+One nobody can answer is exactly one somebody might want the console to stop spending on, and that is
+the only useful thing left to do with it.
+
+**The card sits under the shelf, and the theme sits below it at the foot.** The shelf is the boundary
+in that column: everything above it reads the conversation, and this is the first thing that changes
+how the conversation is run. What `margin-top: auto` pins to the bottom is the theme, because it is
+the one card there that is not about this conversation at all - it is the reader's, across every
+session - so it is what somebody scanning the rail for something about *this* session can skip.
+
+`tending.py` is a module of its own for `thinking.py`'s reason, which is a cycle: the columns live on
+the session index and the decision is made inside a pass, so `sessions.py` and `conversation.py` both
+read it, and `sessions.py` already reads `conversation.py` for the key scheme. `HANDS_OFF_FIELD` and
+`RESERVE_FIELD` live there too, by `roots.py`'s rule: `pages.py` renders the controls and `console.py`
+parses them, and the module that owns the vocabulary is the one both can read without closing a ring.
 
 ### Merging an aside is a disposition, not a merge
 
@@ -1585,6 +2005,17 @@ Four details there are decided:
 - **The key is not turn-prefixed**, deliberately. `before` copies turn-prefixed keys by shape, so a
   turn-shaped name would carry a parent's instructions into a fork that may have attached a
   repository the parent never had. Named this way a fork composes its own.
+- **`working_note` names a session's places and never paths them**, which is `roots.py`'s whole
+  argument said one layer out and a fact about the cache besides. A worktree sits under 32 hex
+  characters of session id, so printing the path invites the failure the root names were built to
+  prevent; and instructions are the per-request parameter Pydantic AI renders in front of the entire
+  cached prefix, so a sentence naming one session's directories makes that session's prefix unlike
+  every other's. With the paths out, the note is a pure function of the isolation: two sessions of
+  the same shape compose byte-identical instructions, and a fork's first request reads its parent's
+  prefix from cache rather than paying full price for the whole conversation again. A relative path
+  already lands in the worktree and `$MAINPLATE_WORKTREE` already names it in a command, so nothing
+  was given up. `test_what_a_stretch_records_is_exactly_what_its_requests_carried` asserts the path
+  is absent beside its control that the note is present, so an emptied note cannot pass it.
 
 **Console guidance is read once at startup instead, and nothing watches it.** `just serve` watches
 `src/mainplate`, and this lives under the config home, so an edit there wants the process restarted
@@ -1645,9 +2076,8 @@ is showing half of how a turn happened. Five things there are decided:
   **It carries no fold of its own; the panel is its fold.** It is drawn as the same `block--document`
   the guidance a turn is handed mid-way is drawn as, because on the page the two are the same thing,
   and what separates them is where each sits in the request, which is what the *panel* around each
-  says. The document's opening line and its character count are on the panel's row - the line is what
-  identifies it without opening it, and the count is what says it is paid for on every request from
-  here on. See "Every panel folds, from its own row".
+  says. The document's opening line is on the panel's row, which is what identifies it without opening
+  it. See "Every panel folds, from its own row".
 
 The panel takes the person's hue, by the same rule as `command`: the axis is who produced the text,
 and what is in a system prompt was written by the operator and by whoever wrote the repository's
@@ -1744,20 +2174,31 @@ decided:
 ## How a model names a line
 
 Every tool lives under `tools/`, one package per tool, as `tools/{name}/{module}.py`. Only the
-constructor reaches the harness: `tools/__init__.py` exports `Files`, `file_tools` and `bash_tools`
-and nothing else, so `agent.py` asks for the tools a workspace affords without knowing that editing
-is anchored, that a worktree root has to be resolved against, or how a command is confined. A third
-tool is a new package beside `files/` and `bash/` and one more name in that list, rather than an
-edit to anything that already imports them.
+constructor reaches the harness: `tools/__init__.py` exports the constructors and the values they
+take and nothing else, so `agent.py` asks for the tools a workspace affords without knowing that
+editing is anchored, that a worktree root has to be resolved against, or how a command is confined. A
+further tool is a new package beside `files/`, `bash/` and `handoff/` and one more name in that list,
+rather than an edit to anything that already imports them.
+
+**`handoff/` is the one whose subject is the conversation rather than the machine**, which is why it
+alone is not conditioned on the isolation: every session has a conversation. See the handoff section
+for why it is in every session's cached prefix, and why it takes a document as an argument rather
+than reading one out of the turn's prose.
 
 Within the files one, `tools/files/anchors.py` is pure and `tools/files/tools.py` is the shell
 around it, which is the split that lets the interesting half be tested with a list of strings. A
-**Which tools a session gets is decided by its `isolation`, not by whether it picked a
-repository.** A session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree
+**Which tools a session gets over its *files* is decided by its `isolation`, not by whether it picked
+a repository.** A session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree
 and its scratch; one on `EVERYTHING` gets the same four over `/`, where `list` refuses because
-nothing there is in git; one on `NOTHING` gets **no toolset at all**, because tools that can only
-fail are worse than none and cost a description on every request. `bash` is added to the first two
-wherever there is a sandbox to run it in.
+nothing there is in git; one on `NOTHING` gets **none of them**, because tools that can only fail are
+worse than none and cost a description on every request. `bash` is added to the first two wherever
+there is a sandbox to run it in.
+
+**`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
+with no files still has exactly one toolset rather than none. It is not an exception to the rule
+above but a different subject: what it reaches is the conversation, and every session has one. See
+the handoff section for why it has to be in the prefix from the first request rather than added when
+a handoff is wanted.
 
 **`list` asks git rather than walking**, so a `.gitignore` is obeyed and a `.venv` or a
 `node_modules` never reaches a context window. `git ls-files --cached --others --exclude-standard`
@@ -2193,6 +2634,43 @@ is nothing against a round trip that takes seconds. `test_app.py` is what fails 
 fails as a timeout, because the failure it guards is a session that stops mid-turn with nothing
 anywhere saying so.
 
+**A pass that cannot go on comes back `Stalled` instead, and that is a different instruction rather
+than a shade of the same one.** `readying` matches on which it got: `Progressed` asks the scheduler
+to make the session ready again, and `Stalled` asks for nothing, because the pass that followed would
+put an identical question to the provider and get an identical answer. `Ended` is the union, named
+for the pass rather than `Outcome`, which already means how a tool call went here and what the
+mechanism made of a pass in `without-durability`.
+
+**The bug it closes is invisible rather than loud.** `without-durability`'s worker leaves a delivery
+unanswered when a pass raises, deliberately, since it cannot tell a workflow's own failure from a
+store that was briefly unreachable, and its own docstring names the cost: a workflow that fails on
+every pass is retried once per lease for as long as it keeps failing, and the count belongs in the
+checkpoint. So a refusal is written to the checkpoint, once, and the loop stops there.
+
+**Terminal is a 4xx and transient is everything else**, which `terminally` decides. A 4xx is the
+provider saying the request itself is wrong - a prompt over the window, a model it will not route, a
+body it will not parse - and no amount of asking again fixes any of those; the exceptions are the
+4xx codes that describe the moment rather than the request (`408`, `409`, `425`, `429`), and a
+redelivery is exactly what each asks for. **The default is transient**, which is the safe way round:
+read as terminal, a transient error stalls a session that would have recovered on its own, where the
+other way costs a redelivery per lease until somebody looks.
+
+**`turn:{n}:refused:{i}` is named after the request rather than the turn**, and it is a settled value
+in a write-once store for a reason worth keeping: what a request is made of is the recorded history
+and the recorded message, neither of which will ever change, so a turn refused at request `i` is
+refused at request `i` on every later pass. Sharing the index with `turn:{n}:model:{i}` is the point,
+since the two are the question and the reason there is no answer and exactly one of them exists.
+`CheckpointedModel.request` reads it *before* the allowance and the snapshot, so a pass spends
+nothing on a question already answered and captures no tree in front of a request nobody makes.
+
+**A person can still ask again, and that is the point rather than a gap.** Writing a message queues
+the session, so a refusal costs one attempt per human action rather than one per lease - and that
+attempt is free, since the recorded refusal answers it without reaching a provider. What gets a
+conversation *past* a refused turn is `fork` at it, which drops the turn's own requests while keeping
+everything under them, and the sentence on the page says so. `refusal_in` is what the page reads, of
+the turn being answered and no other: a refusal on a turn that later answered is history, and the
+transcript is where history goes.
+
 **What replay costs was measured rather than reasoned about**, and it is not where it looks. Each
 pass re-runs `converse` from the top, so a turn of *n* requests replays O(n²) steps; record parsing
 is 1.4% of a 40-round turn and `load` is 0.8% to 2.4% against real SQLite. The dominant term is
@@ -2279,6 +2757,16 @@ morphing keeps the element and a `load` poll fires exactly once and then waits f
 that already arrived, invisibly to any markup assertion. A region with no trigger has nothing to
 get wrong.
 
+**`transcript_region` takes a whole `Conversation` rather than the things drawn out of one**, because
+every caller had one in hand and was taking it apart the same way. What the region needs is the
+session, what was said, whether it is stalled, the model's window and where its reserve falls, and
+five arguments derived from one value are five chances for a caller to pair a transcript with another
+session's window.
+
+**One connection now drives two regions**, which is what `partial` was always for: the transcript, and
+the cache note in the composer. See "Whether the cache is still warm" for why that one cannot simply
+be rendered with the page.
+
 Three things about that connection are decided rather than incidental:
 
 - **It lives outside everything that swaps**, directly under `body`. Held by the transcript it
@@ -2361,7 +2849,7 @@ scrolled, and re-entered by sending a message. `land` therefore has to route its
 bottom and the scroll listener switches following back on at the very moment they asked to be
 somewhere in particular.
 
-The rail (search, key, dock, theme) lives **outside** the region that swaps, so no control is
+The rail (search, key, dock, shelf, handoff, theme) lives **outside** the region that swaps, so no control is
 rebuilt under a reader's finger. What it projects back *onto* the transcript — search marks, the
 panel landed on, which kinds are muted, what is folded — cannot live in the markup
 either, so `assets/mainplate.js` holds it as values and reapplies it after every swap. That
@@ -2400,24 +2888,29 @@ override: the branch link used to appear on a person's panel under the pointer, 
 screen forking did not exist until a media query put it back. On the rule it is simply always
 drawn, and there is no pointer question left to answer.
 
-**The picker is ordered widest-first: workspace, network, endpoint, model, thinking**, and then the
-name and the message box, which are the composer's rather than the picker's. What files a session
-has is the broadest thing about it and is one question rather than two, so it leads; the network
-follows because it is the other thing deciding what the agent can do at all, where the endpoint and
-the model only decide who answers; the endpoint and the model are adjacent because they are a pair,
-the list being whatever the endpoint above it offers; the thinking level is a setting *on* the
-model, so it sits under it.
+**The picker is ordered widest-first: workspace, network, endpoint, model, thinking, handoff**, and
+then the name and the message box, which are the composer's rather than the picker's. What files a
+session has is the broadest thing about it and is one question rather than two, so it leads; the
+network follows because it is the other thing deciding what the agent can do at all, where the
+endpoint and the model only decide who answers; the endpoint and the model are adjacent because they
+are a pair, the list being whatever the endpoint above it offers; the thinking level is a setting *on*
+the model, so it sits under it; and the handoff reserve is measured *against* the model, so it comes
+after both.
 
-**Every question the picker asks is one component.** `choosing` in `pages.py` takes a legend, a
-toggle id, the names on offer and a body of cards, and gives back a group that folds to what is
-picked, says how many options it has, and can be narrowed by typing. All five questions - the
-workspace, the network, the endpoint, the model and the thinking level - are built from it, and that
+**Every question the picker asks with a closed set of answers is one component.** `choosing` in
+`pages.py` takes a legend, a toggle id, the names on offer and a body of cards, and gives back a group
+that folds to what is picked, says how many options it has, and can be narrowed by typing. The
+workspace, the network, the endpoint, the model and the thinking level are all built from it, and that
 is why none of them is a `<select>`: a select renders its options as text in every browser, so it
 could carry neither the forge a repository came from, nor the sentence under a level that is not
 one, nor the fold. Having two kinds of control answering versions of one question was the thing to
 remove.
 
-A sixth question is a `choosing` call and nothing else. The script names none of the card classes
+**Two questions here are deliberately not cards, and both for the same reason**: `starting_at` asks
+for a commit-ish and `tending_group` asks for a number of tokens, and neither has a set to draw.
+Behind `choosing` they would be a card per ref a repository has, or a card that is really a text box.
+
+Another question with a closed set of answers is a `choosing` call and nothing else. The script names none of the card classes
 - it finds a card structurally, as a `<label>` with a radio in it, or by the `data-name` the card
 declares - so a new kind of card needs no edit there. The one selector it does name is
 `.models__provider`, which is not a card but the heading over a run of them. The CSS is the one
@@ -2714,11 +3207,13 @@ box, which is a measurement the server cannot make, and any character count it p
 the wrong place at every other width. `min-width: 0` is what lets the flex item shrink below its
 content and so is the whole of what makes the ellipsis appear.
 
-**A document keeps its character count beside the line and nothing else does.** What a reply cost is
-on the rule already, as tokens and money for the request it belongs to, where what a system prompt or
-a delivered guidance file costs is paid on every request from here on and no rule speaks for that.
-`SIZED` is the two kinds; summed across the blocks, since a batch reaching into two parts of a
-repository is handed both files at once and they arrive as one guidance panel.
+**The row carries the line and no figure beside it, a document's included.** The tempting one is a
+character count on a system prompt or a delivered guidance file, since what is in either is paid for
+on every request from here on and no rule speaks for that. It is refused because characters are not
+the unit: every other number on this page is tokens or money, a window is measured in tokens, and a
+count that cannot be compared against the gauge on the rule below it is a number a reader converts
+rather than reads. What a request carried is a fact about the request, so it belongs on the rule with
+the rest of them.
 
 `pages.OPENING` is a bound on what is *carried* rather than on what is shown, and it exists because a
 line holding the whole of a long block would put every word of it on the page twice, on a region
@@ -2851,9 +3346,14 @@ reader scrolling down watches the line lengthen and warm. Three things there are
   means nothing; clipped, a point along the line means the same fraction on every rule of every
   session. It shades rather than steps because a threshold is a number somebody would have to invent
   and defend, where the whole point is that this gets worse gradually.
-- **The server computes `--filled` and nothing else.** The colours, the geometry and the cap are
-  decisions, so they live in the stylesheet; the fraction is a fact about one request, and there is
-  nowhere else it could come from. It is the one inline style this console writes.
+- **The server computes fractions and nothing else.** The colours, the geometry and the cap are
+  decisions, so they live in the stylesheet; a fraction is a fact about one request, and there is
+  nowhere else it could come from. They are the only inline styles this console writes.
+- **`rule__reserve` is the second mark on that scale**, a short bar standing across the rule where
+  the session's reserve opens, drawn only where auto-handoff is on. On the same scale as the fill, so
+  the two are read against one another: the fill says how far this request got and the mark says
+  where a handoff would be asked for. See the handoff section for why it is an element rather than a
+  second pseudo.
 - **The window comes from the reference and not from the checkpoint.** `Conversation.window` is
   `facts_of` asked about the session's own choice, which is the same lookup that prices a turn, so a
   database that learns a model's window shows it on every session already running on that model.
@@ -2874,6 +3374,12 @@ with four round trips in it would otherwise give that column four stops.
 model's history starts again, then turns, then every panel in play, then one side of them. The forget
 column is the newest and the only one that finds its stops by an attribute a rule declares about
 itself rather than by a class; see the forget section for why it is drawn in every session.
+
+**The leap to the start lands on the rule that opens the first turn**, which is the top of the
+transcript rather than the first panel in it: a turn rule carries that turn's own facts and its fork
+link, and where the stretch has instructions there is a system prompt panel between the rule and the
+message, so landing on the panel put the reader below both with nothing saying so. The leap to the
+end is still the last panel, since nothing is drawn under one.
 
 The raw record hangs off a **model request** rather than a panel, on the rule at that request's own
 boundary; see "The record hangs off a request, not a panel" above for why. Two things about how it is
