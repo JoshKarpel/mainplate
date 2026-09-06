@@ -5,6 +5,56 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
+  `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
+  guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.
+  The repository is concatenated last and so wins where the two disagree, because a repository is
+  right about itself. `AGENTS.md` rather than a name this console invented, with `CLAUDE.md` as the
+  fallback where a directory has no `AGENTS.md`: a file only mainplate can read is knowledge that
+  does not survive turning mainplate off, which is the whole reason to write it in the repository
+  rather than in a prompt. A leading YAML block is taken off, so a `paths:` list never reaches a
+  context window.
+- An index of the guidance elsewhere in the repository, one row per file with the `description` from
+  its own frontmatter, carried in the instructions on every request. That a directory *has*
+  conventions is one line and what they are is a page, so the line rides in the prompt and the page
+  is read when it is wanted. It is asked of git rather than walked, so a `.venv` is never descended.
+- The guidance covering a directory, handed over on the request after a file tool reaches into it,
+  as a system-voice message rather than an edit to the instructions, so the cached prefix is left
+  alone. Whether it has already been handed over is asked of the history the model is about to be
+  given, which answers every case with one question: the console delivered it, the model read the
+  file itself, the model wrote the file, a fork carried it across, or a `forget` dropped it and it
+  is handed over again. A `bash` command reaches none of this, because its argv is the model's and a
+  path inside it is not this console's to parse; the index is what covers that.
+- The system prompt drawn as a panel, folded, at the top of the transcript, and again wherever
+  guidance was handed over mid-turn. It is read out of the instructions each request recorded rather
+  than recomposed, so what the page reports is what a session *was* told rather than what it would
+  be told now, and it is verbatim rather than rendered, because the claim it makes is that this is
+  what was sent. A console that shows what a model answered and hides what it was told is showing
+  half of how a turn happened.
+- Places reached by name rather than by path: `read`, `edit` and `create` take a `root`, and a
+  command finds `$MAINPLATE_WORKTREE` and `$MAINPLATE_SCRATCH` in its environment. A worktree sits
+  under 32 hex characters of session id, and a model reproducing those from memory eventually
+  reproduces them wrong, which costs a refusal and a round trip to recover from. The names are one
+  vocabulary both the tools and the sandbox read, so the two surfaces of one answer cannot drift.
+- What a session is answered under recorded as a step, composed once per stretch of context and
+  replayed after that. Instructions sit in front of the cached prefix, so composing them again on a
+  later turn would re-price every remaining request the moment anything under them moved, and a
+  session working on a repository's own guidance moves it constantly. A `forget` ends a stretch and
+  composes again, which costs nothing: the prefix it would have invalidated has just been thrown
+  away.
+
+### Changed
+
+- Panels are named after what they hold, in the word the page prints: `prompt` and `steer` where
+  they read `you` and `you (steering)`. A reader who learns a word from a panel now finds it in the
+  code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind
+  choices are stored under those values, so a kind that was quieted comes back once and is quieted
+  again.
+
 ## [0.0.1]
 
 ### Added

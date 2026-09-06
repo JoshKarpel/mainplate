@@ -243,10 +243,13 @@ whole of what a session is:
 
 ```python
 async def converse(run: Run) -> Progressed:
-    agent = agent_for(endpoints, chosen, instructions)  # the pair this session recorded at creation
     at = reached(run.recorded)
     while True:
         asked = await opening_turn(run, at.turn)  # takes the next message off the session's inbox
+        # The endpoint and model this session recorded at creation, and what the repository's own
+        # `AGENTS.md` says, composed once per stretch of context and recorded as a step: what sits
+        # in front of the cached prefix must not move under a conversation that is still going.
+        agent = agent_for(endpoints, chosen, instructions)
         with stepping(run, turn_prefix(at.turn), allowance=spending, draining=draining_inbox(run, at.turn)):
             try:
                 answered = await agent.run(asked.said, message_history=list(at.history))

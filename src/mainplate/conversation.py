@@ -89,6 +89,7 @@ from dataclasses import field
 from datetime import timedelta
 from decimal import Decimal
 from enum import Enum
+from functools import partial
 from itertools import groupby
 from itertools import pairwise
 from itertools import takewhile
@@ -102,6 +103,7 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import RetryPromptPart
+from pydantic_ai.messages import SystemPromptPart
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
@@ -129,6 +131,11 @@ from mainplate.durability import parse_took
 from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
+from mainplate.guidance import approaching
+from mainplate.guidance import guidance_under
+from mainplate.guidance import indexing
+from mainplate.guidance import instructing
+from mainplate.guidance import repository_guidance
 from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
@@ -775,6 +782,35 @@ def forgets(recorded: Mapping[str, object], turn: int) -> bool:
     return isinstance(said, records.Prompt) and said.forget
 
 
+def instructions_key(began: int) -> StepKey:
+    """
+    Where this stretch of context records what it is answered under, named by the turn it starts at.
+
+    **Not `turn:{n}:instructions`**, deliberately, and the fork is what decides it: `before` copies
+    turn-prefixed keys by shape, so a turn-shaped name would carry a parent's instructions into a
+    branch that may have attached a repository the parent never had. Named this way a fork composes
+    its own, which is what a session that can differ in its choice should do.
+    """
+    return f"instructions:{began}"
+
+
+def history_began(recorded: Mapping[str, object], turn: int) -> int:
+    """
+    The turn the model's history currently starts at: the last forget at or before `turn`, else 0.
+
+    **What a session is answered under is settled per stretch of context rather than per session**,
+    and a forget is what ends one. That is not a weaker promise than "once, for life": instructions
+    sit in front of the cached prefix, so what recomposing costs is every request that would have
+    read that prefix from cache - and a forget has just thrown the whole prefix away. Recomposing
+    exactly there is therefore free, and it is also the one moment a reader might reasonably expect
+    a repository's edited guidance to be picked up.
+
+    The same `forgets` predicate `reached` clears history on, over the same turns, so the two agree
+    about where a context begins by asking one question rather than two.
+    """
+    return max((each for each in range(turn + 1) if forgets(recorded, each)), default=0)
+
+
 def reached(recorded: Mapping[str, object]) -> Reached:
     """
     The first turn with no answer, and every message the model is to be told before it.
@@ -809,20 +845,36 @@ def reached(recorded: Mapping[str, object]) -> Reached:
 # read: a tool that raised, one a person refused, and one that was cut off partway.
 type Outcome = Literal["success", "failed", "denied", "interrupted"]
 
-# Which pigment a panel is drawn in, and the axis the palette runs on: `person` and `steering` are
-# what reached the model and the rest is what it produced. A new kind takes its side from that rather
-# than a colour chosen for it.
+# Which pigment a panel is drawn in, and the axis the palette runs on: `prompt` and `steer` are what
+# reached the model and the rest is what it produced. A new kind takes its side from that rather than
+# a colour chosen for it.
 #
-# `steering` is its own kind rather than a `person` panel with a flag, because the key filters by
-# kind and the two are worth filtering apart: reading a long turn back, what somebody said *into* it
-# is a different thing from the question that opened it. It takes the person's hue all the same,
-# since the axis is about who produced the text and that is the same person.
+# **Each kind is named after the thing it holds, in the word the page prints.** A reader who learns
+# `steer` from a panel finds `records.Steer` behind it, where `you (steering)` sent them looking for
+# a word the code does not use. What the three on the person's side gave up by no longer all reading
+# `you` is a non-colour cue for the side, which `data-side` and the hue still carry.
 #
-# `command` is on the person's side for the same reason `steering` is, that the axis is about who
-# produced the text. It is its own kind rather than a `person` panel because the key filters by kind
-# and the two are worth filtering apart: reading a session back, what somebody *ran* is a different
-# thing from what they said, and it is the one kind nothing in the conversation ever saw.
-type Kind = Literal["person", "steering", "command", "assistant", "thinking", "tool"]
+# `prompt` overlaps `records.Prompt`, which is narrower: the record is a message that *must* open a
+# turn, where this is whatever message a turn opened on, and a `Steer` arriving at an idle session is
+# both. That is the collision this vocabulary already has with `StepKind` on `command` and `tool`, and
+# it is safe for the same reason - they never mix, and mypy refuses the crossing.
+#
+# `steer` is its own kind rather than a `prompt` panel with a flag, because the key filters by kind
+# and the two are worth filtering apart: reading a long turn back, what somebody said *into* it is a
+# different thing from the question that opened it. It takes the person's hue all the same, since the
+# axis is about who produced the text and that is the same person.
+#
+# `command` is on the person's side for the same reason `steer` is. It is the one kind on that side
+# no model ever saw, which its label used to say by being `you (ran)` and which the `title` on its
+# role says now: a hue is for who produced the text, not for who was told.
+#
+# `system-prompt` is the one kind no `Block` produces, because what it draws is not part of any
+# turn's exchange: it is what every request carried, which belongs to the session. It is a kind all
+# the same so that the key governs it like the rest - a standing block of guidance at the top of a
+# transcript is exactly the thing a reader who has read it once wants quieted - and it takes the
+# person's hue, since what is in it was written by the operator and by whoever wrote the
+# repository's `AGENTS.md`.
+type Kind = Literal["prompt", "steer", "command", "assistant", "thinking", "tool", "system-prompt"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -840,6 +892,21 @@ class Steering:
     Its own type rather than a `Prose` in a person-kind panel, because `panelled` reads a panel's
     kind off its blocks: prose is what the *model* says, and a steer arriving as one would be drawn
     as the model answering itself.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Guidance:
+    """
+    What the console handed the model about a part of the repository it was reaching into.
+
+    Its own type rather than a `Prose` for the reason `Steering` is one: `panelled` reads a panel's
+    kind off its blocks, and this drawn as prose would read as the model saying it. Nobody in the
+    conversation said it - the console did, out of a file somebody committed - which is why it takes
+    the same kind as the session's standing system prompt rather than a kind of its own. It is the
+    same thing arriving later.
     """
 
     text: str
@@ -940,7 +1007,7 @@ class Command:
     result: Result | None = None
 
 
-type Block = Prose | Steering | Command | Reasoning | ToolUse
+type Block = Prose | Steering | Guidance | Command | Reasoning | ToolUse
 
 
 @dataclass(frozen=True, slots=True)
@@ -1165,6 +1232,23 @@ class Transcript:
     awaiting: bool
     turns: int
 
+    system_prompt: str | None = None
+    """
+    The system prompt the most recent recorded request carried, which is what this session is
+    answered under.
+
+    On the transcript rather than on a panel, because it belongs to the session rather than to any
+    one exchange: it is re-rendered on every request and is not a thing anybody said at a position.
+    It is here at all because a console that shows what a model answered and hides what it was told
+    is showing half of how a turn happened.
+
+    Nothing until a turn has recorded its messages, which is where the instructions are kept. That is
+    a real gap on a session's very first turn and it is left rather than closed with a step of its
+    own: the instructions are already in the checkpoint once the turn lands, and recording them a
+    second time to draw them a few seconds earlier is the second copy this console refuses
+    everywhere else.
+    """
+
     spent: Mapping[int, Spent] = field(default_factory=dict)
     """
     What each turn that has produced a response cost, by turn.
@@ -1208,7 +1292,7 @@ class Transcript:
         has to be the text the page is showing above it.
         """
         for panel in self.panels:
-            if panel.turn == turn and panel.kind == "person":
+            if panel.turn == turn and panel.kind == "prompt":
                 return "\n".join(block.text for block in panel.blocks if isinstance(block, Prose))
         return None
 
@@ -1218,7 +1302,9 @@ def kind_of(block: Block) -> Kind:
         case Prose():
             return "assistant"
         case Steering():
-            return "steering"
+            return "steer"
+        case Guidance():
+            return "system-prompt"
         case Command():
             return "command"
         case Reasoning():
@@ -1294,9 +1380,14 @@ def blocks_in(
                 continue
 
 
-def steering_blocks(message: ModelRequest) -> Iterator[Block]:
+def interjected(message: ModelRequest) -> Iterator[Block]:
     """
-    Anything a person said inside a request the *agent* made, which is a steer and nothing else.
+    Anything put into a request the *agent* made, which is a person steering or the console guiding.
+
+    Two part types and therefore two blocks, told apart by what carried them rather than by anything
+    written beside them: a person's message is a `UserPromptPart` and the console's own is a
+    `SystemPromptPart`, which is exactly why the delivery uses one. In part order, so a turn where
+    both arrived draws them as they arrived.
 
     A turn's own opening message arrives as a `UserPromptPart` too, and is skipped by `parted` rather
     than here: what tells them apart is position, since the opening message is the first thing in a
@@ -1306,6 +1397,8 @@ def steering_blocks(message: ModelRequest) -> Iterator[Block]:
     for part in message.parts:
         if isinstance(part, UserPromptPart) and isinstance(part.content, str) and part.content.strip():
             yield Steering(text=part.content)
+        elif isinstance(part, SystemPromptPart) and part.content.strip():
+            yield Guidance(text=part.content)
 
 
 def parted(messages: Sequence[ModelMessage], took: Mapping[str, timedelta]) -> tuple[Sourced, ...]:
@@ -1337,13 +1430,44 @@ def parted(messages: Sequence[ModelMessage], took: Mapping[str, timedelta]) -> t
             at += 1
             blocks.extend((block, at) for block in blocks_in(message, returned, took))
         elif index > 0:
-            blocks.extend((block, None) for block in steering_blocks(message))
+            blocks.extend((block, None) for block in interjected(message))
     return tuple(blocks)
 
 
 def blocks_of(messages: Sequence[ModelMessage], took: Mapping[str, timedelta]) -> tuple[Block, ...]:
     """What a turn's messages are worth reading as, in the order they were produced."""
     return tuple(block for block, _ in parted(messages, took))
+
+
+def recorded_instructions(said: str) -> dict[str, object]:
+    """What this session is answered under, as the JSON-native value the store's codec will take."""
+    return records.Instructions(said=said).recorded()
+
+
+def parse_instructions(recorded: object) -> str:
+    """What a session records itself as being answered under, or a loud failure if it is not that."""
+    return records.Instructions.model_validate(recorded).said
+
+
+def system_prompt_in(messages: Sequence[ModelMessage]) -> str | None:
+    """
+    What the model was told about itself in these messages, which is the system prompt it carried.
+
+    Read out of the recorded messages rather than recomputed, and that is the whole reason this is a
+    lookup rather than a second call to whatever composed them: instructions are a per-request
+    parameter Pydantic AI re-renders on every request, so a page that built its own copy would be
+    asserting what a session *would* be told now rather than reporting what it was told then.
+
+    The **last** one rather than the first, because a turn's requests all carry the same instructions
+    unless something under them moved, and what a reader is asking is what this session is being run
+    under. Nothing where a turn recorded none, which is a turn answered before this console said
+    anything at all.
+    """
+    told: str | None = None
+    for message in messages:
+        if isinstance(message, ModelRequest) and message.instructions is not None:
+            told = message.instructions
+    return told
 
 
 def returned_step(held: records.Returned) -> Returned:
@@ -1725,7 +1849,7 @@ def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Pane
     return Panel(
         turn=turn,
         at=0,
-        kind="person",
+        kind="prompt",
         blocks=(Prose(text=said.said),),
         tree=tree,
         forget=isinstance(said, records.Prompt) and said.forget,
@@ -1756,10 +1880,15 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     panels: list[Panel] = []
     spent: dict[int, Spent] = {}
     asking: dict[int, tuple[Request, ...]] = {}
+    system_prompt: str | None = None
     turn = 0
     while turn < len(opened) and (answered := recorded.get(messages_key(turn))) is not None:
         held = owned_in(recorded, inbox, opened, turn, listening=False)
         said = parse_messages(answered)
+        # Off the same parse the panels come from, so what the page reports the model was told and
+        # what it reports the model said are one reading of one value rather than two walks that can
+        # come to disagree.
+        system_prompt = system_prompt_in(said) or system_prompt
         answering = responses_in(said)
         panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
         blocks = parted(said, tooks_in(recorded, turn, answering))
@@ -1804,6 +1933,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         spent=spent,
         answering=running,
         requests=asking,
+        system_prompt=system_prompt,
     )
 
 
@@ -2008,7 +2138,15 @@ def conversing(
         # Only where there is a worktree to sit beside: a session with no repository has nothing
         # the scratch would be scratch *for*, and gets no tool that could reach it either.
         scratch = None if workspaces is None or worktree is None else workspaces.scratch_at(run.workflow)
-        agent = agent_for(endpoints, chosen, instructions, worktree=worktree, scratch=scratch, bwrap=bwrap)
+        # The endpoint is asked for here and the agent is built per turn below, which is the same
+        # check split in two. Without one there is no endpoint to answer on at all, and finding that
+        # out before the first `awaiting` is what makes it a failure the console can explain rather
+        # than one discovered mid-turn; the agent itself cannot be built this early any more, because
+        # what it is told includes the repository's own guidance and the worktree holding it is
+        # planted inside the loop.
+        endpoints.for_endpoint(chosen.endpoint)
+        # What each stretch of context in this pass is answered under, by the turn it began at.
+        composed: dict[int, str] = {}
         # Built once per pass beside the agent and for the same reason: what it needs from the
         # session is the choice, and a choice cannot change. What it reads *through* is two holders,
         # so a rate that moves under a long-running pass still reaches the turn being priced.
@@ -2039,6 +2177,55 @@ def conversing(
             # result to record and nothing for a replay to disagree with.
             await planting(workspaces, run, chosen, at.turn)
 
+            # Built here rather than once per pass, because what a session is answered under includes
+            # the repository's own `AGENTS.md` and the worktree holding it is planted directly above:
+            # read any earlier, a session's first turn would be answered having been told nothing the
+            # project says about itself. It costs one `Agent` per turn, which is tens of microseconds
+            # against a turn that costs seconds, and the connection pool it reaches through belongs to
+            # the endpoint and is not rebuilt.
+            #
+            # **A step, so it is composed once for the session's life and replayed after that.**
+            # Instructions sit in front of the cached prefix, so composing them again on a later turn
+            # would re-price every remaining request the moment the repository's own `AGENTS.md`
+            # moved - and a session working on a repository's guidance moves it constantly. Reading
+            # it again buys nothing against that, because the thing most likely to have edited the
+            # file is the model, which knows what it wrote.
+            #
+            # It holds what is composed *here* and not what the model is finally sent: `agent_for`
+            # adds this session's worktree and network notes on top, and those are fixed for its life
+            # already, so recording them would double them on the next turn rather than pin them.
+            #
+            # The repository's own guidance, and an index of what the rest of it carries. The index
+            # is one line per file rather than their contents, which is what makes it affordable on
+            # every request in a repository with fifty of them: that a directory *has* rules is what
+            # a model needs before it reaches in, and what they are is a `read` away.
+            async def composing() -> object:
+                elsewhere = () if worktree is None else await guidance_under(worktree)
+                return recorded_instructions(
+                    instructing(
+                        instructions,
+                        None if worktree is None else repository_guidance(worktree.root),
+                        None if worktree is None else indexing(worktree.root, elsewhere),
+                    )
+                )
+
+            # Memoised for the pass as well as recorded, because `Run.step` refuses a key it has
+            # already used: a pass answering two turns of one context would otherwise claim the same
+            # name twice. The dictionary is keyed by where the context began, so a pass that crosses
+            # a forget composes a second time, which is exactly when it should.
+            began = history_began(run.recorded, at.turn)
+            if began not in composed:
+                composed[began] = await run.step(instructions_key(began), composing, parse_instructions)
+            spoken = composed[began]
+            agent = agent_for(
+                endpoints,
+                chosen,
+                spoken,
+                worktree=worktree,
+                scratch=scratch,
+                bwrap=bwrap,
+            )
+
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
             # from zero within it, so a turn's keys do not depend on how many turns preceded it in
             # this pass. A pass that resumes mid-conversation issues its first request under
@@ -2050,7 +2237,12 @@ def conversing(
             # a rewind to this turn puts back, and each later one records what the previous batch
             # of calls left behind.
             draining = draining_inbox(run, at.turn)
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending):
+            # What the parts of the repository this turn reaches into say about themselves, handed
+            # over on the request after it reaches. Closed over the worktree rather than given the
+            # index above, so a directory whose guidance the model has only just written is covered
+            # by the same walk as one that was there all along.
+            guiding = None if worktree is None else partial(approaching, worktree.root)
+            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, guiding):
                 try:
                     answered = await agent.run(asked.said, message_history=list(at.history))
                 except AllowanceSpent:

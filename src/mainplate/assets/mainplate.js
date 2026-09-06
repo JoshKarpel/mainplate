@@ -27,7 +27,7 @@
   // because three places act on the set - noting what the reader decided, putting that back after a
   // swap, and the dock's fold-everything buttons - and a kind added to one and not the others is a
   // fold that reopens itself on the next render.
-  const FOLDS = "details.tool, details.ran";
+  const FOLDS = "details.tool, details.ran, details.system-prompt";
 
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
   // must not leave the page in a scheme it has no rules for.

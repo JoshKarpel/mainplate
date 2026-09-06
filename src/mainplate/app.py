@@ -75,6 +75,8 @@ from mainplate.forge import Forge
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
+from mainplate.guidance import console_guidance
+from mainplate.guidance import instructing
 from mainplate.pages import refusal_page
 from mainplate.reference import Prices
 from mainplate.reference import References
@@ -234,6 +236,13 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     except NoSandbox as missing:
         bwrap = None
         logger.warning(f"no sandbox, so sessions get no shell: {missing}")
+    # The operator's own guidance, read once here rather than per pass, and said out loud for the
+    # same reason the sandbox is: guidance that is quietly not being read is the state nobody can
+    # diagnose. Reading it at startup means an edit reaches sessions when this process next starts,
+    # and nothing here notices one sooner - `just serve` watches `src/mainplate`, where this lives
+    # under the config home, so a guidance edit wants the process restarted by hand.
+    standing = instructing(settings.instructions, console_guidance(settings.config_home))
+    logger.info(f"console guidance: {len(standing)} characters from {settings.config_home}")
     async with open_store(
         settings.database,
         settings.lease,
@@ -249,7 +258,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                 service.durable,
                 conversing(
                     endpoints,
-                    settings.instructions,
+                    standing,
                     workspaces,
                     bwrap=bwrap,
                     # The holders rather than what they currently hold, so a turn is priced at the

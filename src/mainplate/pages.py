@@ -87,6 +87,7 @@ from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
 from mainplate.conversation import Command
 from mainplate.conversation import Disposition
+from mainplate.conversation import Guidance
 from mainplate.conversation import Kind
 from mainplate.conversation import Panel
 from mainplate.conversation import Prose
@@ -182,23 +183,37 @@ CHOOSING_ID: Final = "choosing"
 # chip in the key that governs it. One mapping, so the legend and the thing it is a legend for
 # cannot come to disagree about what a kind is called.
 NAMES: Final[tuple[tuple[Kind, str], ...]] = (
-    ("person", "you"),
-    ("steering", "you (steering)"),
-    ("command", "you (ran)"),
+    ("system-prompt", "system prompt"),
+    ("prompt", "prompt"),
+    ("steer", "steer"),
+    ("command", "command"),
     ("thinking", "thinking"),
     ("assistant", "assistant"),
     ("tool", "tool"),
 )
 
+# The one kind whose label does not say everything about it. `you (ran)` used to carry the fact that
+# no model was ever told about a command; `command` does not, so it is said here instead, which is
+# where the cost estimate already says the thing a figure cannot. Only this one, because it is the
+# only kind whose name leaves something out. Named for the attribute rather than for what it holds,
+# since `aside` is taken and means a side conversation.
+TITLES: Final[dict[Kind, str]] = {
+    "command": "You ran this yourself, in the session's worktree. No model was told about it.",
+}
+
 # Which side of the exchange a kind is on: what reached the model, and what the model produced.
 # The dock's flanking arrows step one side each, and the palette runs on this same axis, so it is
 # stated once here rather than in both places.
 SIDES: Final[dict[Kind, str]] = {
-    "person": "person",
-    "steering": "person",
-    # The person's side because the axis is who produced the text, which is the same rule `steering`
-    # follows. It is the one kind on that side the model never saw, and the panel says so rather than
-    # the palette: a hue is for who, not for who was told.
+    # The person's side, by the same rule as `command`: the axis is who produced the text, and what
+    # is in a system prompt was written by the operator and by whoever wrote the repository's own
+    # guidance. The console composed it; it did not write it.
+    "system-prompt": "person",
+    "prompt": "person",
+    "steer": "person",
+    # The person's side because the axis is who produced the text, which is the same rule `steer`
+    # follows. It is the one kind on that side the model never saw, and the panel's own `title` says
+    # so rather than the palette: a hue is for who, not for who was told.
     "command": "person",
     "assistant": "model",
     "thinking": "model",
@@ -1773,6 +1788,11 @@ def block_element(block: Block, panel: Panel, at: int) -> Element:
             return written_block("block--text", text)
         case Steering(text=text):
             return written_block("block--text", text)
+        case Guidance(text=text):
+            # Verbatim rather than rendered, which is the standing prompt's own reason one panel up:
+            # the claim it makes is that this is what was sent, and rendering the Markdown would show
+            # the reader something the model never saw.
+            return div(cls=("block", "block--guidance"), children=pre(children=code(children=text)))
         case Command():
             return div(cls=("block", "block--ran"), children=command_block(block))
         case Reasoning(text=text):
@@ -1995,7 +2015,11 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
             header(
                 cls="panel__meta",
                 children=[
-                    span(cls="panel__role", children=dict(NAMES)[panel.kind]),
+                    span(
+                        cls="panel__role",
+                        attrs={"title": said} if (said := TITLES.get(panel.kind)) is not None else {},
+                        children=dict(NAMES)[panel.kind],
+                    ),
                     a(
                         cls="panel__anchor",
                         attrs={"href": f"#{panel.anchor}"},
@@ -2004,6 +2028,55 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 ],
             ),
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
+        ],
+    )
+
+
+def system_prompt_panel(said: str) -> Element:
+    """
+    What every request in this session carried, at the top of the conversation it framed.
+
+    Panel-shaped and not a `Panel`, which is the same split `waiting_panel` makes: a panel's identity
+    is its turn and its position, and this belongs to neither. Giving it one would have taken `#N.0`
+    off the person's opening message, which is an address the fork link and every permalink already
+    point at.
+
+    **Folded, and drawn verbatim.** Folded because it is reference rather than conversation, and it
+    is long: unfolded it would be most of what a reader sees on opening any session. Verbatim because
+    the claim it makes is that this is what was *sent*, and rendering the Markdown would show
+    something the model never saw. That is the raw record's argument, one value along.
+
+    The copy button on it is the one seated inside the `pre`, which hands over the prompt and nothing
+    else. The panel's own is not drawn, because the script seats that one against a panel's blocks
+    and what is in here is a fold rather than a block; the two would copy the same characters anyway,
+    give or take the summary, so the absence costs a reader nothing.
+    """
+    return article(
+        cls="panel",
+        attrs={
+            "id": "system-prompt",
+            "data-kind": "system-prompt",
+            "data-side": SIDES["system-prompt"],
+        },
+        children=[
+            header(
+                cls="panel__meta",
+                children=[
+                    span(cls="panel__role", children=dict(NAMES)["system-prompt"]),
+                    a(cls="panel__anchor", attrs={"href": "#system-prompt"}, children="#system-prompt"),
+                ],
+            ),
+            details(
+                cls="system-prompt",
+                # Its own id and not the panel's, because what the script keeps a fold decision under
+                # has to name the fold rather than the thing around it. It never moves, unlike a
+                # panel's position, so a reader who shut this keeps it shut across every swap.
+                attrs={"id": "system-prompt-fold"},
+                children=[
+                    summary(children=span(cls="system-prompt__what", children=f"{len(said)} characters")),
+                    div(cls="system-prompt__body", children=pre(children=code(children=said))),
+                ],
+            ),
         ],
     )
 
@@ -2046,7 +2119,9 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
     holds the same key. The panel has it a request earlier: `turn:{n}:tree:0` is written *before* the
     model is asked, so a turn whose first answer has not landed yet still says what it started on.
     """
-    drawn: list[Element] = []
+    # Above everything, because it framed everything: the system prompt was carried by every request
+    # in the conversation below it, so there is nowhere later it could honestly sit.
+    drawn: list[Element] = [] if said.system_prompt is None else [system_prompt_panel(said.system_prompt)]
     for turn, panels in groupby(said.panels, key=lambda panel: panel.turn):
         within = tuple(panels)
         asking = said.requests.get(turn, ())

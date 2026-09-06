@@ -201,6 +201,43 @@ class TestTheScratchDirectory:
         assert "kept" in said
         assert "exit 0" in said
 
+    async def test_it_is_reachable_by_name_rather_than_by_its_path(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        """
+        The same absolute path under a name, so nothing has to reproduce a session id from memory.
+
+        Asked by *writing through* the variable rather than by echoing it, because an environment
+        variable that holds the right characters and points somewhere unreachable would pass the
+        echo and fail the only thing it is for.
+        """
+        await inside(worktree, scratch, bwrap, 'echo named > "$MAINPLATE_SCRATCH/by-name.txt"')
+
+        assert (scratch / "by-name.txt").read_text() == "named\n"
+
+    async def test_the_worktree_is_named_too_so_a_command_can_come_back_to_it(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        # A command starts in the worktree, so this matters only once it has gone somewhere else,
+        # which is exactly when a path is otherwise retyped.
+        #
+        # It leaves for `/` rather than for the scratch, and that is the difference between a test
+        # and a test that passes anyway: `cd ""` leaves a shell exactly where it was, so a command
+        # that had never left the worktree printed the worktree with the variable unset and proved
+        # nothing. From `/` an unset variable prints `/`.
+        said = await inside(worktree, scratch, bwrap, 'cd / && cd "$MAINPLATE_WORKTREE" && pwd')
+
+        assert str(worktree.root) in said
+
+    async def test_the_clone_is_not_named_because_nothing_should_be_writing_paths_into_it(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        # It is bound so that git works, not so that anybody addresses it. A name would invite a
+        # write to the one place the read-only bind exists to refuse.
+        said = await inside(worktree, scratch, bwrap, "env | grep -c MAINPLATE_ || true")
+
+        assert "2" in said, "the worktree and the scratch, and nothing else"
+
     async def test_nothing_in_it_reaches_git(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         """
         What a scratch directory under the worktree would get wrong.

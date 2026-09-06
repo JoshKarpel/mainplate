@@ -338,9 +338,12 @@ main > * {
 /* And a command takes it too, for exactly the same reason: the person wrote it. That it is the one
    kind here no model ever saw is said by the panel's own label and by the key's chip, which is where
    a fact about who was told belongs - the palette answers who produced it. */
-.panel[data-kind="person"],
-.panel[data-kind="steering"],
-.panel[data-kind="command"] {
+/* And so does the system prompt, which the console composed but nobody here wrote: what is in it is
+   the operator's own guidance and the repository's own, both written by people. */
+.panel[data-kind="prompt"],
+.panel[data-kind="steer"],
+.panel[data-kind="command"],
+.panel[data-kind="system-prompt"] {
     --kind: var(--person-edge);
 }
 
@@ -437,9 +440,10 @@ main > * {
 
 /* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
    tell the kinds apart without reading the word. */
-.panel[data-kind="person"] .panel__role,
-.panel[data-kind="steering"] .panel__role,
-.panel[data-kind="command"] .panel__role {
+.panel[data-kind="prompt"] .panel__role,
+.panel[data-kind="steer"] .panel__role,
+.panel[data-kind="command"] .panel__role,
+.panel[data-kind="system-prompt"] .panel__role {
     color: var(--person-edge);
 }
 
@@ -790,6 +794,23 @@ pre > .copy {
     font-style: normal;
 }
 
+/* Guidance the console handed over part way through a turn, because the model reached into a part of
+   the repository that carries its own. Drawn like the session's standing system prompt, because that
+   is what it is arriving later, and verbatim for the same reason: the claim is that this is what was
+   sent, so rendering the Markdown would show something the model never saw. */
+.block--guidance pre {
+    position: relative;
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 /* --- Tool calls ------------------------------------------------------- */
 
 /* Folded by default: what a tool was handed and what it gave back is context a reader reaches
@@ -921,6 +942,77 @@ pre > .copy {
 
    The hue is the person's throughout. What says no model was told is the panel's label and the
    sentence under the box, not a colour: the palette answers who wrote it. */
+/* The system prompt, shut. It borrows `.ran`'s frame rather than inventing one, because it is the
+   same shape of thing on the page: a summary that says what is in the box, and a box holding text
+   that was never Markdown. What differs is the mark on the summary and that it opens shut. */
+.system-prompt {
+    margin: 0.5rem 0;
+    border: 1px solid color-mix(in srgb, var(--person-edge) 35%, var(--edge-soft));
+    border-radius: var(--radius);
+    background: var(--raised);
+}
+
+.system-prompt > summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: 0.35rem 0.6rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    list-style: none;
+}
+
+.system-prompt > summary::-webkit-details-marker {
+    display: none;
+}
+
+.system-prompt > summary::before {
+    content: "▸";
+    color: var(--person-edge);
+    opacity: 0.7;
+}
+
+.system-prompt[open] > summary::before {
+    content: "▾";
+    opacity: 1;
+}
+
+/* How much of it there is, which is the one fact worth having without opening it: a session whose
+   prompt has grown to tens of thousands of characters is paying for that on every request. */
+.system-prompt__what {
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+}
+
+.system-prompt__body {
+    padding: 0 var(--space-4) var(--space-4);
+    cursor: pointer;
+}
+
+.system-prompt__body pre {
+    /* What the seated copy button is positioned against. Without it the button anchors to the panel
+       instead and lands on the permalink, which is where it was found. */
+    position: relative;
+    margin: 0;
+    /* Out of the band that shuts the panel, exactly as a command's output is: a press in here is
+       usually the start of lifting a line out. */
+    cursor: auto;
+    /* On the console's own grid, and said again rather than inherited because a browser's own sheet
+       sets `pre` to `monospace` on the element. */
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    /* It is prose with its own line breaks, so it wraps rather than scrolling sideways: a system
+       prompt is paragraphs, where a tool's return is columns that must not be re-flowed. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    /* Deliberately uncapped, and the fold is why: a reader who opened this asked for all of it, and
+       a box that scrolls has no still corner for the copy button to pin to. */
+}
+
 .ran {
     margin: 0.5rem 0;
     border: 1px solid color-mix(in srgb, var(--person-edge) 35%, var(--edge-soft));
@@ -2418,9 +2510,10 @@ mark.hit.current {
     --kind-hue: var(--ink-soft);
 }
 
-.key__chip[data-kind="person"],
-.key__chip[data-kind="steering"],
-.key__chip[data-kind="command"] {
+.key__chip[data-kind="prompt"],
+.key__chip[data-kind="steer"],
+.key__chip[data-kind="command"],
+.key__chip[data-kind="system-prompt"] {
     --kind-hue: var(--person-edge);
 }
 

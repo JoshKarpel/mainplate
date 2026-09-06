@@ -163,7 +163,7 @@ class TestWhereACommandIsDrawn:
         }
         said = transcript(recorded)
 
-        assert [(panel.kind, panel.at) for panel in said.panels] == [("person", 0), ("command", 1)]
+        assert [(panel.kind, panel.at) for panel in said.panels] == [("prompt", 0), ("command", 1)]
 
     def test_a_command_run_while_a_turn_is_being_answered_is_drawn_before_it_lands(self) -> None:
         running: dict[str, object] = {**said_at(0, "have a look"), **ran_at(1, "git status")}
@@ -195,7 +195,7 @@ class TestWhereACommandIsDrawn:
             model_key(0, 1): answered_with({"kind": "response", "parts": [{"part_kind": "text", "content": "two"}]}),
         }
         assert [(panel.kind, panel.at) for panel in transcript(recorded).panels] == [
-            ("person", 0),
+            ("prompt", 0),
             ("assistant", 1),
             ("command", 2),
             ("assistant", 3),

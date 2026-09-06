@@ -354,7 +354,7 @@ class TestTheConsole:
         async with calling(app) as caller:
             answered = await caller.post(f"/sessions/{session}/messages", {"prompt": "actually, be brief"})
         assert "actually, be brief" in answered.text
-        assert 'data-kind="steering"' in answered.text
+        assert 'data-kind="steer"' in answered.text
 
     async def test_a_steer_already_put_to_the_model_is_drawn_above_the_answer_it_shaped(
         self, app: ASGIApp, service: Service

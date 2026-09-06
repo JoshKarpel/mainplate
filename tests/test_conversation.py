@@ -27,6 +27,7 @@ from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import SystemPromptPart
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
@@ -46,6 +47,7 @@ from without_durability.stepwise import resume
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import Guidance
 from mainplate.conversation import NeverStarted
 from mainplate.conversation import Panel
 from mainplate.conversation import Progressed
@@ -76,6 +78,7 @@ from mainplate.conversation import requested_at
 from mainplate.conversation import responded
 from mainplate.conversation import so_far
 from mainplate.conversation import spent_on
+from mainplate.conversation import system_prompt_in
 from mainplate.conversation import tooks_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
@@ -309,16 +312,16 @@ class TestForgettingWhatCameBefore:
         recorded = conversation_of(answered_turn("first"), answered_turn("second", forget=True))
         said = transcript(recorded)
 
-        assert [(panel.turn, panel.kind) for panel in said.panels if panel.kind == "person"] == [
-            (0, "person"),
-            (1, "person"),
+        assert [(panel.turn, panel.kind) for panel in said.panels if panel.kind == "prompt"] == [
+            (0, "prompt"),
+            (1, "prompt"),
         ]
         assert said.turns == 2
 
     def test_the_turn_that_forgets_says_so_on_the_panel_that_opens_it(self) -> None:
         """Where the rule reads it from, beside the tree, because both are facts about the turn."""
         recorded = conversation_of(answered_turn("first"), answered_turn("second", forget=True))
-        opening = [panel for panel in transcript(recorded).panels if panel.kind == "person"]
+        opening = [panel for panel in transcript(recorded).panels if panel.kind == "prompt"]
 
         assert [panel.forget for panel in opening] == [False, True]
 
@@ -344,7 +347,7 @@ class TestForgettingWhatCameBefore:
 
     def test_a_prompt_with_no_answer_yet_is_the_persons_panel_and_a_turn_still_awaited(self) -> None:
         assert transcript(said_at(0, "what is it")) == Transcript(
-            panels=(Panel(turn=0, at=0, kind="person", blocks=(Prose(text="what is it"),)),),
+            panels=(Panel(turn=0, at=0, kind="prompt", blocks=(Prose(text="what is it"),)),),
             awaiting=True,
             turns=1,
             # The turn a steer would reach: the first one unanswered, which here is the only one.
@@ -361,7 +364,7 @@ class TestForgettingWhatCameBefore:
         }
         assert transcript(recorded) == Transcript(
             panels=(
-                Panel(turn=0, at=0, kind="person", blocks=(Prose(text="what is it"),)),
+                Panel(turn=0, at=0, kind="prompt", blocks=(Prose(text="what is it"),)),
                 # The answer came out of the turn's one model request, which is what the rule above
                 # it stands at.
                 Panel(turn=0, at=1, kind="assistant", blocks=(Prose(text="a mainplate"),), asked=0),
@@ -420,7 +423,7 @@ class TestForgettingWhatCameBefore:
         ]
         assert [(panel.kind, panel.asked) for panel in panelled(0, parted(turn, {}))] == [
             ("tool", 0),
-            ("steering", None),
+            ("steer", None),
             ("assistant", 1),
         ]
 
@@ -516,7 +519,7 @@ class TestWhereARequestBeganAndWhatItHeld:
         Two responses here, and three panels of them: the reasoning and the call are the first
         response, and the answer is the second.
         """
-        drawn = [panel for panel in transcript(FOUR_PANELS).panels if panel.kind != "person"]
+        drawn = [panel for panel in transcript(FOUR_PANELS).panels if panel.kind != "prompt"]
         assert [panel.asked for panel in drawn] == [0, 0, 1]
 
     def test_two_requests_never_share_a_panel_even_answering_the_same_way(self) -> None:
@@ -769,10 +772,10 @@ class TestWatchingATurnHappen:
         """
         said = transcript({**READ, inbox_key(1): records.Prompt(said="and another thing").recorded()})
         assert [(panel.turn, panel.kind) for panel in said.panels] == [
-            (0, "person"),
+            (0, "prompt"),
             (0, "thinking"),
             (0, "tool"),
-            (1, "person"),
+            (1, "prompt"),
         ]
         assert said.awaiting is True
 
@@ -783,7 +786,7 @@ class TestWatchingATurnHappen:
         it exists - where a panel's record came out of `turn:{n}:messages`, which is not written
         until the turn ends.
         """
-        drawn = [panel for panel in transcript(READ).panels if panel.kind != "person"]
+        drawn = [panel for panel in transcript(READ).panels if panel.kind != "prompt"]
         assert [panel.asked for panel in drawn] == [0, 0]
 
 
@@ -903,7 +906,7 @@ class TestAnsweringASession:
         await started(service, said="hello")
         assert await pass_at(service, provider.body()) == Blocked(listening=frozenset({opened_key(1)}))
         said = transcript(await service.checkpointer.load(SESSION))
-        assert spoken(said) == [("person", "hello"), ("assistant", "answer 1")]
+        assert spoken(said) == [("prompt", "hello"), ("assistant", "answer 1")]
         assert not said.awaiting
 
     async def test_a_later_pass_replays_the_recorded_answer_rather_than_asking_again(
@@ -926,9 +929,9 @@ class TestAnsweringASession:
         await pass_at(service, body)
         assert provider.asked == 2
         assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
-            ("person", "hello"),
+            ("prompt", "hello"),
             ("assistant", "answer 1"),
-            ("person", "again"),
+            ("prompt", "again"),
             ("assistant", "answer 2"),
         ]
 
@@ -955,9 +958,9 @@ class TestAnsweringASession:
         assert provider.carried == [1, 1], "the second request carried its own message and nothing else"
         # And the conversation is all still there, which is the half that says nothing was deleted.
         assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
-            ("person", "hello"),
+            ("prompt", "hello"),
             ("assistant", "answer 1"),
-            ("person", "start again"),
+            ("prompt", "start again"),
             ("assistant", "answer 2"),
         ]
 
@@ -1028,7 +1031,7 @@ class TestAnsweringASession:
         await pass_at(service, provider.body())
 
         said = spoken(transcript(await service.checkpointer.load(SESSION)))
-        assert ("steering", "actually, be brief") in said
+        assert ("steer", "actually, be brief") in said
 
     async def test_a_steer_is_drawn_as_the_person_and_not_as_the_model(
         self, service: Service, provider: Provider
@@ -1042,9 +1045,34 @@ class TestAnsweringASession:
         await pass_at(service, provider.body())
 
         drawn = transcript(await service.checkpointer.load(SESSION)).panels
-        steering = [panel for panel in drawn if panel.kind == "steering"]
+        steering = [panel for panel in drawn if panel.kind == "steer"]
         assert len(steering) == 1
         assert steering[0].blocks == (Steering(text="one more thing"),)
+
+    async def test_guidance_handed_over_mid_turn_is_its_own_panel_and_not_a_steer(self) -> None:
+        """
+        The two things a request can carry that nobody in the conversation said, told apart.
+
+        A steer is a `UserPromptPart` and guidance is a `SystemPromptPart`, which is the whole of why
+        the delivery uses one: read as a steer it would be drawn as the person having typed what the
+        console handed over, and read as prose it would be drawn as the model saying it.
+        """
+        said: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="what is it")]),
+            ModelResponse(parts=[TextPart(content="looking")]),
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content="`apps/web/AGENTS.md`, guidance for this part of the repository:"),
+                    UserPromptPart(content="one more thing"),
+                ]
+            ),
+            ModelResponse(parts=[TextPart(content="right")]),
+        ]
+
+        drawn = tuple(panelled(0, parted(said, {})))
+
+        assert [panel.kind for panel in drawn] == ["assistant", "system-prompt", "steer", "assistant"]
+        assert drawn[1].blocks == (Guidance(text="`apps/web/AGENTS.md`, guidance for this part of the repository:"),)
 
     async def test_two_messages_sent_at_once_keep_their_order_and_neither_is_lost(
         self, service: Service, provider: Provider
@@ -1080,9 +1108,9 @@ class TestAnsweringASession:
 
         await service.send(SESSION, "actually, be brief")
         assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
-            ("person", "hello"),
+            ("prompt", "hello"),
             ("assistant", "answer 1"),
-            ("person", "actually, be brief"),
+            ("prompt", "actually, be brief"),
         ]
 
     async def test_a_message_sent_before_the_pass_reaches_the_model_is_carried_by_it(
@@ -1093,7 +1121,7 @@ class TestAnsweringASession:
         await service.send(SESSION, "actually, be brief")
         await pass_at(service, provider.body())
 
-        assert ("steering", "actually, be brief") in spoken(transcript(await service.checkpointer.load(SESSION)))
+        assert ("steer", "actually, be brief") in spoken(transcript(await service.checkpointer.load(SESSION)))
 
     async def test_two_sessions_do_not_see_each_other(self, service: Service, provider: Provider) -> None:
         body = provider.body()
@@ -1102,11 +1130,11 @@ class TestAnsweringASession:
         await pass_at(service, body, session="one")
         await pass_at(service, body, session="two")
         assert spoken(transcript(await service.checkpointer.load("one"))) == [
-            ("person", "first session"),
+            ("prompt", "first session"),
             ("assistant", "answer 1"),
         ]
         assert spoken(transcript(await service.checkpointer.load("two"))) == [
-            ("person", "second session"),
+            ("prompt", "second session"),
             ("assistant", "answer 2"),
         ]
 
@@ -1142,6 +1170,59 @@ class TestWhatOnePassDoes:
             Completed(Progressed()),
             Blocked(listening=frozenset({opened_key(1)})),
         ), "the first pass handed the rest of the turn back; the second finished it and waited"
+
+    async def test_the_system_prompt_is_settled_before_the_first_answer_and_never_recomposed(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        Instructions sit in front of the cached prefix, so a session must be answered under one.
+
+        The case that says it: the repository's own `AGENTS.md` changes mid-session, which is what a
+        session working on a repository's guidance does constantly and what the *model* is the most
+        likely thing to have done. Recomposed on the next turn, every later request would re-price
+        the whole conversation, and re-reading buys nothing against that because the model already
+        knows what it wrote.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]), ModelResponse(parts=[TextPart("two")])))
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1)
+        await pass_at(planting, body, session.id)
+
+        planted = workspaces.root / session.id
+        (planted / "AGENTS.md").write_text("guidance nobody had when this session opened\n", encoding="utf-8")
+        await planting.say(session.id, "again")
+        await pass_at(planting, body, session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = [system_prompt_in(parse_messages(recorded[messages_key(turn)])) for turn in (0, 1)]
+        assert told[0] is not None, "the control: a session with no system prompt would pass either way"
+        assert told[1] == told[0], "the second turn carried what the first was answered under"
+        assert "guidance nobody had when this session opened" not in told[0]
+
+    async def test_a_forget_composes_the_system_prompt_again(self, service: Service, workspaces: Workspaces) -> None:
+        """
+        The unit is a stretch of context rather than a session, and a forget is what ends one.
+
+        Recomposing costs the requests that would have read the prefix from cache, and a forget has
+        just thrown the whole prefix away, so composing again exactly there is free. It is also the
+        one moment a reader might expect a repository's edited guidance to be picked up.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]), ModelResponse(parts=[TextPart("two")])))
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1)
+        await pass_at(planting, body, session.id)
+
+        planted = workspaces.root / session.id
+        (planted / "AGENTS.md").write_text("guidance written after the session opened\n", encoding="utf-8")
+        await planting.say(session.id, "again", forget=True)
+        await pass_at(planting, body, session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = [system_prompt_in(parse_messages(recorded[messages_key(turn)])) for turn in (0, 1)]
+        assert "guidance written after the session opened" not in (told[0] or "")
+        assert "guidance written after the session opened" in (told[1] or "")
 
     async def test_a_request_the_pass_handed_back_is_made_once_by_the_next_one(
         self, service: Service, workspaces: Workspaces

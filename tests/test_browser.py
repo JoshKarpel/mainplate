@@ -305,11 +305,19 @@ class TestWhereTheReaderIs:
         #
         # From the *start*, because the page opens following the end and one step from there lands on
         # the last stop whichever selector is in force, so the assertion would hold with the bug in.
+        #
+        # Two steps and both of them asserted, because the start of the transcript is above the first
+        # turn rather than on it: the system prompt panel is drawn there. Stepping to each in turn is
+        # what actually says the requests inside turn 0 were skipped, where landing on `rule-1` from a
+        # position this test did not pin could be either stop counted from anywhere.
         await page.goto(f"{gallery}/session.html", wait_until="load")
         assert await page.locator(".rule").count() > await page.locator(".rule--turn").count()
         await page.click('button[data-leap="start"]')
-        await page.click('button[data-step="1"][data-stop="turn"]')
         landed = page.locator(".rule[data-landed]")
+        await page.click('button[data-step="1"][data-stop="turn"]')
+        await expect(landed).to_have_count(1)
+        await expect(landed).to_have_attribute("id", "rule-0")
+        await page.click('button[data-step="1"][data-stop="turn"]')
         await expect(landed).to_have_count(1)
         await expect(landed).to_have_attribute("id", "rule-1")
 
@@ -815,7 +823,7 @@ class TestWhatComesOutOfACopyButton:
         return str(await page.evaluate("() => navigator.clipboard.readText()"))
 
     async def test_a_panel_copies_what_it_says_and_none_of_the_chrome_around_it(self, page: Page, gallery: str) -> None:
-        panel = await self.copying(page, gallery, "person")
+        panel = await self.copying(page, gallery, "prompt")
         said = str(await panel.locator(".block").first.inner_text()).strip()
         await panel.locator(".panel__meta > .copy").click()
         taken = await self.clipboard(page)
@@ -910,7 +918,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         await taking(service, session.id)
         await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
-        button = page.locator(".panel[data-kind=person] .panel__meta > .copy")
+        button = page.locator(".panel[data-kind=prompt] .panel__meta > .copy")
         await expect(button).to_be_visible()
         await button.click()
         await expect(button).to_have_text("copied")
@@ -1380,8 +1388,8 @@ class TestWhereTheComposerSendsTo:
         await page.fill(".composer textarea", "actually, be brief")
         await page.click(".sender > button")
 
-        await expect(page.locator('.panel[data-kind="steering"]')).to_have_count(1)
-        await expect(page.locator('.panel[data-kind="steering"]')).to_contain_text("actually, be brief")
+        await expect(page.locator('.panel[data-kind="steer"]')).to_have_count(1)
+        await expect(page.locator('.panel[data-kind="steer"]')).to_contain_text("actually, be brief")
         recorded = await service.checkpointer.load(session)
         assert [held for key, held in recorded.items() if key.startswith(INBOX)][-1] == recorded_steer(
             "actually, be brief"

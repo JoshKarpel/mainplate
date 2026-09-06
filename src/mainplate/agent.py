@@ -532,9 +532,10 @@ def working_note(worktree: Worktree, scratch: Path | None = None) -> str:
     since a toolset is built per session and its own description is not.
     """
     said = (
-        f"You are working in a git worktree at {worktree.root}. The file tools take paths relative "
-        f"to it and reach nothing outside it. Changes you make there are snapshotted automatically; "
-        f"you never need to commit, and you should not run git commands to record your work."
+        f"You are working in a git worktree at {worktree.root}, which is called `worktree`. The file "
+        f"tools take paths relative to it and reach nothing outside it. Changes you make there are "
+        f"snapshotted automatically; you never need to commit, and you should not run git commands "
+        f"to record your work."
     )
     if scratch is None:
         return said
@@ -546,13 +547,16 @@ def working_note(worktree: Worktree, scratch: Path | None = None) -> str:
     # `cd` does not survive to the next call, which on its own reads as an instruction to put one at
     # the front of every command. `--chdir` has already done it.
     return (
-        f"{said} You also have a scratch directory at {scratch}, outside the worktree and outside "
-        f"every snapshot, which is where anything that is not the repository's belongs. Commands "
-        f"you run start in the worktree, so a relative path means the same thing there as it does "
-        f"to the file tools and you never need to `cd` into it. They reach those two directories "
-        f"and a read-only system, and nothing else: no home directory, no other session's files, "
-        f"and no configuration of the console itself. Git can be read but not written there, so "
-        f"`status`, `diff`, `log` and `blame` answer while `add`, `commit` and `stash` fail."
+        f"{said} You also have a scratch directory at {scratch}, called `scratch`, outside the "
+        f"worktree and outside every snapshot, which is where anything that is not the repository's "
+        f'belongs. Reach it by passing `root: "scratch"` to `read`, `edit` or `create` rather than '
+        f"by writing that path out; in a command it is `$MAINPLATE_SCRATCH`, and the worktree is "
+        f"`$MAINPLATE_WORKTREE`. Commands you run start in the worktree, so a relative path means "
+        f"the same thing there as it does to the file tools and you never need to `cd` into it. "
+        f"They reach those two directories and a read-only system, and nothing else: no home "
+        f"directory, no other session's files, and no configuration of the console itself. Git can "
+        f"be read but not written there, so `status`, `diff`, `log` and `blame` answer while `add`, "
+        f"`commit` and `stash` fail."
     )
 
 

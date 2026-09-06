@@ -50,6 +50,7 @@ from pydantic import TypeAdapter
 
 type StepKind = Literal[
     "choice",
+    "instructions",
     "prompt",
     "steer",
     "command",
@@ -144,6 +145,34 @@ class Prompt(Record):
     hands the model, which is the same split `command` already makes between being *in* the
     checkpoint and being *in* the message history.
     """
+
+
+class Instructions(Record):
+    """
+    What one stretch of context is answered under, composed before its first answer and never again.
+
+    **Recorded rather than re-derived**, which is the argument a turn's cost already makes one field
+    along: what a turn was answered under is settled the moment it is answered, and composing it
+    again later would give a different answer the instant anything under it moved. Instructions sit
+    in front of the cached prefix, so that later answer would re-price every remaining request of the
+    stretch - and a session working on a repository's own `AGENTS.md` moves it constantly.
+
+    **A stretch of context rather than a whole session, because a forget ends one.** That is not a
+    weaker promise: what recomposing costs is the requests that would have read the prefix from
+    cache, and a forget has just thrown the whole prefix away, so composing again exactly there is
+    free. It is also the one moment a reader might reasonably expect edited guidance to be picked up.
+
+    It holds what *`conversing`* composes and not what the model was ultimately sent: `agent_for`
+    adds the notes about this session's worktree and network on top, and those are fixed for the
+    session's life anyway, so recording them here would double them on the next turn rather than pin
+    them.
+
+    Written by a pass rather than by `Service.start`, because composing it reads a worktree the
+    worker is the one to plant.
+    """
+
+    kind: Literal["instructions"] = "instructions"
+    said: str
 
 
 class Steer(Record):
@@ -288,7 +317,7 @@ DELIVERED: TypeAdapter[Delivered] = TypeAdapter(Delivered)
 
 
 type Step = Annotated[
-    Prompt | Steer | Command | Result | Tree | Response | Messages | Returned,
+    Prompt | Steer | Command | Result | Tree | Response | Messages | Returned | Instructions,
     Field(discriminator="kind"),
 ]
 """

@@ -17,6 +17,7 @@ from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Prose
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
+from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import result_key
@@ -78,6 +79,27 @@ class TestReadingAKeyBack:
             messages_key(1),
         }
         assert CHOICE_KEY not in carried, "the branch answers the choice itself"
+
+    def test_a_prefix_leaves_the_instructions_behind_so_a_branch_composes_its_own(self) -> None:
+        """
+        What the key's shape is for, and the reason it is not `turn:{n}:instructions`.
+
+        `before` carries turn-prefixed keys across by shape, so a turn-shaped name would hand a
+        branch its parent's system prompt - and a fork may *attach* a repository the parent never
+        had, whose guidance and index would then be missing from words the branch is answered under.
+        """
+        recorded: dict[str, object] = {
+            CHOICE_KEY: {"endpoint": "here", "model": "ripe/fast"},
+            instructions_key(0): {"kind": "instructions", "said": "what the parent was answered under"},
+            **said_at(0, "first"),
+            messages_key(0): [],
+            **said_at(1, "second"),
+        }
+
+        carried = before(recorded, 1)
+
+        assert instructions_key(0) not in carried
+        assert messages_key(0) in carried, "the control: the turns themselves do come across"
 
     def test_a_prefix_carries_a_command_and_its_result_and_stops_at_the_branch_point(self) -> None:
         """

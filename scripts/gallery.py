@@ -27,6 +27,7 @@ from pathlib import Path
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import SystemPromptPart
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
@@ -240,8 +241,41 @@ def timing(seconds: float) -> dict[str, object]:
 # is written after its return, so a call with a time and no result is a state nothing can record.
 TIMINGS = {"call-1": 0.184, "call-7": 12.65}
 
+# What the requests in this fixture carried, so the panel that draws a session's system prompt has
+# something to draw. Three scopes in the order `instructing` composes them - the console's standing
+# directions, the working note the session's own isolation adds, and the repository's own
+# `AGENTS.md` last - because what that panel is for is showing a reader which of those they are
+# looking at.
+INSTRUCTIONS = """\
+You are a helpful assistant, working with a software engineer. Be concise and direct.
+
+You are working in a git worktree at /var/lib/mainplate/worktrees/2f9c1a, which is called
+`worktree`. The file tools take paths relative to it and reach nothing outside it. Changes you make
+there are snapshotted automatically; you never need to commit, and you should not run git commands
+to record your work. You also have a scratch directory at /var/lib/mainplate/scratch/2f9c1a, called
+`scratch`, outside the worktree and outside every snapshot. Reach it by passing `root: "scratch"` to
+`read`, `edit` or `create` rather than by writing that path out; in a command it is
+`$MAINPLATE_SCRATCH`, and the worktree is `$MAINPLATE_WORKTREE`.
+
+Commands you run cannot reach the network: no fetching, no installing, no cloning. Something that
+needs one fails rather than hanging.
+
+`AGENTS.md`, this repository's own guidance:
+
+# Polling
+
+The console holds one connection per page and the transcript carries no `hx-` attribute of its
+own. A region that asks for itself has to get its own trigger right; a region with no trigger has
+nothing to get wrong.
+
+Run `just test` before saying anything is done.
+"""
+
 CONVERSATION: list[ModelMessage] = [
-    ModelRequest(parts=[UserPromptPart(content="Why does the poll stop after one answer?")]),
+    ModelRequest(
+        parts=[UserPromptPart(content="Why does the poll stop after one answer?")],
+        instructions=INSTRUCTIONS,
+    ),
     ModelResponse(
         parts=[
             ThinkingPart(
@@ -273,7 +307,19 @@ CONVERSATION: list[ModelMessage] = [
                 tool_name="read_file",
                 content=READ,
                 tool_call_id="call-1",
-            )
+            ),
+            # What the console hands over when a turn reaches into a part of the repository that
+            # carries its own guidance. A `SystemPromptPart` rather than a user one, because nobody
+            # typed it, which is also how the transcript tells the two apart.
+            SystemPromptPart(
+                content=(
+                    "`src/mainplate/AGENTS.md`, guidance for this part of the repository:\n\n"
+                    "# Pages\n\n"
+                    "Pages are `without-html` node trees, pure functions of already-answered\n"
+                    "questions. A page and the fragment inside it are the same function called at\n"
+                    "two depths, which is what stops the two renderings from disagreeing.\n"
+                )
+            ),
         ]
     ),
     ModelResponse(

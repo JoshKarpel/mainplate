@@ -12,9 +12,10 @@
 # the same answer. `Path.resolve` is what makes the symlink case work, since it is the only check
 # that follows one.
 #
-# There are *two* places a session may reach, and they are not symmetric. A relative path is always
-# inside the worktree, because that is what a conversation is about; the scratch directory is reached
-# by naming its absolute path, which the instructions carry. `list` is the exception to both and
+# There are *two* places a session may reach, and they are not symmetric. A relative path is inside
+# the worktree unless a call names another root, because what a conversation is about is the
+# repository; anywhere else is reached by naming it rather than by writing a session id out. `list`
+# is the exception to both and
 # stays on the worktree alone: it answers by asking git, and the scratch is deliberately not in git,
 # so extending it would mean a second implementation that walks a directory instead. What `list`
 # earns its keep for is bounding a large repository tree, which a scratch directory does not have,
@@ -48,6 +49,7 @@ from typing import assert_never
 from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
+from mainplate.roots import RootName
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import EditRefused
 from mainplate.tools.files.anchors import Moved
@@ -151,6 +153,11 @@ class GitTracked:
 
     path: Path
 
+    @property
+    def name(self) -> RootName:
+        """What a model calls this place, which is what it is rather than where it is."""
+        return "worktree"
+
     async def entries(self, here: Path) -> tuple[str, ...]:
         """
         What git says is under `here`, which is everything committed or new but nothing ignored.
@@ -199,6 +206,10 @@ class Scratch:
 
     path: Path
 
+    @property
+    def name(self) -> RootName:
+        return "scratch"
+
 
 @dataclass(frozen=True, slots=True)
 class System:
@@ -211,6 +222,10 @@ class System:
     """
 
     path: Path
+
+    @property
+    def name(self) -> RootName:
+        return "machine"
 
 
 type Root = GitTracked | Scratch | System
@@ -238,10 +253,14 @@ class Files:
     Frozen and holding only roots, so it is a value rather than a handle: every method is an effect
     against the filesystem, and two callers sharing one share no state.
 
-    The **first** root is where a relative path lands, which keeps every path a model writes meaning
-    what it has always meant and stays well defined however many roots there are. Anywhere else is
-    reached by naming its absolute path, which the instructions carry. The asymmetry is deliberate: a
-    bare `notes.md` is about the repository, because that is what a conversation is about.
+    The **first** root is where a relative path lands when a call names no other, which keeps every
+    path a model writes meaning what it has always meant and stays well defined however many roots
+    there are. The asymmetry is deliberate: a bare `notes.md` is about the repository, because that
+    is what a conversation is about.
+
+    Anywhere else is reached by naming the root rather than by writing its path out, since a worktree
+    sits under 32 hex characters of session id and a model reproducing those from memory eventually
+    reproduces them wrong. A root owns its own name, so a kind of place added here brings one with it.
     """
 
     roots: tuple[Root, ...]
@@ -276,7 +295,21 @@ class Files:
         """
         return self.locks.setdefault(here, asyncio.Lock())
 
-    def resolved(self, path: str) -> Located:
+    def against(self, root: str) -> Path:
+        """
+        Which place a relative path is joined to, named rather than spelled out.
+
+        The refusal names every root this session has, which is what lets the tool descriptions stay
+        the same for every session: what a session's places are called varies, so it is taught at the
+        one moment a model gets it wrong rather than described in a sentence built per session.
+        """
+        for each in self.roots:
+            if each.name == root:
+                return each.path.resolve()
+        named = ", ".join(each.name for each in self.roots)
+        raise Refused(f"there is no {root!r} here. This session's roots are {named}")
+
+    def resolved(self, path: str, root: str = "") -> Located:
         """
         Where `path` actually is and which root it is in, or a refusal if it is out of reach.
 
@@ -284,18 +317,33 @@ class Files:
         absolute path replaces the root outright under `/`, and a symlink is followed to whatever
         it really points at. Comparing the unresolved join would pass all three.
 
-        A relative path joins the first root and therefore cannot climb into another by accident.
+        `root` names which place a *relative* path is joined to, and nothing else: what a path is
+        allowed to reach is still every root, because an absolute path lands where it lands whatever
+        was named. Unnamed it is the first root, which is what a bare `notes.md` has always meant.
         """
         wheres = tuple(each.path.resolve() for each in self.roots)
-        here = (wheres[0] / path).resolve()
-        for root, where in zip(self.roots, wheres, strict=True):
+        here = ((self.against(root) if root else wheres[0]) / path).resolve()
+        for found, where in zip(self.roots, wheres, strict=True):
             if here == where or where in here.parents:
-                return Located(path=here, root=root)
+                return Located(path=here, root=found)
         named = " and ".join(str(each) for each in wheres)
         raise Refused(f"{path!r} is outside this session's workspace. These tools reach {named}")
 
-    def loaded(self, path: str) -> tuple[Path, Text]:
-        here = self.resolved(path).path
+    def naming(self, path: str, found: Located) -> str:
+        """
+        What to call a path in what a tool hands back, which says the root only where it has to.
+
+        A bare `notes.md` in a return would be two different files once a session has two roots, so
+        the root is named wherever it is not the one a relative path already means. Named only there,
+        for the reason `Reachable.labelled` puts an attachment on a row only where two would
+        otherwise read alike: a word repeated on every line stops being read.
+        """
+        if found.root == self.roots[0]:
+            return path
+        return f"{path} in {found.root.name}"
+
+    def loaded(self, path: str, root: str = "") -> tuple[Path, Text]:
+        here = self.resolved(path, root).path
         if not here.exists():
             raise Refused(f"there is no file at {path!r}")
         if here.is_dir():
@@ -311,13 +359,15 @@ class Files:
             raise Refused(f"{path!r} is not UTF-8 text, so it has no lines to anchor") from None
         return here, Text.of(content)
 
-    async def read(self, path: str, offset: int, limit: int) -> str:
-        async with self.exclusively(self.resolved(path).path):
-            _, text = await asyncio.to_thread(self.loaded, path)
+    async def read(self, path: str, offset: int, limit: int, root: str = "") -> str:
+        found = self.resolved(path, root)
+        async with self.exclusively(found.path):
+            _, text = await asyncio.to_thread(self.loaded, path, root)
         anchored = Anchored.over(text.lines)
         start = max(0, offset - 1)
         stop = min(len(text.lines), start + max(1, limit))
-        return "\n".join((reading(path, len(text.lines), start, stop), "", anchored.rendered(start, stop)))
+        said = reading(self.naming(path, found), len(text.lines), start, stop)
+        return "\n".join((said, "", anchored.rendered(start, stop)))
 
     async def listing(self, path: str, depth: int) -> str:
         """
@@ -343,20 +393,22 @@ class Files:
             case _ as unreachable:
                 assert_never(unreachable)
 
-    async def edit(self, path: str, operations: Sequence[Operation]) -> str:
+    async def edit(self, path: str, operations: Sequence[Operation], root: str = "") -> str:
+        located = self.resolved(path, root)
         # The read and the write are one critical section, not two. Holding this around the write
         # alone would leave each caller writing out a whole file it read *before* the other one's
         # edit landed, which is the same lost write with a smaller window.
-        async with self.exclusively(self.resolved(path).path):
-            found, text = await asyncio.to_thread(self.loaded, path)
+        async with self.exclusively(located.path):
+            found, text = await asyncio.to_thread(self.loaded, path, root)
             done = written(Anchored.over(text.lines), operations)
             # `newline=""` again, so the endings `Text` just put back are written as they are rather
             # than translated a second time on the way out.
             await asyncio.to_thread(found.write_text, text.rejoined(done.lines), encoding="utf-8", newline="")
-        return reported(path, done)
+        return reported(self.naming(path, located), done)
 
-    async def create(self, path: str, content: str) -> str:
-        here = self.resolved(path).path
+    async def create(self, path: str, content: str, root: str = "") -> str:
+        located = self.resolved(path, root)
+        here = located.path
         text = Text.of(content if content.endswith("\n") else content + "\n")
 
         def write() -> None:
@@ -371,7 +423,8 @@ class Files:
                 raise Refused(f"{path!r} already exists; `create` never overwrites, so edit it instead")
             await asyncio.to_thread(write)
         anchored = Anchored.over(text.lines)
-        return "\n".join((f"created {path}, {counted(len(text.lines), 'line')}", "", anchored.rendered(0, MAX_LINES)))
+        made = f"created {self.naming(path, located)}, {counted(len(text.lines), 'line')}"
+        return "\n".join((made, "", anchored.rendered(0, MAX_LINES)))
 
 
 def counted(many: int, noun: str) -> str:
@@ -511,7 +564,7 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         """
         return await guarded(files.listing(path, depth))
 
-    async def read(path: str, offset: int = 1, limit: int = MAX_LINES) -> str:
+    async def read(path: str, offset: int = 1, limit: int = MAX_LINES, root: str = "") -> str:
         r"""
         Read a file, with an anchor in front of every line that has one.
 
@@ -548,15 +601,16 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         the unique lines around the run.
 
         Args:
-            path: Path to the file. Relative paths are inside the repository; name the scratch
-                directory's absolute path to reach a file there.
+            path: Path to the file, relative to `root`.
             offset: First line to show, counting from 1.
             limit: How many lines to show at most.
+            root: Which of this session's places `path` is relative to. Your instructions name them.
+                Left out, it is the first one, which is what a bare name has always meant.
 
         """
-        return await guarded(files.read(path, offset, limit))
+        return await guarded(files.read(path, offset, limit, root))
 
-    async def edit(path: str, operations: list[Operation]) -> str:
+    async def edit(path: str, operations: list[Operation], root: str = "") -> str:
         r"""
         Change a file by naming lines with their anchors, never by retyping them.
 
@@ -602,14 +656,15 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         reading the file again, and lists any anchor elsewhere in the file that changed as a result.
 
         Args:
-            path: Path to the file. Relative paths are inside the repository; name the scratch
-                directory's absolute path to reach a file there.
+            path: Path to the file, relative to `root`.
             operations: The changes to apply together.
+            root: Which of this session's places `path` is relative to. Your instructions name them.
+                Left out, it is the first one, which is what a bare name has always meant.
 
         """
-        return await guarded(files.edit(path, operations))
+        return await guarded(files.edit(path, operations, root))
 
-    async def create(path: str, content: str) -> str:
+    async def create(path: str, content: str, root: str = "") -> str:
         """
         Create a new file. Refuses if there is already something at that path.
 
@@ -618,12 +673,13 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         are created as needed, and the file is given a trailing newline if it lacks one.
 
         Args:
-            path: Path for the new file. Relative paths are inside the repository; name the
-                scratch directory's absolute path to create a file there.
+            path: Path for the new file, relative to `root`.
             content: What to write into it.
+            root: Which of this session's places `path` is relative to. Your instructions name them.
+                Left out, it is the first one, which is what a bare name has always meant.
 
         """
-        return await guarded(files.create(path, content))
+        return await guarded(files.create(path, content, root))
 
     for tool in (read, edit, create):
         toolset.add_function(tool, retries=RETRIES)
