@@ -752,7 +752,7 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         # block onward. How it *reaches* the model is the provider's business and varies - a real
         # `{"role": "system"}` entry on the OpenAI wire and on the four Anthropic models that honour
         # one, `<system>`-tagged user text everywhere else - so do not write code here that depends on
-        # which. See the guidance section in `AGENTS.md`.
+        # which. See `docs/design/guidance.md`.
         if scope.guiding is not None:
             for said in scope.guiding(request_context.messages):
                 request_context.messages.append(ModelRequest(parts=[SystemPromptPart(content=said)]))

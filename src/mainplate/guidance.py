@@ -191,6 +191,12 @@ async def guidance_under(worktree: Worktree) -> tuple[Path, ...]:
 
     Sorted, so an index composed twice is the same index. The root's own file is left out because it
     is already in the instructions whole; what this is for is the ones that are not.
+
+    **One file per directory, the same first-name-wins rule `guidance_at` applies**, because git
+    answers with every path matching either pathspec. A repository that pairs an `AGENTS.md` with a
+    `CLAUDE.md` importing it - which is how this one wires Claude Code to the file every other
+    harness reads - would otherwise index each directory twice, and the second row would point at a
+    file whose whole content is a line naming the first.
     """
     spec = tuple(f"*/{name}" for name in GUIDANCE_NAMES)
     try:
@@ -199,7 +205,13 @@ async def guidance_under(worktree: Worktree) -> tuple[Path, ...]:
         # `forge.offers`'s promise rather than `catalogue.discover`'s refusal: a repository that
         # cannot be listed costs an index rather than the ability to answer the session at all.
         return ()
-    return tuple(sorted({Path(each) for each in said.split("\0") if each}))
+    held = {Path(each) for each in said.split("\0") if each}
+    return tuple(
+        sorted(
+            next(chosen for name in GUIDANCE_NAMES if (chosen := directory / name) in held)
+            for directory in {each.parent for each in held}
+        )
+    )
 
 
 def indexing(worktree: Path, found: Sequence[Path]) -> str | None:

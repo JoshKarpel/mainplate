@@ -255,6 +255,21 @@ class TestFindingTheGuidanceUnderARepository:
 
         assert await guidance_under(worktree) == ()
 
+    async def test_a_directory_holding_both_names_is_indexed_once(self, worktree: Worktree) -> None:
+        # The pair a repository writes to wire one harness to the file every other harness reads.
+        # Both match the pathspec, so without the first-name-wins rule the index carries a second row
+        # per directory pointing at a file whose whole content is a line naming the first.
+        written(worktree.root, "apps/web/AGENTS.md", "the web app's\n")
+        written(worktree.root, "apps/web/CLAUDE.md", "@AGENTS.md\n")
+
+        assert await guidance_under(worktree) == (Path("apps/web/AGENTS.md"),)
+
+    async def test_a_directory_holding_only_the_second_name_is_still_found(self, worktree: Worktree) -> None:
+        # The control on the rule above: first-name-wins must not become "only the first name".
+        written(worktree.root, "apps/api/CLAUDE.md", "the api's\n")
+
+        assert await guidance_under(worktree) == (Path("apps/api/CLAUDE.md"),)
+
 
 def reaching(path: str, root: str | None = None) -> ModelResponse:
     """One model response calling `read` on a path, which is what an approach looks like."""

@@ -55,89 +55,36 @@ each reaches models the other does not. It also decides what `url` has to be: th
 appends `/v1/messages` to what it is given, so it wants the host, and the OpenAI SDK appends
 `/chat/completions`, so it wants the host and `/v1`.
 
-The **provider** of a model (`anthropic`, `fireworks`, `xai`) is a third word and a different thing
-again. It is discovered rather than configured, and it is not a level of the hierarchy: the same
-provider turns up under more than one endpoint, since every Fireworks model on exe.dev's gateway is
-listed by both of its formats under one id. So the shape is `endpoint -> model`, and the provider is
-the heading the model cards are grouped under.
-
-A session records what it is answered on at the moment it is created: its workspace, whether its
-commands may reach the network, the endpoint, the model, and a thinking level. All of it is fixed for
-its life, and forking is how it changes. The one thing about a session that *does* change is when it
-hands itself off, which is answered on the same page and can be answered again at any point while the
-session runs - it has to be, or it is not a setting. The workspace is one question rather than two: a
-repository this console can reach, or no files, or this whole machine, and picking one settles both
-what the session works in and what its tools may touch. The endpoint is what carries the API format, which is why it is recorded rather than
-looked up later: the same model id genuinely does sit behind two formats, and the two serialize a
-conversation differently.
-
-Once you have picked a repository, you can say **where in it to start** and **what branch to start
-there**. The two fields appear with the repository and are not there before it, because neither is a
-question a session on no files has. Both are optional. Left blank, the worktree is checked out at the
-repository's default branch as it stands now, on a branch named after the session
-(`mainplate/349e2f1e`), so a `git commit` from the box under the conversation has somewhere to live
-and `git push origin HEAD` does the obvious thing. Name one yourself and that wins.
-
-They are two questions rather than one because **starting at `main` cannot put the worktree on
-`main`**: git refuses a branch another worktree already holds, so the second session you started
-there would fail to get files at all. One says where to begin, the other says what to begin.
-
-The starting point is a **search over the branches the repository actually has**, read from the
-repository itself rather than from this console's copy of it, so it works on the very first session
-you start on one. Typing narrows them under the box, matching anywhere in a name rather than at the
-front, and the arrow keys step what is left. It is not cards, because there is no closed set of
-answers to draw as them: a tag, a hash or `main~3` is still typed, and with JavaScript off the browser
-completes from the same names.
-
-**Starting a session is also when this console's copy of a repository catches up.** It clones once
-and nothing else ever refreshes that, so planting a session's worktree fetches first: a new session
-begins at the repository as it is now, whether you named a starting point or left it alone. A fork is
-the exception, because it begins at the files its forked turn actually saw, which is what makes it
-the same question.
-
-You pick all of it on the new-session page, ordered widest first. The endpoints are cards naming the
-API format each speaks and the URL each points at, and the models are cards carrying what they cost,
-how much they read, and what they can do, grouped by the vendor each comes from. Every question with a
-set of answers to show is the same component: a group of cards **folded down to the one you picked**,
-with the count of what else is on offer beside it and a box that narrows the group as you type. A
-gateway serves seventy models, and a wall of seventy cards is not a page you can see the rest of your
-choices on; shut, each of those is one line. The two that are not cards are the ones with nothing to
-draw - where in a repository to start, and how much of the window to keep free for a handoff, neither
-of which has a set of answers so much as a box. Opening a group is a checkbox and
-the folding is a CSS `:has()` rule, so it works with JavaScript off and a shut group can never name
-something other than what is actually checked. After that the session says what it is on rather than
-offering a control that could not change it. A conversation that switched model halfway would replay
-its recorded answers from one and continue on another, so what the transcript shows and what the next
-turn reasons from would have different authors.
-
-You can name a session there too, in the field above the box. Left empty it is named after its first
-message, which is what every session was named after before the field existed.
-
-**Forking is how you change your mind**, and it keeps the original readable. Every turn opens with a
-rule carrying a `fork` link: following it makes a new session that inherits the turns before that
-one, on whatever endpoint, model and thinking level you pick, and asks that turn's own question
-again. The message comes across editable, so a fork is equally a way to rephrase. The sidebar draws
-the result as a tree, each fork nested under what it came from and labelled with the turn it left at.
-
-The repository is the one part a fork will not change. It inherits its parent's, because re-asking
-a turn against different files is a different question wearing the same words. A session working in
-*no* repository is the exception, and forking one is how you pick a repository up: think something
-through first, then fork it into the code.
-
-A fork carries neither the starting point nor the branch its parent was given. It is checked out at
-the files the forked turn actually saw, which is what makes it the same question, so a starting point
-beside that would be a second answer to where its files come from; and a branch its parent's worktree
-still holds is one git will not check out twice.
-
-Each row in the sidebar names the repository its session works in, which is what tells two
-conversations apart once you are working in more than one. It reads `owner/repo` while a forge still
-reaches it, and the recorded id once none does, so a detached integration leaves the row saying
-where the session is rather than saying nothing.
-
-A new session starts on whichever model the default endpoint listed first, which for most gateways is
-their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
+A new session starts on whichever model the default endpoint listed first, which for most gateways
+is their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
 since dropped falls back to the first rather than stopping the console. `default_thinking` names the
 level, and defaults to saying nothing about thinking at all.
+
+## Starting a session
+
+You pick what a session is answered on when you create it, ordered widest first: its **workspace**,
+which is a repository this console can reach, or no files, or this whole machine; whether its
+commands may reach the **network**; the **endpoint** and **model**; a **thinking level**; and how
+much of the window to keep free for a handoff. All of it is fixed for the session's life except the
+last, and **forking is how it changes**.
+
+Pick a repository and two more fields appear: **where in it to start** and **what branch to start
+there**, both optional. Left blank the worktree is checked out at the repository's default branch as
+it stands now, on a branch named after the session (`mainplate/349e2f1e`), so a `git commit` from
+the box under the conversation has somewhere to live and `git push origin HEAD` does the obvious
+thing. The starting point is a search over the branches the repository actually has, read from the
+repository rather than from this console's copy, so it works on the very first session you start on
+one.
+
+Starting a session is also when this console's copy of a repository catches up: it clones once and
+nothing else refreshes that, so planting a worktree fetches first.
+
+**Forking keeps the original readable.** Every turn opens with a rule carrying a `fork` link:
+following it makes a new session that inherits the turns before that one, on whatever endpoint,
+model and thinking level you pick, and asks that turn's own question again with the message editable.
+The sidebar draws the result as a tree. A fork inherits its parent's repository, because re-asking a
+turn against different files is a different question wearing the same words; a session working in
+*no* repository is the exception, and forking one is how you pick a repository up.
 
 ## What a model costs
 
@@ -159,17 +106,14 @@ model_reference:
 access can point at a file it already has. Delete it and mainplate calls nobody but the gateways
 your own endpoints name.
 
-It is read before the console takes traffic and re-read on a timer, and unlike model discovery it
-can never stop the console starting: a database that will not load costs a card its numbers and
-nothing else. A model the database has no record of says so on its card. A console with no reference
+It can never stop the console starting: a database that will not load costs a card its numbers and
+nothing else. A model it has no record of says so on its card, and a console with no reference
 configured says nothing, because nothing was looked up.
 
-The list is read once before the console takes traffic and refreshed on a timer after that
-(`MAINPLATE_REFRESH`, fifteen minutes by default), by a task that answers no requests. So rendering
-a page never causes a request to a gateway, and a model that appears at the provider reaches the
-picker without anybody restarting anything. A refresh that fails keeps the models discovered
-earlier and logs why; a *first* read that fails is a startup failure naming the endpoint, because a
-console with an empty picker can answer nothing.
+Both the reference and the model list are read before the console takes traffic and refreshed on a
+timer after that (`MAINPLATE_REFRESH`, fifteen minutes by default), so rendering a page never causes
+a request to a gateway and a model that appears at the provider reaches the picker without anybody
+restarting anything.
 
 Credentials live in that file rather than in the environment. A key read from a `0600` file and
 handed to the SDK never becomes an environment variable, so it is not inherited by child
@@ -208,7 +152,7 @@ existing `config.yaml` is never overwritten.
 `just demo` runs the same console on a throwaway database, for poking at a page without touching
 real sessions.
 
-### Leaving it running
+## Leaving it running
 
 `mainplate install` converges a user systemd unit and restarts the service onto the interpreter
 that ran the command, so an install means "the running service is this installation". Run it again
@@ -242,102 +186,42 @@ sees exactly what the first one did.
 
 A session is a durable workflow under
 [`without-durability`](https://without.help/without-durability/), over its
-[SQLite store](https://without.help/without-durability-sqlite/). The workflow's body is the
-whole of what a session is:
+[SQLite store](https://without.help/without-durability-sqlite/), and it has an **inbox**: everything
+you do to it from the page is an append, a message or a command to run in its worktree. The pass
+answering it suspends until there is something there, so nothing polls, no pass is held open, and
+the wait outlives the process that was waiting.
 
-```python
-async def converse(run: Run) -> Progressed:
-    at = reached(run.recorded)
-    while True:
-        asked = await opening_turn(run, at.turn)  # takes the next message off the session's inbox
-        # The endpoint and model this session recorded at creation, and what the repository's own
-        # `AGENTS.md` says, composed once per stretch of context and recorded as a step: what sits
-        # in front of the cached prefix must not move under a conversation that is still going.
-        agent = agent_for(endpoints, chosen, instructions)
-        with stepping(run, turn_prefix(at.turn), allowance=spending, draining=draining_inbox(run, at.turn)):
-            try:
-                answered = await agent.run(asked.said, message_history=list(at.history))
-            except AllowanceSpent:
-                return Progressed()  # one live model request per pass; the next one carries on
-        said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
-        at = Reached(turn=at.turn + 1, history=(*at.history, *said))
-```
+**Nothing decides in advance which turn a message lands in.** Type while a reply is coming and the
+pass folds your message into the request it is about to make; type a moment later and it opens the
+next turn. Neither the page nor the handler has to guess, because the pass is the only thing reading
+at the instant the answer is true.
 
-A session has an **inbox**, and everything you do to it from the page is an append: a message, or a
-command to run in its worktree. `run.receive` suspends the pass until there is something in it, and
-records which entry the turn took. Nothing polls the store, no pass is held open waiting, and the
-wait outlives the process that was waiting: the workflow is a row, and whichever worker picks it up
-next runs the body again from the top and reaches further than the last one did.
-
-**Nothing decides in advance which turn a message lands in**, which is what a queue removes the need
-for. Type while a reply is coming and the pass folds your message into the request it is about to
-make; type a moment later and it opens the next turn. Neither the page nor the handler has to guess,
-because the pass is the only thing reading at the instant the answer is true.
-
-A pass is **one live model request and the tool batch behind it**, rather than a whole turn, so a
-turn of forty round trips is forty passes. What that buys is a lease that bounds one round trip
-instead of a bet on how long the longest conversation might run: a pass that spends its allowance
-hands the turn back, the session is made ready again, and the next pass replays what is recorded
-and reaches one request further. Nothing is paid for twice, because a replayed request is read out
-of the checkpoint.
-
-The two things a pass writes are what make the second run cheap and the first one safe:
-
-- **`run.step(messages_key(turn), ...)`** records the messages a turn produced, so resuming reads
-  the history back instead of re-driving the agent over every past turn.
-- **`stepping(run, ...)`** puts the agent's *model requests and tool calls* through the checkpoint,
-  one recorded step each, so a pass that reaches the provider and then dies does not pay for that
-  answer twice, and a tool that already read a file or wrote one is not run again against a
-  directory that has moved since.
-
-That second one is a Pydantic AI **capability**, `StepwiseDurability`, in the same shape as the
-bundled Temporal, DBOS, and Prefect ones: attach it to an agent and, inside a session, every model
-request and every tool call becomes a recorded step. Outside one it does nothing at all, so the
-same agent is an ordinary agent in a script or a test.
-
-It is built on `AbstractCapability` and `WrapperModel`, the surface Pydantic AI documents for
-third-party integrations, rather than on the internals the bundled three share. Most of what that
-base class carries is about crossing a *serialization* boundary, and there is no such boundary
-here: the workflow body runs in this process, only a step's result is ever encoded, so the model
-instance is simply in scope.
+A pass is **one live model request and the tool batch behind it** rather than a whole turn, so a
+turn of forty round trips is forty passes and the lease bounds one round trip instead of betting on
+how long the longest conversation might run. Every model request and every tool call is a recorded
+step, so a pass that reaches the provider and then dies does not pay for that answer twice, and a
+tool that already read a file is not run again against a directory that has moved since.
 
 ## How the agent edits files
 
-What a session's tools reach is one of the two things it picks when it is created. A session
-working in a repository gets `list`, `read`, `edit` and `create` over its own git worktree and a
-scratch directory beside it, refusing any path outside the two. One working on the whole machine
-gets the same four with no such boundary. One reaching nothing gets no tools at all, which is what
-this console was before there were repositories: a place to talk.
+What a session's tools reach is one of the things it picks when it is created. A session working in
+a repository gets `list`, `read`, `edit` and `create` over its own git worktree and a scratch
+directory beside it, refusing any path outside the two. One working on the whole machine gets the
+same four with no such boundary. One reaching nothing gets no tools at all, which is what this
+console was before there were repositories: a place to talk.
 
 Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
 Every command runs in a mount namespace of its own holding exactly what that session reaches and a
 read-only system, so there is no home directory and no configuration of the console in it, and the
 network is off unless the session asked for it. Inside a worktree the repository's git objects go in
 read-only: `status`, `diff`, `log` and `blame` all answer, while `commit` and `stash` fail. That is
-deliberate rather than incidental, because the conversation is how work is recorded here and
-committing is yours to do. **Run** in the composer is where you do it: the same command from there
-runs outside all of this, as you, in the same worktree.
+deliberate, because the conversation is how work is recorded here and committing is yours to do.
+**Run** in the composer is where you do it: the same command from there runs outside all of this, as
+you, in the same worktree.
 
-`list` takes a directory and a depth, and a directory at that depth is summarised by a count rather
-than opened, so the depth bounds the answer instead of hinting at it:
-
-```text
-., 8 files within 2 levels
-
-.gitignore
-README.md
-pyproject.toml
-src/
-  demo/ (4 files)
-tests/
-  test_app.py
-```
-
-It asks git what is there rather than walking the directory, so a `.gitignore` is obeyed and an
-installed environment or a build directory never reaches the model, while a file the agent itself
-just wrote does. The tree is assembled here: git records files and not directories, so what it
-answers with is a flat list of paths and an empty directory does not exist as far as this is
-concerned.
+`list` asks git what is there rather than walking the directory, so a `.gitignore` is obeyed and an
+installed environment never reaches the model, while a file the agent itself just wrote does. A
+directory past the depth you asked for is summarised by a count rather than opened.
 
 **A line is addressed by a hash of its own content, not by its position.** A read puts a four-letter
 anchor in front of every line:
@@ -353,40 +237,13 @@ vhvn│def farewell(name):
 kxpe│    return f"bye {name}"
 ```
 
-The `│` is what says where the tool stops talking and the file starts, and it is worth the token per
-line it costs over a space: with a space, `cxec def greet(name):` gives a model nothing to tell the
-name from the line, and one that guesses wrong writes the anchor back into the file as content.
-
-A line number is the one address that cannot fail: an edit above shifts everything below it and
-`47` still resolves, so a stale line number silently edits the wrong place. An anchor either
-resolves to exactly one line or does not resolve at all, so the same mistake is a refusal that says
-to read the file again. It also means the model never retypes the text it is replacing, which is
-the expensive half of a search-and-replace edit.
-
-Nothing is stored between calls. Anchors are recomputed on every read, and where two lines would
-share one, each takes in the line above it until they differ. Blank lines get no anchor: they are
-17% of the lines in a typical file and none of them is unique on its own content, so they were the
-largest single source of both cost and instability. They keep the `----` marker and the bar anyway,
-so the gutter is a column that never breaks and no line of a read is parsed by a different rule than
-the one above it.
-
-An `edit` takes a **list** of operations, resolved against one reading of the file and applied
-together, so operations in one call cannot shift each other and a batch that contradicts itself is
-refused entire rather than half-applied. Which lines a span covers is said by the field name rather
-than by a flag:
-
-```json
-{"op": "splice", "from": "vhvn", "before": "kxpe", "text": ""}
-```
-
-`from` and `to` are inside the span; `after` and `before` are outside it. One of them alone inserts
-at that point. That is also how a span reaches blank lines: deleting a function and the blank lines
-after it names the *next* code line with `before`, so it neither names a blank nor retypes the line
-it stops short of. A `substitute` operation replaces text inside one anchored line, for when
-retyping a whole paragraph to change a word is the wasteful part.
-
-Every reply shows the changed regions with their new anchors, and names any anchor elsewhere in the
-file that changed as a result, so a run of edits needs no re-read in between.
+A line number is the one address that cannot fail: an edit above shifts everything below it and `47`
+still resolves, so a stale line number silently edits the wrong place. An anchor either resolves to
+exactly one line or does not resolve at all, so the same mistake is a refusal that says to read the
+file again. It also means the model never retypes the text it is replacing, which is the expensive
+half of a search-and-replace edit. Nothing is stored between calls, and an `edit` takes a list of
+operations applied against one reading of the file, so a batch that contradicts itself is refused
+entire rather than half-applied.
 
 There is deliberately no tool that overwrites a whole file. `create` refuses a path that already
 exists, because a tool that rewrites a file wholesale is the escape hatch that makes all of this
@@ -408,209 +265,82 @@ has done to the conversation, a panel or a tool call they unfolded, a command th
 search, the place they had scrolled to, survives an update arriving.
 
 **A turn is drawn as it happens.** The responses and tool results behind a running turn are already
-in the checkpoint, recorded step by step so that a resumed pass does not pay for them twice, so the
-page reads those rather than waiting for the turn to write its messages: reasoning appears, then a
-call with its arguments, then its result, then the next request. A call still out is drawn working on
-its own panel, and while one is, nothing else claims a reply is being written; a message you steered
-into the turn is drawn the instant you send it rather than when the turn ends. Nothing is stored to
-make this work and nothing is streamed from the provider; it is the same checkpoint, read sooner.
+in the checkpoint, recorded step by step so a resumed pass does not pay for them twice, so the page
+reads those rather than waiting for the turn to finish: reasoning appears, then a call with its
+arguments, then its result, then the next request. Nothing is stored to make this work and nothing
+is streamed from the provider; it is the same checkpoint, read sooner.
 
-A turn is drawn as panels: a coloured edge per run of one kind within one request, with the person's
-message, the model's reasoning, its calls, and its answer each in their own. The palette runs on one axis, cool
-for what reached the model and warm for what it produced, so a reader scrolling can tell the sides
-apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
-page.
+A turn is drawn as **panels**, a coloured edge per run of one kind within one request, with the
+person's message, the model's reasoning, its calls and its answer each in their own. The palette
+runs on one axis, cool for what reached the model and warm for what it produced. **Every panel
+folds, from its own row**, so the dock's fold-everything button turns a finished conversation into
+its own outline; shut, a row carries the front of what is in it.
 
-**Every panel folds, from its own row**, with the mark just right of the title. What you want put
-away is yours to decide; the console only says where each kind starts, which is a message, a reply, a
-stretch of reasoning and a batch of calls open, and reference shut. Shut, a panel's row carries the
-front of what is in it, clipped to whatever width the panel has - and for a batch of calls or
-commands, the names of what ran. So the dock's fold-everything button turns a finished conversation
-into its own outline, one row per panel, and a third button beside it puts every fold back where the
-console had it. A tool call and a command keep a fold of their own inside the panel, because what
-their summary says is the outcome and the status rather than the first line of the body, and a panel
-holds a whole batch of either.
+A **rule** stands at every round trip, carrying what is true of that request rather than of any
+panel in it: the worktree it was made against, how long it took, what it spent in tokens and money,
+and a fold showing the JSON the checkpoint actually holds for it. Since the checkpoint *is* the
+conversation, that is the state itself rather than a debug view of it. The rule's own line is a
+**gauge** of how much of the model's context window the request carried, filled from the left and
+shading toward red, so scrolling down a long conversation shows the line lengthen and warm. What a
+turn cost is an estimate from published rates rather than a bill, since no gateway reports what it
+actually charged; the session's total sits under the message box, and above the box is whether the
+provider still holds this conversation's prefix and what re-sending it costs with none of it cached.
 
-A **handoff** is the one panel nobody typed. `/handoff` asks a session to write down where the work
-has got to, checking the working tree rather than recalling it, and the document it writes opens the
-next turn with everything above it out of the model's context - still in the transcript for you to
-read, and no longer in what the model is told. Both the ask and the document are drawn as their own
-kind, on the person's side of the palette because that is who produced the text, with the panel
-saying outright that the console composed it.
-
-It also happens without being asked. Every session keeps a **reserve** of the model's window free for
-writing one, and reaching it is what fires the handoff: a short bar on each rule's gauge marks where
-that falls, so watching the line grow toward it is watching the handoff approach. The reserve is in
-tokens rather than a fraction, because what has to be true is that the run has room to do its work,
-and that is the same quantity on every model. It is on by default, which is safe only because a
-handoff destroys nothing - the whole conversation stays on the page, and forking above the boundary
-carries all of it into a session whose context has it too. The switch and the amount are per session,
-answerable when you start one and changeable while it runs.
-
-Two more panels say what the model was *told* rather than what anyone said. The **system prompt** is
-what every request in a stretch of context carried, drawn under the rule that opens that stretch, and
-**guidance** is a repository's own `AGENTS.md` for a directory, handed over at the moment a tool
-reached into it. They are two kinds rather than one because they sit in different places in the
-request - the first is re-sent whole on every request in front of the cached prefix, the second is
-appended once into the history - so the key can quiet either without the other, and so that a reader
-can see which is which. How much authority the second one carries is the provider's answer rather
-than this console's, and it varies by model, which is another reason not to draw them as one thing.
-Both are drawn shut, with the line each opens with on the row, so a reader can tell what is in one
-without opening it.
-
-A **rule** stands at every round trip to the model, carrying what is true of that request rather than
-of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and
-money, and an `r1.0` fold showing the JSON the checkpoint actually holds for it. Since the checkpoint
-*is* the conversation, that is the state itself rather than a debug view of it, and it is fetched
-only when you open it so the transcript never carries it, and it opens in place, below the rule, so
-the record and the reply it came from can be read together. A request is recorded the moment the
-provider answers, so a record can be opened while the turn is still running.
-
-The figures are symbols, because a rule is one line that must not wrap: `↑` and `↓` are the tokens
-sent and returned, `▣` is how much of the first came out of the provider's cache, and `Δ` against `Σ`
-is what this exchange cost against what the conversation has cost so far. The words are in the
-titles. The sent figure is the *context* the request carried rather than a sum, since every request
-of a turn carries the whole conversation again, so beside it is what fraction of the model's context
-window that is - and the rule's own line is a gauge of the same fraction, filled from the left and
-shading toward red as it fills, so scrolling down a long conversation shows the line lengthen and
-warm. The reserve is marked on that same line, where a handoff would be asked for, so the two are read
-against one another. The window is what the reference database says about the model; with none
-configured the counts are drawn, and the fraction, the gauge and the mark are not.
-
-The rule that opens a turn carries the turn's own facts besides: which turn it is, the `fork` link,
-and what the whole turn spent. That costs no new idea, because every rule already stood at a request
-boundary - a turn opens with its first request. The spend fills in as the turn runs, because each
-response is priced and timed as it is recorded rather than when the page is drawn: what a turn came
-to is settled the moment it is answered, where pricing it again later from a database that has since
-moved would change what an old session appears to have cost. It is an estimate from published rates
-and not a bill, since no gateway reports what it actually charged; a model nobody publishes a price
-for shows its token counts and no money. The time is what the turn spent waiting on the provider,
-summed over its round trips; the calls it made in between carry their own, beside the tool's name on
-the panel that drew it. The session's own total sits under the message box.
-
-Above the box is the other half of the money: **whether the provider still holds this conversation's
-prefix**, and what re-sending it costs with none of it cached. A conversation is re-sent whole on every
-turn, so one picked up after lunch pays full input price for everything said in it and nothing about
-the request looks any different. It is one-sided on purpose: past the cache's retention the prefix is
-cold and the line says so, and under it what it says is when the prefix was last *written*, because
-whether a provider has evicted one cannot be observed from here. Both ends are priced, with the whole
-prefix cached and with none of it, because the gap between them is what waiting costs and on a long
-conversation it is tenfold. Both carry a `+` because both are floors: they price re-sending what has
-already been said, where the answer, the tools the turn runs and any further requests it makes are all
-on top.
-
-A panel that arrives, or whose blocks say something different, is **marked for a beat** in its own
-kind's hue. A turn fills in over several renders, and a reader watching one needs to be told which
-part moved rather than left to spot it. It is worked out from what a panel says, so unfolding a
-call or laying a search mark over one is not mistaken for news, and a conversation just opened does
-not flash itself top to bottom.
-
-The page opens **pinned to the end** and stays there as answers arrive. Scrolling away releases it,
-scrolling back to the bottom re-enters it, and so does sending a message: whatever you had scrolled
-up to check, what you want to see now is the answer to what you just sent.
+Two panels say what the model was *told* rather than what anyone said: the **system prompt** every
+request in a stretch of context carried, and **guidance**, a repository's own `AGENTS.md` for a
+directory, handed over at the moment a tool reached into it.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
-the colour legend, a dock that steps where the model's history starts again, whole turns, every
-panel, or only what the model said, and folds everything at once or puts every fold back where the
-console had it, a shelf for text you have written
-and not sent, a follow-the-end toggle, when this session hands itself off, and, at the foot of it, a
-light/dark/system theme. The shelf is the boundary: everything above it reads the conversation, the
-handoff card is the first thing that changes how the conversation is run, and the theme is the one
-card there that is not about this conversation at all. Everything is an enhancement: with JavaScript
-off the console still renders, still posts messages, still hands off, and every panel and every tool
-call is still a fold that opens; what goes is the reading controls and the keyboard send.
+the colour legend, a dock that steps through the transcript, a shelf for text you have written and
+not sent, when this session hands itself off, and a light/dark/system theme. Everything there is an
+enhancement: with JavaScript off the console still renders, still posts messages, still hands off,
+and every panel is still a fold that opens.
 
-**Send** puts what is in the box into the conversation now. If a reply is already coming, that means
-**steering**: the message is put to the model in the turn it is answering, appended to the next
-request it makes, so it travels up with whatever tool results are going the same way and shapes that
-answer rather than the one after it. It shows in the transcript as a `steer` panel the instant you
-send it, and sits below the results it travelled with and above the answer it shaped.
+**It reads on a phone.** The rail folds away behind a clasp, and the session list becomes a strip of
+chips across the top so the conversation gets all but about a twentieth of the height.
 
-You are not asked which of those it is, because you could not answer: the page you typed on was drawn
-from a checkpoint that has moved since. Neither is it decided when the message is written, because
-that reading can go stale between the read and the write. It goes in the session's queue, and the
-reply that is running takes it if it is still running when it looks.
+### What you can do with what you typed
 
-Sending as a turn finishes cannot lose the message either, and nothing has to be raced for that to
-hold: a message nobody took is still in the queue, and the next turn opens on it.
+**Send** puts it into the conversation now. If a reply is already coming, that means **steering**:
+the message is put to the model in the turn it is answering, so it shapes that answer rather than
+the one after it. You are not asked which, because you could not answer: the page you typed on was
+drawn from a checkpoint that has moved since. It goes in the session's queue and the reply takes it
+if it is still running when it looks; a message nobody took is still in the queue, and the next turn
+opens on it.
 
-The caret beside Send opens everything else you can do with what you typed. **Next** is the one thing
-the record cannot decide for you: it queues the message behind the reply that is coming instead of
-putting it to the model now.
+The caret beside Send opens the rest. Each has a name you can type instead: `/` at the start of an
+empty box opens the same list, and a space after the whole word takes it, so `/fork ` puts the box
+in that answer's mode with the button beside it saying `Fork` rather than `Send`. Nothing is ever
+inferred from what you typed, so what you are about to press always says what it does.
 
-**Forget** asks the message with the model's context cleared, which is what to reach for when a
-conversation has wandered and the backlog is costing you more than it is worth. What is cleared is
-the context and nothing else: everything said so far stays on the page, keeps counting toward what
-the session has cost, and still comes across if you fork. The transcript draws a line where it
-happened saying so, and the dock's leftmost column steps between those lines. To carry on the
-conversation one of them closed, press `fork` on that line: the branch takes the whole backlog with
-it and leaves the boundary behind.
-
-**Handoff** is the same family one step along: where `Forget` drops the backlog and asks your
-question, this has the session write the backlog down first and start again from that. It is the one
-answer whose box may be empty, because what it does with what you typed is point the handoff at
-something rather than send it anywhere - so `/handoff` on its own hands off, and `/handoff` with a
-paragraph hands off dwelling on what the paragraph says.
-
-**Aside** steps out into a side conversation you mean to come back from, and **Fork** starts one you
-do not. Both carry the whole conversation and leave the original where it is; the only difference is
-what you meant, which is recorded so the sidebar can draw a digression as a digression. From either,
-**Parent** sends what is in the box into the conversation you left. That is a message rather than a
-merge, which is what makes it honest: the turns you took on the side were asked against a different
-history, and splicing them in would leave the original holding an exchange that never happened.
-
-Each of those has a name you can type instead of reaching for the menu. `/` at the start of an empty
-box opens the same list, narrowed as you type, and a space after the whole word takes it: `/fork `
-puts the box in that answer's mode, with the button beside it saying `Fork` rather than `Send` and a
-line above it saying what will happen. The space is what commits, so until you press it the word is
-ordinary text with the menu open beside it, and Enter takes whichever row you have arrowed to if you
-would rather not finish typing. Nothing has been sent, so what you write next is what goes there, and
-Escape puts the box back. Nothing is ever inferred from what you typed - a message that opens with a
-slash is a message, and one that names nothing is ordinary text - so what you are about to press
-always says what it does.
-
-Sending leaves the mode, except where the answer is one worth staying in: `Run` stays, because a
-command is rarely the only one, and everything else puts the box back to `Send`.
-
-**Keep** puts what is in the box on the shelf and clears it, so you can write the next thing. The
-shelf itself is in the rail; pressing a kept note adds it back to the box rather than replacing what
-is there, so several of them assemble into one message. That is also how a long aside comes home:
-keep the conclusions as you go, then send them back together. The shelf is scoped to the conversation and
-a fork inherits its parent's. It lives in your browser, so it does not follow you to another machine
-yet.
-
-**Run** is the one answer there that is not a message. It runs what is in the box in this session's
-own worktree, as *you* rather than as the agent, and the model is never told. That last part is the
-point: the agent's shell runs behind a mount namespace with the repository's git objects bound
-read-only, so no tool can write a history no panel shows, and `git commit` and `git push` are exactly
-the things that boundary is meant to keep for you. Nothing about the run enters the conversation the
-model is given, so committing at the end of a session costs it no context and reaches no provider.
-The run is still recorded, though, so it draws as a `command` panel with the command, how long it
-took and what it exited with, it survives a reload, and a fork carries it. What it said is drawn
-open, where a tool call's output is folded: you asked for this one, so reading it should cost no
-clicks, and a command whose whole answer was its exit status says `said nothing` rather than showing
-an empty pane. Being open makes putting one away the press you make most, so the frame around the
-output folds it as well as the line at the top does: reading to the end of a long output does not mean
-scrolling back up to shut it. That holds for everything here that folds, since a tool call's return
-and a stretch of reasoning are the other two things that run to hundreds of lines. Pressing what is
-in the box does nothing, since that is where you select from. The status is shown as the number rather than as "failed", because `git diff --quiet`
-exits 1 to say there *are* changes.
-
-`/run ` reaches it like any of the others, and `! ` into an empty box is its own shorter key: either
-way the box becomes a command box, set in the terminal's own face, with `Run` beside it, and stays one
-after each command runs. Escape puts it back. Inside one a slash is just a slash, since it is the
-front of half the paths anybody types.
+- **Next** queues the message behind the reply that is coming instead of putting it to the model
+  now. It is the one thing the record cannot decide for you.
+- **Forget** asks it with the model's context cleared, for when a conversation has wandered and the
+  backlog costs more than it is worth. What is cleared is the context and nothing else: everything
+  said so far stays on the page, keeps counting toward what the session has cost, and still comes
+  across if you fork.
+- **Handoff** is the same family one step along. Where `Forget` drops the backlog, this has the
+  session write it down first, checking the working tree rather than recalling it, and start again
+  from that document. It also happens without being asked: every session keeps a **reserve** of the
+  window free for writing one, marked on each rule's gauge, so watching the line grow toward it is
+  watching the handoff approach. On by default, which is safe only because a handoff destroys
+  nothing.
+- **Aside** steps out into a side conversation you mean to come back from and **Fork** starts one
+  you do not; from either, **Parent** sends what is in the box back into the conversation you left.
+  That is a message rather than a merge, which is what makes it honest: the turns you took on the
+  side were asked against a different history.
+- **Keep** puts it on the shelf and clears the box. Pressing a kept note adds it back rather than
+  replacing what is there, so several assemble into one message. It lives in your browser, so it
+  does not follow you to another machine yet.
+- **Run** is the one that is not a message. It runs what is in the box in this session's worktree,
+  as *you* rather than as the agent, and the model is never told, so committing at the end of a
+  session costs it no context and reaches no provider. It is still recorded, so it draws as a
+  `command` panel with what it exited with, survives a reload, and a fork carries it. `! ` into an
+  empty box is its own shorter key, and the box stays a command box after each run.
 
 Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
 often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
 you cannot write one in.
-
-**It reads on a phone.** The rail folds away behind a clasp once it cannot stand beside the
-conversation without taking the width from it, and on a narrow screen the session list stops being a
-column and becomes a strip of chips across the top: every session is still one swipe away, and the
-conversation gets all but about a twentieth of the height. What a screen that narrow mostly buys is
-one scroller at a time, so the new-session page's choosing becomes a single scroll with the message
-box pinned under it, and the fork page scrolls as the one long thing it is.
 
 ## What it does not do yet
 
@@ -626,8 +356,9 @@ Named plainly, because they are the next things rather than omissions nobody not
   writes it is outside what that can see: the paths a command touches are not knowable before it
   runs.
 - **Two API formats, not every format.** An endpoint's `format` takes `anthropic` or `openai`, which
-  between them cover most gateways. A third is one `Endpoint` class saying how to name a model over
-  that format and how to ask it what it serves, plus an extra on `pydantic-ai-slim`.
+  between them cover most gateways. A third is one `Wire` class saying how to name a model over that
+  format, how to ask it what it serves and what it has to be told to reuse a conversation's prefix,
+  plus an extra on `pydantic-ai-slim`.
 - **A session cannot be moved to another endpoint.** Removing an endpoint that sessions use leaves
   them readable and stuck; the page names the endpoint so putting it back is obvious. Forking one
   onto an endpoint that still exists is the way out. A model dropping out of the picker is *not* that
@@ -652,6 +383,16 @@ Named plainly, because they are the next things rather than omissions nobody not
   `serve` itself is portable, so elsewhere it is a foreground process and whatever you already use
   to keep one running.
 - **Nothing deletes a session.** They accumulate, and the only way to remove one is the file.
+
+## Why it is built this way
+
+The reasoning is written down rather than left to be inferred from the source:
+
+| | |
+|---|---|
+| [Philosophy](https://joshkarpel.github.io/mainplate/philosophy/) | The one idea everything rests on, and the rules new work is measured against |
+| [Design](https://joshkarpel.github.io/mainplate/design/) | How each part works, what it costs, and which alternatives were tried and are not worth trying again |
+| [Maintaining](https://joshkarpel.github.io/mainplate/maintaining/) | The toolchain around the source, for working on the repository itself |
 
 ## Why the name
 
