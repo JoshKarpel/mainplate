@@ -87,6 +87,7 @@ nav:
       - How a model reaches a file: design/tools.md
       - Where a command runs: design/sandbox.md
       - Durability: design/durability.md
+      - Plugins: design/plugins.md
       - The console: design/console.md
       - The stylesheet and the grid: design/assets.md
       - Running it as a service: design/deployment.md

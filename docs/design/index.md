@@ -31,6 +31,9 @@ the cross-cutting rules the pages cite rather than restate.
   isolation axes a session picks.
 - **[Durability](durability.md)** is the Pydantic AI capability that records a turn step by step,
   and what one pass of a session actually does.
+- **[Plugins](plugins.md)** is how somebody adds to this console without editing it: what a plugin
+  may contribute, the two files that declare one, and where a repository's own code runs, which is
+  not in this process. It is the one page here describing something not yet built.
 - **[The console](console.md)** is the page: the live connection, the transcript, panels and rules,
   and the controls around them.
 - **[The stylesheet and the grid](assets.md)** is what draws it: the three shapes, the one value
