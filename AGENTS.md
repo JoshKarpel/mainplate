@@ -227,8 +227,9 @@ result:{entry}       what the command delivered under `{entry}` exited with, sai
                      by `Commands` when it finishes
 choice               the endpoint, model, repository, base, branch, isolation and thinking level;
                      written by `Service.start` and by `Service.fork`, before the first message
-instructions:{n}     what the stretch of context beginning at turn `n` is answered under; composed
-                     and recorded by the first pass to reach it, and replayed by every later one
+instructions:{n}     what the stretch of context beginning at turn `n` is answered under, exactly as
+                     the model is sent it; composed and recorded by the first pass to reach it,
+                     before its first request, and replayed by every later one
 turn:{n}:opened      the entry this turn took, recorded by `Run.receive` in the conversation body
 turn:{n}:tree:{i}    the worktree before the i-th model request; written by `StepwiseDurability`
 turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request, recorded by
@@ -1532,15 +1533,22 @@ therefore free, and it is the one moment a reader might reasonably expect edited
 picked up. `history_began` asks the same `forgets` predicate `reached` clears history on, so the two
 cannot disagree about where a context starts.
 
-Three details there are decided:
+Four details there are decided:
 
 - **It is a `Run.step`**, so the first pass composes and every later one replays. That also means it
   cannot be composed twice under one key in a pass, which is why a pass answering two turns of one
   stretch memoises what it composed and a pass crossing a forget composes a second time.
-- **It records what `conversing` composes, not what the model was sent.** `agent_for` adds this
-  session's worktree and network notes on top, and those are fixed for its life already, so recording
-  them would double them on the next turn rather than pin them. That is not a guess: the test that
-  pins this failed on exactly that, with the working note appearing twice.
+- **It records exactly what the model is sent**, the notes about this session's worktree and network
+  included, and `agent_for` speaks it verbatim. Composed out there instead, those notes would be a
+  sentence the model carried that no record held - so a page could report only what a *turn's*
+  messages held, which is nothing until a turn has landed - and they would be recomposed on every
+  turn from live state, in front of a cached prefix they are supposed to sit still behind. The reason
+  they cannot simply be appended in `agent_for` on top of a record that already holds them is the
+  replay: a second pass hands it back the recorded string and would get them twice.
+- **What decides the note and what decides the toolset is one function.** They are read off one
+  `Choice.isolation` and one worktree, and `agent.reaching` answers both at once, because in two
+  `match` statements they would be two places to keep in step over one answer and the failure would
+  be quiet - a session told it has a scratch directory whose tools cannot reach one.
 - **The key is not turn-prefixed**, deliberately. `before` copies turn-prefixed keys by shape, so a
   turn-shaped name would carry a parent's instructions into a fork that may have attached a
   repository the parent never had. Named this way a fork composes its own.
@@ -1557,24 +1565,35 @@ so passing a `paths:` list on spends a context window on it and invites an answe
 block that opens the file and closes counts, so a document whose first line is a rule of dashes is
 left as written.
 
-**The system prompt is drawn as a panel**, at the top of the transcript, folded, verbatim. A console
-that shows what a model answered and hides what it was told is showing half of how a turn happened.
-Four things there are decided:
+**The system prompt is drawn as a panel**, under the rule that opens the stretch it belongs to,
+folded, verbatim. A console that shows what a model answered and hides what it was told is showing
+half of how a turn happened. Five things there are decided:
 
-- **It is read out of `turn:{n}:messages` and never recomputed.** `ModelRequest.instructions` is
-  recorded per request, so the page reports what a session *was* told rather than what it would be
-  told now. Recomputing it would be a second implementation of the same question, and the two would
-  disagree the moment a worktree moved.
-- **It is not a `Panel`.** A panel's identity is its turn and its position, and this belongs to
-  neither; giving it one would have taken `#N.0` off the person's opening message, which the fork
-  link and every permalink already point at. `waiting_panel` is the same split, and
-  `Transcript.system_prompt` is where it rides instead. It is `system-prompt` in `data-kind`, in the
+- **It is read out of `instructions:{n}` and never out of a turn.** That record is written before the
+  stretch's first request, where a turn's messages do not exist until it ends, so the panel is on the
+  page while a turn is being answered rather than only afterwards. What makes the record worth
+  trusting for this is that `agent_for` speaks it verbatim: nothing is composed on top of it, so what
+  a stretch records and what its requests carried are one string.
+  `test_what_a_stretch_records_is_exactly_what_its_requests_carried` holds the two ends against each
+  other, with the worktree note as the control, since that is the part that used to be added after
+  the record was written.
+- **One per stretch, under its own rule.** A forget composes again, so a single panel above
+  everything would stand the newest instructions over turns answered under an older one. Under the
+  rule the reader gets the order it happened in: the boundary, then what the model is told from here,
+  then the message.
+- **It is not a `Panel`.** A panel's identity is its turn and its position, and this belongs to the
+  first but not the second; giving it one would have taken `#N.0` off the person's opening message,
+  which the fork link and every permalink already point at. `waiting_panel` is the same split, and
+  `Transcript.system_prompts` is where it rides instead. It is `system-prompt` in `data-kind`, in the
   anchor and in the class, and `system prompt` on the page, because a reader who reaches for `#told`
   is reaching for a word this console prints nowhere.
-- **Nothing is drawn until the first turn lands**, because that is where the instructions are
-  recorded. Left rather than closed with a step of its own: they are already in the checkpoint once
-  the turn ends, and recording them a second time to draw them a few seconds earlier is the second
-  copy this console refuses everywhere else.
+- **A stretch nothing has composed for yet is drawn with the working dots in it**, because composing
+  reads a repository the pass is the one to fetch: a session's first message is on the page before
+  there is anything to put under it, and on a fresh clone that gap is minutes. Drawn rather than left
+  out, so what is coming is visible from the moment the message is; `instructed_in` is what keeps it
+  off a stretch nothing will ever compose for, which is every turn answered before this console
+  recorded instructions at all. Those draw no panel, which is a loss taken knowingly against a
+  spinner that would never resolve. `opening.html` in the gallery is that state to look at.
 - **Verbatim in a `pre`, not rendered Markdown**, because the claim it makes is that this is what was
   *sent*. The `pre` is deliberately uncapped and does not scroll: a reader who opened the fold asked
   for all of it, and a box that scrolls has no still corner for the copy button to pin to.

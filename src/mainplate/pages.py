@@ -2032,14 +2032,27 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
     )
 
 
-def system_prompt_panel(said: str) -> Element:
+def system_prompt_panel(turn: int, said: str | None) -> Element:
     """
-    What every request in this session carried, at the top of the conversation it framed.
+    What every request in one stretch of context carried, under the rule that opens the stretch.
 
     Panel-shaped and not a `Panel`, which is the same split `waiting_panel` makes: a panel's identity
-    is its turn and its position, and this belongs to neither. Giving it one would have taken `#N.0`
-    off the person's opening message, which is an address the fork link and every permalink already
-    point at.
+    is its turn and its position, and this belongs to the first but not the second. Giving it one
+    would have taken `#N.0` off the person's opening message, which is an address the fork link and
+    every permalink already point at.
+
+    **One per stretch, under its own rule**, rather than one at the top of the page. A forget
+    composes again, so a single panel above everything would be the newest instructions standing over
+    turns answered under older ones. Under the rule the reader gets the order the conversation
+    happened in: the boundary, then what the model is told from here, then the message.
+
+    **`None` is a stretch whose instructions are not composed yet**, drawn as the panel with the
+    working dots in place of the fold. Composing reads the repository's guidance out of a worktree
+    the pass is the one to plant, so on a session's first turn there is a real gap between the
+    message being there to render and this being there to put in it. Drawn rather than left out, so
+    what is coming is visible from the moment the message is; it resolves on the same swap the first
+    response arrives on, and `instructed_in` is what keeps it off a stretch nothing will ever compose
+    for.
 
     **Folded, and drawn verbatim.** Folded because it is reference rather than conversation, and it
     is long: unfolded it would be most of what a reader sees on opening any session. Verbatim because
@@ -2051,10 +2064,11 @@ def system_prompt_panel(said: str) -> Element:
     and what is in here is a fold rather than a block; the two would copy the same characters anyway,
     give or take the summary, so the absence costs a reader nothing.
     """
+    anchor = f"system-prompt-{turn}"
     return article(
         cls="panel",
         attrs={
-            "id": "system-prompt",
+            "id": anchor,
             "data-kind": "system-prompt",
             "data-side": SIDES["system-prompt"],
         },
@@ -2063,15 +2077,18 @@ def system_prompt_panel(said: str) -> Element:
                 cls="panel__meta",
                 children=[
                     span(cls="panel__role", children=dict(NAMES)["system-prompt"]),
-                    a(cls="panel__anchor", attrs={"href": "#system-prompt"}, children="#system-prompt"),
+                    a(cls="panel__anchor", attrs={"href": f"#{anchor}"}, children=f"#{anchor}"),
                 ],
             ),
-            details(
+            div(cls=("block", "block--text"), children=working())
+            if said is None
+            else details(
                 cls="system-prompt",
                 # Its own id and not the panel's, because what the script keeps a fold decision under
-                # has to name the fold rather than the thing around it. It never moves, unlike a
-                # panel's position, so a reader who shut this keeps it shut across every swap.
-                attrs={"id": "system-prompt-fold"},
+                # has to name the fold rather than the thing around it. It names the turn the stretch
+                # began at, which never moves, so a reader who shut this keeps it shut across every
+                # swap.
+                attrs={"id": f"{anchor}-fold"},
                 children=[
                     summary(children=span(cls="system-prompt__what", children=f"{len(said)} characters")),
                     div(cls="system-prompt__body", children=pre(children=code(children=said))),
@@ -2119,9 +2136,7 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
     holds the same key. The panel has it a request earlier: `turn:{n}:tree:0` is written *before* the
     model is asked, so a turn whose first answer has not landed yet still says what it started on.
     """
-    # Above everything, because it framed everything: the system prompt was carried by every request
-    # in the conversation below it, so there is nowhere later it could honestly sit.
-    drawn: list[Element] = [] if said.system_prompt is None else [system_prompt_panel(said.system_prompt)]
+    drawn: list[Element] = []
     for turn, panels in groupby(said.panels, key=lambda panel: panel.turn):
         within = tuple(panels)
         asking = said.requests.get(turn, ())
@@ -2139,6 +2154,11 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
                 forget=within[0].forget,
             )
         )
+        # Directly under the rule that opens the stretch, so a reader meets the boundary, then what
+        # the model is told from here, then the message it is told it about. Absent on every turn
+        # that continues a stretch rather than beginning one.
+        if turn in said.system_prompts:
+            drawn.append(system_prompt_panel(turn, said.system_prompts[turn]))
         at = 0
         for panel in within:
             if panel.asked is not None and panel.asked != at:

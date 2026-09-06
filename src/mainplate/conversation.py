@@ -121,6 +121,7 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.agent import reaching
 from mainplate.durability import TOOK
 from mainplate.durability import Allowance
 from mainplate.durability import AllowanceSpent
@@ -811,6 +812,38 @@ def history_began(recorded: Mapping[str, object], turn: int) -> int:
     return max((each for each in range(turn + 1) if forgets(recorded, each)), default=0)
 
 
+def instructed_in(recorded: Mapping[str, object], turns: int) -> dict[int, str | None]:
+    """
+    What each stretch of context in this conversation is answered under, by the turn it begins at.
+
+    One per stretch rather than one per session, because a forget composes again: a single system
+    prompt at the top of the page would be the newest one standing over turns that were answered
+    under an older one. Keyed by the turn a stretch begins at, which is where the page draws it -
+    under that turn's own rule, which for a forget is the rule saying the context was cleared there.
+
+    **`None` is a stretch whose instructions have not been composed yet**, which is a real state and
+    not a missing record: composing reads the repository's guidance out of a worktree the pass is the
+    one to plant, so a session's first turn is queued before there is anything to compose. The page
+    draws that as a system prompt panel with nothing in it yet, so what is coming is visible from the
+    moment the message is.
+
+    A stretch that has *answered* under instructions this console never recorded is absent
+    altogether, which is every session written before it recorded them. Absent rather than pending,
+    because a turn that has landed will never compose anything now, and a panel waiting forever on a
+    record nobody will write is the one state a reader cannot diagnose.
+    """
+    told: dict[int, str | None] = {}
+    for turn in range(turns):
+        if turn and not forgets(recorded, turn):
+            continue
+        said = recorded.get(instructions_key(turn))
+        if said is not None:
+            told[turn] = parse_instructions(said)
+        elif recorded.get(messages_key(turn)) is None:
+            told[turn] = None
+    return told
+
+
 def reached(recorded: Mapping[str, object]) -> Reached:
     """
     The first turn with no answer, and every message the model is to be told before it.
@@ -1232,21 +1265,19 @@ class Transcript:
     awaiting: bool
     turns: int
 
-    system_prompt: str | None = None
+    system_prompts: Mapping[int, str | None] = field(default_factory=dict)
     """
-    The system prompt the most recent recorded request carried, which is what this session is
-    answered under.
+    What each stretch of context is answered under, by the turn it begins at, with `None` for one
+    whose instructions have not been composed yet.
 
-    On the transcript rather than on a panel, because it belongs to the session rather than to any
-    one exchange: it is re-rendered on every request and is not a thing anybody said at a position.
-    It is here at all because a console that shows what a model answered and hides what it was told
-    is showing half of how a turn happened.
+    On the transcript rather than on a panel, because it belongs to a stretch rather than to any one
+    exchange: it is carried by every request in that stretch and is not a thing anybody said at a
+    position. It is here at all because a console that shows what a model answered and hides what it
+    was told is showing half of how a turn happened.
 
-    Nothing until a turn has recorded its messages, which is where the instructions are kept. That is
-    a real gap on a session's very first turn and it is left rather than closed with a step of its
-    own: the instructions are already in the checkpoint once the turn lands, and recording them a
-    second time to draw them a few seconds earlier is the second copy this console refuses
-    everywhere else.
+    Read from `instructions:{n}`, which a pass writes before it makes the stretch's first request, so
+    the panel is drawn while a turn is still being answered rather than only once it has landed. See
+    `instructed_in` for what an absent one and a pending one each mean.
     """
 
     spent: Mapping[int, Spent] = field(default_factory=dict)
@@ -1453,15 +1484,15 @@ def system_prompt_in(messages: Sequence[ModelMessage]) -> str | None:
     """
     What the model was told about itself in these messages, which is the system prompt it carried.
 
-    Read out of the recorded messages rather than recomputed, and that is the whole reason this is a
-    lookup rather than a second call to whatever composed them: instructions are a per-request
-    parameter Pydantic AI re-renders on every request, so a page that built its own copy would be
-    asserting what a session *would* be told now rather than reporting what it was told then.
+    **What the page draws is `instructions:{n}`, not this**, because that record exists before the
+    first request where these messages exist only after the turn. This is the other end of the same
+    fact, and holding the two against each other is what pins the claim that record makes: the
+    recorded string is spoken verbatim, so what a stretch records and what its requests carried have
+    to be one string rather than two that drift.
 
     The **last** one rather than the first, because a turn's requests all carry the same instructions
-    unless something under them moved, and what a reader is asking is what this session is being run
-    under. Nothing where a turn recorded none, which is a turn answered before this console said
-    anything at all.
+    unless something under them moved. Nothing where a turn recorded none, which is a turn answered
+    before this console said anything at all.
     """
     told: str | None = None
     for message in messages:
@@ -1880,15 +1911,10 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     panels: list[Panel] = []
     spent: dict[int, Spent] = {}
     asking: dict[int, tuple[Request, ...]] = {}
-    system_prompt: str | None = None
     turn = 0
     while turn < len(opened) and (answered := recorded.get(messages_key(turn))) is not None:
         held = owned_in(recorded, inbox, opened, turn, listening=False)
         said = parse_messages(answered)
-        # Off the same parse the panels come from, so what the page reports the model was told and
-        # what it reports the model said are one reading of one value rather than two walks that can
-        # come to disagree.
-        system_prompt = system_prompt_in(said) or system_prompt
         answering = responses_in(said)
         panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
         blocks = parted(said, tooks_in(recorded, turn, answering))
@@ -1933,7 +1959,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         spent=spent,
         answering=running,
         requests=asking,
-        system_prompt=system_prompt,
+        system_prompts=instructed_in(recorded, turn),
     )
 
 
@@ -2191,9 +2217,12 @@ def conversing(
             # it again buys nothing against that, because the thing most likely to have edited the
             # file is the model, which knows what it wrote.
             #
-            # It holds what is composed *here* and not what the model is finally sent: `agent_for`
-            # adds this session's worktree and network notes on top, and those are fixed for its life
-            # already, so recording them would double them on the next turn rather than pin them.
+            # **It holds exactly what the model is sent**, which is what lets the page draw the
+            # system prompt from the moment a turn opens rather than only once one has landed.
+            # `agent_for` speaks this string verbatim, so the note about this session's worktree and
+            # network is composed in here beside the guidance instead of being appended out there:
+            # appended, it would be a sentence the model carried that no record held, recomposed on
+            # every turn in front of a cached prefix it is supposed to sit still behind.
             #
             # The repository's own guidance, and an index of what the rest of it carries. The index
             # is one line per file rather than their contents, which is what makes it affordable on
@@ -2206,6 +2235,7 @@ def conversing(
                         instructions,
                         None if worktree is None else repository_guidance(worktree.root),
                         None if worktree is None else indexing(worktree.root, elsewhere),
+                        reaching(chosen.isolation, worktree, scratch, bwrap).note,
                     )
                 )
 

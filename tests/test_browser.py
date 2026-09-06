@@ -306,17 +306,13 @@ class TestWhereTheReaderIs:
         # From the *start*, because the page opens following the end and one step from there lands on
         # the last stop whichever selector is in force, so the assertion would hold with the bug in.
         #
-        # Two steps and both of them asserted, because the start of the transcript is above the first
-        # turn rather than on it: the system prompt panel is drawn there. Stepping to each in turn is
-        # what actually says the requests inside turn 0 were skipped, where landing on `rule-1` from a
-        # position this test did not pin could be either stop counted from anywhere.
+        # The start is turn 0's own rule, which is the top of the transcript, so one step from there
+        # is the next stop *below* it: `rule-1` with this column's selector and `rule-0-1` with every
+        # rule, which is what makes the one assertion discriminate rather than merely hold.
         await page.goto(f"{gallery}/session.html", wait_until="load")
         assert await page.locator(".rule").count() > await page.locator(".rule--turn").count()
         await page.click('button[data-leap="start"]')
         landed = page.locator(".rule[data-landed]")
-        await page.click('button[data-step="1"][data-stop="turn"]')
-        await expect(landed).to_have_count(1)
-        await expect(landed).to_have_attribute("id", "rule-0")
         await page.click('button[data-step="1"][data-stop="turn"]')
         await expect(landed).to_have_count(1)
         await expect(landed).to_have_attribute("id", "rule-1")

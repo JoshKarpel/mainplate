@@ -44,10 +44,12 @@ from mainplate.catalogue import Offering
 from mainplate.console import LINKS
 from mainplate.conversation import Result
 from mainplate.conversation import heard_key
+from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_messages
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_result
@@ -426,7 +428,12 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
     fixture that said one thing in the step and another in the messages would draw a turn this
     console cannot produce.
     """
-    written: dict[str, object] = {}
+    # What the stretch of context beginning at turn 0 is answered under, which is what the system
+    # prompt panel under that turn's rule draws. Written before the turn's first request by a pass,
+    # so a fixture that left it out would render a session whose first turn landed with nothing
+    # saying what it was told. A fixture with a forget in it records another beside the boundary,
+    # because that is where the next stretch begins.
+    written: dict[str, object] = {instructions_key(0): recorded_instructions(INSTRUCTIONS)}
     for turn, messages in enumerate(turns):
         came_back = returns(messages)
         # The two records a turn opens with: the entry the message arrived as, and the cursor saying
@@ -501,13 +508,25 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
 
 
 def showing(
-    session: Session, written: dict[str, object], *, answerable: bool = True, working: bool = True
+    session: Session,
+    written: dict[str, object],
+    *,
+    answerable: bool = True,
+    working: bool = True,
+    started: bool = True,
 ) -> Conversation:
-    """One session as a page sees it. `working` is whether it picked a repository at all."""
+    """
+    One session as a page sees it.
+
+    `working` is whether it picked a repository at all. `started` is whether a pass has been there
+    yet: a session whose message is still queued has no turn, so it has no tree recorded before a
+    request nobody has made, and a fixture that gave it one would be a checkpoint no pass could
+    write.
+    """
     chosen = CATALOGUE.default if working else replace(CATALOGUE.default, repository=None)
     return Conversation(
         session=session,
-        said=transcript(snapshotted(written) if working else written),
+        said=transcript(snapshotted(written) if working and started else written),
         chosen=chosen,
         answerable=answerable,
         repository=REPOSITORY if working else None,
@@ -538,6 +557,10 @@ def pages() -> dict[str, str]:
     # standing *between* two turns with the first still on the page above it: a boundary at the top
     # of a conversation would draw the same markup and prove nothing about what it says.
     settled[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
+    # And what the stretch it opens is answered under, composed again because a forget has thrown the
+    # cached prefix away and composing exactly there is free. The same words here, since nothing under
+    # them moved between the two turns; what the second panel shows is that a boundary gets one.
+    settled[instructions_key(1)] = recorded_instructions(INSTRUCTIONS)
     waiting = dict(settled)
     waiting[inbox_key(5)] = recorded_prompt("And what about a turn still being answered?")
 
@@ -562,12 +585,21 @@ def pages() -> dict[str, str]:
     answering[inbox_key(6)] = recorded_steer("and while you are there, check the phone width")
 
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
+    # The state every session opens in, and stays in for as long as the clone and the worktree take:
+    # the message is there to be drawn and what the session is answered under is not, because
+    # composing that reads a repository the pass is the one to fetch. The system prompt panel is
+    # drawn with nothing in it rather than left out, and a screenshot is where you find out whether
+    # that reads as something on its way or as something broken.
+    queued = showing(
+        LISTED[1], {inbox_key(0): recorded_prompt("Why does the poll stop after one answer?")}, started=False
+    )
 
     return {
         "start.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, REFERENCE),
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
         "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
+        "opening.html": session_page(LINKS, LISTED, queued, REACHABLE),
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),
         "answering.html": session_page(LINKS, LISTED, showing(PARENT, answering), REACHABLE),

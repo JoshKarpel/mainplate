@@ -64,16 +64,19 @@ from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
 from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
+from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import panelled
 from mainplate.conversation import parse_choice
 from mainplate.conversation import parse_delivered
+from mainplate.conversation import parse_instructions
 from mainplate.conversation import parse_messages
 from mainplate.conversation import parted
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
+from mainplate.conversation import recorded_instructions
 from mainplate.conversation import requested_at
 from mainplate.conversation import responded
 from mainplate.conversation import so_far
@@ -352,6 +355,10 @@ class TestForgettingWhatCameBefore:
             turns=1,
             # The turn a steer would reach: the first one unanswered, which here is the only one.
             answering=0,
+            # Nothing has composed this stretch's instructions yet, which is a message queued ahead of
+            # the pass that will. The page draws the panel with nothing in it rather than nothing at
+            # all, so what is coming is visible from the moment the message is.
+            system_prompts={0: None},
         )
 
     def test_an_answered_turn_is_the_question_and_the_answer_as_two_panels(self) -> None:
@@ -490,6 +497,73 @@ FOUR_PANELS: dict[str, object] = {
         {"kind": "response", "parts": [{"part_kind": "text", "content": "it says hello"}]},
     ),
 }
+
+
+class TestWhatASessionIsAnsweredUnder:
+    """
+    The system prompt a page draws, which it reads from `instructions:{n}` and not from any turn.
+
+    That is what puts the panel on the page before a turn has landed: the record is written by a pass
+    before it makes the stretch's first request, where a turn's messages do not exist until it ends.
+    """
+
+    def test_a_stretch_shows_what_it_is_answered_under_before_its_turn_has_landed(self) -> None:
+        recorded = {
+            **said_at(0, "what is it"),
+            instructions_key(0): recorded_instructions("what this session is answered under"),
+        }
+        said = transcript(recorded)
+
+        assert said.awaiting, "the control: nothing has answered, so this is the state being pinned"
+        assert said.system_prompts == {0: "what this session is answered under"}
+
+    def test_a_stretch_nothing_has_composed_for_yet_is_pending_rather_than_absent(self) -> None:
+        """
+        A message is queued before the pass that composes for it has planted a worktree to read, so
+        the page draws the panel with nothing in it rather than nothing at all.
+        """
+        assert transcript(said_at(0, "what is it")).system_prompts == {0: None}
+
+    def test_a_turn_answered_under_instructions_nobody_recorded_draws_no_panel(self) -> None:
+        """
+        Every session written before this console recorded them, which is the loss taken knowingly.
+
+        Absent rather than pending, and that is the distinction worth pinning: a turn that has landed
+        will never compose anything now, so a panel waiting for ever on a record nobody will write is
+        the one state a reader cannot diagnose.
+        """
+        assert transcript(conversation_of(answered_turn("first"))).system_prompts == {}
+
+    def test_each_stretch_of_context_carries_its_own(self) -> None:
+        """
+        A forget composes again, so there is one per stretch under the rule that opens it. Asserted as
+        the whole mapping, because what a single panel at the top of the page would do is stand the
+        newest instructions over turns answered under the older ones.
+        """
+        recorded = {
+            **conversation_of(answered_turn("first"), answered_turn("second", forget=True)),
+            instructions_key(0): recorded_instructions("told this to begin with"),
+            instructions_key(1): recorded_instructions("told this from the boundary on"),
+        }
+        assert transcript(recorded).system_prompts == {
+            0: "told this to begin with",
+            1: "told this from the boundary on",
+        }
+
+    def test_a_turn_that_continues_a_stretch_carries_none_of_its_own(self) -> None:
+        """
+        One per stretch and not one per turn, which is what keeps the panel out of every rule.
+
+        The second turn is left unanswered on purpose: read per turn it would be a stretch with
+        nothing composed for it yet, so the pending panel this draws elsewhere would appear in the
+        middle of a conversation that is answering perfectly well under what turn 0 recorded.
+        """
+        recorded = {
+            **conversation_of(answered_turn("first")),
+            **said_at(1, "and another thing"),
+            instructions_key(0): recorded_instructions("told this to begin with"),
+        }
+        assert transcript(recorded).system_prompts == {0: "told this to begin with"}
 
 
 class TestWhereARequestBeganAndWhatItHeld:
@@ -1170,6 +1244,32 @@ class TestWhatOnePassDoes:
             Completed(Progressed()),
             Blocked(listening=frozenset({opened_key(1)})),
         ), "the first pass handed the rest of the turn back; the second finished it and waited"
+
+    async def test_what_a_stretch_records_is_exactly_what_its_requests_carried(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        The claim the page rests on, since it draws the panel from the record and never from a turn.
+
+        The two ends of one fact, held against each other: `agent_for` speaks the recorded string
+        verbatim, so anything composed on top of it out there would be a sentence the model was sent
+        that no record holds - a page reporting less than was said, and instructions moving under a
+        conversation whose cached prefix they sit in front of.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = system_prompt_in(parse_messages(recorded[messages_key(0)]))
+        assert told is not None, "the control: nothing carried means nothing to differ over"
+        assert str(workspaces.root / session.id) in told, (
+            "the other control: the note about this session's own worktree is the part that used to "
+            "be composed after the record was written, so without it the two agree by having no "
+            "chance to disagree"
+        )
+        assert parse_instructions(recorded[instructions_key(0)]) == told
 
     async def test_the_system_prompt_is_settled_before_the_first_answer_and_never_recomposed(
         self, service: Service, workspaces: Workspaces

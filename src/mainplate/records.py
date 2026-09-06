@@ -162,13 +162,15 @@ class Instructions(Record):
     cache, and a forget has just thrown the whole prefix away, so composing again exactly there is
     free. It is also the one moment a reader might reasonably expect edited guidance to be picked up.
 
-    It holds what *`conversing`* composes and not what the model was ultimately sent: `agent_for`
-    adds the notes about this session's worktree and network on top, and those are fixed for the
-    session's life anyway, so recording them here would double them on the next turn rather than pin
-    them.
+    **It holds exactly what the model is sent**, notes about this session's worktree and network
+    included, because `agent_for` speaks it verbatim. That is what the page draws: a system prompt
+    panel reads this rather than digging one out of a turn's recorded messages, so it is there from
+    the moment a turn opens instead of only once one has landed.
 
     Written by a pass rather than by `Service.start`, because composing it reads a worktree the
-    worker is the one to plant.
+    worker is the one to plant. That is the whole of the gap a reader sees: a session's very first
+    turn draws the panel without a prompt in it until the clone and the worktree are there to be
+    read, which on a fresh repository is the one slow moment in a session's life.
     """
 
     kind: Literal["instructions"] = "instructions"

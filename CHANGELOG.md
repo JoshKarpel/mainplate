@@ -29,23 +29,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file itself, the model wrote the file, a fork carried it across, or a `forget` dropped it and it
   is handed over again. A `bash` command reaches none of this, because its argv is the model's and a
   path inside it is not this console's to parse; the index is what covers that.
-- The system prompt drawn as a panel, folded, at the top of the transcript, and again wherever
-  guidance was handed over mid-turn. It is read out of the instructions each request recorded rather
-  than recomposed, so what the page reports is what a session *was* told rather than what it would
-  be told now, and it is verbatim rather than rendered, because the claim it makes is that this is
-  what was sent. A console that shows what a model answered and hides what it was told is showing
-  half of how a turn happened.
+- The system prompt drawn as a panel, folded and verbatim, under the rule that opens the stretch of
+  context it belongs to, and again wherever guidance was handed over mid-turn. It is read from what
+  that stretch recorded rather than out of a turn's messages, so it is on the page while the first
+  turn is still being answered rather than only once one has landed; a stretch nothing has composed
+  for yet draws the panel with the working dots in it, which is where a session sits for as long as
+  its clone and its worktree take. Verbatim rather than rendered, because the claim it makes is that
+  this is what was *sent*. A console that shows what a model answered and hides what it was told is
+  showing half of how a turn happened.
 - Places reached by name rather than by path: `read`, `edit` and `create` take a `root`, and a
   command finds `$MAINPLATE_WORKTREE` and `$MAINPLATE_SCRATCH` in its environment. A worktree sits
   under 32 hex characters of session id, and a model reproducing those from memory eventually
   reproduces them wrong, which costs a refusal and a round trip to recover from. The names are one
   vocabulary both the tools and the sandbox read, so the two surfaces of one answer cannot drift.
-- What a session is answered under recorded as a step, composed once per stretch of context and
-  replayed after that. Instructions sit in front of the cached prefix, so composing them again on a
-  later turn would re-price every remaining request the moment anything under them moved, and a
-  session working on a repository's own guidance moves it constantly. A `forget` ends a stretch and
-  composes again, which costs nothing: the prefix it would have invalidated has just been thrown
-  away.
+- What a session is answered under recorded as a step, exactly as the model is sent it, composed
+  once per stretch of context before that stretch's first request and replayed after that.
+  Instructions sit in front of the cached prefix, so composing them again on a later turn would
+  re-price every remaining request the moment anything under them moved, and a session working on a
+  repository's own guidance moves it constantly. A `forget` ends a stretch and composes again, which
+  costs nothing: the prefix it would have invalidated has just been thrown away.
 
 ### Changed
 

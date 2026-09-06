@@ -591,6 +591,78 @@ def whole_machine_note() -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Reach:
+    """
+    What a session's isolation comes to: the places it reaches, and what it is told about them.
+
+    One value because it is one decision read by two callers. `agent_for` builds the toolsets from
+    the roots and the confinement; `conversing` composes the note into the instructions it records.
+    Decided in two `match` statements those would be two places to keep in step over one answer, and
+    the failure would be quiet - a session told it has a scratch directory whose tools cannot reach
+    one, or told there is no network by a command that can dial out.
+
+    Empty on every arm that affords nothing, so a caller asks what it has rather than which arm it
+    landed on: no roots is no toolset, no confinement is no `bash`, and no note is nothing to say.
+    """
+
+    roots: tuple[Root, ...] = ()
+    confinement: Confinement | None = None
+    note: str = ""
+
+
+def reaching(
+    isolation: Isolation,
+    worktree: Worktree | None = None,
+    scratch: Path | None = None,
+    bwrap: str | None = None,
+) -> Reach:
+    """
+    What one session's isolation affords, given the worktree and the sandbox this machine has.
+
+    **Decided by the session's own isolation**, not by what a caller happens to be handed.
+    `Filesystem.NOTHING` reaches nothing rather than reaching a place its tools would refuse: a
+    console being used to talk rather than to edit is what this was before there were repositories,
+    and offering a model tools that cannot work is worse than offering none, since it spends the
+    description on every request and invites a call that can only fail.
+
+    `bwrap` is passed in rather than looked up, because where the sandbox binary is is a fact about
+    the machine. Without it a `WORKTREE` session keeps its file tools and is offered no `bash`, which
+    is what this console was before there was one, and an `EVERYTHING` session reaches nothing at
+    all: what that arm *is* is a sandbox with `/` in it, so without one there is nothing left that
+    anybody chose.
+    """
+    match isolation.filesystem:
+        case Filesystem.NOTHING:
+            return Reach()
+        case Filesystem.WORKTREE if worktree is not None:
+            # The scratch is reachable by the file tools only where a command can make it exist,
+            # which is the same condition `bash` is offered under. Offered without one, `read` would
+            # name a directory nothing ever creates. The worktree is first, so a relative path still
+            # means the repository however many roots a session ends up with.
+            if scratch is None or bwrap is None:
+                return Reach(roots=(GitTracked(path=worktree.root),), note=working_note(worktree))
+            return Reach(
+                roots=(GitTracked(path=worktree.root), Scratch(path=scratch)),
+                confinement=InAWorktree(worktree=worktree, scratch=scratch),
+                note=f"{working_note(worktree, scratch)}\n\n{network_note(isolation.network)}",
+            )
+        case Filesystem.WORKTREE:
+            # A worktree was chosen and none was supplied, which is the instant before a session's
+            # first pass has planted one. Nothing rather than tools rooted nowhere.
+            return Reach()
+        case Filesystem.EVERYTHING if bwrap is not None:
+            return Reach(
+                roots=(System(path=Path("/")),),
+                confinement=OverEverything(),
+                note=f"{whole_machine_note()}\n\n{network_note(isolation.network)}",
+            )
+        case Filesystem.EVERYTHING:
+            return Reach()
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def agent_for(
     wires: Wires,
     chosen: Choice,
@@ -611,55 +683,23 @@ def agent_for(
     and are as fixed as it is: a pass that resumed a session at a different effort would continue a
     conversation whose earlier answers were reasoned at another.
 
-    **What the tools are is decided by the session's own isolation**, not by what this happens to be
-    handed. `Filesystem.NOTHING` gets no toolset at all rather than tools that refuse every call: a
-    console being used to talk rather than to edit is what this was before there were repositories,
-    and offering a model tools that cannot work is worse than offering none, since it spends the
-    description on every request and invites a call that can only fail.
-
-    `bwrap` is passed in rather than looked up here, because where the sandbox binary is is a fact
-    about the machine and this is called once per pass. Without it a `WORKTREE` session keeps its
-    file tools and is offered no `bash`, which is what this console was before there was one, and an
-    `EVERYTHING` session gets nothing at all: what that arm *is* is a sandbox with `/` in it, so
-    without one there is nothing to give it that anybody chose.
+    **The instructions are spoken exactly as they arrive**, and nothing is composed on top of them
+    here. What a session is answered under is recorded before its first request, so a note added here
+    would be a sentence the model was sent and the record does not hold - which is both a page
+    reporting less than was said, and instructions that change under a conversation whose cached
+    prefix they sit in front of. `reaching` is where the note comes from, and `conversing` composes
+    it into what it records.
     """
+    reach = reaching(chosen.isolation, worktree, scratch, bwrap)
     tools = []
-    spoken = instructions
-    confinement: Confinement | None = None
-    match chosen.isolation.filesystem:
-        case Filesystem.NOTHING:
-            pass
-        case Filesystem.WORKTREE if worktree is not None:
-            # The scratch is reachable by the file tools only where a command can make it exist,
-            # which is the same condition `bash` is offered under. Offered without one, `read` would
-            # name a directory nothing ever creates. The worktree is first, so a relative path still
-            # means the repository however many roots a session ends up with.
-            running = scratch is not None and bwrap is not None
-            reaching: tuple[Root, ...] = (GitTracked(path=worktree.root),)
-            if running and scratch is not None:
-                reaching = (*reaching, Scratch(path=scratch))
-                confinement = InAWorktree(worktree=worktree, scratch=scratch)
-            tools.append(file_tools(Files(roots=reaching)))
-            spoken = f"{instructions}\n\n{working_note(worktree, scratch if running else None)}"
-            spoken = f"{spoken}\n\n{network_note(chosen.isolation.network)}" if running else spoken
-        case Filesystem.WORKTREE:
-            # A worktree was chosen and none was supplied, which is the instant before a session's
-            # first pass has planted one. No tools rather than tools rooted nowhere.
-            pass
-        case Filesystem.EVERYTHING if bwrap is not None:
-            confinement = OverEverything()
-            tools.append(file_tools(Files(roots=(System(path=Path("/")),))))
-            spoken = f"{instructions}\n\n{whole_machine_note()}\n\n{network_note(chosen.isolation.network)}"
-        case Filesystem.EVERYTHING:
-            pass
-        case _ as unreachable:
-            assert_never(unreachable)
-    if confinement is not None and bwrap is not None:
-        tools.append(bash_tools(confinement, bwrap, chosen.isolation.venue))
+    if reach.roots:
+        tools.append(file_tools(Files(roots=reach.roots)))
+    if reach.confinement is not None and bwrap is not None:
+        tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue))
     return Agent(
         wires.for_endpoint(chosen.endpoint).model(chosen.model),
         name="mainplate",
-        instructions=spoken,
+        instructions=instructions,
         model_settings=chosen.settings,
         capabilities=[StepwiseDurability()],
         toolsets=tools,

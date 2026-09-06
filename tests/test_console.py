@@ -34,9 +34,11 @@ from mainplate.console import posted_workspace
 from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
 from mainplate.conversation import heard_key
+from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
+from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import tool_key
@@ -252,6 +254,38 @@ class TestTheConsole:
         connecting = answered.text.index("hx-sse:connect")
         assert answered.text.index('id="stream"') < connecting
         assert connecting < answered.text.index('id="transcript"')
+
+    async def test_the_system_prompt_is_drawn_under_the_rule_that_opens_its_stretch(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The order a reader meets it in: the boundary, then what the model is told from here, then the
+        message it is told it about. Pinned as an ordering because that is what a reader of the markup
+        can check, and the placement is the whole of what moved it off the top of the page.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session, instructions_key(0), recorded_instructions("what this session is answered under")
+        )
+        drawn = await watched(app, session)
+
+        assert "what this session is answered under" in drawn
+        assert drawn.index('id="rule-0"') < drawn.index('id="system-prompt-0"')
+        assert drawn.index('id="system-prompt-0"') < drawn.index('data-kind="prompt"')
+
+    async def test_a_stretch_nothing_has_composed_for_yet_draws_the_panel_with_no_prompt_in_it(
+        self, app: ASGIApp
+    ) -> None:
+        """
+        A session's first message is queued before the pass that composes for it has planted a
+        worktree to read, so the panel is there from the moment the message is and fills in on the
+        swap the first answer arrives on. Asserted against the *fold*, because the panel is drawn
+        either way and what tells the two apart is whether there is anything to unfold.
+        """
+        drawn = await watched(app, await a_session(app))
+
+        assert 'id="system-prompt-0"' in drawn
+        assert 'id="system-prompt-0-fold"' not in drawn
 
     @pytest.mark.parametrize("settled", [True, False])
     async def test_the_transcript_asks_for_nothing_on_its_own(
