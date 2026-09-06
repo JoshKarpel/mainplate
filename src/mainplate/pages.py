@@ -32,10 +32,11 @@ from typing import assert_never
 
 from pydantic_ai.settings import ThinkingLevel
 from without_html import DOCTYPE
+from without_html import Attributes
+from without_html import Child
 from without_html import Element
 from without_html import VoidElement
 from without_html import a
-from without_html import article
 from without_html import aside
 from without_html import body
 from without_html import button
@@ -50,7 +51,6 @@ from without_html import form
 from without_html import h1
 from without_html import h2
 from without_html import head
-from without_html import header
 from without_html import html
 from without_html import input_
 from without_html import label
@@ -87,6 +87,7 @@ from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Block
 from mainplate.conversation import Command
 from mainplate.conversation import Disposition
+from mainplate.conversation import Guidance
 from mainplate.conversation import Kind
 from mainplate.conversation import Panel
 from mainplate.conversation import Prose
@@ -96,7 +97,8 @@ from mainplate.conversation import Steering
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
-from mainplate.markup import as_markup
+from mainplate.markup import as_document
+from mainplate.markup import as_message
 from mainplate.reference import Cost
 from mainplate.reference import Described
 from mainplate.reference import Reference
@@ -182,28 +184,106 @@ CHOOSING_ID: Final = "choosing"
 # chip in the key that governs it. One mapping, so the legend and the thing it is a legend for
 # cannot come to disagree about what a kind is called.
 NAMES: Final[tuple[tuple[Kind, str], ...]] = (
-    ("person", "you"),
-    ("steering", "you (steering)"),
-    ("command", "you (ran)"),
+    ("system-prompt", "system prompt"),
+    ("guidance", "guidance"),
+    ("prompt", "prompt"),
+    ("steer", "steer"),
+    ("command", "command"),
     ("thinking", "thinking"),
     ("assistant", "assistant"),
     ("tool", "tool"),
 )
 
+# The one kind whose label does not say everything about it. `you (ran)` used to carry the fact that
+# no model was ever told about a command; `command` does not, so it is said here instead, which is
+# where the cost estimate already says the thing a figure cannot. Only this one, because it is the
+# only kind whose name leaves something out. Named for the attribute rather than for what it holds,
+# since `aside` is taken and means a side conversation.
+TITLES: Final[dict[Kind, str]] = {
+    "command": "You ran this yourself, in the session's worktree. No model was told about it.",
+    # The other kind whose label leaves something out: `guidance` says what it holds and not why it
+    # is here, which is that a tool reached into a part of the repository carrying its own.
+    "guidance": (
+        "The console handed this to the model when it reached into a part of the repository "
+        "that carries its own guidance."
+    ),
+}
+
 # Which side of the exchange a kind is on: what reached the model, and what the model produced.
 # The dock's flanking arrows step one side each, and the palette runs on this same axis, so it is
 # stated once here rather than in both places.
 SIDES: Final[dict[Kind, str]] = {
-    "person": "person",
-    "steering": "person",
-    # The person's side because the axis is who produced the text, which is the same rule `steering`
-    # follows. It is the one kind on that side the model never saw, and the panel says so rather than
-    # the palette: a hue is for who, not for who was told.
+    # The person's side, by the same rule as `command`: the axis is who produced the text, and what
+    # is in a system prompt was written by the operator and by whoever wrote the repository's own
+    # guidance. The console composed it; it did not write it.
+    "system-prompt": "person",
+    # The same rule one mechanism along: whoever wrote the repository's `AGENTS.md` wrote this, and
+    # the console handed it over. What separates it from the standing prompt is where it sits in the
+    # request, which is not something a hue can say.
+    "guidance": "person",
+    "prompt": "person",
+    "steer": "person",
+    # The person's side because the axis is who produced the text, which is the same rule `steer`
+    # follows. It is the one kind on that side the model never saw, and the panel's own `title` says
+    # so rather than the palette: a hue is for who, not for who was told.
     "command": "person",
     "assistant": "model",
     "thinking": "model",
     "tool": "model",
 }
+
+# Which panels the server draws open, and every panel folds, so this is the whole of the default.
+#
+# **The reader's is the last word, and the server only says where they start.** What a person opens
+# or shuts survives every swap - `mainplate.js` keeps the decision, not a set of the ones they
+# unfolded - so this is a first offer rather than a rule about what may be read. A kind added
+# without an entry here is a `KeyError` at render, which is the same bargain `SIDES` takes and for
+# the same reason: a default nobody chose is worse than a page that will not draw.
+#
+# Reference is shut and conversation is open, which is the one line through all eight. A system
+# prompt and a delivered guidance file are documents somebody committed, so they are drawn as their
+# opening line and a figure; everything else is what was said, and a conversation whose replies had
+# to be opened one at a time would not be a transcript. A tool panel is *open* with each call inside
+# it shut, which is today's rendering exactly: the calls are listed, and what each was handed is a
+# press away.
+OPENS: Final[dict[Kind, bool]] = {
+    "system-prompt": False,
+    "guidance": False,
+    "prompt": True,
+    "steer": True,
+    "command": True,
+    "thinking": True,
+    "assistant": True,
+    "tool": True,
+}
+
+
+def opens(starts: bool) -> Attributes:
+    """
+    Where a fold starts, said twice, because the two sayings answer different questions.
+
+    `open` is the state, and it is what makes the page work with no script at all. `data-opens` is
+    where the console *put* it, which stops being the same thing the moment a reader presses
+    anything: one is mutable and one is not, so this is the original beside the current rather than a
+    copy of it, and neither can go stale against the other.
+
+    It exists for the dock's third fold button, which puts every fold back where the console had it.
+    Once a reader has moved one - or a morph has, which on a turn being watched is most of them - the
+    page holds that answer nowhere else, and the button has no way to ask the server for it without
+    fetching the transcript again.
+
+    The word is the dock's own (`data-fold="open"` / `"shut"`), so what a button posts and what a
+    fold says about itself are one vocabulary.
+    """
+    return {"open": starts, "data-opens": "open" if starts else "shut"}
+
+
+# The kinds whose row carries how much of them there is: a document the console handed the model.
+# The one fact worth having without opening either, because what is in here is paid for on every
+# request from here on, so a prompt or a delivered file grown to tens of thousands of characters is
+# worth seeing at a glance. It is not that figure for anything else on the page - what a reply cost
+# is on the rule above it, in tokens and money, which is the fact a reader actually wants there.
+SIZED: Final[frozenset[Kind]] = frozenset({"system-prompt", "guidance"})
 
 # What the link that starts one is called, and what the tab says on the page where a session does
 # not exist yet. "Session" rather than "worktree", which is the other word for this and is already
@@ -615,7 +695,40 @@ def elapsed(took: timedelta) -> str:
     return f"{minutes:.0f}m {rest:.0f}s"
 
 
-def spend_element(spent: Spent, whose: str) -> tuple[Element, ...]:
+def consumed(context: int, window: int | None) -> float | None:
+    """
+    How much of a model's context window this much context takes up, as a fraction of it.
+
+    Nothing at all where either half is missing, which is one answer to three questions - no
+    reference database, an endpoint that no longer lists the recorded id, a model nobody wrote a
+    window down for - because the page does the same thing with all three.
+
+    Uncapped, deliberately. A window is what a database says and the count is what a provider
+    reported, so the two can disagree and a session past 100% is a real state worth seeing said
+    rather than a figure to round back down to full. What is capped is the *gauge*, which cannot
+    draw past its own width.
+    """
+    if not context or not window:
+        return None
+    return context / window
+
+
+def portion(fraction: float) -> str:
+    """
+    A fraction as the whole numbers of percent a person reads it in.
+
+    Named as being under one rather than shown as `0%`, which is `charged`'s rule about `<$0.0001`
+    at the other end of the same problem: a long conversation on a very large window really is a
+    fraction of a percent of it, and rounding that to nothing says the window is untouched.
+    """
+    if fraction < 0.01:
+        return "<1%"
+    return f"{fraction:.0%}"
+
+
+def spend_element(
+    spent: Spent, whose: str, window: int | None = None, running: Decimal | None = None
+) -> tuple[Element, ...]:
     """
     What something cost, as counts and money, or nothing at all where it has not answered yet.
 
@@ -633,37 +746,100 @@ def spend_element(spent: Spent, whose: str) -> tuple[Element, ...]:
     The time leads the figures because it is the one a reader is usually waiting on, and it says in
     its title what it is the time *of*: the round trips to the provider and not the turn from end to
     end, since the calls a turn made in between are timed on their own panels.
+
+    **The input figure is the context and not the sum**, which is `Spent.context`'s whole argument
+    said on the page: what a reader wants off a rule is how full the window is, and a turn's
+    requests each carry the conversation again. The fraction beside it is the same fact as a
+    percentage, and the gauge on the rule itself is the same fact again as a picture - one number
+    said three ways because the question it answers is the one a long conversation ends on.
+
+    **Symbols and not words.** A rule is a single line that must not wrap, and it now carries six
+    figures where it carried three. `\N{UPWARDS ARROW}` and `\N{DOWNWARDS ARROW}` are a count of
+    tokens going up to the model and coming back, `\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}` is how much of
+    the first came out of the provider's cache instead, and `\N{GREEK CAPITAL LETTER DELTA}` against
+    `\N{N-ARY SUMMATION}` is what this one exchange added against the running total, which is that
+    pair's own notation and reads as a pair rather than as two prices to tell apart by size. Five
+    cells rather than the twenty or so the words would take, and the words are in the titles where
+    there is room to say which is which.
+
+    `running` is everything up to and including whatever this rule speaks for, which is the figure a
+    person scrolling actually wants: what one turn cost is only readable against what the
+    conversation has cost so far. It is left out where it *is* what the rule already says, since the
+    first priced turn of a session would otherwise print one number twice.
+
+    **The separator goes between the figures rather than in front of each of them.** Every one of
+    these is drawn only where there is something to say, so a dot carried by a figure is a dot that
+    appears or disappears with it: baked in, the time had none and the count after it had one, and a
+    turn nothing timed then opened with a dot standing for nothing. Interleaving it here is the one
+    place that knows what is actually being drawn.
     """
     if not spent.asked and not spent.answered:
         return ()
-    return (
-        *(
+    fraction = consumed(spent.context, window)
+    figures: list[tuple[str, str, tuple[Child, ...]]] = []
+    if spent.took is not None:
+        figures.append(("took", f"{whose} spent {elapsed(spent.took)} waiting on the model", (elapsed(spent.took),)))
+    if spent.context:
+        figures.append(
             (
-                span(
-                    cls="rule__took",
-                    attrs={"title": f"{whose} spent {elapsed(spent.took)} waiting on the model"},
-                    children=elapsed(spent.took),
+                "context",
+                f"{whose}: {spent.context:,} tokens of context",
+                (
+                    f"\N{UPWARDS ARROW}{tokens(spent.context)}",
+                    # Inside the count rather than beside it, and in brackets, because it is a fact
+                    # *about* that count and not a figure of its own: what is cached is part of the
+                    # context, the way the wire's own numbers nest. Its own element all the same, so
+                    # a phone can drop the bracket and keep the count.
+                    *(
+                        (
+                            span(
+                                cls="rule__cached",
+                                attrs={
+                                    "title": f"{spent.cached:,} of those tokens were read from the provider's cache"
+                                },
+                                children=f" (\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}{tokens(spent.cached)})",
+                            ),
+                        )
+                        if spent.cached
+                        else ()
+                    ),
                 ),
             )
-            if spent.took is not None
-            else ()
-        ),
+        )
+    if fraction is not None and window is not None:
+        figures.append(
+            (
+                "full",
+                f"{portion(fraction)} of this model's context window, which the reference gives as {window:,} tokens",
+                (portion(fraction),),
+            )
+        )
+    figures.append(
+        ("answered", f"{whose} wrote {spent.answered:,} tokens", (f"\N{DOWNWARDS ARROW}{tokens(spent.answered)}",))
+    )
+    if spent.cost is not None:
+        figures.append(
+            (
+                "cost",
+                f"{whose}, estimated from published rates and not billed: ${spent.cost:f}",
+                (f"\N{GREEK CAPITAL LETTER DELTA}{charged(spent.cost)}",),
+            )
+        )
+    if running is not None and running != spent.cost:
+        figures.append(
+            (
+                "running",
+                f"${running:f} up to and including {whose.lower()}, estimated from published rates and not billed",
+                (f"\N{N-ARY SUMMATION}{charged(running)}",),
+            )
+        )
+    return tuple(
         span(
-            cls="rule__tokens",
-            attrs={"title": f"{whose}: {spent.asked:,} tokens in, {spent.answered:,} out"},
-            children=f"{tokens(spent.asked)} in \N{MIDDLE DOT} {tokens(spent.answered)} out",
-        ),
-        *(
-            (
-                span(
-                    cls="rule__cost",
-                    attrs={"title": f"{whose}, estimated from published rates and not billed: ${spent.cost:f}"},
-                    children=f"\N{MIDDLE DOT} {charged(spent.cost)}",
-                ),
-            )
-            if spent.cost is not None
-            else ()
-        ),
+            cls=f"rule__{named}",
+            attrs={"title": title},
+            children=list(said) if at == 0 else ["\N{MIDDLE DOT} ", *said],
+        )
+        for at, (named, title, said) in enumerate(figures)
     )
 
 
@@ -1439,6 +1615,11 @@ def session_spend(spent: Spent) -> str:
 
     The time is named only where every turn in the session was timed, which is the rule the money
     follows: a total quietly missing a turn reads as the whole and understates it.
+
+    `asked` here and `context` on a rule, deliberately, and they are different numbers: this is what
+    the session has been *charged* for, which is every request's input added up, where a rule says how
+    much of the window one exchange left in use. Both are true and neither substitutes for the other,
+    so this is not the place to make them agree.
     """
     said = f"{spent.asked:,} tokens in and {spent.answered:,} out over this session"
     if spent.took is not None:
@@ -1525,16 +1706,19 @@ def chosen_note(
     )
 
 
-def written(text: str) -> Element:
+def written(text: str, *, document: bool = False) -> Element:
     """
     Prose, as the Markdown its author almost certainly meant it to be.
 
-    `as_markup` is what makes putting this in a child position safe, and it is the only reason
+    The renderer is what makes putting this in a child position safe, and it is the only reason
     this is not simply escaped text: it renders the Markdown and then throws away everything the
     result is not allowed to contain, so a model that echoed a prompt back cannot put a script or
     a `javascript:` link on this page. See `markup.py` for why both halves of that are needed.
+
+    `document` says the text is a file rather than something typed into a box, which decides whether
+    its own newlines are line breaks. See `markup.py` for why that is the one difference.
     """
-    return div(cls="text", children=as_markup(text))
+    return div(cls="text", children=as_document(text) if document else as_message(text))
 
 
 def working() -> Element:
@@ -1599,7 +1783,7 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     """
     return details(
         cls="tool",
-        attrs={"id": f"{anchor}-tool-{at}", "open": used.returned is None},
+        attrs={"id": f"{anchor}-tool-{at}", **opens(used.returned is None)},
         children=[
             summary(
                 children=[
@@ -1707,7 +1891,7 @@ def command_block(ran: Command) -> Element:
     said = None if ran.result is None else ran.result.output
     return details(
         cls="ran",
-        attrs={"id": f"ran-{ran.entry}", "open": True},
+        attrs={"id": f"ran-{ran.entry}", **opens(True)},
         children=[
             summary(
                 children=[
@@ -1742,7 +1926,38 @@ def command_block(ran: Command) -> Element:
     )
 
 
-def written_block(kind: str, text: str) -> Element:
+# How much of a panel's prose is carried into the line its row stands for it with. Not a decision
+# about how much is *shown*: what a shut panel shows is whatever fits, clipped with an ellipsis by
+# the browser at whatever width the panel happens to have, which is the one measurement no server can
+# make. This is only the bound on what is carried, and it exists because a line holding the whole of
+# a long block would put every word of it on the page twice, on a region that is re-rendered whenever
+# the turn in flight records anything.
+#
+# The number is what the clipping needs to stay honest: clipped short of the bound the ellipsis says
+# there is more, and clipped *at* the bound with no ellipsis it would say there is not. So it has to
+# exceed what the widest panel can show, which is a bounded question because the transcript is capped
+# at `--measure`. `TestTheLineAShutPanelStandsFor` measures the worst case there is - the narrowest
+# character this console's prose face draws, repeated - and fails if it fits.
+OPENING: Final = 320
+
+
+def opening_of(text: str) -> str:
+    """
+    The front of a block of prose, as the one line a shut fold stands for.
+
+    Whitespace collapsed rather than left as written, because the summary is one line either way: a
+    browser collapses it in the markup, so a paragraph break carried here would spend the bound on
+    characters that draw as one space. Collapsing first makes `OPENING` a count of what a reader
+    could actually see.
+
+    Markdown markers are left in it. A model that opened its reasoning with a heading wrote that
+    heading, and rendering it here would need a second rendering path for a line that has nowhere to
+    put a block element; the fold under it is one press away for anybody who wants it set properly.
+    """
+    return " ".join(text.split())[:OPENING]
+
+
+def written_block(kind: str, text: str, *, document: bool = False) -> Element:
     """
     One block of rendered Markdown, carrying the Markdown it was rendered from.
 
@@ -1755,8 +1970,11 @@ def written_block(kind: str, text: str) -> Element:
     Only the kinds that *are* Markdown. A tool's arguments and its return are shown verbatim already,
     so what is on the page is the source, and an attribute repeating it would be the second copy this
     one is not.
+
+    `document` goes straight to `written`, and says the text is a file rather than something typed
+    into a box: guidance is one, and everything else here was written in the conversation.
     """
-    return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text))
+    return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text, document=document))
 
 
 def block_element(block: Block, panel: Panel, at: int) -> Element:
@@ -1767,12 +1985,28 @@ def block_element(block: Block, panel: Panel, at: int) -> Element:
     halves of it: a call is addressed by the panel it is in, which never moves once made, and a
     command by its own inbox entry, because the panel a command is in does move. See
     `command_block`.
+
+    **Only two kinds fold in here, and the rest are drawn plain.** A stretch of reasoning, the
+    standing system prompt and a delivered guidance file each used to carry a `<details>` of its own
+    whose summary was the front of its own body - so a panel spent one row saying what it was and a
+    second row saying it again, and the second row was a lone marker once the fold was open. The
+    panel is that fold now, and its opening line is on the panel's own row. See `panel_element`.
+
+    A call and a command keep theirs, because neither summary is a prefix of anything: a tool's name
+    with what it returned and how long it ran, and a command's line with the status a program chose,
+    are facts about the block rather than the block restated. A panel also holds a *batch* of either,
+    so a reader wanting one read out of three needs a fold per call and not only a fold per panel.
     """
     match block:
         case Prose(text=text):
             return written_block("block--text", text)
         case Steering(text=text):
             return written_block("block--text", text)
+        case Guidance(text=text):
+            # Drawn as the document the standing system prompt is drawn as, because it is the same
+            # kind of thing: an `AGENTS.md` with a line of the console's own in front of it. What
+            # separates the two is where each sits in the request, which is the panel's business.
+            return written_block("block--document", text, document=True)
         case Command():
             return div(cls=("block", "block--ran"), children=command_block(block))
         case Reasoning(text=text):
@@ -1804,7 +2038,13 @@ def missing_record(turn: int, at: int) -> Element:
 
 def record_fold(links: Links, session: str, turn: int, at: int) -> Element:
     """
-    The `r{at}` marker on a rule, and the raw record of that request behind it.
+    The `r{turn}.{at}` marker on a rule, and the raw record of that request behind it.
+
+    Named the whole way, for `Panel.label`'s reason one level along: a rule inside a turn draws no
+    `#N`, so a bare `r1` said which request without saying of what, and a reader following one
+    permalink out of several had nothing to tell them apart. The `r` is what keeps it from being
+    read as a panel, which numbers a different axis - `#3.1` is turn 3's second *panel* and `r3.1`
+    is its second *request*, and one response becomes as many panels as it has kinds of part.
 
     Fetched only when opened, because the transcript is re-rendered whenever a running turn records
     anything and the raw record is several times the size of the reading of it. `hx-preserve` is what
@@ -1830,7 +2070,7 @@ def record_fold(links: Links, session: str, turn: int, at: int) -> Element:
             summary(
                 cls="tag__summary",
                 attrs={"title": f"The {ordinal(at)} model request of turn {turn}"},
-                children=span(cls="tag__at", children=f"r{at}"),
+                children=span(cls="tag__at", children=f"r{turn}.{at}"),
             ),
             pre(cls="record__json", children=code(children="\N{HORIZONTAL ELLIPSIS}")),
         ],
@@ -1852,6 +2092,8 @@ def rule_element(
     spent: Spent | None = None,
     opens: bool = False,
     forget: bool = False,
+    window: int | None = None,
+    running: Decimal | None = None,
 ) -> Element:
     """
     A line across the conversation where one round trip to the model began.
@@ -1897,7 +2139,16 @@ def rule_element(
     thing. Continuing the conversation a forget closed is `fork` at that turn: `before` copies the
     turns below the branch point and the marker lives on the turn that opens, so the branch carries
     the whole backlog and no boundary. A control of its own would be a second name for one call.
+
+    **The line is also the gauge**, filled from the left as far as this request's context reaches
+    into the model's window and shading toward red as it goes. A rule is already a hairline drawn
+    across the whole column at every request boundary, so the one thing a long conversation most
+    wants to know - how close it is to the end of the window - costs no row and no control: a reader
+    scrolling down watches the line lengthen and warm. The fraction is the only thing the server
+    computes into the markup, as one custom property; the colours, the geometry and the cap are the
+    stylesheet's, because they are decisions rather than facts.
     """
+    filled = consumed(spent.context, window) if spent is not None else None
     return div(
         cls=("rule", "rule--turn" if opens else None, "rule--forget" if forget else None),
         attrs={
@@ -1906,6 +2157,9 @@ def rule_element(
             # Declared rather than inferred from the modifier, so the dock's column steps stops it is
             # told about the way every other arrow does. See `dock_card`.
             "data-stop": "forget" if forget else None,
+            # Capped here as well as clipped there, so a session past a window the database
+            # understates asks for no more line than there is.
+            "style": None if filled is None else f"--filled: {min(filled, 1.0):.1%}",
         },
         children=[
             *(
@@ -1931,7 +2185,6 @@ def rule_element(
                 if opens and session
                 else ()
             ),
-            *((span(cls="rule__forget", children="the model's context was cleared here"),) if forget else ()),
             # Only where there is a session to ask, which the gallery's pages are rendered without: a
             # control pointed at no conversation is a dead button rather than an offer, the same
             # reason the fork link is conditional.
@@ -1957,8 +2210,13 @@ def rule_element(
                 else ()
             ),
             span(cls="rule__span"),
+            # Between two spacers rather than beside the fork link, so it sits in the middle of the
+            # line with the turn's own controls at one end and its figures at the other. That is what
+            # a boundary is: it belongs to neither side, and drawn against the left group it read as
+            # one more thing about the turn rather than as the thing the rule is saying.
+            *((span(cls="rule__forget", children="context cleared"), span(cls="rule__span")) if forget else ()),
             *(
-                spend_element(spent, f"Turn {turn}" if opens else f"Request {turn}.{asked}")
+                spend_element(spent, f"Turn {turn}" if opens else f"Request {turn}.{asked}", window, running)
                 if spent is not None
                 else ()
             ),
@@ -1966,16 +2224,74 @@ def rule_element(
     )
 
 
+def panel_opening(blocks: Sequence[Block]) -> str:
+    """
+    The line a shut panel stands for: the front of what is in it.
+
+    A shut panel has to say what it holds, or folding prose is a control that trades a paragraph for
+    nothing. What that line *is* differs by what the blocks are, and the split is the one the old
+    per-block folds already drew. Prose - a message, a steer, a reply, a stretch of reasoning, a
+    document - stands for itself with its own opening, clipped by the browser at whatever width the
+    panel has. A call and a command have no prose opening to take, so the panel names what is in it:
+    a batch is `read, read` and `git status --short, git diff --quiet`, which is the one thing a
+    reader scanning a shut turn wants from either.
+
+    The *first* block for the prose kinds, and every block for the two that are named. That is not an
+    inconsistency: an opening is a prefix, and a prefix of a run of paragraphs is the front of the
+    first one, where a list of calls that named only its first would be hiding the rest.
+    """
+    match blocks:
+        case [ToolUse(), *_]:
+            return ", ".join(block.tool for block in blocks if isinstance(block, ToolUse))
+        case [Command(), *_]:
+            return ", ".join(block.text for block in blocks if isinstance(block, Command))
+        case [Prose(text=text) | Steering(text=text) | Reasoning(text=text) | Guidance(text=text), *_]:
+            return opening_of(text)
+        case _:
+            # A panel with nothing in it, which is the one being waited on: it is the working dots
+            # and a role, and there is no line for it to stand for.
+            return ""
+
+
+def panel_size(kind: Kind, blocks: Sequence[Block]) -> int | None:
+    """
+    How much of a document there is, and `None` for everything that is not one. See `SIZED`.
+
+    Summed across the blocks rather than taken off the first, because a batch of calls reaching into
+    two parts of a repository is handed both files at once and they arrive as one guidance panel.
+    What is paid for on every request from here on is all of it.
+
+    Only `Guidance` is measured, and within `panel_element` that is the whole of `SIZED`: the
+    standing system prompt is not a `Panel` at all and measures its own. See `system_prompt_panel`.
+    """
+    if kind not in SIZED:
+        return None
+    return sum(len(block.text) for block in blocks if isinstance(block, Guidance))
+
+
 def panel_element(links: Links, session: str, panel: Panel) -> Element:
     """
-    One run of one kind of thing, with the facts about it above it.
+    One run of one kind of thing, folded from the row of facts above it.
 
     `data-kind` and `data-side` are the whole of what the chrome needs to know: the key filters by
     kind, the dock's flanking arrows step by side, and the stylesheet draws the edge from the same
     attribute. Nothing has to keep a list of selectors in step with a list of kinds.
 
-    What a panel says is what is *in* it, and nothing about the turn or the request around it. The
-    worktree, the fork, what was spent and the raw record are all facts about the exchange rather
+    **Every panel folds, and the mark is on its own row rather than under it.** What a reader wants
+    put away is decided by what they are reading, so the console picks where each kind *starts* -
+    `OPENS` - and nothing more. Three kinds used to carry a `<details>` inside the panel whose summary
+    was the front of its own body, which spent a second row restating what this row already says, and
+    once open spent it on a lone marker. Hoisted here that row is gone, the opening line rides beside
+    the role, and every other kind gains a fold it never had.
+
+    **The row is the summary, and what is in it keeps working.** A press on the permalink or on the
+    copy button does not toggle the panel: the summary's activation behaviour skips a press whose
+    target is interactive content, so a link and a button inside one navigate and copy as they always
+    did. That is what lets this row be the fold without the row losing anything; it is a fact about
+    the browser rather than about this markup, so `TestFoldingAPanel` asks Chromium.
+
+    What a panel says is still what is *in* it, and nothing about the turn or the request around it.
+    The worktree, the fork, what was spent and the raw record are all facts about the exchange rather
     than about any one run of blocks, so they are on the rules between them. See `rule_element`.
 
     Nothing here draws the copy buttons, and that is not an omission. One of them sits inside a
@@ -1983,28 +2299,167 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
     so seating them is `mainplate.js`'s - and a button in the markup for the panel beside a seated one
     for the code in it would be two mechanisms for one thing.
     """
-    return article(
+    return details(
         cls="panel",
         attrs={
             "id": panel.anchor,
             "data-kind": panel.kind,
             "data-side": SIDES[panel.kind],
             "data-turn": str(panel.turn),
+            **opens(OPENS[panel.kind]),
         },
         children=[
-            header(
-                cls="panel__meta",
-                children=[
-                    span(cls="panel__role", children=dict(NAMES)[panel.kind]),
-                    a(
-                        cls="panel__anchor",
-                        attrs={"href": f"#{panel.anchor}"},
-                        children=f"#{panel.label}",
-                    ),
-                ],
+            panel_meta(
+                panel.kind,
+                panel_opening(panel.blocks),
+                anchor=panel.anchor,
+                label=panel.label,
+                size=panel_size(panel.kind, panel.blocks),
             ),
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
         ],
+    )
+
+
+def panel_meta(
+    kind: Kind,
+    opening: str | None,
+    *,
+    anchor: str | None = None,
+    label: str | None = None,
+    size: int | None = None,
+) -> Element:
+    """
+    A panel's row of facts, which is also the summary that folds it.
+
+    One function for all three panel shapes - a `Panel`, the standing system prompt, and the one
+    saying a reply is being written - because the row is the same row and a second rendering of it
+    would eventually disagree about where the marker sits or what the label is called.
+
+    `size` is how much of it there is, drawn only for a document; see `SIZED`. Pushed to the end of
+    the row and never shrunk, so the opening line is what gives way and the figure stays where the
+    eye learns to find it. It is *not* hidden when the panel opens, since a figure about the whole is
+    not a prefix of anything.
+
+    `opening` is `None` where there is nothing yet to stand for, and the row carries the working dots
+    in the line's own place: a reply not written yet, and a stretch of context whose instructions the
+    pass has still to compose. In the row rather than in the panel, because a panel opened to show
+    three dots is a row spent on three dots, which is the thing this row exists not to spend.
+
+    `anchor` is absent on the one panel there is nothing to link to: the panel saying a reply is
+    being written is gone the moment it arrives, so a permalink to it points at nothing by the time
+    anybody follows one.
+
+    The marker itself is the stylesheet's, on the role, because it turns with the panel's own `open`
+    and nothing here would have to be told twice.
+    """
+    return summary(
+        cls="panel__meta",
+        children=[
+            span(
+                cls="panel__role",
+                attrs={"title": said} if (said := TITLES.get(kind)) is not None else {},
+                children=dict(NAMES)[kind],
+            ),
+            span(cls="opening", children=opening if opening is not None else working()),
+            *((span(cls="panel__size", children=f"{size} characters"),) if size is not None else ()),
+            *(
+                (a(cls="panel__anchor", attrs={"href": f"#{anchor}"}, children=f"#{label or anchor}"),)
+                if anchor is not None
+                else ()
+            ),
+        ],
+    )
+
+
+def system_prompt_panel(turn: int, said: str | None) -> Element:
+    """
+    What every request in one stretch of context carried, under the rule that opens the stretch.
+
+    Panel-shaped and not a `Panel`, which is the same split `waiting_panel` makes: a panel's identity
+    is its turn and its position, and this belongs to the first but not the second. Giving it one
+    would have taken `#N.0` off the person's opening message, which is an address the fork link and
+    every permalink already point at.
+
+    **One per stretch, under its own rule**, rather than one at the top of the page. A forget
+    composes again, so a single panel above everything would be the newest instructions standing over
+    turns answered under older ones. Under the rule the reader gets the order the conversation
+    happened in: the boundary, then what the model is told from here, then the message.
+
+    **`None` is a stretch whose instructions are not composed yet**, drawn as the panel with the
+    working dots in it. Composing reads the repository's guidance out of a worktree the pass is the
+    one to plant, so on a session's first turn there is a real gap between the message being there to
+    render and this being there to put in it. Drawn rather than left out, so what is coming is
+    visible from the moment the message is; it resolves on the same swap the first response arrives
+    on, and `instructed_in` is what keeps it off a stretch nothing will ever compose for.
+
+    **The dots go on the panel's own row, in place of the opening line, and the panel stays shut.**
+    An open panel holding nothing but a spinner is a whole row spent on three dots, which is the
+    thing hoisting the fold up here got rid of everywhere else. It also keeps this panel's default
+    from *moving*: a fold whose default changes under a reader is one the console cannot draw either
+    way once they have pressed it, because a press that put it back where it was is a decision
+    withdrawn. See `opens` and `wireFolds`. Shut throughout, the wait is one row and what replaces it
+    is the same row saying what the prompt opens with.
+
+    **Drawn as the Markdown it is**, because what is in it is `.md` files - the operator's guidance
+    and the repository's `AGENTS.md`, concatenated - so its headings, lists and fences are the
+    structure its authors wrote, and a wall of `##` is the one reading of it nobody meant.
+
+    That does not weaken the claim that this is what was *sent*. What the model was handed is the
+    source, and the source is what this hands back: the block carries `data-markdown`, so the panel's
+    copy button gives the characters rather than the rendering, and the raw record on the rule is the
+    same value one step further out.
+
+    It is a `.block` and not bare prose, and that is what puts the copy button on the panel: the
+    script seats one against a panel's blocks, and it is the whole prompt somebody reaches for. A
+    fence inside gets its own besides, which is the seating everywhere else.
+
+    It is drawn as the same `block--document` the guidance a turn is handed mid-way is drawn as: on
+    the page the two are the same thing, and what separates them is where each sits in the request,
+    which is what the panel says rather than anything inside it. The id names the turn the stretch
+    began at, which never moves, so a reader who shut this keeps it shut across every swap.
+    """
+    anchor = f"system-prompt-{turn}"
+    return details(
+        cls="panel",
+        attrs={
+            "id": anchor,
+            "data-kind": "system-prompt",
+            "data-side": SIDES["system-prompt"],
+            **opens(OPENS["system-prompt"]),
+        },
+        children=[
+            panel_meta(
+                "system-prompt",
+                opening_of(said) if said is not None else None,
+                anchor=anchor,
+                size=len(said) if said is not None else None,
+            ),
+            *((written_block("block--document", said, document=True),) if said is not None else ()),
+        ],
+    )
+
+
+def out_on_a_call(said: Transcript) -> bool:
+    """
+    Whether the turn in flight is waiting on a tool rather than on the model.
+
+    What decides whether the transcript already says it is working. A call with no result is drawn
+    working on its own panel, and it is the model's call, so a second panel of dots under it says
+    the same thing twice and says it in a shape - an empty reply - that nothing is writing.
+
+    Asked of the turn being answered rather than of the last panel on the page, because a person can
+    type while a reply is coming: what is at the bottom may be their message, and the turn that is
+    actually out is the one above it.
+
+    A *command* running is not this. It runs outside the conversation and no model was told about
+    it, so it says nothing about whether one is answering.
+    """
+    return any(
+        isinstance(block, ToolUse) and block.returned is None
+        for panel in said.panels
+        if panel.turn == said.answering
+        for block in panel.blocks
     )
 
 
@@ -2012,18 +2467,48 @@ def waiting_panel() -> Element:
     """
     One panel for however many messages are outstanding, because one reply is what is actually
     being written: the turns behind it are queued, not in flight.
+
+    Shut, with the working dots on its own row where the opening line goes, which is what a panel
+    with nothing in it yet should cost: the wait is the whole of what this says, and a panel opened
+    to show three dots spends a second row saying it again. See `panel_meta`.
+
+    Not drawn at all where a call is still out, which `out_on_a_call` decides: what this panel is for
+    is a wait nothing else on the page accounts for.
     """
-    return article(
+    return details(
         cls="panel",
-        attrs={"id": "waiting", "data-kind": "assistant", "data-side": "model"},
-        children=[
-            header(cls="panel__meta", children=span(cls="panel__role", children="assistant")),
-            div(cls=("block", "block--text"), children=working()),
-        ],
+        attrs={"id": "waiting", "data-kind": "assistant", "data-side": "model", **opens(False)},
+        children=panel_meta("assistant", None),
     )
 
 
-def transcript_region(links: Links, session: str, said: Transcript, stalled: str | None = None) -> Element:
+def running_to(before: Decimal | None, spent: Spent | None) -> Decimal | None:
+    """
+    What a conversation has cost once one more turn or request is counted into it.
+
+    `altogether`'s rule, applied one at a time rather than to a whole session: unknown anywhere is
+    unknown from there on, so the first unpriced turn takes the running total off every rule below
+    it rather than leaving a figure that is quietly the sum of everything else. A total missing a
+    part reads as the whole and understates it, and a reader has no way to tell that from a cheap
+    conversation.
+
+    A turn nothing is recorded for is a turn nobody has asked anything yet, which costs nothing and
+    so leaves the total where it was. That is a different answer from an unpriced turn, and the two
+    arrive here as the same `None` from two different places: one is a turn absent from the mapping,
+    the other is a cost the reference could not supply.
+    """
+    if before is None:
+        return None
+    if spent is None:
+        return before
+    if spent.cost is None:
+        return None
+    return before + spent.cost
+
+
+def transcript_region(
+    links: Links, session: str, said: Transcript, stalled: str | None = None, window: int | None = None
+) -> Element:
     """
     The conversation, and whether it is still waiting on the rest of it.
 
@@ -2047,9 +2532,23 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
     model is asked, so a turn whose first answer has not landed yet still says what it started on.
     """
     drawn: list[Element] = []
+    # What the conversation has cost by the time each rule is drawn. A turn rule carries the total
+    # through the turn it opens, exactly as it already carries that turn's own spend: both figures on
+    # it summarise what is below rather than what is above, so the pair reads as one statement about
+    # the turn. The request rules within it then step from the total the turn began at up to that
+    # same figure.
+    before: Decimal | None = Decimal(0)
     for turn, panels in groupby(said.panels, key=lambda panel: panel.turn):
         within = tuple(panels)
         asking = said.requests.get(turn, ())
+        spent = said.spent.get(turn)
+        through = running_to(before, spent)
+        # And the same total at each request within the turn, by index rather than by counting the
+        # rules that get drawn: request 0 never gets a rule of its own, since the turn's rule already
+        # stands at that boundary, and a request that produced no panel gets none either.
+        climbing: list[Decimal | None] = []
+        for one in asking:
+            climbing.append(running_to(climbing[-1] if climbing else before, one.spent))
         drawn.append(
             rule_element(
                 links,
@@ -2057,23 +2556,40 @@ def transcript_region(links: Links, session: str, said: Transcript, stalled: str
                 turn,
                 asked=0 if asking else None,
                 tree=within[0].tree,
-                spent=said.spent.get(turn),
+                spent=spent,
                 opens=True,
                 # Off the turn's first panel beside its tree, which is where both facts about a turn
                 # rather than about a request are carried.
                 forget=within[0].forget,
+                window=window,
+                running=through,
             )
         )
+        # Directly under the rule that opens the stretch, so a reader meets the boundary, then what
+        # the model is told from here, then the message it is told it about. Absent on every turn
+        # that continues a stretch rather than beginning one.
+        if turn in said.system_prompts:
+            drawn.append(system_prompt_panel(turn, said.system_prompts[turn]))
         at = 0
         for panel in within:
             if panel.asked is not None and panel.asked != at:
                 at = panel.asked
                 if at < len(asking):
                     drawn.append(
-                        rule_element(links, session, turn, asked=at, tree=asking[at].tree, spent=asking[at].spent)
+                        rule_element(
+                            links,
+                            session,
+                            turn,
+                            asked=at,
+                            tree=asking[at].tree,
+                            spent=asking[at].spent,
+                            window=window,
+                            running=climbing[at],
+                        )
                     )
             drawn.append(panel_element(links, session, panel))
-    if said.awaiting and stalled is None:
+        before = through
+    if said.awaiting and stalled is None and not out_on_a_call(said):
         drawn.append(waiting_panel())
     if stalled is not None:
         drawn.append(p(cls="stalled", children=stalled))
@@ -2272,8 +2788,26 @@ def dock_card() -> Element:
             div(
                 cls="dock__fold",
                 children=[
-                    dock_button(None, "Unfold every tool call", "\N{DOWNWARDS DOUBLE ARROW}", {"data-fold": "open"}),
-                    dock_button(None, "Fold every tool call", "\N{UPWARDS DOUBLE ARROW}", {"data-fold": "shut"}),
+                    # Every fold on the page, which since a panel is one means the whole conversation
+                    # rather than only the calls in it: shut, the transcript is its own outline, one
+                    # row per panel saying what is in it, and one press puts it all back.
+                    dock_button(None, "Unfold everything", "\N{DOWNWARDS DOUBLE ARROW}", {"data-fold": "open"}),
+                    dock_button(None, "Fold everything", "\N{UPWARDS DOUBLE ARROW}", {"data-fold": "shut"}),
+                    # The third answer, and it is not a midpoint between the two beside it: those set
+                    # every fold one way, and this hands the question back, so what a reader gets is
+                    # a call folded, a command open and a system prompt away - the shape the console
+                    # renders rather than any single state. It is the way back from either of the
+                    # others, which without it are one-way presses over a whole conversation.
+                    #
+                    # Where each fold started is `data-opens`, which the server puts on every one of
+                    # them because nothing else on the page still holds it: a turn being watched is
+                    # morphed constantly, and every morph records the state it delivered. See `opens`.
+                    dock_button(
+                        None,
+                        "Fold as the console does",
+                        "\N{ANTICLOCKWISE OPEN CIRCLE ARROW}",
+                        {"data-fold": "default"},
+                    ),
                 ],
             ),
         ],
@@ -2813,7 +3347,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             showing=showing.session.id,
             reachable=reachable,
             pane=[
-                transcript_region(links, showing.session.id, showing.said, stalled),
+                transcript_region(links, showing.session.id, showing.said, stalled, showing.window),
                 composer(
                     links.to_say(showing.session.id),
                     chosen_note(showing.chosen, showing.repository, showing.worktree, showing.said.total),

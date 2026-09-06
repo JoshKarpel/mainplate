@@ -5,6 +5,120 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
+  `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
+  guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.
+  The repository is concatenated last and so wins where the two disagree, because a repository is
+  right about itself. `AGENTS.md` rather than a name this console invented, with `CLAUDE.md` as the
+  fallback where a directory has no `AGENTS.md`: a file only mainplate can read is knowledge that
+  does not survive turning mainplate off, which is the whole reason to write it in the repository
+  rather than in a prompt. A leading YAML block is taken off, so a `paths:` list never reaches a
+  context window.
+- An index of the guidance elsewhere in the repository, one row per file with the `description` from
+  its own frontmatter, carried in the instructions on every request. That a directory *has*
+  conventions is one line and what they are is a page, so the line rides in the prompt and the page
+  is read when it is wanted. It is asked of git rather than walked, so a `.venv` is never descended.
+- The guidance covering a directory, handed over on the request after a file tool reaches into it,
+  as a system-voice message rather than an edit to the instructions, so the cached prefix is left
+  alone. Whether it has already been handed over is asked of the history the model is about to be
+  given, which answers every case with one question: the console delivered it, the model read the
+  file itself, the model wrote the file, a fork carried it across, or a `forget` dropped it and it
+  is handed over again. A `bash` command reaches none of this, because its argv is the model's and a
+  path inside it is not this console's to parse; the index is what covers that.
+- The system prompt drawn as a panel, shut, under the rule that opens the stretch of context it
+  belongs to. It is read from what that stretch recorded rather than out of a turn's messages, so it
+  is on the page while the first turn is still being answered rather than only once one has landed; a
+  stretch nothing has composed for yet draws the working dots on the panel's row, which is where a
+  session sits for as long as its clone and its worktree take. Drawn as the Markdown it is, since
+  what is in it is `.md` files and a wall of `##` is the one reading of them nobody meant; the source
+  rides along as `data-markdown`, so the copy button still hands back exactly what was sent. The
+  panel's row stands for it with its own opening line, clipped at the width of the panel, and the
+  character count beside it, which is what says it is paid for on every request from here on. A
+  console that shows what a model answered and hides what it was told is showing half of how a turn
+  happened.
+- Guidance handed over mid-turn drawn as a `guidance` panel, in the same shape, at the position it
+  was delivered. Its own kind rather than the system prompt's, because the two sit in different
+  places in the request - `instructions` in front of the cached prefix against a system part appended
+  once into the history - reach the model with different authority depending on which model it is,
+  and are two things the key can quiet apart. Shut, its row names the file it came from, which is the
+  line it opens with.
+- Places reached by name rather than by path: `read`, `edit` and `create` take a `root`, and a
+  command finds `$MAINPLATE_WORKTREE` and `$MAINPLATE_SCRATCH` in its environment. A worktree sits
+  under 32 hex characters of session id, and a model reproducing those from memory eventually
+  reproduces them wrong, which costs a refusal and a round trip to recover from. The names are one
+  vocabulary both the tools and the sandbox read, so the two surfaces of one answer cannot drift.
+- What a session is answered under recorded as a step, exactly as the model is sent it, composed
+  once per stretch of context before that stretch's first request and replayed after that.
+  Instructions sit in front of the cached prefix, so composing them again on a later turn would
+  re-price every remaining request the moment anything under them moved, and a session working on a
+  repository's own guidance moves it constantly. A `forget` ends a stretch and composes again, which
+  costs nothing: the prefix it would have invalidated has just been thrown away.
+
+- How full the model's context window is, on every rule and in two forms. The figures say how much
+  context the request carried, how much of it was read from the provider's cache, and what percentage
+  of the window that is; the rule's own line is a gauge of the same fraction, filled from the left and
+  shading toward red as it fills. The scale is the whole width of the rule and the fill is clipped to
+  it, so a point along the line means the same fraction on every rule of every session. The window is
+  the reference database's answer about the session's model, so a console with none configured draws
+  the counts and no fraction, exactly as it did before.
+- What the conversation has cost so far, on every rule beside what that turn or request cost. One
+  turn's price is only readable against the running total, and the total under the message box is at
+  the bottom of a conversation somebody is reading the middle of. It follows the same rule the session
+  total does: the first unpriced turn takes it off every rule below, because a total quietly missing a
+  turn reads as the whole and understates it.
+
+### Changed
+
+- The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
+  this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
+  rather than multiplied, since the pitches on either side of the answer are a pixel apart.
+- A rule's input figure is the *context* the request carried rather than the sum of what the turn's
+  requests were charged for. Every request of a turn carries the whole conversation again, so the sum
+  says the same tokens several times over and would draw a turn of four round trips as four times as
+  full as it is. What the session was charged for is still under the message box.
+- A rule's figures are symbols rather than words: `↑` and `↓` for the tokens sent and returned, `▣`
+  for how much of the first came out of the cache, and `Δ` against `Σ` for what one exchange cost
+  against what the conversation has. The cached count is inside the context figure as `↑96K (▣45K)`,
+  because it is part of that count rather than a figure of its own, and none is drawn in a stronger
+  ink than the others. A rule is one line that must not wrap and it now carries six figures; the
+  words are in the titles. It is also a size larger, because a line whose whole job is figures was
+  saving a couple of pixels of height at the cost of reading them at a glance.
+- A turn waiting on a tool call draws no reply panel under it. The call is already drawn working on
+  its own panel, so the dots below it said the same thing twice, in the shape of an empty reply that
+  nothing was writing.
+- A rule's line stops where the panels' text does rather than crossing the whole column, so it no
+  longer runs under the transcript's scrollbar - which matters more now that the line is a gauge.
+- The marker that opens a request's raw record names its turn as well as its request, `r3.1` rather
+  than `r1`. A rule inside a turn draws no `#N`, so the index alone said which request without saying
+  of what.
+- A forget's rule says `context cleared`, in the middle of the line, between the turn's own controls
+  at one end and its figures at the other. On a phone those three parts stack, one to a row.
+- Every panel folds, from its own row of facts, with the mark immediately right of the title. What a
+  reader wants put away is theirs to decide, so the console says only where each kind starts: a
+  message, a reply, a stretch of reasoning and a batch of calls open, a system prompt and a delivered
+  guidance file shut. Shut, a panel is one row carrying the front of what is in it - clipped by the
+  browser at whatever width the panel has, and for a batch of calls or commands the names of what ran
+  rather than a quotation - so the whole transcript folds down to its own outline. A tool call and a
+  command keep the fold they have, because their summary is facts about the block rather than the
+  block restated and a panel holds a batch of either. Reasoning, the system prompt and delivered
+  guidance lose theirs, which is a row apiece back: the thing their summary said is the thing the
+  panel's row now says, and once open that row held a lone marker.
+- The dock's fold-everything and unfold-everything buttons reach every panel rather than only the
+  calls, and a third button beside them puts every fold back where the console had it. That is not a
+  midpoint between the two: it hands out a different answer per fold, so it is the way back from
+  either of them, which without it are one-way presses over a whole conversation.
+- The panel saying a reply is being written, and a stretch of context whose instructions are not
+  composed yet, carry the working dots on their own row instead of opening a panel to show them.
+- Panels are named after what they hold, in the word the page prints: `prompt` and `steer` where
+  they read `you` and `you (steering)`. A reader who learns a word from a panel now finds it in the
+  code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind
+  choices are stored under those values, so a kind that was quieted comes back once and is quieted
+  again.
+
 ## [0.0.1]
 
 ### Added
@@ -63,9 +177,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whatever tool results are going the same way and shapes the very next answer rather than the one
   after it. A steer arriving as the turn would end has no request left to carry it, so it redirects
   the run into one more instead of being stranded. Both are recorded steps, so a resumed pass asks
-  the same questions rather than whatever is queued by then. It reads back as a `you (steering)`
-  panel below the tool results it travelled with and above the answer it shaped, and it is on the
-  page the instant it is sent rather than when the turn ends.
+  the same questions rather than whatever is queued by then. It reads back as a `steer` panel below
+  the tool results it travelled with and above the answer it shaped, and it is on the page the
+  instant it is sent rather than when the turn ends.
 - **`Send` decides for itself whether a message steers**, because neither the button nor the reader
   can know: the page was rendered from a checkpoint that has moved by the time a paragraph has been
   typed into it, so choosing between two moments on the page is choosing against a state that no

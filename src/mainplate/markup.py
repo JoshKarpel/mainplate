@@ -37,44 +37,56 @@ TOKENS: Final[frozenset[str]] = frozenset({name for name in STANDARD_TYPES.value
 # closed set of Pygments token names cannot.
 ALLOWED_CLASSES: Final[dict[str, set[str]]] = {tag: set(TOKENS) for tag in ("div", "pre", "code", "span")}
 
-# One converter for the process. `Markdown` accumulates state across a conversion and must be
-# reset between them, which makes it a place rather than a value; holding one is safe here only
-# because `convert` never awaits, so no second render can interleave with one on this event loop.
-# It is not safe to share across threads, and this must not become one that is.
-CONVERTER = Markdown(
-    extensions=[
-        # Fenced code, because a console answered by a model is mostly code.
-        "fenced_code",
-        # Highlighting, because the same is true of what is *in* the fence. It emits classes rather
-        # than inline styles so the colours come from the console's own palette and follow the
-        # reader's theme; inline styles would also mean allowing `style` through the sanitiser.
-        "codehilite",
-        "tables",
-        # Without this, a list whose markers change mid-way silently merges into one list.
-        "sane_lists",
-        # A chat box promises that a newline is a newline. Markdown's own rule (a line break needs
-        # two trailing spaces) is a rule about documents, and nobody typing a message knows it.
-        "nl2br",
-    ],
-    extension_configs={
-        "codehilite": {
-            # An unlabelled fence is left alone rather than guessed at. Guessing is slow, it is
-            # wrong often enough to be noticeable on short snippets, and a wrong guess colours
-            # tokens by a grammar the text is not written in, which reads worse than no colour.
-            "guess_lang": False,
-            # A language Pygments does not know renders as a plain fence rather than raising, which
-            # matters because the fence's label is written by a model.
-            "noclasses": False,
-        }
-    },
-    output_format="html",
-)
+# What every conversion here does, whatever the text came from.
+EXTENSIONS: Final = [
+    # Fenced code, because a console answered by a model is mostly code.
+    "fenced_code",
+    # Highlighting, because the same is true of what is *in* the fence. It emits classes rather
+    # than inline styles so the colours come from the console's own palette and follow the
+    # reader's theme; inline styles would also mean allowing `style` through the sanitiser.
+    "codehilite",
+    "tables",
+    # Without this, a list whose markers change mid-way silently merges into one list.
+    "sane_lists",
+]
+
+EXTENSION_CONFIGS: Final = {
+    "codehilite": {
+        # An unlabelled fence is left alone rather than guessed at. Guessing is slow, it is
+        # wrong often enough to be noticeable on short snippets, and a wrong guess colours
+        # tokens by a grammar the text is not written in, which reads worse than no colour.
+        "guess_lang": False,
+        # A language Pygments does not know renders as a plain fence rather than raising, which
+        # matters because the fence's label is written by a model.
+        "noclasses": False,
+    }
+}
+
+# One converter per kind of text, for the process. `Markdown` accumulates state across a conversion
+# and must be reset between them, which makes it a place rather than a value; holding one is safe
+# here only because `convert` never awaits, so no second render can interleave with one on this
+# event loop. Neither is safe to share across threads, and this must not become one that is.
+#
+# Two of them, and the whole difference is `nl2br`. A chat box promises that a newline is a newline,
+# because Markdown's own rule - a line break needs two trailing spaces - is a rule about *documents*
+# and nobody typing a message knows it. A guidance file is a document, written by somebody who does:
+# it is soft-wrapped at whatever width its author's editor uses, so honouring those newlines draws a
+# paragraph as a column of ragged lines that says nothing about how it was written.
+MESSAGE = Markdown(extensions=[*EXTENSIONS, "nl2br"], extension_configs=EXTENSION_CONFIGS, output_format="html")
+
+DOCUMENT = Markdown(extensions=EXTENSIONS, extension_configs=EXTENSION_CONFIGS, output_format="html")
+
+
+def converted(converter: Markdown, text: str) -> Markup:
+    """`text` through one converter, rendered and then sanitised into markup a page can carry."""
+    converter.reset()
+    return Markup(nh3.clean(converter.convert(text), allowed_classes=ALLOWED_CLASSES))
 
 
 @lru_cache(maxsize=2048)
-def as_markup(text: str) -> Markup:
+def as_message(text: str) -> Markup:
     """
-    `text` as Markdown, rendered and then sanitised into markup a page can carry.
+    Something somebody typed into a box, or a model answered with.
 
     Cached because it is a pure function of its input and the console is not: a transcript is
     re-rendered whole whenever the turn in flight records anything, so an unmemoised conversion
@@ -85,5 +97,15 @@ def as_markup(text: str) -> Markup:
     at the boundary that accepts it, and a key is the exact text, so the same message renders once
     however many times it is drawn.
     """
-    CONVERTER.reset()
-    return Markup(nh3.clean(CONVERTER.convert(text), allowed_classes=ALLOWED_CLASSES))
+    return converted(MESSAGE, text)
+
+
+@lru_cache(maxsize=64)
+def as_document(text: str) -> Markup:
+    """
+    A Markdown *file*: the guidance a session is answered under, or a part of the repository's own.
+
+    Cached for the reason a message is, and smaller because there are far fewer of them: one per
+    stretch of context, plus whatever a turn was handed on approach.
+    """
+    return converted(DOCUMENT, text)

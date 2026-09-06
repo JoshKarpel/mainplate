@@ -142,6 +142,60 @@ class TestReachingTheScratchDirectory:
             await reaching.read("/etc/passwd", 1, 10)
 
 
+class TestNamingTheRootInsteadOfSpellingItOut:
+    """
+    A place is reached by what it is rather than by where it is.
+
+    A worktree sits under 32 hex characters of session id, and a model that has to reproduce those
+    from memory eventually reproduces them wrong, which is a refusal it then has to recover from.
+    """
+
+    @pytest.fixture
+    def reaching(self, tmp_path: Path) -> Files:
+        # Named from `tmp_path` rather than a constant, because `tmp_path.parent` is shared by every
+        # test in a class: a fixed name is one scratch directory holding the last test's files.
+        scratch = tmp_path.parent / f"scratch-{tmp_path.name}"
+        scratch.mkdir(exist_ok=True)
+        (tmp_path / "app.py").write_text(SOURCE)
+        return Files(roots=(GitTracked(path=tmp_path), Scratch(path=scratch)))
+
+    async def test_a_named_root_is_what_a_relative_path_joins(self, reaching: Files) -> None:
+        await reaching.create("plan.md", "one\ntwo\n", root="scratch")
+
+        assert (reaching.roots[1].path / "plan.md").read_text() == "one\ntwo\n"
+        assert not (reaching.roots[0].path / "plan.md").exists(), "and not in the worktree"
+
+    async def test_the_same_name_in_two_roots_is_two_files(self, reaching: Files) -> None:
+        # The case that says `root` decides rather than decorates: one name, two places, and each
+        # call has to land in the one it asked for.
+        await reaching.create("notes.md", "the repository's\n")
+        await reaching.create("notes.md", "the scratch's\n", root="scratch")
+
+        assert "the repository's" in await reaching.read("notes.md", 1, 10)
+        assert "the scratch's" in await reaching.read("notes.md", 1, 10, root="scratch")
+
+    async def test_a_root_nobody_has_is_refused_and_the_refusal_names_the_ones_there_are(self, reaching: Files) -> None:
+        # Taught at the moment it is got wrong, which is what lets one tool description serve every
+        # session: what a session's places are called varies and its tools' descriptions do not.
+        with pytest.raises(Refused, match=r"no 'somewhere' here.*worktree, scratch"):
+            await reaching.read("app.py", 1, 10, root="somewhere")
+
+    async def test_what_comes_back_names_the_root_only_where_it_is_not_the_first(self, reaching: Files) -> None:
+        await reaching.create("plan.md", "one\n", root="scratch")
+
+        assert "plan.md in scratch" in await reaching.read("plan.md", 1, 10, root="scratch")
+        assert "in worktree" not in await reaching.read("app.py", 1, 10), "which would be on every line"
+
+    async def test_an_absolute_path_still_lands_where_it_points(self, reaching: Files) -> None:
+        # `root` says what a *relative* path joins and nothing else, so naming one cannot redirect a
+        # path that already says where it goes.
+        where = str(reaching.roots[0].path / "app.py")
+
+        found = reaching.resolved(where, root="scratch")
+
+        assert found.root == reaching.roots[0]
+
+
 class TestStayingInsideTheWorkspace:
     @pytest.mark.parametrize(
         "escape",

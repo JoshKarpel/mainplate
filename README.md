@@ -243,10 +243,13 @@ whole of what a session is:
 
 ```python
 async def converse(run: Run) -> Progressed:
-    agent = agent_for(endpoints, chosen, instructions)  # the pair this session recorded at creation
     at = reached(run.recorded)
     while True:
         asked = await opening_turn(run, at.turn)  # takes the next message off the session's inbox
+        # The endpoint and model this session recorded at creation, and what the repository's own
+        # `AGENTS.md` says, composed once per stretch of context and recorded as a step: what sits
+        # in front of the cached prefix must not move under a conversation that is still going.
+        agent = agent_for(endpoints, chosen, instructions)
         with stepping(run, turn_prefix(at.turn), allowance=spending, draining=draining_inbox(run, at.turn)):
             try:
                 answered = await agent.run(asked.said, message_history=list(at.history))
@@ -397,16 +400,16 @@ conversation down it whenever the session records anything. Every message is a w
 rather than a delta, which is what makes a dropped connection cost nothing and a reconnect need no
 replay, and each names the region it is for, so a second region joins the same connection rather
 than opening another. A render is *morphed* into the page rather than replacing it, so what a reader
-has done to the conversation, a tool call they unfolded, a command they put away, a search, the place
-they had scrolled to, survives an update arriving.
+has done to the conversation, a panel or a tool call they unfolded, a command they put away, a
+search, the place they had scrolled to, survives an update arriving.
 
 **A turn is drawn as it happens.** The responses and tool results behind a running turn are already
 in the checkpoint, recorded step by step so that a resumed pass does not pay for them twice, so the
 page reads those rather than waiting for the turn to write its messages: reasoning appears, then a
-call with its arguments, then its result, then the next request. A call still out is drawn working,
-and a message you steered into the turn is drawn the instant you send it rather than when the turn
-ends. Nothing is stored to make this work and nothing is streamed from the provider; it is the same
-checkpoint, read sooner.
+call with its arguments, then its result, then the next request. A call still out is drawn working on
+its own panel, and while one is, nothing else claims a reply is being written; a message you steered
+into the turn is drawn the instant you send it rather than when the turn ends. Nothing is stored to
+make this work and nothing is streamed from the provider; it is the same checkpoint, read sooner.
 
 A turn is drawn as panels: a coloured edge per run of one kind within one request, with the person's
 message, the model's reasoning, its calls, and its answer each in their own. The palette runs on one axis, cool
@@ -414,13 +417,44 @@ for what reached the model and warm for what it produced, so a reader scrolling 
 apart before reading a word. Messages are rendered as Markdown and sanitised before they reach the
 page.
 
+**Every panel folds, from its own row**, with the mark just right of the title. What you want put
+away is yours to decide; the console only says where each kind starts, which is a message, a reply, a
+stretch of reasoning and a batch of calls open, and reference shut. Shut, a panel's row carries the
+front of what is in it, clipped to whatever width the panel has - and for a batch of calls or
+commands, the names of what ran. So the dock's fold-everything button turns a finished conversation
+into its own outline, one row per panel, and a third button beside it puts every fold back where the
+console had it. A tool call and a command keep a fold of their own inside the panel, because what
+their summary says is the outcome and the status rather than the first line of the body, and a panel
+holds a whole batch of either.
+
+Two more panels say what the model was *told* rather than what anyone said. The **system prompt** is
+what every request in a stretch of context carried, drawn under the rule that opens that stretch, and
+**guidance** is a repository's own `AGENTS.md` for a directory, handed over at the moment a tool
+reached into it. They are two kinds rather than one because they sit in different places in the
+request - the first is re-sent whole on every request in front of the cached prefix, the second is
+appended once into the history - so the key can quiet either without the other, and so that a reader
+can see which is which. How much authority the second one carries is the provider's answer rather
+than this console's, and it varies by model, which is another reason not to draw them as one thing.
+Both are drawn shut, with the character count beside the opening line on the row, because what is in
+them is paid for on every request from there on.
+
 A **rule** stands at every round trip to the model, carrying what is true of that request rather than
 of any panel in it: the worktree it was made against, how long it took, what it spent in tokens and
-money, and an `r0` fold showing the JSON the checkpoint actually holds for it. Since the checkpoint
+money, and an `r1.0` fold showing the JSON the checkpoint actually holds for it. Since the checkpoint
 *is* the conversation, that is the state itself rather than a debug view of it, and it is fetched
 only when you open it so the transcript never carries it, and it opens in place, below the rule, so
 the record and the reply it came from can be read together. A request is recorded the moment the
 provider answers, so a record can be opened while the turn is still running.
+
+The figures are symbols, because a rule is one line that must not wrap: `↑` and `↓` are the tokens
+sent and returned, `▣` is how much of the first came out of the provider's cache, and `Δ` against `Σ`
+is what this exchange cost against what the conversation has cost so far. The words are in the
+titles. The sent figure is the *context* the request carried rather than a sum, since every request
+of a turn carries the whole conversation again, so beside it is what fraction of the model's context
+window that is - and the rule's own line is a gauge of the same fraction, filled from the left and
+shading toward red as it fills, so scrolling down a long conversation shows the line lengthen and
+warm. The window is what the reference database says about the model; with none configured the counts
+are drawn and the fraction is not.
 
 The rule that opens a turn carries the turn's own facts besides: which turn it is, the `fork` link,
 and what the whole turn spent. That costs no new idea, because every rule already stood at a request
@@ -445,16 +479,17 @@ up to check, what you want to see now is the answer to what you just sent.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that steps where the model's history starts again, whole turns, every
-panel, or only what the model said, and folds every call at once, a shelf for text you have written
+panel, or only what the model said, and folds everything at once or puts every fold back where the
+console had it, a shelf for text you have written
 and not sent, a follow-the-end toggle, and a light/dark/system theme. All of it is an enhancement. With JavaScript
-off the console still renders, still posts messages, and every tool call is still a fold that
-opens; what goes is the rail and the keyboard send.
+off the console still renders, still posts messages, and every panel and every tool call is still a
+fold that opens; what goes is the rail and the keyboard send.
 
 **Send** puts what is in the box into the conversation now. If a reply is already coming, that means
 **steering**: the message is put to the model in the turn it is answering, appended to the next
 request it makes, so it travels up with whatever tool results are going the same way and shapes that
-answer rather than the one after it. It shows in the transcript as a `you (steering)` panel the
-instant you send it, and sits below the results it travelled with and above the answer it shaped.
+answer rather than the one after it. It shows in the transcript as a `steer` panel the instant you
+send it, and sits below the results it travelled with and above the answer it shaped.
 
 You are not asked which of those it is, because you could not answer: the page you typed on was drawn
 from a checkpoint that has moved since. Neither is it decided when the message is written, because
@@ -509,15 +544,15 @@ point: the agent's shell runs behind a mount namespace with the repository's git
 read-only, so no tool can write a history no panel shows, and `git commit` and `git push` are exactly
 the things that boundary is meant to keep for you. Nothing about the run enters the conversation the
 model is given, so committing at the end of a session costs it no context and reaches no provider.
-The run is still recorded, though, so it draws as a `you (ran)` panel with the command, how long it
+The run is still recorded, though, so it draws as a `command` panel with the command, how long it
 took and what it exited with, it survives a reload, and a fork carries it. What it said is drawn
 open, where a tool call's output is folded: you asked for this one, so reading it should cost no
 clicks, and a command whose whole answer was its exit status says `said nothing` rather than showing
 an empty pane. Being open makes putting one away the press you make most, so the frame around the
 output folds it as well as the line at the top does: reading to the end of a long output does not mean
-scrolling back up to shut it. That holds for a tool call's return too, which is the other thing here
-that runs to hundreds of lines. Pressing the output itself does nothing, since that is where you
-select from. The status is shown as the number rather than as "failed", because `git diff --quiet`
+scrolling back up to shut it. That holds for everything here that folds, since a tool call's return
+and a stretch of reasoning are the other two things that run to hundreds of lines. Pressing what is
+in the box does nothing, since that is where you select from. The status is shown as the number rather than as "failed", because `git diff --quiet`
 exits 1 to say there *are* changes.
 
 `/run ` reaches it like any of the others, and `! ` into an empty box is its own shorter key: either

@@ -27,6 +27,7 @@ from pathlib import Path
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import SystemPromptPart
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
@@ -43,10 +44,12 @@ from mainplate.catalogue import Offering
 from mainplate.console import LINKS
 from mainplate.conversation import Result
 from mainplate.conversation import heard_key
+from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_messages
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_result
@@ -65,6 +68,7 @@ from mainplate.pages import start_page
 from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
+from mainplate.reference import facts_of
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.service import Conversation
@@ -130,7 +134,11 @@ REFERENCE = Reference(
     qualified={
         "anthropic/claude-sonnet-4-6": Facts(
             cost=Cost(input=3, output=15, cache_read=0.3, cache_write=3.75),
-            context=1_000_000,
+            # The window every session in this gallery is answered on, and the smaller of the two
+            # deliberately: what the gauge along each rule has to show is a conversation getting
+            # somewhere near the end of one, and a fixture on a million-token window would draw every
+            # rule as an empty line. The card beside it still renders `1M` for the model below.
+            context=200_000,
             output=128_000,
             released=date(2030, 11, 19),
             about="Balanced everyday model: fast enough to iterate with, careful enough to trust.",
@@ -215,6 +223,13 @@ def spending(asked: int, answered: int, cached: int = 0, cost: str = "0") -> Req
     The cost is on the response because that is where this console now records it, before the
     response is written rather than after. A fixture that left it off would draw the one state the
     live path no longer produces: a settled turn with counts and no price.
+
+    The counts climb across the conversation the way a real one's do - each request carries
+    everything said before it, and almost all of that comes back out of the cache - because that is
+    the whole of what the gauge on each rule draws. Fixtures that all sat at four thousand tokens
+    would draw four identical empty lines and say nothing about the one figure they are for. The
+    prices are what this reference's own rates come to on these counts, so a screenshot shows a
+    session whose money and tokens agree with each other.
     """
     return RequestUsage(
         input_tokens=asked,
@@ -240,8 +255,41 @@ def timing(seconds: float) -> dict[str, object]:
 # is written after its return, so a call with a time and no result is a state nothing can record.
 TIMINGS = {"call-1": 0.184, "call-7": 12.65}
 
+# What the requests in this fixture carried, so the panel that draws a session's system prompt has
+# something to draw. Three scopes in the order `instructing` composes them - the console's standing
+# directions, the working note the session's own isolation adds, and the repository's own
+# `AGENTS.md` last - because what that panel is for is showing a reader which of those they are
+# looking at.
+INSTRUCTIONS = """\
+You are a helpful assistant, working with a software engineer. Be concise and direct.
+
+You are working in a git worktree at /var/lib/mainplate/worktrees/2f9c1a, which is called
+`worktree`. The file tools take paths relative to it and reach nothing outside it. Changes you make
+there are snapshotted automatically; you never need to commit, and you should not run git commands
+to record your work. You also have a scratch directory at /var/lib/mainplate/scratch/2f9c1a, called
+`scratch`, outside the worktree and outside every snapshot. Reach it by passing `root: "scratch"` to
+`read`, `edit` or `create` rather than by writing that path out; in a command it is
+`$MAINPLATE_SCRATCH`, and the worktree is `$MAINPLATE_WORKTREE`.
+
+Commands you run cannot reach the network: no fetching, no installing, no cloning. Something that
+needs one fails rather than hanging.
+
+`AGENTS.md`, this repository's own guidance:
+
+# Polling
+
+The console holds one connection per page and the transcript carries no `hx-` attribute of its
+own. A region that asks for itself has to get its own trigger right; a region with no trigger has
+nothing to get wrong.
+
+Run `just test` before saying anything is done.
+"""
+
 CONVERSATION: list[ModelMessage] = [
-    ModelRequest(parts=[UserPromptPart(content="Why does the poll stop after one answer?")]),
+    ModelRequest(
+        parts=[UserPromptPart(content="Why does the poll stop after one answer?")],
+        instructions=INSTRUCTIONS,
+    ),
     ModelResponse(
         parts=[
             ThinkingPart(
@@ -264,7 +312,7 @@ CONVERSATION: list[ModelMessage] = [
                 tool_call_id="call-1",
             ),
         ],
-        usage=spending(asked=4_182, answered=196, cost="0.0156"),
+        usage=spending(asked=38_400, answered=196, cost="0.1181"),
         metadata=timing(3.4),
     ),
     ModelRequest(
@@ -273,7 +321,19 @@ CONVERSATION: list[ModelMessage] = [
                 tool_name="read_file",
                 content=READ,
                 tool_call_id="call-1",
-            )
+            ),
+            # What the console hands over when a turn reaches into a part of the repository that
+            # carries its own guidance. A `SystemPromptPart` rather than a user one, because nobody
+            # typed it, which is also how the transcript tells the two apart.
+            SystemPromptPart(
+                content=(
+                    "`src/mainplate/AGENTS.md`, guidance for this part of the repository:\n\n"
+                    "# Pages\n\n"
+                    "Pages are `without-html` node trees, pure functions of already-answered\n"
+                    "questions. A page and the fragment inside it are the same function called at\n"
+                    "two depths, which is what stops the two renderings from disagreeing.\n"
+                )
+            ),
         ]
     ),
     ModelResponse(
@@ -315,7 +375,7 @@ CONVERSATION: list[ModelMessage] = [
                 )
             )
         ],
-        usage=spending(asked=4_610, answered=832, cached=3_968, cost="0.0219"),
+        usage=spending(asked=44_800, answered=832, cached=38_400, cost="0.0432"),
         metadata=timing(9.7),
     ),
 ]
@@ -327,7 +387,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
             TextPart(content="Checking."),
             ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-2"),
         ],
-        usage=spending(asked=5_604, answered=88, cached=4_608, cost="0.0041"),
+        usage=spending(asked=96_300, answered=88, cached=44_600, cost="0.1698"),
         metadata=timing(1.2),
     ),
 ]
@@ -344,7 +404,7 @@ PARTWAY = ModelResponse(
     # A turn in flight has a cost too, which is the point of pricing a response before the step
     # records it rather than after the run ends. Left off, this fixture would draw the state the
     # console used to have and no longer does.
-    usage=spending(asked=6_120, answered=142, cached=5_120, cost="0.0067"),
+    usage=spending(asked=151_900, answered=142, cached=96_200, cost="0.1981"),
     metadata=timing(2.8),
 )
 
@@ -380,7 +440,12 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
     fixture that said one thing in the step and another in the messages would draw a turn this
     console cannot produce.
     """
-    written: dict[str, object] = {}
+    # What the stretch of context beginning at turn 0 is answered under, which is what the system
+    # prompt panel under that turn's rule draws. Written before the turn's first request by a pass,
+    # so a fixture that left it out would render a session whose first turn landed with nothing
+    # saying what it was told. A fixture with a forget in it records another beside the boundary,
+    # because that is where the next stretch begins.
+    written: dict[str, object] = {instructions_key(0): recorded_instructions(INSTRUCTIONS)}
     for turn, messages in enumerate(turns):
         came_back = returns(messages)
         # The two records a turn opens with: the entry the message arrived as, and the cursor saying
@@ -455,13 +520,25 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
 
 
 def showing(
-    session: Session, written: dict[str, object], *, answerable: bool = True, working: bool = True
+    session: Session,
+    written: dict[str, object],
+    *,
+    answerable: bool = True,
+    working: bool = True,
+    started: bool = True,
 ) -> Conversation:
-    """One session as a page sees it. `working` is whether it picked a repository at all."""
+    """
+    One session as a page sees it.
+
+    `working` is whether it picked a repository at all. `started` is whether a pass has been there
+    yet: a session whose message is still queued has no turn, so it has no tree recorded before a
+    request nobody has made, and a fixture that gave it one would be a checkpoint no pass could
+    write.
+    """
     chosen = CATALOGUE.default if working else replace(CATALOGUE.default, repository=None)
     return Conversation(
         session=session,
-        said=transcript(snapshotted(written) if working else written),
+        said=transcript(snapshotted(written) if working and started else written),
         chosen=chosen,
         answerable=answerable,
         repository=REPOSITORY if working else None,
@@ -470,6 +547,9 @@ def showing(
         # puts `Run` among the sending menu's answers, and so what makes `/run` and `!` reach a mode
         # at all.
         runnable=working,
+        # Looked up here rather than written down, exactly as `Service.read` does it, so the gauge
+        # on every rule is drawn against the same number the model's own card shows.
+        window=facts.context if (facts := facts_of(CATALOGUE, REFERENCE, chosen)) is not None else None,
     )
 
 
@@ -492,6 +572,10 @@ def pages() -> dict[str, str]:
     # standing *between* two turns with the first still on the page above it: a boundary at the top
     # of a conversation would draw the same markup and prove nothing about what it says.
     settled[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
+    # And what the stretch it opens is answered under, composed again because a forget has thrown the
+    # cached prefix away and composing exactly there is free. The same words here, since nothing under
+    # them moved between the two turns; what the second panel shows is that a boundary gets one.
+    settled[instructions_key(1)] = recorded_instructions(INSTRUCTIONS)
     waiting = dict(settled)
     waiting[inbox_key(5)] = recorded_prompt("And what about a turn still being answered?")
 
@@ -516,12 +600,21 @@ def pages() -> dict[str, str]:
     answering[inbox_key(6)] = recorded_steer("and while you are there, check the phone width")
 
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
+    # The state every session opens in, and stays in for as long as the clone and the worktree take:
+    # the message is there to be drawn and what the session is answered under is not, because
+    # composing that reads a repository the pass is the one to fetch. The system prompt panel is
+    # drawn with nothing in it rather than left out, and a screenshot is where you find out whether
+    # that reads as something on its way or as something broken.
+    queued = showing(
+        LISTED[1], {inbox_key(0): recorded_prompt("Why does the poll stop after one answer?")}, started=False
+    )
 
     return {
         "start.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, REFERENCE),
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
         "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
+        "opening.html": session_page(LINKS, LISTED, queued, REACHABLE),
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),
         "answering.html": session_page(LINKS, LISTED, showing(PARENT, answering), REACHABLE),

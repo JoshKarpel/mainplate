@@ -49,6 +49,7 @@ from pydantic_ai.capabilities.abstract import WrapToolExecuteHandler
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import SystemPromptPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.models import Model
@@ -228,6 +229,20 @@ took is still in the queue, and the next turn opens on it.
 """
 
 
+type Guiding = Callable[[Sequence[ModelMessage]], Sequence[str]]
+"""
+What the repository says about the parts of itself this turn has been reaching into, and has not
+been told yet.
+
+A function for the reason `Pricer` and `Draining` are: what answers it reads guidance files out of
+a worktree, and injecting the one question keeps this capability ignorant of what a guidance file is
+and of where a session's files are. One instance still serves every session.
+
+It is handed the messages rather than asked about a path, because both halves of the answer are in
+them: which paths the model reached for, and whether it has already been handed what covers them.
+That is what makes the history the ledger, so a `forget` re-delivers and a replay does not.
+"""
+
 type Pricer = Callable[[RequestUsage], Decimal | None]
 """
 What one model request came to, in US dollars, asked of whatever knows the rates.
@@ -273,6 +288,7 @@ class Stepping:
     worktree: Worktree | None = None
     pricer: Pricer | None = None
     draining: Draining | None = None
+    guiding: Guiding | None = None
     allowance: Allowance = field(default_factory=lambda: Allowance(limit=None))
     taken: Counter[str] = field(default_factory=Counter)
     allowed: set[StepKey] = field(default_factory=set)
@@ -424,6 +440,7 @@ def stepping(
     pricer: Pricer | None = None,
     draining: Draining | None = None,
     allowance: Allowance | None = None,
+    guiding: Guiding | None = None,
 ) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
@@ -444,6 +461,7 @@ def stepping(
         worktree=worktree,
         pricer=pricer,
         draining=draining,
+        guiding=guiding,
         allowance=allowance if allowance is not None else Allowance(limit=None),
     )
     token = current_stepping.set(scope)
@@ -600,11 +618,27 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         if scope is None:
             return request_context
         scope.allow(scope.coming("model"))
+        # Guidance first, then the steer, which is the order they were produced in: what the
+        # repository says about a directory was true before the person typed anything into the turn.
+        #
+        # A `SystemPromptPart` and not a `UserPromptPart`, because nobody typed it: it is the console
+        # speaking, so a reader has to be able to tell it from a message and `interjected` draws the
+        # two apart by which part carried them.
+        #
+        # What it costs the cached prefix is nothing, and that is the load-bearing half: appended it
+        # is one more entry at the end, where an instruction re-prices every request from the system
+        # block onward. How it *reaches* the model is the provider's business and varies - a real
+        # `{"role": "system"}` entry on the OpenAI wire and on the four Anthropic models that honour
+        # one, `<system>`-tagged user text everywhere else - so do not write code here that depends on
+        # which. See the guidance section in `AGENTS.md`.
+        if scope.guiding is not None:
+            for said in scope.guiding(request_context.messages):
+                request_context.messages.append(ModelRequest(parts=[SystemPromptPart(content=said)]))
         if scope.draining is None:
             return request_context
-        said = await scope.steering()
-        if said:
-            request_context.messages.append(ModelRequest(parts=[UserPromptPart(content=text) for text in said]))
+        steered = await scope.steering()
+        if steered:
+            request_context.messages.append(ModelRequest(parts=[UserPromptPart(content=text) for text in steered]))
         return request_context
 
     # There was an `after_node_run` here, and the inbox is what deleted it. It drained again where a

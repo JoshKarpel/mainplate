@@ -633,7 +633,8 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
+            drawn = transcript_region(LINKS, session, asked.said, stalled_by(asked), asked.window)
+            return page_response(200, fragment(drawn))
         case Disposition.NEXT | Disposition.FORGET:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
             # next free turn and differ only in what that turn opens on. A forget never reaches
@@ -642,7 +643,8 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
+            drawn = transcript_region(LINKS, session, asked.said, stalled_by(asked), asked.window)
+            return page_response(200, fragment(drawn))
         case Disposition.FORK | Disposition.ASIDE:
             # The parent's own choice, not a posted one: a fork from the composer offers no picker,
             # and `Service.fork` is what decides the repository either way. Forking the *end* carries
@@ -672,7 +674,8 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             asked = await service.read(session)
             if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
                 return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            return page_response(200, fragment(transcript_region(LINKS, session, asked.said, stalled_by(asked))))
+            drawn = transcript_region(LINKS, session, asked.said, stalled_by(asked), asked.window)
+            return page_response(200, fragment(drawn))
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot

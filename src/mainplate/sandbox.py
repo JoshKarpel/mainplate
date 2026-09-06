@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Final
 from typing import assert_never
 
+from mainplate.roots import RootName
+from mainplate.roots import environment_named
 from mainplate.snapshots import Worktree
 
 BWRAP: Final = "bwrap"
@@ -125,6 +127,20 @@ class Bind:
 
     path: Path
     writable: bool
+
+    name: RootName | None = None
+    """
+    What a command calls this place, where it is one a model has any business naming.
+
+    A bind rather than a field on the sandbox, so the two shapes still differ only in what is in
+    `places`. Absent on the clone, which is bound so that git works and is not somewhere anybody
+    should be writing paths into, and absent on `/`, where an environment variable saying `/` would
+    be a name for the thing every path already starts with.
+
+    Every path here is bound at *its own* path, so this is not a shorter route to the directory: it
+    is the same absolute path under a name, which is what stops a model reproducing 32 hex characters
+    from memory and getting them wrong.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,9 +241,9 @@ class Sandbox:
         common = await worktree.demand("rev-parse", "--path-format=absolute", "--git-common-dir")
         return cls(
             places=(
-                Bind(path=worktree.root, writable=True),
+                Bind(path=worktree.root, writable=True, name="worktree"),
                 Bind(path=Path(common), writable=False),
-                Bind(path=scratch, writable=True),
+                Bind(path=scratch, writable=True, name="scratch"),
             )
         )
 
@@ -273,8 +289,15 @@ class Sandbox:
             case _ as unreachable:
                 assert_never(unreachable)
         places: list[str] = []
+        # What each place is called, beside the bind that makes it reachable, so the two cannot come
+        # apart: a name here is a name for a path this sandbox actually has. `--clearenv` below takes
+        # the parent's environment away and these are added after it, so what a command finds is only
+        # ever what this console put there.
+        named: list[str] = []
         for bind in self.places:
             places.extend(("--bind" if bind.writable else "--ro-bind", str(bind.path), str(bind.path)))
+            if bind.name is not None:
+                named.extend(("--setenv", environment_named(bind.name), str(bind.path)))
         return (
             *binds,
             "--proc",
@@ -305,6 +328,7 @@ class Sandbox:
             "--setenv",
             "TERM",
             "dumb",
+            *named,
             "--chdir",
             at,
         )

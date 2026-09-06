@@ -23,11 +23,28 @@
 
   const THEMES = ["system", "light", "dark"];
 
-  // Everything in the transcript that folds: a tool call, and a command the person ran. Named once
-  // because three places act on the set - noting what the reader decided, putting that back after a
-  // swap, and the dock's fold-everything buttons - and a kind added to one and not the others is a
-  // fold that reopens itself on the next render.
-  const FOLDS = "details.tool, details.ran";
+  // Everything in the transcript that folds: every panel, and inside one, a tool call and a command
+  // the person ran. Named once because three places act on the set - noting what the reader decided,
+  // putting that back after a swap, and the dock's fold-everything buttons - and a kind added to one
+  // and not the others is a fold that reopens itself on the next render.
+  //
+  // Two levels, and each is named. A *panel's* fold is the reader's own: what they want put away is
+  // theirs to decide, and the server only says where each kind starts. A *call's* is the call's,
+  // because its summary is facts about it - a name, an outcome, how long it ran - rather than the
+  // block restated, and a panel holds a whole batch, so a reader wanting one read out of three needs
+  // a fold per call and not only one per panel. A stretch of reasoning and a document have neither
+  // of those and so have no fold of their own: the panel's row already says what they are.
+  const FOLDS = "details.panel, details.tool, details.ran";
+
+  // The frames a press can shut a fold from; see `wireShutting`. Written as the *bodies* rather than
+  // as the folds around them, which is what lets one rule survive a fold moving out to the panel: a
+  // document's frame shuts the panel it is in, and a call's shuts the call, because each one shuts
+  // whichever `<details>` it is a body of.
+  //
+  // Stated this way it also says the thing a list of folds could not. A panel's own room is the
+  // whitespace between the blocks of a conversation, and that is in no frame here, so a press that
+  // missed a paragraph cannot fold the reply it missed.
+  const FRAMES = ".tool__body, .ran__body, .block--document";
 
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
   // must not leave the page in a scheme it has no rules for.
@@ -698,7 +715,12 @@
         if (!parent) continue;
         // A panel's own label and permalink are chrome, not conversation, and so is the word on a
         // copy button - which is seated inside a fence, where the marks would otherwise reach it.
-        if (parent.closest(".panel__meta, [data-copy]")) continue;
+        //
+        // A fold's opening line goes with them, and it is the one entry here that is skipped for
+        // being a *second copy* rather than for not being conversation: it stands for the body a few
+        // pixels below it, so a word in the first line of one would be found twice and the dock would
+        // step through the same sentence at two stops.
+        if (parent.closest(".panel__meta, [data-copy], .opening")) continue;
         // Only the kinds the reader left in play, so the count is of what they are looking at.
         const panel = parent.closest(".panel");
         if (panel && muted.has(panel.dataset.kind)) continue;
@@ -1042,14 +1064,20 @@
         });
       });
 
+      // Three answers to what is folded, and the third is not a midpoint between the other two: they
+      // set every fold one way, and `default` puts each one back where the console had it, which is
+      // a different answer per fold - a call shut, a reply open, a system prompt away. It is the way
+      // back from either of the others, which without it are one-way presses over a conversation.
+      //
+      // Nothing here records anything: setting `open` dispatches `toggle`, so `wireFolds` takes all
+      // three down the one path every other press already goes down.
       document.querySelectorAll("[data-fold]").forEach((button) => {
         button.addEventListener("click", () => {
           const box = transcript();
           if (!box) return;
-          const open = button.dataset.fold === "open";
+          const asked = button.dataset.fold;
           box.querySelectorAll(FOLDS).forEach((fold) => {
-            fold.open = open;
-            folds.set(fold.id, open);
+            fold.open = asked === "default" ? fold.dataset.opens === "open" : asked === "open";
           });
         });
       });
@@ -1092,6 +1120,18 @@
     // back later: a `<details>` closed by the next swap would otherwise look to this file like one
     // they shut. Every kind that folds, since a command opens by default and a call does not, so
     // reading a set of ids back off the page could not tell a decision from a default.
+    //
+    // **Every toggle, including the ones a morph causes, and that is deliberate.** A call still out
+    // is drawn open, so the morph that delivers one records it as open, and the reader watching it
+    // fill in keeps it open when the result lands instead of having it collapse under them. Told
+    // apart - by comparing against the `data-opens` the server sent - a still-out call would shut
+    // itself the moment it returned, and a reader could not ask otherwise: at the moment they would
+    // press, open is already what the console said, so the press would read as agreeing rather than
+    // as deciding. The two are indistinguishable there, so this does not try.
+    //
+    // What that costs is that nothing stays undecided for long on a turn being watched. The dock's
+    // third button is the way back, and it is why the *server* still says where each fold started:
+    // see `data-opens` and `opens` in `pages.py`.
     const wireFolds = () => {
       document.addEventListener("toggle", (event) => {
         const fold = event.target;
@@ -1106,17 +1146,23 @@
     // the box that is not the output itself. That room is at the *bottom* as well, which is where a
     // reader who has just read to the end already is.
     //
-    // Every kind that folds, because it is one complaint: a command is drawn open so shutting is the
-    // press made oftenest there, and a call the reader opened to check the work is the one whose
-    // return runs to hundreds of lines. A rule that held for one and not the other would be two
-    // panels of the same shape answering the same press differently.
+    // It is one complaint about three boxes: a command is drawn open so shutting is the press made
+    // oftenest there, a call the reader opened to check the work is the one whose return runs to
+    // hundreds of lines, and a system prompt is the longest thing on the page. A rule that held for
+    // one and not the others would be boxes of the same shape answering the same press differently.
     //
-    // The output is the exemption, and it is the whole of what makes this safe. A click in a `pre` is
-    // usually the start of lifting a line out, and a panel that folded under somebody selecting from
-    // it would cost more than the scroll it saves. A press that *ended* a drag is out for the same
-    // reason: a browser reports one as a click on whatever the pointer came to rest over, so a
-    // selection still standing is a press that was not aimed at the frame. `said nothing` is this
-    // console's own sentence rather than the command's, so it stays part of the frame.
+    // Whose fold it shuts is read off the frame, which is what keeps this one rule now that a
+    // document's fold is the panel around it and a call's is still the call. See `FRAMES`.
+    //
+    // What is *in* the box is the exemption, and it is the whole of what makes this safe. A click in
+    // there is usually the start of lifting a line out, and a panel that folded under somebody
+    // selecting from it would cost more than the scroll it saves. Two selectors because the content
+    // takes two shapes - a `pre` for a command's output and a tool's return, rendered prose for a
+    // system prompt - and the exemption is about the content rather than about either shape. A press
+    // that *ended* a drag is out for the same reason: a browser reports one as a click on whatever
+    // the pointer came to rest over, so a selection still standing is a press that was not aimed at
+    // the frame. `said nothing` is this console's own sentence rather than the command's, so it stays
+    // part of the frame.
     //
     // Shutting only. Opening is the summary's, because a shut panel is a summary and little else, and
     // this is not the toggle in another place - it is the way out of a box too tall to scroll back up.
@@ -1124,8 +1170,10 @@
     const wireShutting = () => {
       document.addEventListener("click", (event) => {
         if (!(event.target instanceof Element)) return;
-        const fold = event.target.closest(FOLDS);
-        if (!fold || !fold.open || event.target.closest("summary, pre")) return;
+        const frame = event.target.closest(FRAMES);
+        if (!frame || event.target.closest("summary, pre, .text")) return;
+        const fold = frame.closest(FOLDS);
+        if (!fold || !fold.open) return;
         if (document.getSelection()?.isCollapsed === false) return;
         fold.open = false;
       });

@@ -46,6 +46,7 @@ from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.reference import References
+from mainplate.reference import facts_of
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
@@ -109,6 +110,21 @@ class Conversation:
     them is about the session: whether this session has files, and whether this console was built to
     run anything at all. A console with no `Commands` offers no `Run`, exactly as one with no sandbox
     offers no `bash`, and neither is a session's fault.
+    """
+
+    window: int | None = None
+    """
+    How large this session's model's context window is, or nothing where nothing says.
+
+    Here because it is what turns a token count into a fraction, and the count is on every rule the
+    transcript draws. It is not a fact about the conversation, so it cannot come out of the
+    checkpoint: it is the reference database's answer about the model the session is bound to, read
+    at render time exactly as a card's is, so a database that learns a model's window shows it on
+    every session already running on that model.
+
+    `None` for each of the three ways to know nothing - no database configured, an endpoint that no
+    longer lists the recorded id, a model with no record - and the page draws the counts with no
+    fraction beside them, which is what it drew before there was one.
     """
 
 
@@ -210,6 +226,7 @@ class Service:
         recorded = await self.checkpointer.load(session)
         chosen = choice_of(recorded)
         working = chosen is not None and chosen.repository is not None
+        facts = facts_of(self.catalogues.current, self.references.current, chosen) if chosen is not None else None
         return Conversation(
             session=found,
             said=transcript(recorded),
@@ -218,6 +235,7 @@ class Service:
             repository=self.repository_of(chosen),
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
             runnable=self.commands is not None and self.workspaces is not None and working,
+            window=facts.context if facts is not None else None,
         )
 
     async def token(self, session: str) -> int:

@@ -34,14 +34,18 @@ from mainplate.console import posted_workspace
 from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
 from mainplate.conversation import heard_key
+from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
+from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import tool_key
 from mainplate.conversation import tree_key
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.reference import Facts
+from mainplate.reference import Reference
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
@@ -123,6 +127,40 @@ def blocks_carrying_markdown(region: str) -> list[dict[str, str | None]]:
             held = dict(attrs)
             if "data-markdown" in held:
                 found.append(held)
+
+    reading = Reading()
+    reading.feed(region)
+    reading.close()
+    return found
+
+
+def opening_lines(region: str) -> list[str]:
+    """
+    What each panel's row says it stands for, as the text a browser would show in it.
+
+    Parsed for the same reason `blocks_carrying_markdown` is. The opening line is the *source* of
+    what is under it rather than the rendering, so a message written to be markup reaches this
+    element as characters, and what has to hold is that they are still characters when the document
+    is read back - which is a statement about the parse and not about which escaped spelling appears.
+    """
+    found: list[str] = []
+
+    class Reading(HTMLParser):
+        inside = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if self.inside:
+                self.inside += 1
+            elif dict(attrs).get("class") == "opening":
+                self.inside = 1
+                found.append("")
+
+        def handle_endtag(self, tag: str) -> None:
+            self.inside = max(0, self.inside - 1)
+
+        def handle_data(self, data: str) -> None:
+            if self.inside:
+                found[-1] += data
 
     reading = Reading()
     reading.feed(region)
@@ -253,6 +291,53 @@ class TestTheConsole:
         assert answered.text.index('id="stream"') < connecting
         assert connecting < answered.text.index('id="transcript"')
 
+    async def test_the_system_prompt_is_drawn_under_the_rule_that_opens_its_stretch(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The order a reader meets it in: the boundary, then what the model is told from here, then the
+        message it is told it about. Pinned as an ordering because that is what a reader of the markup
+        can check, and the placement is the whole of what moved it off the top of the page.
+        """
+        session = await a_session(app)
+        await service.checkpointer.supply(
+            session, instructions_key(0), recorded_instructions("what this session is answered under")
+        )
+        drawn = await watched(app, session)
+
+        assert "what this session is answered under" in drawn
+        assert drawn.index('id="rule-0"') < drawn.index('id="system-prompt-0"')
+        assert drawn.index('id="system-prompt-0"') < drawn.index('data-kind="prompt"')
+
+    async def test_the_system_prompt_is_drawn_as_the_markdown_it_is(self, app: ASGIApp, service: Service) -> None:
+        """
+        What is under the fold is `.md` files, so its headings and lists are the structure their
+        authors wrote. The source rides along as `data-markdown`, which is what the copy button hands
+        back, so drawing it costs nothing about the claim that this is what was sent.
+        """
+        said = "## Conventions\n\n- say less\n"
+        session = await a_session(app)
+        await service.checkpointer.supply(session, instructions_key(0), recorded_instructions(said))
+        drawn = await watched(app, session)
+
+        assert "<h2>Conventions</h2>" in drawn
+        assert "<li>say less</li>" in drawn
+        assert said in [held["data-markdown"] for held in blocks_carrying_markdown(drawn)]
+
+    async def test_a_stretch_nothing_has_composed_for_yet_draws_the_panel_with_no_prompt_in_it(
+        self, app: ASGIApp
+    ) -> None:
+        """
+        A session's first message is queued before the pass that composes for it has planted a
+        worktree to read, so the panel is there from the moment the message is and fills in on the
+        swap the first answer arrives on. Asserted against the *fold*, because the panel is drawn
+        either way and what tells the two apart is whether there is anything to unfold.
+        """
+        drawn = await watched(app, await a_session(app))
+
+        assert 'id="system-prompt-0"' in drawn
+        assert 'id="system-prompt-0-fold"' not in drawn
+
     @pytest.mark.parametrize("settled", [True, False])
     async def test_the_transcript_asks_for_nothing_on_its_own(
         self, app: ASGIApp, service: Service, settled: bool
@@ -354,7 +439,7 @@ class TestTheConsole:
         async with calling(app) as caller:
             answered = await caller.post(f"/sessions/{session}/messages", {"prompt": "actually, be brief"})
         assert "actually, be brief" in answered.text
-        assert 'data-kind="steering"' in answered.text
+        assert 'data-kind="steer"' in answered.text
 
     async def test_a_steer_already_put_to_the_model_is_drawn_above_the_answer_it_shaped(
         self, app: ASGIApp, service: Service
@@ -622,15 +707,35 @@ class TestTheConsole:
         pass on the sidebar's copy whatever the transcript did with it, which is the check that
         cannot fail measuring the wrong thing.
 
-        Asserted on what is *drawn*, with the sources the copy buttons hand over taken back out. A
-        block carries the Markdown it was written as, so it holds that message's angle brackets by
-        construction; what it must not do is let them become anything, which is the test below.
+        Asserted on what is *drawn*, with the two places the source is deliberately carried taken
+        back out. A block carries the Markdown it was written as for its copy button, and a panel's
+        row carries the front of it as the line a shut panel stands for, so both hold that message's
+        angle brackets by construction; what neither may do is let them become anything, which is
+        what the two tests below ask of each.
         """
         session = await a_session(app, "<script>alert(1)</script> and <img src=x onerror=alert(2)>")
-        drawn = sub(r' data-markdown="[^"]*"', "", await watched(app, session))
+        drawn = sub(r'( data-markdown="[^"]*"|<span class="opening">[^<]*</span>)', "", await watched(app, session))
         assert "<script" not in drawn
         assert "alert(1)" not in drawn
         assert "onerror" not in drawn
+
+    async def test_markup_in_a_message_is_still_text_in_the_line_its_panel_stands_for(self, app: ASGIApp) -> None:
+        """
+        A panel's opening line is the source rather than the rendering, so the sanitiser never sees
+        it and the escaping of a text child is the whole of what keeps it inert. The message is
+        written to close that element and open a script beside it.
+
+        Read back with a real HTML parser, because what has to hold is that the document parses to
+        one element whose text is exactly the front of the message - the same statement whether the
+        renderer spells the bracket `&lt;` or `&#60;`.
+
+        The empty ones are dropped rather than counted: a panel with nothing to stand for yet carries
+        the working dots in this element instead of a line, and how many of those a page happens to
+        have is not what this asks.
+        """
+        said = "</span><script>alert(1)</script>"
+        session = await a_session(app, said)
+        assert [line for line in opening_lines(await watched(app, session)) if line] == [said]
 
     async def test_the_source_a_copy_button_hands_over_cannot_break_out_of_its_attribute(self, app: ASGIApp) -> None:
         """
@@ -666,6 +771,17 @@ ANSWERED = [
 
 # One call, as a response holds it, for the pages that need a turn with a tool in it.
 CALLED = {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"}
+
+
+def a_reference(context: int) -> Reference:
+    """
+    A database that knows one thing about the model these sessions run on: how big its window is.
+
+    Under the routed id, which is the key `Reference.look_up` tries first and the only one a listing
+    with no upstream name has at all. The console's own default is no database, so a test that wants
+    a window says so; every other test here is the case where nothing does.
+    """
+    return Reference(qualified={DEFAULT_CHOICE.model: Facts(context=context)}, upstream={})
 
 
 class TestForgettingFromTheComposer:
@@ -727,7 +843,7 @@ class TestForgettingFromTheComposer:
 
         region = await watched(app, session)
         assert "rule--forget" in region
-        assert "the model's context was cleared here" in region
+        assert "context cleared" in region
         # And the turn it closed is still on the page, which is the half a rendering can get wrong.
         assert "what is a mainplate" in region
 
@@ -957,9 +1073,82 @@ class TestWhatARuleSays:
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert 'class="rule rule--turn"' in region
-        assert "5K in" in region
-        assert "640 out" in region
-        assert "$0.0123" in region
+        assert "\N{UPWARDS ARROW}5K" in region
+        assert "\N{DOWNWARDS ARROW}640" in region
+        assert "(\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}4K)" in region
+        assert "\N{GREEK CAPITAL LETTER DELTA}$0.0123" in region
+
+    async def test_a_rule_says_how_full_the_window_is_and_draws_the_same_fact_as_a_gauge(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The percentage and the `--filled` the line is drawn to are one figure said twice.
+
+        Both come from the reference's window and the last request's own input, so this is also what
+        pins that a session picks its window up from the database rather than from anything recorded:
+        nothing about the checkpoint changes between this test and the one below it.
+        """
+        service.references.current = a_reference(context=10_000)
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "53%" in region, "5,300 of 10,000 tokens"
+        assert "--filled: 53.0%" in region, "and the line drawn to the same fraction"
+
+    async def test_a_session_whose_model_nobody_wrote_a_window_down_for_draws_no_gauge(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The counts still say what they say; only the fraction goes, because nothing could compute it.
+
+        Three ways to know nothing arrive as one answer here - no database, an endpoint that no
+        longer lists the recorded id, a model with no record - and this is the first of them, which
+        is the console's own default.
+        """
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "\N{UPWARDS ARROW}5K" in region, "how much context there is is known either way"
+        assert "rule__full" not in region
+        assert "--filled" not in region
+
+    async def test_a_rule_says_what_the_conversation_has_cost_by_the_time_it_reaches_it(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        What one turn cost is only readable against what has been spent so far, so a rule says both.
+
+        The first turn is the case the running total is left off, since there it *is* the turn's own
+        figure and printing one number twice says nothing. The second turn is where it starts.
+        """
+        session = await a_session(app)
+        await answered(service, session, *ANSWERED)
+        assert "\N{N-ARY SUMMATION}" not in await watched(app, session), "one turn in, the total is the turn"
+        await service.say(session, "and again")
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "\N{GREEK CAPITAL LETTER DELTA}$0.0123" in region, "what this turn added"
+        assert "\N{N-ARY SUMMATION}$0.0246" in region, "and two turns at $0.0123 each"
+
+    async def test_one_unpriced_turn_takes_the_running_total_off_every_rule_below_it(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        `altogether`'s rule, one rule at a time: a total quietly missing a turn understates it.
+
+        The turn after an unpriced one is priced perfectly well and still shows no total, which is
+        the point rather than a shortcoming: what the total would say is the sum of everything the
+        reference happened to know about, and nothing on the page could say it was doing that.
+        """
+        session = await a_session(app)
+        await answered(
+            service, session, {"kind": "response", "parts": [], "usage": {"input_tokens": 300, "output_tokens": 12}}
+        )
+        await service.say(session, "and again")
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert "\N{GREEK CAPITAL LETTER DELTA}$0.0123" in region, "the priced turn still says what it cost"
+        assert "\N{N-ARY SUMMATION}" not in region, "and the conversation says nothing about its total"
 
     async def test_the_fork_link_is_on_the_rule_rather_than_inside_the_turn(
         self, app: ASGIApp, service: Service
@@ -988,8 +1177,8 @@ class TestWhatARuleSays:
             service, session, {"kind": "response", "parts": [], "usage": {"input_tokens": 300, "output_tokens": 12}}
         )
         region = await watched(app, session)
-        assert "300 in" in region
-        assert "12 out" in region
+        assert "\N{UPWARDS ARROW}300" in region
+        assert "\N{DOWNWARDS ARROW}12" in region
         assert "rule__cost" not in region
         assert "free" not in region
 
@@ -1028,6 +1217,42 @@ class TestWhatARuleSays:
         await service.checkpointer.supply(session, tool_key(0, "c1"), came_back("x", took=0.184))
         region = await watched(app, session)
         assert "184ms" in region
+
+    async def test_a_turn_out_on_a_call_says_so_on_the_call_and_nowhere_else(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The call's own panel is drawn working, so a second panel of dots under it says it twice.
+
+        And says it in a shape nothing is writing: an empty reply below a call the model is waiting
+        on reads as a turn that has started answering, where what is happening is a tool running.
+        """
+        session = await a_session(app)
+        turn = await taken(service, session)
+        await service.checkpointer.supply(
+            session,
+            model_key(turn, 0),
+            answered_with({"kind": "response", "parts": [CALLED], "usage": {"input_tokens": 1, "output_tokens": 1}}),
+        )
+        region = await watched(app, session)
+        assert 'id="waiting"' not in region, "nothing claims a reply is being written"
+        # Which the dots still on the page must therefore belong to: the call's own panel.
+        assert 'aria-label="working"' in region, "and the call is drawn as still out"
+
+    async def test_a_turn_whose_calls_have_all_come_back_is_waiting_on_the_model_again(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The control: with the result in, what is being waited on is the next request."""
+        session = await a_session(app)
+        turn = await taken(service, session)
+        await service.checkpointer.supply(
+            session,
+            model_key(turn, 0),
+            answered_with({"kind": "response", "parts": [CALLED], "usage": {"input_tokens": 1, "output_tokens": 1}}),
+        )
+        await service.checkpointer.supply(session, tool_key(turn, "c1"), came_back("x"))
+        region = await watched(app, session)
+        assert 'id="waiting"' in region
 
 
 class TestShowingWhatWasRecorded:
@@ -1076,8 +1301,8 @@ class TestShowingWhatWasRecorded:
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert "aaaaaaaa" in region, "the tree taken before the ask"
-        assert "5K in" in region, "and what the answer cost"
-        assert 'class="tag__at">r0<' in region, "and the record behind it"
+        assert "\N{UPWARDS ARROW}5K" in region, "and what the answer cost"
+        assert 'class="tag__at">r0.0<' in region, "and the record behind it, named turn and request"
 
     async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
         """
