@@ -97,10 +97,10 @@ change:
   the two isolation axes a session picks.
 - [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, and what one
   pass does.
-- [`docs/design/plugins.md`](docs/design/plugins.md): what a plugin may contribute, the two files it
-  is declared in, and the trust gate in front of a repository's own code. The one page here
-  describing something **not built yet**, so read it as the design being written to rather than as
-  the console as it stands.
+- [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
+  sent, the effects it may ask for, and the trust gate in front of a repository's own plugin. The
+  one page here describing something **not built yet**, so read it as the design being written to
+  rather than as the console as it stands.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
