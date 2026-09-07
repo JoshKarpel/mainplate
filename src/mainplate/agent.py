@@ -766,9 +766,9 @@ def reaching(
             # name a directory nothing ever creates. The worktree is first, so a relative path still
             # means the repository however many roots a session ends up with.
             if scratch is None or bwrap is None:
-                return Reach(roots=(GitTracked(path=worktree.root),), note=working_note(scratch=False))
+                return Reach(roots=(GitTracked(worktree=worktree),), note=working_note(scratch=False))
             return Reach(
-                roots=(GitTracked(path=worktree.root), Scratch(path=scratch)),
+                roots=(GitTracked(worktree=worktree), Scratch(path=scratch)),
                 confinement=InAWorktree(worktree=worktree, scratch=scratch),
                 note=f"{working_note(scratch=True)}\n\n{network_note(isolation.network)}",
             )

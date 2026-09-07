@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic_ai import ModelRetry
 
+from mainplate.snapshots import Worktree
 from mainplate.tools.files.anchors import GUTTER
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import Splice
@@ -30,7 +31,7 @@ SOURCE = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
 @pytest.fixture
 def files(tmp_path: Path) -> Files:
     (tmp_path / "app.py").write_text(SOURCE)
-    return Files(roots=(GitTracked(path=tmp_path),))
+    return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)),))
 
 
 def naming(files: Files, at: int) -> str:
@@ -103,7 +104,7 @@ class TestReachingTheScratchDirectory:
         scratch = tmp_path.parent / "scratch-for-session"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(path=tmp_path), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)), Scratch(path=scratch)))
 
     async def test_a_file_there_can_be_created_read_and_edited(self, reaching: Files) -> None:
         where = str(reaching.roots[1].path / "plan.md")
@@ -157,7 +158,7 @@ class TestNamingTheRootInsteadOfSpellingItOut:
         scratch = tmp_path.parent / f"scratch-{tmp_path.name}"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(path=tmp_path), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)), Scratch(path=scratch)))
 
     async def test_a_named_root_is_what_a_relative_path_joins(self, reaching: Files) -> None:
         await reaching.create("plan.md", "one\ntwo\n", root="scratch")

@@ -86,6 +86,7 @@ nav:
       - What a session is told: design/guidance.md
       - How a model reaches a file: design/tools.md
       - Where a command runs: design/sandbox.md
+      - What runs, and as whom: design/security.md
       - Durability: design/durability.md
       - Plugins: design/plugins.md
       - The console: design/console.md

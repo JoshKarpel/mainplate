@@ -50,6 +50,7 @@ from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.roots import RootName
+from mainplate.snapshots import Worktree
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import EditRefused
 from mainplate.tools.files.anchors import Moved
@@ -149,9 +150,19 @@ class GitTracked:
     It owns how to enumerate itself rather than leaving that to whoever holds it, because "ask git"
     is the one thing that is true of this root and false of every other. A second worktree is one
     more of these in `Files.roots` and nothing else.
+
+    It holds the `Worktree` rather than its path, because enumerating it means running a program
+    against a directory a session may write, and *how* to do that safely is one answer this console
+    has already worked out: which git directory to name, and what environment to build. Holding the
+    path would be holding half of it, and the other half would be reassembled here and drift.
     """
 
-    path: Path
+    worktree: Worktree
+
+    @property
+    def path(self) -> Path:
+        """Where this root is, which is what every other kind of root carries as a field."""
+        return self.worktree.root
 
     @property
     def name(self) -> RootName:
@@ -176,22 +187,19 @@ class GitTracked:
         A failure is a fault rather than a `Refused`: this root is a git worktree by construction,
         so git failing here is not something a model can retry its way out of, and returning nothing
         would be a silent wrong answer.
+
+        **Through `Worktree.git` rather than a subprocess of its own**, which is what gets this the
+        named git directory and the built environment: running a program in the parent against the
+        one directory a session may write is exactly what that method exists to make safe, and
+        rebuilding it here would be a second copy to keep in step. `at` is where git runs and is
+        never what `--work-tree` names, so a listing of a subdirectory comes back relative to it.
+
+        `stdout` rather than `out` because `-z` separates paths with NUL, which is not text to strip.
         """
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            cwd=here,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, err = await process.communicate()
-        if process.returncode:
-            raise ListingFailed(f"git ls-files failed ({process.returncode}): {err.decode().strip()}")
-        return tuple(sorted(found for found in out.decode().split("\0") if found))
+        listed = await self.worktree.git("ls-files", "--cached", "--others", "--exclude-standard", "-z", at=here)
+        if not listed.ok:
+            raise ListingFailed(f"git ls-files failed ({listed.code}): {listed.err}")
+        return tuple(sorted(found for found in listed.stdout.decode().split("\0") if found))
 
 
 @dataclass(frozen=True, slots=True)

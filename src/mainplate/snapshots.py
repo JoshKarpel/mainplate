@@ -45,6 +45,10 @@ IDENTITY: Final[Mapping[str, str]] = {
     "GIT_COMMITTER_EMAIL": "mainplate@localhost",
 }
 
+# Spelled out for the reason the sandbox spells its own out: what git finds is what this console put
+# there, so a `PATH` the service happened to be started with cannot decide which `git` runs.
+WHERE_GIT_IS: Final = "/usr/bin:/bin:/usr/local/bin"
+
 
 # What may appear in something a session names a commit by. Every one of these characters is one git
 # itself accepts in a revision expression: a ref name, a tag, an abbreviated hash, and the suffixes
@@ -145,15 +149,30 @@ class SnapshotFailed(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class Ran:
-    """What one git invocation came to."""
+    """
+    What one git invocation came to.
+
+    The bytes are what is held and the text is a reading of them, because not everything git prints
+    is text to strip: `-z` output is NUL-separated paths, and a caller handed a stripped string has
+    already lost the ability to split it safely. `out` and `err` are the common case and stay one
+    attribute access away.
+    """
 
     code: int
-    out: str
-    err: str
+    stdout: bytes
+    stderr: bytes
 
     @property
     def ok(self) -> bool:
         return self.code == 0
+
+    @property
+    def out(self) -> str:
+        return self.stdout.decode().strip()
+
+    @property
+    def err(self) -> str:
+        return self.stderr.decode().strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +185,56 @@ class Worktree:
     """
 
     root: Path
+
+    gitdir: Path | None = None
+    """
+    Where git keeps this tree, told to git rather than found by looking down from `root`.
+
+    A session's worktree is a *linked* one, so the `.git` at its root is a one-line pointer file
+    standing in the single directory that session's own `bash` may write. Both halves of what git
+    would discover from there are therefore the session's to replace: the file can become a
+    repository, or keep pointing somewhere the session made. Repository configuration names programs
+    git runs - `core.fsmonitor` fires on the index refresh inside `add` - so a parent that discovers
+    its way to a git directory runs whatever the tree last said, as the service user, outside the
+    sandbox, and with `add` still exiting 0 because git treats a failing fsmonitor as a reason to
+    scan normally.
+
+    Naming it is what closes that, and it closes the whole family rather than the settings anybody
+    has named so far: the poisoned config is never read, so which keys can run a program stops being
+    a list to keep up with. That is `sandbox.py`'s argument about commands, one layer in.
+
+    The value is free to know. A linked worktree's git directory is `<clone>/worktrees/<session>`,
+    so `Worktrees` derives it and reads nothing out of the tree to do so. `None` is the repository
+    itself, where `root` *is* the git directory and there is nothing in between to poison.
+    """
+
+    @property
+    def addressed(self) -> tuple[str, ...]:
+        """
+        Where git is told to work, or nothing at all where it is left to find out.
+
+        `--work-tree` is this tree's root and never the directory git is being run *in*, which is
+        the one way to get this wrong: a command run in a subdirectory still names the root here,
+        and its output stays relative to where it ran, exactly as an unpinned call's would. Naming
+        the subdirectory instead changes what `ls-files` prints.
+        """
+        if self.gitdir is None:
+            return ()
+        return ("--git-dir", str(self.gitdir), "--work-tree", str(self.root))
+
+    @property
+    def environment(self) -> Mapping[str, str]:
+        """
+        What a git run against this tree finds in its environment, built rather than inherited.
+
+        Built, so the console's own environment does not cross into a program git may run on the
+        strength of something in a repository, and so a machine where nobody set `user.email` still
+        snapshots. Nothing here sets `HOME`, so git reads no global configuration either.
+
+        Read by `git` and by nothing else. It is a property so the reasoning has somewhere to live,
+        not an invitation to assemble a git call out of parts.
+        """
+        return {**IDENTITY, "PATH": WHERE_GIT_IS}
 
     @asynccontextmanager
     async def staging(self) -> AsyncIterator[Path]:
@@ -180,31 +249,45 @@ class Worktree:
         flight at once. A single shared path is a file two concurrent captures would write over
         each other, and the loser's `write-tree` would then describe a tree that never existed.
 
-        The directory is asked for rather than assumed to be `.git`, because in a *linked* worktree
-        it is not: `.git` there is a file holding a pointer, and every session having a worktree of
-        its own means almost every worktree here is a linked one.
+        The directory is never assumed to be `.git`, because in a *linked* worktree it is not: `.git`
+        there is a file holding a pointer, and every session having a worktree of its own means
+        almost every worktree here is a linked one. Where `gitdir` says which it is, that is the
+        answer, and asking git would be asking it to read the pointer this console is refusing to
+        trust - so the shadow index lands in the clone rather than wherever the tree last pointed.
         """
-        index = Path(await self.demand("rev-parse", "--absolute-git-dir")) / f"mainplate-index-{token_hex(8)}"
+        known = self.gitdir or Path(await self.demand("rev-parse", "--absolute-git-dir"))
+        index = known / f"mainplate-index-{token_hex(8)}"
         try:
             yield index
         finally:
             index.unlink(missing_ok=True)
 
-    async def git(self, *arguments: str, index: Path | None = None) -> Ran:
+    async def git(self, *arguments: str, index: Path | None = None, at: Path | None = None) -> Ran:
+        """
+        One git command against this tree, with everything that makes that safe already applied.
+
+        **This is the whole of how git is run here**, and it is one method rather than a set of
+        pieces on purpose. `addressed` and `environment` are the two halves a caller would otherwise
+        assemble, and a second assembly is a second thing to keep in step: the first time it drifts,
+        what it drops is the git directory, and the failure is a program running rather than an
+        error. So a caller that needs something this does not do gets an argument here.
+
+        `at` is where git *runs*, defaulting to the tree's root. It is never what `--work-tree`
+        names, so a listing of a subdirectory comes back relative to that subdirectory.
+
+        `index` is a shadow index, which `staging` makes and every capture goes through.
+        """
         process = await asyncio.create_subprocess_exec(
             "git",
+            *self.addressed,
             *arguments,
-            cwd=self.root,
+            cwd=at or self.root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={
-                **IDENTITY,
-                "PATH": "/usr/bin:/bin:/usr/local/bin",
-                **({"GIT_INDEX_FILE": str(index)} if index else {}),
-            },
+            env={**self.environment, **({"GIT_INDEX_FILE": str(index)} if index else {})},
         )
         out, err = await process.communicate()
-        return Ran(code=process.returncode or 0, out=out.decode().strip(), err=err.decode().strip())
+        return Ran(code=process.returncode or 0, stdout=out, stderr=err)
 
     async def demand(self, *arguments: str, index: Path | None = None) -> str:
         ran = await self.git(*arguments, index=index)
@@ -282,6 +365,19 @@ class Worktrees:
     def at(self, session: str) -> Path:
         return self.root / session
 
+    def gitdir(self, session: str) -> Path:
+        """
+        Where git keeps this session's worktree, by construction rather than by reading anything.
+
+        `git worktree add` names the directory after the last component of the path it is given, and
+        that component is the session id, which is unique. So this is derivable from the two things
+        already held here, and derivable is the whole point: it is the *trusted* half of a session's
+        git state, sitting inside a clone that the sandbox binds read-only, and working it out from
+        the tree instead would mean asking the one directory the session can write. `Worktree.gitdir`
+        is what that buys.
+        """
+        return self.repo / "worktrees" / self.at(session).name
+
     def worktree(self, session: str) -> Worktree:
         """
         The session's own worktree, as something to snapshot, whether or not it has been planted.
@@ -289,7 +385,7 @@ class Worktrees:
         A value rather than a lookup, so a caller that only wants to *name* the worktree - a page
         saying where a session works - needs no repository call and cannot fail.
         """
-        return Worktree(root=self.at(session))
+        return Worktree(root=self.at(session), gitdir=self.gitdir(session))
 
     async def confirm(self) -> None:
         """That the repository is one, once at startup rather than at the first session."""
@@ -388,7 +484,7 @@ class Worktrees:
         """
         here = self.at(session)
         if here in await self.planted():
-            return Worktree(root=here)
+            return self.worktree(session)
         self.root.mkdir(parents=True, exist_ok=True)
         repository = Worktree(root=self.repo)
         if tree is not None:
@@ -399,7 +495,7 @@ class Worktrees:
             commit = await repository.demand("rev-parse", "HEAD")
         placing = ("-b", branch) if branch is not None else ("--detach",)
         await repository.demand("worktree", "add", *placing, str(here), commit)
-        return Worktree(root=here)
+        return self.worktree(session)
 
     async def uproot(self, session: str) -> None:
         """

@@ -2388,7 +2388,7 @@ def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> W
     """
     if workspaces is None or chosen.repository is None:
         return None
-    return workspaces.worktree(session)
+    return workspaces.worktree(session, chosen.repository)
 
 
 def taken(entries: Sequence[Entry]) -> tuple[records.Delivered, ...]:

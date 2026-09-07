@@ -41,6 +41,19 @@ plugin reaches is decided by its own tier rather than by what the *model* may to
 at `describe` and never added mid-conversation, because a tool definition sits above the cached
 prefix and introducing one late invalidates the whole conversation beneath it.
 
+## `list` runs a program in the parent
+
+`GitTracked.entries` runs `git ls-files` in this process, over the worktree, which is the one
+directory a session may write. `ls-files` refreshes the index, so a call that let git find its own
+directory would run whatever the tree's configuration named. See
+[`docs/design/security.md`](../../../docs/design/security.md).
+
+**So it holds a `Worktree` and goes through `Worktree.git`**, which is the only place that knows how
+to run git safely: named git directory, built environment. Do not build a git subprocess here out of
+`addressed` and `environment`, which is a second copy of that answer and drifts silently. What
+`entries` needs beyond the default is `at=` and `Ran.stdout`, and anything else should be one more
+argument there rather than a subprocess of its own.
+
 ## Two things not to undo
 
 - **`list` asks git, and keeps doing so once `bash` exists.** It is not a listing convenience that

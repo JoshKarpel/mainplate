@@ -72,6 +72,19 @@ between orienting in a large repository for a few hundred tokens and doing it fo
 The sandbox gives it a second reason to exist: `list` is a narrow tool whose argv this console
 writes, so the question a model asks most often stays off the unbounded path.
 
+The measurements behind that, on a 393-file repository: `list` at the default depth is around 360
+tokens, `git ls-files` flat is around 4,400, and a `find .` that meets a `.venv` is over a million.
+The first two both grow with the repository and the third is unbounded; `list` is the only one of
+the three with a ceiling, which is `MAX_ROWS` rather than a habit. Against that, its description
+costs around 400 tokens on every request, so it pays for itself if it heads off roughly one runaway
+enumeration in several thousand requests.
+
+**It runs a program in the parent, so it runs it through `Worktree.git`** rather than a subprocess
+of its own: that is the one place that names git's directory instead of letting `ls-files` find one
+in a tree the session writes, and builds an environment instead of inheriting this process's. It is
+why `GitTracked` holds a `Worktree` instead of a path. See [what runs, and as
+whom](security.md).
+
 ## A line is addressed by a hash of its own content
 
 A line number is the one address that cannot fail: an edit above shifts everything below it and `47`

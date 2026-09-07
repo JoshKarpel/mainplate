@@ -217,6 +217,15 @@ bound here is what stops a *tool* writing a history no panel shows, and `git com
 The authority it grants is what the paragraph above already grants a model, so what actually guards
 it is who can reach the console.
 
-One thing is deliberately still to come. `GitTracked.entries` runs `git ls-files` in the parent
-rather than through the sandbox, which is a narrower problem than arbitrary shell (its argv is ours;
-the exposure is a malicious repository's git configuration) and a good next step.
+## What the parent still runs
+
+The binds above say what a *command* reaches. They say nothing about the parent, which runs git
+against the same worktree to snapshot it and to answer `list`, and the worktree is bound read-write
+because a session has to be able to work in it. So git configuration is an input the parent takes
+from a directory the session writes, and several settings there name a program git runs.
+
+Neither of them does now: `Worktree.gitdir` names git's own directory, so both `snapshots.py` and
+`GitTracked.entries` read their configuration out of the read-only clone. What still discovers is
+any `git` a person types into [`Run`](composer.md#run), which is a shell and so not ours to pin.
+[What runs, and as whom](security.md) is the whole of it, and it is the page to read before adding
+anything to the parent that touches a worktree.

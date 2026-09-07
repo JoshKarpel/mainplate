@@ -213,9 +213,13 @@ anybody who wants it.
 `snapshots.py` captures a tree through a *shadow index*, so nothing a reader can see moves: not
 their staged changes, not `HEAD`, not a branch, not `git log`. Four things there are easy to undo:
 
-- **The index path is asked for, never assumed to be `.git`.** In a linked worktree `.git` is a file
-  holding a pointer, and almost every workspace here is a linked one, so `staging` resolves it with
-  `rev-parse --absolute-git-dir`.
+- **Git is told which directory is its own, never left to find one.** In a linked worktree `.git` is
+  a file holding a pointer, and almost every workspace here is a linked one, so the git directory is
+  neither `.git` nor anything derived by reading it: `Worktrees.gitdir` computes
+  `<clone>/worktrees/<session>`, `Worktree.git` passes it as `--git-dir` with `--work-tree`, and
+  `staging` writes the shadow index there. The worktree is the one directory a session may write, so
+  discovering anything out of it is reading a value that session controls, and git configuration
+  names programs git runs. [What runs, and as whom](security.md) is why.
 - **A fresh index per operation, not one per workspace.** Two concurrent captures over one path
   write over each other, and the loser's `write-tree` then describes a tree that never existed, in
   practice the *empty* tree.

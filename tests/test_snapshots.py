@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -38,7 +39,9 @@ from mainplate.settings import Settings
 from mainplate.snapshots import SNAPSHOT_REF
 from mainplate.snapshots import NotAWorktree
 from mainplate.snapshots import Worktree
+from mainplate.snapshots import Worktrees
 from mainplate.snapshots import branch_named
+from mainplate.tools import GitTracked
 
 
 class TestWorkingFromARelativeDatabase:
@@ -88,6 +91,140 @@ class TestWorkingFromARelativeDatabase:
         # It is the same question `plant` asks to decide whether it has anything to do.
         assert planted.root in await worktrees.planted()
         assert (await worktrees.plant("a" * 32)).root == planted.root
+
+
+class TestNamingGitsOwnDirectory:
+    """
+    That a snapshot reads its configuration from the clone and never from the tree it is capturing.
+
+    A session's worktree is the one directory its `bash` may write, and the `.git` at the root of a
+    linked worktree is a pointer file. So a session can put a repository of its own there, and git
+    configuration names programs git runs. What these assert is that the parent never reads it: the
+    control fires the same payload through a `Worktree` that looks for its git directory, which is
+    what makes the other two assertions mean anything.
+    """
+
+    SESSION = "b" * 32
+
+    @pytest.fixture
+    async def worktrees(self, worktree: Worktree, tmp_path: Path) -> Worktrees:
+        """A clone of the fixture repository, ready to plant linked worktrees of."""
+        clones = Clones(root=tmp_path / "clones")
+        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root))
+        await clones.ensure(repository)
+        return clones.worktrees(repository.id, tmp_path / "worktrees")
+
+    def poison(self, planted: Worktree, ran: Path) -> None:
+        """
+        What a session's own `bash` could do to its worktree: replace the pointer with a repository
+        whose configuration names a command, which `git add`'s index refresh then runs.
+
+        `; false` so the command fails as a file-system monitor, which is the case worth pinning:
+        git treats that as a reason to scan normally, so a capture through the poisoned directory
+        succeeds and reports nothing. The payload has already run by then.
+        """
+        (planted.root / ".git").unlink()
+        subprocess.run(("git", "init", "-q", str(planted.root)), check=True)
+        subprocess.run(("git", "-C", str(planted.root), "config", "core.fsmonitor", f"touch {ran}; false"), check=True)
+
+    async def test_the_derived_git_directory_is_the_one_git_made(self, worktrees: Worktrees) -> None:
+        """
+        The derivation, against git rather than against a reading of its documentation. `git
+        worktree add` names the directory after the last component of the path, and the `gitdir`
+        file inside it points back at the worktree, so this asks git which tree it thinks that
+        directory belongs to.
+        """
+        planted = await worktrees.plant(self.SESSION)
+
+        assert planted.gitdir == worktrees.gitdir(self.SESSION)
+        assert planted.gitdir is not None
+        assert planted.gitdir.is_dir()
+        assert (planted.gitdir / "gitdir").read_text().strip() == str(planted.root / ".git")
+
+    async def test_a_worktree_that_looks_for_its_git_directory_runs_what_the_tree_says(
+        self, worktrees: Worktrees, tmp_path: Path
+    ) -> None:
+        """
+        The control, and the reason the two assertions below are not vacuous: the payload is live,
+        and the only thing standing between it and the service user is which directory git is told
+        to read.
+        """
+        planted = await worktrees.plant(self.SESSION)
+        ran = tmp_path / "ran"
+        self.poison(planted, ran)
+
+        await Worktree(root=planted.root).capture("through a discovered directory")
+
+        assert ran.exists()
+
+    async def test_naming_the_git_directory_runs_nothing_the_tree_asked_for(
+        self, worktrees: Worktrees, tmp_path: Path
+    ) -> None:
+        planted = await worktrees.plant(self.SESSION)
+        ran = tmp_path / "ran"
+        self.poison(planted, ran)
+
+        await planted.capture("through the clone")
+
+        assert not ran.exists()
+
+    async def test_listing_runs_nothing_the_tree_asked_for_either(self, worktrees: Worktrees, tmp_path: Path) -> None:
+        """
+        `list` is the other thing that runs git in the parent, and `ls-files` refreshes the index, so
+        it reaches the same setting from a call site the model triggers directly. Here rather than in
+        `test_files.py` because what it needs is this rig: a real linked worktree of a real clone,
+        which is the shape the vector depends on.
+        """
+        planted = await worktrees.plant(self.SESSION)
+        ran = tmp_path / "ran"
+        self.poison(planted, ran)
+
+        listed = await GitTracked(worktree=planted).entries(planted.root)
+
+        assert not ran.exists()
+        assert "src/kept.txt" in listed
+
+    async def test_a_listing_that_looks_for_its_git_directory_runs_what_the_tree_says(
+        self, worktrees: Worktrees, tmp_path: Path
+    ) -> None:
+        """The control for the pair above."""
+        planted = await worktrees.plant(self.SESSION)
+        ran = tmp_path / "ran"
+        self.poison(planted, ran)
+
+        await GitTracked(worktree=Worktree(root=planted.root)).entries(planted.root)
+
+        assert ran.exists()
+
+    async def test_a_poisoned_worktree_is_still_captured_correctly(self, worktrees: Worktrees, tmp_path: Path) -> None:
+        """
+        Refusing the tree's git directory is not refusing the tree. The files are still the session's
+        work and still belong in the snapshot, so what the repository the session planted holds is
+        beside the point rather than a reason to capture nothing.
+        """
+        planted = await worktrees.plant(self.SESSION)
+        (planted.root / "src" / "written.txt").write_text("by the session\n")
+        self.poison(planted, tmp_path / "ran")
+
+        held = await planted.paths(await planted.capture("after"))
+
+        assert "src/kept.txt" in held
+        assert "src/written.txt" in held
+
+    async def test_the_shadow_index_is_written_in_the_clone(self, worktrees: Worktrees, tmp_path: Path) -> None:
+        """
+        The other thing discovery decided. A capture writes its index into the git directory, so a
+        parent that read one out of the tree would write into whatever the tree pointed at.
+
+        Asked of a *poisoned* worktree deliberately: on a clean one the discovered directory and the
+        derived one are the same path, so this would hold however it was arrived at.
+        """
+        planted = await worktrees.plant(self.SESSION)
+        self.poison(planted, tmp_path / "ran")
+
+        async with planted.staging() as index:
+            assert index.parent == planted.gitdir
+            assert not index.is_relative_to(planted.root)
 
 
 @pytest.fixture
@@ -847,7 +984,7 @@ class TestWhatATurnRecords:
         await pass_at(planting, body, session.id)
 
         recorded = await planting.checkpointer.load(session.id)
-        assert parse_tree(recorded[opening_tree_key(0)]) == await workspaces.worktree(session.id).capture(
+        assert parse_tree(recorded[opening_tree_key(0)]) == await workspaces.worktree(session.id, FIXTURE).capture(
             "the same tree"
         )
 
@@ -924,9 +1061,9 @@ class TestWhatATurnRecords:
         recorded = await planting.checkpointer.load(session.id)
         after = parse_tree(recorded[tree_key(0, 1)])
         assert after is not None
-        held = await workspaces.worktree(session.id).paths(after)
+        held = await workspaces.worktree(session.id, FIXTURE).paths(after)
         assert "src/added.txt" in held
-        assert "src/added.txt" not in await workspaces.worktree(session.id).paths(
+        assert "src/added.txt" not in await workspaces.worktree(session.id, FIXTURE).paths(
             str(parse_tree(recorded[tree_key(0, 0)]))
         )
 

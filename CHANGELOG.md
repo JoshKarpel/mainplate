@@ -389,7 +389,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   object at all. Forking checks the new session's worktree out at the tree the forked turn
   originally saw, so a branch re-asks its question against the files that question was asked about.
   Snapshots are gitignore-aware, so what a branch checks out is the source as that turn saw it and
-  never a `.venv`, a build directory, or an untracked file holding a secret.
+  never a `.venv`, a build directory, or an untracked file holding a secret. Everything this console
+  runs git for outside the sandbox, snapshots and `list` both, is told which git directory is its own
+  rather than finding one by looking down from the worktree, so the configuration git reads comes out
+  of the clone the sandbox binds read-only: settings that name a program git then runs are numerous
+  and the list is open-ended, and a session's worktree is the one directory that session may write.
 - Two isolation settings on a session, picked when it is created and fixed for its life like the
   endpoint and the model, with forking the way to change them. **What files it has** is a repository
   it works in, no files at all, or this whole machine. **Network** is on or off, and off rather than

@@ -69,6 +69,32 @@ the session on the cheapest model the endpoint lists and say the shortest thing 
 Reach for a frontier model only when the change is about what a frontier model does differently, and
 say so.
 
+## A worktree is a session's to write, so the parent must not read anything out of it
+
+The console process holds the credential, the store and the service user's whole filesystem; the
+sandbox holds a session's worktree, bound read-write because a session has to work in it. **Anything
+the parent runs against that worktree is running with one side's authority over the other side's
+input**, and the mistake is never a missing check, it is a program that goes and *finds* something
+rather than being handed it.
+
+Git is the standing example and the reason this has a section. Its configuration names programs it
+runs (`core.fsmonitor` fires inside `git add`, and the list is open-ended), a session's worktree is a
+linked one whose `.git` is a pointer file the session can replace, and a failing monitor makes git
+scan normally, so the capture succeeds and nothing reports it. So `Worktree.gitdir` names git's
+directory and `Worktree.git` passes `--git-dir` with `--work-tree`, which reads the configuration out
+of the read-only clone and consults the tree's not at all.
+
+What must hold when adding to the parent:
+
+- **Never run git in a session's worktree without naming its directory.** A bare `git -C <worktree>`
+  in `snapshots.py`, in a tool, in a page or in a script is the whole vulnerability restored.
+- **Never take a path out of a worktree and act on it in the parent.** Derive it, the way
+  `Worktrees.gitdir` does, or receive it from the console's own state.
+- **Prefer the sandbox** where the parent has no reason to be the one running it at all. That is the
+  [plugins-as-scripts](docs/design/plugins.md) argument, and it is the same argument.
+
+[`docs/design/security.md`](docs/design/security.md) is why, and names what is still open.
+
 ## Where the rest of it is written
 
 The design notes are [a documentation site](https://joshkarpel.github.io/mainplate/) built from
@@ -95,6 +121,9 @@ change:
   content-addressed anchoring scheme behind `read` and `edit`.
 - [`docs/design/sandbox.md`](docs/design/sandbox.md): the mount namespace `bash` runs behind, and
   the two isolation axes a session picks.
+- [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
+  sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
+  anything to the parent that runs a program against a session's worktree.**
 - [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, and what one
   pass does.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is

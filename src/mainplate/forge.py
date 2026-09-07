@@ -326,8 +326,17 @@ class Workspaces:
         """
         return self.scratch / session
 
-    def worktree(self, session: str) -> Worktree:
-        return Worktree(root=self.at(session))
+    def worktree(self, session: str, repository: str) -> Worktree:
+        """
+        A session's worktree, knowing which clone it is of, which is what lets git be *told* where
+        its directory is rather than left to find one in a tree the session can write. See
+        `Worktree.gitdir`.
+
+        The repository is asked for rather than derived from the session because nothing here holds
+        a session's choice, and the callers all have it: a worktree is only ever named for a session
+        that picked a repository.
+        """
+        return self.clones.worktrees(repository, self.root).worktree(session)
 
     def named(self, repository: str) -> Repository | None:
         return self.reaching.current.offers(repository)
