@@ -96,6 +96,11 @@ The sidebar draws the result as a tree. A fork inherits its parent's repository,
 turn against different files is a different question wearing the same words; a session working in
 *no* repository is the exception, and forking one is how you pick a repository up.
 
+A fork inherits no plugins, though, so it lands on that same **Load plugins** step before it answers
+anything, with the parent's switches already set the way you left them. That is the cost of forking
+being how a session changes its mind about them: a branch declares and sets up from scratch, so
+editing a repository's `.mainplate/` and forking is how you try the change.
+
 ## What a model costs
 
 No gateway reached so far publishes a price anywhere in its model list, and what it does publish is

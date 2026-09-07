@@ -266,9 +266,10 @@ class Choice:
         a branch would be a name `git worktree add -b` refuses because the parent already holds it.
 
         Trust survives a fork and the base does not, and the two are different questions. A fork
-        inherits the repository half of what its parent registered rather than reading any file
-        again, so what this records there is that the branch is running what its parent ran, which is
-        true whether or not it is ever consulted.
+        reads its repository's declaration again, out of the tree it is planted at, so this is what
+        decides whether it reads one at all: a branch of a session that trusts its repository draws
+        that repository's plugins on its own settings step, and a branch of one that does not draws
+        none, exactly as its parent did.
         """
         if self.repository is None:
             return replace(self, base=None, branch=None, trusted=True, isolation=self.isolation.settled(None))

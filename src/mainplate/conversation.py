@@ -2867,18 +2867,20 @@ def conversing(
         while True:
             asked = await opening_turn(run, at.turn)
             # A session that declares plugins and has loaded none has nothing to answer with, and
-            # answering anyway would put a turn in the cached prefix under a harness nobody chose. It
-            # cannot arise through the console, since the message box is on the other side of the
-            # settings step; it is refused rather than assumed away because the alternative is a
-            # conversation quietly running without the plugins somebody installed. `opening_turn`
-            # above is what holds an ordinary session here, blocked on an empty inbox, until the step
-            # is answered.
+            # answering anyway would put a turn in the cached prefix under a harness nobody chose. So
+            # this pass stops here, having recorded nothing: the page draws the settings step, and the
+            # press that answers it asks for the pass that picks this message up.
+            #
+            # **Stopped rather than refused, because a branch reaches here holding a message.** A fork
+            # carries none of its parent's plugins and queues the turn it re-asks, so `opening_turn`
+            # hands that message over while the step is still unanswered - which is waiting for a
+            # press rather than anything having gone wrong. An ordinary session waits further up,
+            # blocked on an empty inbox, and a refusal recorded here would have made every branch with
+            # something to re-ask a session that says it cannot be answered.
             #
             # Asked of what was *declared*, so a console with no plugins at all needs no confirmation:
             # what the step confirms is executing somebody's program, and there is none to execute.
             if enrolled is None and declared:
-                never = records.Refused(why="this session's plugins were never loaded, so it cannot be answered")
-                await run.step(refused_key(at.turn, 0), partial(as_recorded, never), parse_refused)
                 return Stalled()
             # Read off the message this pass just parked on rather than by asking the store again,
             # which is the whole reason the boundary rides on the message itself: a pass carries its

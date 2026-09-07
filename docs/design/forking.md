@@ -51,9 +51,9 @@ under the reader's hand, and there would be one per turn.
   asked](composer.md#handing-off-without-being-asked). The *switches* are the other column and are
   inherited: which plugins run is not a fact about one conversation's context, and left behind, a
   branch would set up and execute a program somebody had turned off in the session it branched from.
-- **What the operator's plugins are**, which a fork asks afresh. Those scripts sit outside every
-  worktree, so nothing a model wrote can reach them, and describing them again is how a conversation
-  picks up an edited one. See [plugins](plugins.md#setup).
+- **What its plugins *are*, at every tier**, which a fork declares and sets up afresh. Nothing about
+  the parent's comes across, so describing them again is how a conversation picks up an edited one.
+  See [plugins](plugins.md#setup).
 - **A repository it does not have.** A fork may *attach* one and may not *swap* one; see [the
   workspace](workspace.md#a-fork-may-attach-a-repository-and-may-not-swap-one).
 
@@ -61,23 +61,32 @@ What it *does* inherit, besides the turns, is the worktree state: a fork's workt
 at the tree the forked turn originally saw, so a branch re-asks its question against the files that
 question was asked about.
 
-And **the repository half of what its parent declared and loaded**, both keys and whole, which is the
-one place the plugin tiers are told apart. A fork plants at a *recorded tree*, which is a tree a model
-wrote - a snapshot is `git add -A`, so a `.mainplate/` file written on turn 4 is in the tree recorded
-for turn 5. Re-reading it here would run a plugin the parent's model authored, one fork away from any
-session with files, so only a session planted at a commit the repository provided ever reads that
-file. Both keys rather than the registration alone, because a fork of a session that never got past
-its settings step has only the declaration, and re-reading the file to draw a switch for it is the
-same read one step earlier. See
+## A fork answers the settings step again
+
+**A branch holds a conversation and still owes an answer to that step**, which is the one place a
+fork is not simply a session with a past. It carries no declaration, no registration and no press, so
+its first pass reads what the tree it is planted at declares, its page draws the step over the turns
+it carries, and the press in the branch is what runs `setup`.
+
+That is read off the registration alone rather than off the turn count. What a cached prefix cannot
+survive is a plugin set changing under a request already made, and a branch has made none: it holds
+*recorded* turns, which is a different thing.
+
+**Editing `.mainplate/` and forking is therefore how a session iterates on its own plugins**,
+including the setup script that installs its toolchain - which a branch has to run again anyway,
+since it plants a fresh worktree and an ignored directory does not come across in a recorded tree.
+
+**And the press is asked for again because a branch is planted at a tree a model wrote.** A snapshot
+is `git add -A`, so a `.mainplate/` file written on turn 4 is in the tree recorded for turn 5. What
+makes running what that tree names legitimate is not that the parent was confirmed once: it is that
+somebody chose to fork this conversation and then confirmed the switches here. Starting a session and
+forking one are the same decision about the same code, taken at two moments, and both are asked in
+the same place. The parent's switches come across as the step's defaults, so a plugin turned off is
+drawn turned off in every branch. See
 [reading it once](plugins.md#read-once-and-never-from-a-tree-this-console-wrote).
 
-And **the press that answered the parent's settings step**, where it has one, which is what lets the
-operator's half be set up afresh at all. A fork carries turns, and a session with a turn in it is past
-that step: the step is drawn in place of the transcript, and the route answering it refuses a session
-that has been asked anything. So a branch that had to be confirmed again could not be, and it would
-reach its first message having loaded nothing and refuse it. What that carries is the parent's own
-confirmation rather than a new one, over the switches copied beside it, so what a branch runs is what
-somebody already looked at and said yes to.
+The cost, stated: **every fork stops at a screen before it answers anything**, a fork made only to
+re-ask one turn included.
 
 ## There is no rewind
 

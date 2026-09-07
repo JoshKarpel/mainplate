@@ -24,6 +24,7 @@ from conftest import already
 from conftest import answered_with
 from conftest import came_back
 from conftest import recorded_turn
+from conftest import registered
 from conftest import run
 from conftest import started
 from playwright.async_api import Browser
@@ -40,8 +41,6 @@ from mainplate.agent import RETENTION
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
-from mainplate.conversation import PLUGINS_KEY
-from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Result
 from mainplate.conversation import messages_key
@@ -56,7 +55,6 @@ from mainplate.forge import Workspaces
 from mainplate.pages import CACHE_ID
 from mainplate.pages import OPENING
 from mainplate.plugins.asking import Declaring
-from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.installed import BUNDLED_ROOT
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
@@ -241,10 +239,14 @@ async def registering(service: Service, session: str, *enrolled: Enrolled) -> No
 
     A session with no registration is one nobody has answered that step for, so its page draws the
     step rather than a transcript - which is the honest state and not the one most of these tests are
-    about. Both keys, because both are written: the console's own half and the repository's.
+    about. It is `conftest.registered` under another name, kept here because what these tests reach
+    for is a *branch* that has not answered its step yet: a fork carries its parent's turns and none
+    of its plugins, so it draws the step until something records one.
+
+    A session `started` made has one already, and a registration is write-once, so a card to draw goes
+    to `started` as `enrolled` rather than being supplied over the top of an empty set here.
     """
-    await service.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(enrolled))
-    await service.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
+    await registered(service, session, *enrolled)
 
 
 # A plugin with a card of both kinds of control, which is what the rail draws and what the card tests
@@ -1835,11 +1837,26 @@ class TestOpeningTheRecordBehindARequest:
         assert placed["record"]["width"] > placed["rule"]["width"] / 2
 
 
+async def landed_on_the_branch(service: Service, page: Page) -> str:
+    """
+    The branch a send just navigated to, with its settings step answered so a transcript is drawn.
+
+    **A fork lands on that step**, because it carries its parent's turns and none of its plugins, and
+    that is the console working rather than a fixture to loosen: a branch plants a fresh worktree and
+    may be planted at a tree whose `.mainplate/` says something new, so it asks again. This console
+    runs no worker, so the pass that press would ask for never happens and the registration is written
+    here instead of clicked.
+    """
+    branch = page.url.rsplit("/", 1)[-1]
+    await registering(service, branch)
+    await page.reload(wait_until="load")
+    return branch
+
+
 async def a_conversation(console: tuple[str, Service], page: Page) -> str:
     """One session with a turn being answered, on the page, as the id to write further steps against."""
     url, service = console
-    session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
-    await registering(service, session.id, CARDED)
+    session = await started(service, "what is a mainplate", DEFAULT_CHOICE, None, CARDED)
     await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
@@ -2059,6 +2076,7 @@ class TestWhereTheComposerSendsTo:
 
         await page.wait_for_url(lambda url: session not in url)
         assert "/sessions/" in page.url
+        await landed_on_the_branch(console[1], page)
         await expect(page.locator("#transcript")).to_contain_text("try it another way")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
 
@@ -2074,6 +2092,7 @@ class TestWhereTheComposerSendsTo:
         await page.click(".sender__caret")
         await page.click('.sender__option[value="aside"]')
         await page.wait_for_url(lambda url: session not in url)
+        await landed_on_the_branch(console[1], page)
 
         await page.fill(".composer textarea", "here is what I found")
         await page.click(".sender__caret")
@@ -2535,6 +2554,7 @@ class TestNamingAModeFromTheKeyboard:
         await page.keyboard.press("Shift+Enter")
 
         await page.wait_for_url(lambda url: session not in url)
+        await landed_on_the_branch(console[1], page)
         await expect(page.locator("#transcript")).to_contain_text("try it another way")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
 
@@ -2949,6 +2969,7 @@ class TestTheShelf:
         await self.keep(page, "worth carrying across")
         forked = await service.fork(session, at=1, chosen=DEFAULT_CHOICE, said="try again")
         assert forked is not None
+        await registering(service, forked.id)
         await page.goto(f"{url}/sessions/{forked.id}", wait_until="load")
 
         await expect(page.locator(".shelf__take")).to_have_text("worth carrying across")
@@ -2966,6 +2987,7 @@ class TestTheShelf:
         await self.keep(page, "worth carrying across")
         forked = await service.fork(session, at=1, chosen=DEFAULT_CHOICE, said="try again")
         assert forked is not None
+        await registering(service, forked.id)
         await page.goto(f"{url}/sessions/{forked.id}", wait_until="load")
         await page.click(".shelf__drop >> nth=0")
         await expect(page.locator(".shelf__take")).to_have_count(0)

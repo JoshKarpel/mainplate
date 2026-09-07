@@ -21,6 +21,7 @@ from conftest import answered_with
 from conftest import came_back
 from conftest import passing
 from conftest import recorded_turn
+from conftest import registered
 from conftest import snapshotted
 from without_asgi import ASGIApp
 from without_durability.interfaces import INBOX
@@ -97,7 +98,13 @@ async def taken(service: Service, session: str) -> int:
     Which is what a pass's first act is, written by hand here for the reason the whole `app` fixture
     runs without a worker: a test asserting on a turn in flight must not be racing one. Until this
     happens a message is only queued, which is a different state and one these tests are rarely about.
+
+    The registration goes with it because a pass sets a session's plugins up *before* it opens a turn,
+    so a session with a turn taken is one that got past its settings step by definition. Writing the
+    turn without it would be a checkpoint no pass could produce, and a page drawn from it draws the
+    step over a conversation.
     """
+    await registered(service, session)
     recorded = await service.checkpointer.load(session)
     turn = len([key for key in recorded if key.endswith(":opened")])
     await service.checkpointer.supply(
@@ -113,7 +120,7 @@ async def answered(service: Service, session: str, *said: object) -> int:
     return turn
 
 
-async def a_session(app: ASGIApp, said: str = "what is a mainplate", title: str | None = None) -> str:
+async def a_session(app: ASGIApp, service: Service, said: str = "what is a mainplate", title: str | None = None) -> str:
     """
     A session started the way a browser starts one, with its first message in it.
 
@@ -122,15 +129,17 @@ async def a_session(app: ASGIApp, said: str = "what is a mainplate", title: str 
     choice and the message box is on the session's own page. Written once here rather than at every
     call site, and a test that is about the split posts to `/sessions` itself.
 
-    The settings step in between is skipped, which is safe because this app's service runs no plugins:
-    a console with nothing declared has nothing to confirm. `TestLoadingASessionsPlugins` is where the
-    step itself is driven.
+    The settings step in between is answered by writing what a pass would have written, which is two
+    empty registrations: this app's service runs no plugins, so there is nothing to confirm, but a
+    registration is still what takes a session past the step and a page drawn without one is the step.
+    `TestLoadingASessionsPlugins` is where the step itself is driven, through the route.
     """
     async with calling(app) as caller:
         answered = await caller.post("/sessions", starting_form(title=title))
         assert answered.status == 303
         session = answered.location.rsplit("/", 1)[-1]
         assert (await caller.post(f"/sessions/{session}/messages", {"prompt": said})).status == 200
+        await registered(service, session)
         return session
 
 
@@ -311,7 +320,7 @@ class TestTheConsole:
     async def test_the_first_message_creates_a_session_and_redirects_to_it(
         self, app: ASGIApp, service: Service
     ) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         listed = await service.listed()
         assert [(each.id, each.title, each.created_at) for each in listed] == [(session, "what is a mainplate", WHEN)]
 
@@ -325,18 +334,20 @@ class TestTheConsole:
         turn. What changed is only who wrote it - creation used to say the first thing itself, and
         now there is somebody at a box.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         assert delivered_in(await service.checkpointer.load(session)) == [recorded_steer("what is a mainplate")]
 
-    async def test_an_unanswered_session_renders_the_question_and_watches_for_the_answer(self, app: ASGIApp) -> None:
-        session = await a_session(app)
+    async def test_an_unanswered_session_renders_the_question_and_watches_for_the_answer(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert answered.status == 200
         assert "what is a mainplate" in answered.text
         assert f'hx-sse:connect="/fragments/stream?session={session}"' in answered.text
 
-    async def test_the_connection_is_held_outside_everything_that_swaps(self, app: ASGIApp) -> None:
+    async def test_the_connection_is_held_outside_everything_that_swaps(self, app: ASGIApp, service: Service) -> None:
         """
         The connection is the page's, not the transcript's, and the difference is load-bearing.
 
@@ -345,7 +356,7 @@ class TestTheConsole:
         what a reader of the markup can check: the connecting element opens before the region it
         updates and is closed before it, so it cannot be inside it.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
         connecting = answered.text.index("hx-sse:connect")
@@ -360,7 +371,7 @@ class TestTheConsole:
         message it is told it about. Pinned as an ordering because that is what a reader of the markup
         can check, and the placement is the whole of what moved it off the top of the page.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await service.checkpointer.supply(
             session, instructions_key(0), recorded_instructions("what this session is answered under")
         )
@@ -377,7 +388,7 @@ class TestTheConsole:
         back, so drawing it costs nothing about the claim that this is what was sent.
         """
         said = "## Conventions\n\n- say less\n"
-        session = await a_session(app)
+        session = await a_session(app, service)
         await service.checkpointer.supply(session, instructions_key(0), recorded_instructions(said))
         drawn = await watched(app, session)
 
@@ -386,7 +397,7 @@ class TestTheConsole:
         assert said in [held["data-markdown"] for held in blocks_carrying_markdown(drawn)]
 
     async def test_a_stretch_nothing_has_composed_for_yet_draws_the_panel_with_no_prompt_in_it(
-        self, app: ASGIApp
+        self, app: ASGIApp, service: Service
     ) -> None:
         """
         A session's first message is queued before the pass that composes for it has planted a
@@ -394,7 +405,7 @@ class TestTheConsole:
         swap the first answer arrives on. Asserted against the *fold*, because the panel is drawn
         either way and what tells the two apart is whether there is anything to unfold.
         """
-        drawn = await watched(app, await a_session(app))
+        drawn = await watched(app, await a_session(app, service))
 
         assert 'id="system-prompt-0"' in drawn
         assert 'id="system-prompt-0-fold"' not in drawn
@@ -412,7 +423,7 @@ class TestTheConsole:
         disclosure that fetches what the checkpoint holds behind it, so `hx-` appears all over this
         page and only here does it mean the conversation asking for itself.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         if settled:
             await answered(
                 service, session, {"kind": "response", "parts": [{"part_kind": "text", "content": "it is a plate"}]}
@@ -423,25 +434,29 @@ class TestTheConsole:
         opening = drawn[: drawn.index(">") + 1]
         assert "hx-" not in opening, f"the region asks for something on its own: {opening}"
 
-    async def test_a_stream_sends_the_conversation_as_soon_as_it_is_opened(self, app: ASGIApp) -> None:
+    async def test_a_stream_sends_the_conversation_as_soon_as_it_is_opened(
+        self, app: ASGIApp, service: Service
+    ) -> None:
         """
         What makes a reconnect need no replay: the only thing this ever sends is current state, so
         a page that has just connected and one that has been connected for an hour are handed the
         same thing.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
             first = await anext(events)
         assert "what is a mainplate" in first.data
         assert f'hx-target="#{TRANSCRIPT_ID}"' in first.data
         assert 'hx-swap="outerMorph"' in first.data
 
-    async def test_a_message_names_the_region_it_is_for_rather_than_the_connection(self, app: ASGIApp) -> None:
+    async def test_a_message_names_the_region_it_is_for_rather_than_the_connection(
+        self, app: ASGIApp, service: Service
+    ) -> None:
         """
         A message made only of partials leaves the connecting element alone, which is what lets one
         connection drive several regions and what keeps the sink inert.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
             first = await anext(events)
         assert first.data.startswith("<hx-partial")
@@ -456,8 +471,10 @@ class TestTheConsole:
             answered = await caller.get("/fragments/stream?session=nothing-here")
         assert answered.status == 404
 
-    async def test_a_message_into_a_session_answers_with_the_transcript_alone(self, app: ASGIApp) -> None:
-        session = await a_session(app)
+    async def test_a_message_into_a_session_answers_with_the_transcript_alone(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})
         assert answered.status == 200
@@ -476,7 +493,7 @@ class TestTheConsole:
         held; so would a read here, since a turn can end between the read and the write. What is
         recorded is a message that *may* be folded in, which is the whole of what Send means.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})
         recorded = await service.checkpointer.load(session)
@@ -495,7 +512,7 @@ class TestTheConsole:
         the reply finished. It is drawn from the entry instead, which exists the instant it is
         delivered.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await taken(service, session)
         async with calling(app) as caller:
             answered = await caller.post(f"/sessions/{session}/messages", {"prompt": "actually, be brief"})
@@ -509,7 +526,7 @@ class TestTheConsole:
         `turn:{n}:heard:{i}` is the cursor that says where it went, so a running turn puts it where
         the settled reading will: above the response it was appended to rather than at the end.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await taken(service, session)
         async with calling(app) as caller:
             await caller.post(f"/sessions/{session}/messages", {"prompt": "actually, be brief"})
@@ -527,7 +544,7 @@ class TestTheConsole:
         this is the override and everything else about Send is the pass's to decide. What it records
         is the other kind of message: one a draining pass stops at rather than folds in.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing", "disposition": "next"})
         recorded = await service.checkpointer.load(session)
@@ -535,18 +552,20 @@ class TestTheConsole:
             "and another thing"
         )
 
-    async def test_a_message_queued_behind_an_unanswered_one_is_still_shown(self, app: ASGIApp) -> None:
+    async def test_a_message_queued_behind_an_unanswered_one_is_still_shown(
+        self, app: ASGIApp, service: Service
+    ) -> None:
         """It is recorded and it will be answered, so a page that hid it would be lying about it."""
-        session = await a_session(app, "the first thing")
+        session = await a_session(app, service, "the first thing")
         async with calling(app) as caller:
             await caller.post(f"/sessions/{session}/messages", {"prompt": "the second thing", "disposition": "next"})
             answered = await caller.get(f"/sessions/{session}")
         assert "the first thing" in answered.text
         assert "the second thing" in answered.text
 
-    async def test_the_sidebar_lists_every_session_newest_first(self, app: ASGIApp) -> None:
-        await a_session(app, "the older one")
-        await a_session(app, "the newer one")
+    async def test_the_sidebar_lists_every_session_newest_first(self, app: ASGIApp, service: Service) -> None:
+        await a_session(app, service, "the older one")
+        await a_session(app, service, "the newer one")
         async with calling(app) as caller:
             answered = await caller.get("/")
         assert answered.text.index("the newer one") < answered.text.index("the older one")
@@ -570,7 +589,7 @@ class TestTheConsole:
 
     async def test_an_empty_message_is_refused_rather_than_recorded(self, app: ASGIApp, service: Service) -> None:
         """A client refusal, not a server fault: a request that is not a message did not break anything."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.post(f"/sessions/{session}/messages", {"prompt": "   "})
         assert answered.status == 422
@@ -589,9 +608,11 @@ class TestTheConsole:
         assert answered.status == 422
         assert await service.listed() == ()
 
-    async def test_a_send_refuses_a_swap_of_anything_that_is_not_a_transcript(self, app: ASGIApp) -> None:
+    async def test_a_send_refuses_a_swap_of_anything_that_is_not_a_transcript(
+        self, app: ASGIApp, service: Service
+    ) -> None:
         """Every status but 204 and 304 swaps in htmx 4, so a refusal would otherwise replace the conversation."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert 'hx-status:4xx="swap:none"' in answered.text
@@ -611,7 +632,7 @@ class TestTheConsole:
         assert 'value="ripe/fast" checked' in answered.text, "the first it listed, preselected"
 
     async def test_a_session_is_named_by_the_box_when_one_is_given(self, app: ASGIApp, service: Service) -> None:
-        session = await a_session(app, "the first thing said", title="Reading the checkpointer")
+        session = await a_session(app, service, "the first thing said", title="Reading the checkpointer")
         found = await service.read(session)
         assert found is not None
         assert found.session.title == "Reading the checkpointer"
@@ -620,7 +641,7 @@ class TestTheConsole:
         self, app: ASGIApp, service: Service
     ) -> None:
         """The behaviour every session had before the field existed, and still the default."""
-        session = await a_session(app, "the first thing said")
+        session = await a_session(app, service, "the first thing said")
         found = await service.read(session)
         assert found is not None
         assert found.session.title == "the first thing said"
@@ -633,7 +654,7 @@ class TestTheConsole:
         `parse_qs` drops empty values, so an untouched field and an absent one already arrive
         alike; whitespace is the case that would otherwise get through and title a session `"   "`.
         """
-        session = await a_session(app, "the first thing said", title=given)
+        session = await a_session(app, service, "the first thing said", title=given)
         found = await service.read(session)
         assert found is not None
         assert found.session.title == "the first thing said"
@@ -645,7 +666,7 @@ class TestTheConsole:
         A sidebar seventeen rems wide can hold only so much, and a name typed into a box can be
         arbitrarily long where one taken from a message was already cut.
         """
-        session = await a_session(app, "hello", title="w " * 200)
+        session = await a_session(app, service, "hello", title="w " * 200)
         found = await service.read(session)
         assert found is not None
         assert len(found.session.title) <= TITLE_LENGTH
@@ -708,8 +729,8 @@ class TestTheConsole:
         assert answered.status == 422
         assert await service.listed() == ()
 
-    async def test_a_session_page_says_what_it_is_answered_on(self, app: ASGIApp) -> None:
-        session = await a_session(app)
+    async def test_a_session_page_says_what_it_is_answered_on(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert f"{DEFAULT_CHOICE.endpoint}" in answered.text
@@ -730,7 +751,7 @@ class TestTheConsole:
         the turn's, so it is held whether or not anything is expected down it; what a stalled
         session must not do is claim something is coming.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         narrowed = replace(service, catalogues=Catalogues(current=OTHER_CATALOGUE))
         async with calling(build_app(already(narrowed))) as caller:
             answered = await caller.get(f"/sessions/{session}")
@@ -749,7 +770,7 @@ class TestTheConsole:
         sentence names the one thing that does work: forking at the turn drops that turn's own
         requests and keeps everything under them.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await service.checkpointer.supply(
             session, refused_key(0, 0), records.Refused(why="prompt is too long", status=400).recorded()
         )
@@ -774,7 +795,7 @@ class TestTheConsole:
         somebody to restore a model nobody removed, and would take the spinner off a conversation
         the worker is still going to answer.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         thinned = Catalogue(
             offered={
                 DEFAULT_CHOICE.endpoint: Offering(
@@ -792,12 +813,14 @@ class TestTheConsole:
         assert "no longer" not in answered.text
         assert 'id="waiting"' in answered.text, "the worker can still answer it, so an answer is coming"
 
-    async def test_a_message_is_rendered_as_the_markdown_it_was_written_as(self, app: ASGIApp) -> None:
-        session = await a_session(app, "a **strong** point")
+    async def test_a_message_is_rendered_as_the_markdown_it_was_written_as(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, "a **strong** point")
         region = await watched(app, session)
         assert "<strong>strong</strong>" in region
 
-    async def test_markup_in_a_message_does_not_become_markup(self, app: ASGIApp) -> None:
+    async def test_markup_in_a_message_does_not_become_markup(self, app: ASGIApp, service: Service) -> None:
         """
         Asserted on the fragment rather than the page, which is not a detail.
 
@@ -812,13 +835,15 @@ class TestTheConsole:
         angle brackets by construction; what neither may do is let them become anything, which is
         what the two tests below ask of each.
         """
-        session = await a_session(app, "<script>alert(1)</script> and <img src=x onerror=alert(2)>")
+        session = await a_session(app, service, "<script>alert(1)</script> and <img src=x onerror=alert(2)>")
         drawn = sub(r'( data-markdown="[^"]*"|<span class="opening">[^<]*</span>)', "", await watched(app, session))
         assert "<script" not in drawn
         assert "alert(1)" not in drawn
         assert "onerror" not in drawn
 
-    async def test_markup_in_a_message_is_still_text_in_the_line_its_panel_stands_for(self, app: ASGIApp) -> None:
+    async def test_markup_in_a_message_is_still_text_in_the_line_its_panel_stands_for(
+        self, app: ASGIApp, service: Service
+    ) -> None:
         """
         A panel's opening line is the source rather than the rendering, so the sanitiser never sees
         it and the escaping of a text child is the whole of what keeps it inert. The message is
@@ -833,10 +858,12 @@ class TestTheConsole:
         have is not what this asks.
         """
         said = "</span><script>alert(1)</script>"
-        session = await a_session(app, said)
+        session = await a_session(app, service, said)
         assert [line for line in opening_lines(await watched(app, session)) if line] == [said]
 
-    async def test_the_source_a_copy_button_hands_over_cannot_break_out_of_its_attribute(self, app: ASGIApp) -> None:
+    async def test_the_source_a_copy_button_hands_over_cannot_break_out_of_its_attribute(
+        self, app: ASGIApp, service: Service
+    ) -> None:
         """
         The message a block carries for its copy button is the raw thing somebody typed, so what
         stops it being markup is the escaping of the attribute holding it and nothing else. The
@@ -847,7 +874,7 @@ class TestTheConsole:
         - which is the same statement whether the renderer spells a quote `&#34;` or `&quot;`.
         """
         said = '" onmouseover="alert(1)'
-        session = await a_session(app, said)
+        session = await a_session(app, service, said)
         carrying = blocks_carrying_markdown(await watched(app, session))
         assert [held["data-markdown"] for held in carrying] == [said]
         # And the element carries nothing else, which is what says the value did not close its own
@@ -898,7 +925,7 @@ class TestForgettingFromTheComposer:
         assert answered.status == 200
 
     async def test_the_message_opens_a_turn_recorded_as_forgetting(self, app: ASGIApp, service: Service) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         await self.sent(app, session, "start again")
@@ -908,7 +935,7 @@ class TestForgettingFromTheComposer:
 
     async def test_everything_above_the_boundary_is_still_recorded(self, app: ASGIApp, service: Service) -> None:
         """Nothing is deleted, which is the whole difference between this and a `clear`."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         await self.sent(app, session, "start again")
@@ -924,7 +951,7 @@ class TestForgettingFromTheComposer:
         A boundary between turns is the only place one can go, so this never reaches `send`: what
         `Send` delivers is a message a running turn may fold in, and this must not be one.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
 
         await self.sent(app, session, "start again")
 
@@ -935,7 +962,7 @@ class TestForgettingFromTheComposer:
     async def test_the_transcript_says_the_model_was_told_nothing_above_it(
         self, app: ASGIApp, service: Service
     ) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         await self.sent(app, session, "start again")
@@ -947,7 +974,7 @@ class TestForgettingFromTheComposer:
         assert "what is a mainplate" in region
 
     async def test_a_conversation_nobody_forgot_draws_no_boundary(self, app: ASGIApp, service: Service) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         region = await watched(app, session)
@@ -975,7 +1002,7 @@ class TestBranchingFromTheComposer:
     async def test_branching_makes_a_new_session_and_leaves_this_one_alone(
         self, app: ASGIApp, service: Service
     ) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         branch = await self.branched(app, service, session)
 
         assert branch != session
@@ -989,7 +1016,7 @@ class TestBranchingFromTheComposer:
         Forking the *end*, so nothing is left behind and nothing is re-asked: every turn of the
         parent comes across settled and the message goes into the turn after them.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         branch = await self.branched(app, service, session)
 
@@ -1009,7 +1036,7 @@ class TestBranchingFromTheComposer:
         parent. Pinned as the header rather than as a status, because a `200` with the wrong header
         would swap an empty body over the conversation.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.post(
                 f"/sessions/{session}/messages", {"prompt": "elsewhere", "disposition": "fork"}
@@ -1021,7 +1048,7 @@ class TestBranchingFromTheComposer:
 
     async def test_the_branch_is_recorded_as_a_fork_of_its_parent(self, app: ASGIApp, service: Service) -> None:
         """So the sidebar draws it under what it came from, exactly as a fork from a turn is."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         branch = await self.branched(app, service, session)
 
         listed = {each.id: each for each in await service.listed()}
@@ -1036,7 +1063,7 @@ class TestBranchingFromTheComposer:
         Inherited rather than defaulted, because a branch of a session on one model that quietly
         started on the configured default would be answering a different question.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         branch = await self.branched(app, service, session)
 
         assert choice_of(await service.checkpointer.load(branch)) == choice_of(await service.checkpointer.load(session))
@@ -1047,8 +1074,8 @@ class TestBranchingFromTheComposer:
             answered = await caller.get("/")
         assert "sender__option" not in answered.text
 
-    async def test_a_conversation_with_a_turn_in_it_does(self, app: ASGIApp) -> None:
-        session = await a_session(app)
+    async def test_a_conversation_with_a_turn_in_it_does(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert "sender__option" in answered.text
@@ -1071,7 +1098,7 @@ class TestSteppingOutAndComingBack:
         return dict(answered.headers)
 
     async def test_an_aside_is_recorded_as_one(self, app: ASGIApp, service: Service) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         headers = await self.sent(app, session, "just checking something", "aside")
         stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
 
@@ -1083,7 +1110,7 @@ class TestSteppingOutAndComingBack:
 
     async def test_a_plain_fork_is_not_an_aside(self, app: ASGIApp, service: Service) -> None:
         """The flag is what somebody meant, so it has to be off unless they said so."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         headers = await self.sent(app, session, "going another way", "fork")
         forked = headers["hx-redirect"].rsplit("/", 1)[-1]
 
@@ -1096,7 +1123,7 @@ class TestSteppingOutAndComingBack:
         self, app: ASGIApp, service: Service
     ) -> None:
         """Nothing about the copy differs, which is the claim that keeps this one call and not two."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         headers = await self.sent(app, session, "just checking something", "aside")
         stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
@@ -1114,7 +1141,7 @@ class TestSteppingOutAndComingBack:
         requests whose context never existed, since they were asked against the history at the
         branch point.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         headers = await self.sent(app, session, "just checking something", "aside")
         stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
 
@@ -1125,7 +1152,7 @@ class TestSteppingOutAndComingBack:
         assert back["hx-redirect"].endswith(session), "and the reader is taken back there"
 
     async def test_the_aside_itself_is_not_sent_the_message_it_sent_back(self, app: ASGIApp, service: Service) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         headers = await self.sent(app, session, "just checking", "aside")
         stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
         await self.sent(app, stepped, "here is what I found", "parent")
@@ -1134,12 +1161,12 @@ class TestSteppingOutAndComingBack:
         # not be here is a third: going back sends to the parent instead of to both.
         assert delivered_in(await service.checkpointer.load(stepped))[1:] == [recorded_prompt("just checking")]
 
-    async def test_a_session_that_came_from_nowhere_cannot_send_back(self, app: ASGIApp) -> None:
+    async def test_a_session_that_came_from_nowhere_cannot_send_back(self, app: ASGIApp, service: Service) -> None:
         """
         Refused rather than dropped, and read off the row rather than posted: a form naming a
         destination is how a message reaches a conversation nobody was looking at.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             answered = await caller.post(
                 f"/sessions/{session}/messages", {"prompt": "back to what", "disposition": "parent"}
@@ -1147,13 +1174,17 @@ class TestSteppingOutAndComingBack:
         assert answered.status == 422
 
     async def test_the_way_back_is_offered_only_where_there_is_one(self, app: ASGIApp, service: Service) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         async with calling(app) as caller:
             plain = await caller.get(f"/sessions/{session}")
         assert 'value="parent"' not in plain.text
 
         headers = await self.sent(app, session, "just checking", "aside")
         stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
+        # A branch answers its own settings step before it draws a composer, because it carries its
+        # parent's turns and none of its plugins. Written by hand for the reason `a_session` writes
+        # one: this app runs no worker, so nothing else ever records a registration.
+        await registered(service, stepped)
         async with calling(app) as caller:
             branched = await caller.get(f"/sessions/{stepped}")
         assert 'value="parent"' in branched.text
@@ -1176,7 +1207,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
         turns that into `warm as of 12m`.
         """
         service.references.current = a_reference(context=200_000)
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         region = await watched(app, session)
@@ -1194,7 +1225,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
         one available: a `Service` is frozen, and what decides this is when the prefix was written.
         """
         service.references.current = a_reference(context=200_000)
-        session = await a_session(app)
+        session = await a_session(app, service)
         stale = WHEN - RETENTION - timedelta(seconds=1)
         await answered(service, session, {**ANSWERED[0], "timestamp": stale.isoformat()})
 
@@ -1219,7 +1250,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
             qualified={DEFAULT_CHOICE.model: Facts(context=200_000, cost=Cost(input=3, output=15, cache_read=0.3))},
             upstream={},
         )
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         region = await watched(app, session)
@@ -1238,7 +1269,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
             qualified={DEFAULT_CHOICE.model: Facts(context=200_000, cost=Cost(input=3, output=15))},
             upstream={},
         )
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         region = await watched(app, session)
@@ -1254,7 +1285,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
         when the prefix was last written is worth saying whether or not anything can price it.
         """
         service.references.current = a_reference(context=200_000)
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         region = await watched(app, session)
@@ -1269,7 +1300,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
         There is no prefix to have been cached before the first answer. The region stays all the same,
         because it is what the page's own connection swaps into once there is.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
 
         region = await watched(app, session)
 
@@ -1282,7 +1313,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
         is the context, which grows with every turn.
         """
         service.references.current = a_reference(context=200_000)
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
 
         region = await watched(app, session)
@@ -1300,7 +1331,7 @@ class TestWhatARuleSays:
     """
 
     async def test_a_turn_opens_with_a_rule_carrying_what_it_spent(self, app: ASGIApp, service: Service) -> None:
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert 'class="rule rule--turn"' in region
@@ -1320,7 +1351,7 @@ class TestWhatARuleSays:
         nothing about the checkpoint changes between this test and the one below it.
         """
         service.references.current = a_reference(context=10_000)
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert "53%" in region, "5,300 of 10,000 tokens"
@@ -1336,7 +1367,7 @@ class TestWhatARuleSays:
         longer lists the recorded id, a model with no record - and this is the first of them, which
         is the console's own default.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert "\N{UPWARDS ARROW}5K" in region, "how much context there is is known either way"
@@ -1352,7 +1383,7 @@ class TestWhatARuleSays:
         The first turn is the case the running total is left off, since there it *is* the turn's own
         figure and printing one number twice says nothing. The second turn is where it starts.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         assert "\N{N-ARY SUMMATION}" not in await watched(app, session), "one turn in, the total is the turn"
         await service.say(session, "and again")
@@ -1371,7 +1402,7 @@ class TestWhatARuleSays:
         the point rather than a shortcoming: what the total would say is the sum of everything the
         reference happened to know about, and nothing on the page could say it was doing that.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(
             service, session, {"kind": "response", "parts": [], "usage": {"input_tokens": 300, "output_tokens": 12}}
         )
@@ -1390,7 +1421,7 @@ class TestWhatARuleSays:
         On a panel the link was revealed by hover, so it did not exist on a touch screen at all, and
         forking is the only way a session changes its mind.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert 'class="rule__fork"' in region
@@ -1403,7 +1434,7 @@ class TestWhatARuleSays:
         A turn drawn as `free` here would be a claim nobody made, which is the one way to be wrong
         about money that a reader cannot catch.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(
             service, session, {"kind": "response", "parts": [], "usage": {"input_tokens": 300, "output_tokens": 12}}
         )
@@ -1417,14 +1448,14 @@ class TestWhatARuleSays:
         self, app: ASGIApp, service: Service
     ) -> None:
         """Read off the response's own `metadata`, which is where a pass stamps it before recording."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, {**ANSWERED[0], "metadata": {"took": 4.25}})
         region = await watched(app, session)
         assert "4.2s" in region
 
     async def test_a_turn_nothing_timed_says_nothing_about_time(self, app: ASGIApp, service: Service) -> None:
         """Every response recorded before this console timed anything, which must draw no figure."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert "rule__took" not in region
@@ -1435,7 +1466,7 @@ class TestWhatARuleSays:
         duration: a `ToolReturnPart` has nowhere for one, and what a turn's messages say about a call
         is the tool's own value.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(
             service,
             session,
@@ -1458,7 +1489,7 @@ class TestWhatARuleSays:
         And says it in a shape nothing is writing: an empty reply below a call the model is waiting
         on reads as a turn that has started answering, where what is happening is a tool running.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         turn = await taken(service, session)
         await service.checkpointer.supply(
             session,
@@ -1474,7 +1505,7 @@ class TestWhatARuleSays:
         self, app: ASGIApp, service: Service
     ) -> None:
         """The control: with the result in, what is being waited on is the next request."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         turn = await taken(service, session)
         await service.checkpointer.supply(
             session,
@@ -1495,7 +1526,7 @@ class TestShowingWhatWasRecorded:
     """
 
     async def answered_session(self, app: ASGIApp, service: Service) -> str:
-        session = await a_session(app)
+        session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
         await service.checkpointer.supply(session, model_key(0, 0), answered_with(ANSWERED[0]))
         return session
@@ -1514,7 +1545,7 @@ class TestShowingWhatWasRecorded:
         The `rule--turn` count is what keeps the dock's turn arrows stepping turns rather than
         requests, and it is why the modifier exists rather than the selector being every rule.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await service.checkpointer.supply(session, tree_key(0, 1), snapshotted("b" * 40))
         await answered(service, session, *ANSWERED, *ANSWERED)
         region = await watched(app, session)
@@ -1527,7 +1558,7 @@ class TestShowingWhatWasRecorded:
         self, app: ASGIApp, service: Service
     ) -> None:
         """The three things that are true of a request, which were previously homeless or on a panel."""
-        session = await a_session(app)
+        session = await a_session(app, service)
         await service.checkpointer.supply(session, tree_key(0, 0), snapshotted("a" * 40))
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
@@ -1598,7 +1629,7 @@ class TestShowingWhatWasRecorded:
         Shown as text and not as rendered Markdown, so the sanitiser this page uses elsewhere is not
         in the path at all: what stands in for it is that a node tree escapes a text child.
         """
-        session = await a_session(app)
+        session = await a_session(app, service)
         await service.checkpointer.supply(
             session,
             model_key(0, 0),
@@ -1896,21 +1927,29 @@ class TestLoadingASessionsPlugins:
         assert enrolled is not None
         assert [each.qualified for each in enrolled] == ["user:lint"]
 
-    async def test_a_session_that_has_been_asked_something_is_refused(self, service: Service) -> None:
+    async def test_a_session_that_has_already_loaded_its_plugins_is_refused(self, service: Service) -> None:
         """
         A tool definition leaving the cached prefix invalidates everything under it exactly as one
-        arriving late does, so which plugins run is settled the moment a turn is recorded.
+        arriving late does, so which plugins run is settled the moment a registration is recorded.
+
+        The registration and not the first message, which is the distinction a fork turns on: a branch
+        carries a whole conversation and no registration, so it has to be able to answer this step
+        while already holding turns. What it may not do is answer it twice.
         """
         answering = Answering()
         app, running = await self.console(service, answering)
         session = await self.declared(running)
         await running.say(session, "hello")
         async with calling(app) as caller:
+            first = await caller.post(f"/sessions/{session}/setup", {SETTLE_FIELD: SETTLED})
+            # What the pass the press asked for would record, written directly so that this stays a
+            # test about the route rather than one about what a plugin answers to every later event.
+            await registered(running, session)
             pressed = await caller.post(f"/sessions/{session}/setup", {SETTLE_FIELD: SETTLED})
 
+        assert first.status == 303, "a session holding a message has settled nothing yet"
         assert pressed.status == 422
         assert "fork it instead" in pressed.text
-        assert answering.asked == []
 
     async def test_try_again_asks_for_another_pass_and_runs_nothing(self, service: Service) -> None:
         """

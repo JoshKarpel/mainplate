@@ -45,6 +45,8 @@ from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
 from mainplate.config import Config
 from mainplate.config import Endpoint
+from mainplate.conversation import PLUGINS_KEY
+from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import Ended
 from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
@@ -54,6 +56,8 @@ from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
+from mainplate.plugins.asking import Enrolled
+from mainplate.plugins.asking import recorded_registration
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_session
@@ -450,7 +454,31 @@ def app(service: Service) -> ASGIApp:
     return build_app(already(service))
 
 
-async def started(service: Service, said: str, chosen: Choice = DEFAULT_CHOICE, title: str | None = None) -> Session:
+async def registered(service: Service, session: str, *enrolled: Enrolled) -> None:
+    """
+    What a pass writes when somebody answers a session's settings step.
+
+    **A registration is the whole of what takes a session past that step**, so a suite running without
+    a worker has to write one or every page it renders is the step rather than a transcript. Both keys,
+    because both are written together, and `enrolled` goes under the console's own: what these tests
+    want is a session whose rail draws a card, and which tier it came back under is the fork's question
+    rather than any reader's.
+
+    **Write-once, so this has to be the *first* registration a session gets.** The store keeps the
+    value a key was first given, so calling it after an empty one records nothing and leaves the rail
+    empty with no failure to point at.
+    """
+    await service.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(enrolled))
+    await service.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
+
+
+async def started(
+    service: Service,
+    said: str,
+    chosen: Choice = DEFAULT_CHOICE,
+    title: str | None = None,
+    *enrolled: Enrolled,
+) -> Session:
     """
     A session on `chosen` with `said` in it, which is what creating one used to be in one call.
 
@@ -460,12 +488,16 @@ async def started(service: Service, said: str, chosen: Choice = DEFAULT_CHOICE, 
     session with a message in it, so the pair is written once rather than at every call site - and a
     test that is about the split says so by calling `Service.start` itself.
 
-    It skips the step, which is safe exactly where nothing is declared: a console with no plugins has
-    nothing to confirm. A test that wants plugins actually running presses the button, through
-    `set_up` in `test_plugins.py` or `loaded` in `test_app.py`.
+    It skips the step by recording what answering it on a console with nothing declared writes, which
+    is two empty registrations. Written rather than implied, because a registration is the whole of
+    what takes a session past that step: a session holding turns and no registration is one still
+    owing an answer, which is what a fork is and is not what these tests are about. A test that wants
+    plugins actually running presses the button, through `set_up` in `test_plugins.py` or `loaded` in
+    `test_app.py`, and both start from `Service.start` rather than from here for that reason.
     """
     session = await service.start(chosen, title)
     await service.say(session.id, said)
+    await registered(service, session.id, *enrolled)
     found = await read_session(service.database, session.id)
     return found if found is not None else session
 

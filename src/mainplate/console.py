@@ -891,11 +891,16 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     out of files, and the switches on this form are drawn from that. So the press is the
     confirmation, and the pass that follows is what it confirms.
 
-    **Live before anything has been asked, and refused afterwards.** A tool definition leaving the
-    cached prefix invalidates everything under it exactly as one arriving late does, so a session
-    that has opened a turn is one whose set of plugins is settled, and forking is how a conversation
-    changes its mind. That is refused here rather than in the service because what decides it is
-    whether a turn has been recorded, which is a checkpoint question and the service holds no page.
+    **Live until a registration exists, and refused afterwards.** A tool definition leaving the cached
+    prefix invalidates everything under it exactly as one arriving late does, so a session that has
+    been set up is one whose set of plugins is settled, and forking is how a conversation changes its
+    mind. That is refused here rather than in the service because what decides it is what the
+    checkpoint holds, and the service holds no page.
+
+    **The registration and not the turn count**, which is what lets a fork answer this at all: a branch
+    carries its parent's turns and none of its plugins, so it owes an answer to the step while already
+    holding a conversation. Read against turns instead, every fork would be refused here and would have
+    to be handed a press it never gave.
 
     Two buttons and one route, told apart by a field rather than by the shape of the post. `Try
     again` asks for another *declaring* pass, which is the whole of what retrying a session whose
@@ -910,9 +915,9 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    if found.said.turns:
+    if found.plugins is not None:
         return page_response(
-            422, refusal_page(LINKS, 422, f"session {session} has already been asked something; fork it instead")
+            422, refusal_page(LINKS, 422, f"session {session} has already loaded its plugins; fork it instead")
         )
     if wanted.again:
         await service.setup_again(session)

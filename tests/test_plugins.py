@@ -1149,10 +1149,11 @@ class TestASessionsPlugins:
 
 class TestWhatABranchDoesAboutThem:
     """
-    A fork carries turns, so it is past the settings step before it has one: the step is drawn in
-    place of the transcript, and the route answering it refuses a session that has been asked
-    anything. So a branch that had to be confirmed again could not be, and everything here turns on
-    the parent's own press coming across.
+    A fork carries turns and nothing about its parent's plugins, so it holds a conversation and still
+    owes an answer to the settings step. That is what lets a branch pick up an edited `.mainplate/`,
+    and it is why the press is asked for again rather than inherited: a branch is planted at a
+    recorded tree, which is a tree a model wrote, so what makes running what it names legitimate is
+    somebody choosing to fork and then confirming the switches in the branch.
 
     Driven with `tendings`, because which plugins a branch sets up is read out of the column the
     switches carried across, and a pass with no way to read one would set up every declared plugin.
@@ -1162,14 +1163,14 @@ class TestWhatABranchDoesAboutThem:
     def declaring(self) -> Declaring:
         return Declaring(console=bundled(), speaking=Spawned(environ={}))
 
-    async def test_a_branch_of_a_loaded_session_loads_rather_than_stalling(
+    async def test_a_branch_of_a_loaded_session_is_on_a_step_of_its_own_and_loads_when_it_is_answered(
         self, service: Service, declaring: Declaring
     ) -> None:
         """
-        **Every fork of every session on a console with any plugins**, which is what made this worth
-        a test of its own: the console's half of a registration is deliberately not carried, so
-        without the press a branch reaches its first message having set nothing up and refuses it for
-        having loaded none.
+        **Every fork of every session on a console with any plugins**, which is what makes this worth
+        a test of its own: nothing about the parent's plugins is carried, so a branch's first pass
+        registers nothing and its page draws the step over the turns it holds. The press in the branch
+        is what runs anything, and it is the branch's own rather than one it was handed.
         """
         session = await self.loaded(service, declaring)
         forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE, said="again")
@@ -1177,23 +1178,35 @@ class TestWhatABranchDoesAboutThem:
 
         await passing(service, forked.id, self.body(declaring, service))
 
+        waiting = await service.checkpointer.load(forked.id)
+        assert setups_in(waiting) == 0, "the parent's press is not the branch's"
+        assert registered_in(waiting) is None, "so nothing is set up until somebody presses in here"
+
+        await replace(service, declaring=declaring).settle(forked.id, {}, 0)
+        await passing(service, forked.id, self.body(declaring, service))
+
         recorded = await service.checkpointer.load(forked.id)
         assert refusal_in(recorded) is None, "the branch is answerable rather than stopped"
         enrolled = registered_in(recorded)
-        assert enrolled is not None, "and it set the operator's own half up afresh"
+        assert enrolled is not None, "and it set every tier up afresh"
         assert {each.qualified for each in enrolled} == {"bundled:handoff", "bundled:guidance"}
 
-    async def test_a_plugin_switched_off_stays_off_across_the_branch(
+    async def test_a_plugin_switched_off_comes_across_as_what_the_branchs_step_is_drawn_with(
         self, service: Service, declaring: Declaring
     ) -> None:
         """
-        The switches and not the settings, which is the one column a fork inherits. Left behind, a
-        branch would *execute* a program somebody had turned off in the session it is a branch of.
+        The switches and not the settings, which is the one column a fork copies, and they arrive as
+        the step's *defaults* rather than as a decision already taken. Left behind, a branch would
+        offer a program somebody had turned off in the session it is a branch of, drawn switched on.
         """
         session = await self.loaded(service, declaring, {"bundled:handoff": False})
         forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE, said="again")
         assert forked is not None
+        carried = await read_tending(service.database, forked.id)
+        assert carried.enabled.get("bundled:handoff") is False, "the branch's step is drawn with it off"
 
+        await passing(service, forked.id, self.body(declaring, service))
+        await replace(service, declaring=declaring).settle(forked.id, dict(carried.enabled), 0)
         await passing(service, forked.id, self.body(declaring, service))
 
         enrolled = registered_in(await service.checkpointer.load(forked.id))

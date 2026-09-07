@@ -32,8 +32,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session nobody confirms has executed nothing at all. One that will not set up puts you back on the
   step with the reason above the switches, rather than stalling the conversation. Which plugins a
   session runs is then settled for its life, because a tool definition leaving the cached prefix
-  invalidates everything under it exactly as one arriving late does. The real cost: creating a
-  session no longer carries the first message, so you create, wait, confirm, and come back to type.
+  invalidates everything under it exactly as one arriving late does, and forking is how it changes: a
+  branch carries its parent's turns and none of its plugins, so it lands on this same step with the
+  parent's switches as its defaults and declares, sets up and confirms afresh. That is what makes
+  editing a repository's `.mainplate/` and forking the way to iterate on a plugin, and it is why the
+  press is asked for again rather than inherited - a branch is planted at a tree the model wrote, so
+  what licenses running it is the decision to fork plus the confirmation in the branch. The real
+  cost: creating a session no longer carries the first message, so you create, wait, confirm, and
+  come back to type, and a fork stops at that screen before it answers anything.
 - **A plugin sets itself up**, in one event that both gets it ready and asks what it contributes. It
   is the one event with a network and the one with a directory of its own that survives the session,
   which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an

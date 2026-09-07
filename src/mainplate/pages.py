@@ -4196,20 +4196,21 @@ def settling(showing: Conversation) -> bool:
     """
     Whether this session is still on its settings step, which is what shape its page takes.
 
-    **Both halves are load-bearing and the turn count is the one easy to leave out.** A session that
-    has set nothing up is on the step, whether nobody has pressed the button yet or a pass is out
-    answering the press, because the thing that takes a session past the step is a registration and
-    nothing else writes one. And a session with a turn in it is past the step whatever its plugins
-    say, because a tool
-    definition leaving the cached prefix invalidates everything under it exactly as one arriving late
-    does - without that, a session recorded before any of this existed would draw the step over a
-    conversation.
+    **The registration alone, and the turn count deliberately not.** A session that has set nothing up
+    is on the step, whether nobody has pressed the button yet or a pass is out answering the press,
+    because the thing that takes a session past the step is a registration and nothing else writes one.
+
+    A fork is why the turn count is not read here. It carries its parent's turns and none of its
+    plugins, so it is a session holding a conversation and still owing an answer to the step - which is
+    the point, since it plants a fresh worktree whose toolchain nothing has installed yet and may be
+    planted at a tree where `.mainplate/` says something new. What the cached prefix cannot survive is
+    a plugin set changing under a request already made, and a fork has made none.
 
     Two shapes of one page rather than one page with a banner: settling is the step alone, and loaded
     is the transcript, the message box and the rail. The live connection sends whichever regions the
     shape it finds has, so this is the one predicate both sides read.
     """
-    return showing.said.turns == 0 and showing.plugins is None
+    return showing.plugins is None
 
 
 def running_plugins(showing: Conversation) -> tuple[Enrolled, ...]:

@@ -197,17 +197,16 @@ has pressed anything*.
 **And two more beside them, `plugins:declared:console` and `plugins:declared:repository`**, holding
 what was read out of files before any of it ran. Four keys rather than two because the two questions
 have different answers at different moments: between them a session is on its settings step, with a
-declaration to draw switches from and no registration at all. They split by tier on the same rule and
-for the same reason, so a fork inherits the repository's declaration as well as its registration - a
-fork of a session that never got past its step has only the first, and re-reading the file to draw a
-switch would be the same read out of the same model-written tree, one step earlier.
+declaration to draw switches from and no registration at all. They split by tier because the tiers
+are read from different places and one of them can fail on its own, not because a fork treats them
+differently: [a fork carries none of the
+four](#read-once-and-never-from-a-tree-this-console-wrote).
 
 **Forking is how a conversation picks up an edited plugin**, and that is the existing answer rather
-than a new one: a fork is a session, so it sets the operator's plugins up afresh, and the way to
-carry work across a plugin change is the control that already carries it across a change of model or
-a change of mind. A repository's plugin is [the exception and cannot be reloaded that
-way](#read-once-and-never-from-a-tree-this-console-wrote); a fresh session is what picks one of
-those up.
+than a new one: a fork is a session, so it declares and sets up from scratch, and the way to carry
+work across a plugin change is the control that already carries it across a change of model or a
+change of mind. A repository's plugin is [no exception and is picked up the same
+way](#read-once-and-never-from-a-tree-this-console-wrote), out of the tree the branch is planted at.
 
 There is deliberately no reload that reaches a *running* session. A set of tools that changed under
 a conversation would invalidate the prefix beneath it and leave the turns already recorded having
@@ -264,6 +263,15 @@ and its own note says an empty take raises and the pass comes back `Blocked` unt
 delivered. So "set up, then stop and wait" is `planting` moving above `opening_turn` in the loop,
 plus a session that is queued by `make_ready` rather than by a delivery. A session nobody types into
 holds no lease and no worker slot, because a blocked pass has released its claim.
+
+**A fork walks the same four steps with a message already in its inbox**, which is the one place the
+waiting is not `opening_turn`'s. A branch queues the turn it re-asks, so the pass at step 2 is handed
+that message instead of blocking on nothing, and finds no registration under it. It stops there
+having recorded *nothing*: no turn is answered, no refusal is written, and the page draws the step
+exactly as it would for a session nobody has typed into. The press at step 3 asks for the pass that
+picks the message up. A refusal recorded at that point, which is what used to happen on the argument
+that the message box is on the far side of the step, would have made every branch with something to
+re-ask a session saying it could not be answered.
 
 **Step 4 is a pass rather than the press, and this is the one that changed.** An earlier build ran
 the whole thing in the request handler, on the argument that describing was a handful of short-lived
@@ -815,8 +823,9 @@ which trains somebody to answer without reading.
 
 So it is recorded **per session, on the `Choice`**, settled before the first message and fixed for
 its life like everything else there - and changing your mind is [`fork`](forking.md), which is the
-answer this console gives to every other question about a session's terms. A fork inherits it, since
-a fork inherits the repository half of what its parent registered rather than reading any file again.
+answer this console gives to every other question about a session's terms. A fork carries it on the
+`Choice` it inherits, so a branch of a session that trusts its repository reads that repository's
+declaration again and a branch of one that does not still reads nothing.
 
 **Asked blind, in the picker.** [The worker clones and a request handler never
 does](workspace.md#where-a-repository-comes-from), so when somebody picks a repository there is no
@@ -879,26 +888,28 @@ like it covers the case when it does not. A snapshot is a tree a model wrote: it
 its own worktree would run a plugin the parent's model authored, one fork away from any session with
 files.
 
-**So a fork inherits the repository half of what its parent recorded, and sets it up afresh for
-nothing.** What it inherits is the whole of that half, the tools and the cards and not merely the
-names, because re-running a repository's plugin would be launching a script out of a tree the
-parent's model had been editing. Both keys come across, the declaration as well as the registration:
-a fork of a session that never got past its settings step has only the first, and re-reading the file
-to draw a switch for it is the same read out of the same tree, one step earlier. Only a session
-planted at a commit the *repository* provided ever reads that file or runs what is in it.
+**So a fork carries nothing about its parent's plugins, and asks again.** Not the declaration, not
+the registration, and not the press. A branch's checkpoint holds none of those keys, so its first
+pass reads what the tree it is planted at declares, its page draws the settings step over the turns
+it carries, and the press that answers the step is what runs `setup`.
 
-**The user half is a different question and a fork sets it up again**, because those scripts are the
-operator's own and sit outside every worktree, so nothing a model wrote can reach them. That is the
-one place the two tiers are still told apart, and the asymmetry is the security one rather than a
-timing one: it turns on who wrote the file, which is the question the trust switch already asks.
+**Which means editing `.mainplate/` and forking is how a session iterates on its own plugins.** That
+is the flow rather than a hole in the one above, and the setup script that installs a session's
+toolchain is why it has to be: a branch plants a fresh worktree, an ignored directory does not come
+across in a recorded tree, and a fork that inherited a registration would hold tools it has no
+installation for.
 
-**Setting it up again needs a press, so a fork carries its parent's**, along with the switches that
-say which plugins that press was over. A fork carries turns, and the step is drawn in place of the
-transcript over a session with none, so a branch cannot be asked to confirm again; without the
-carried press it would set nothing up and refuse its first message for having loaded nothing, which
-is every fork of every session on a console with any plugins at all. Carrying the parent's
-confirmation rather than inventing one is what keeps this a trust boundary: what a branch runs is
-what somebody looked at and said yes to, under the switches they left it on.
+**The press being asked for again is what keeps this a trust boundary.** A branch is planted at a
+tree a model wrote, so what makes running what that tree names legitimate is not that the parent was
+confirmed once: it is that somebody chose to fork this conversation and then confirmed the switches
+in the branch. The decision to start a session and the decision to fork one are the same decision
+about the same code, taken at two moments, and both are asked in the same place. The parent's
+switches come across as the step's defaults, so a plugin turned off in a session is drawn turned off
+in every branch of it and nobody has to remember why.
+
+The cost, stated: **every fork stops at a screen before it answers anything**, including a fork made
+only to re-ask one turn. That is one press against a branch silently running whatever its recorded
+tree happened to name.
 
 **Where a session says it does not trust the repository nothing is read**, and the recorded set is
 empty for that session's life. Trusting afterwards reaches sessions started after it and none before,

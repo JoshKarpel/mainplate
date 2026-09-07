@@ -36,8 +36,6 @@ from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
 from mainplate.commands import Slot
 from mainplate.conversation import CHOICE_KEY
-from mainplate.conversation import REPOSITORY_DECLARED_KEY
-from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
@@ -602,10 +600,9 @@ class Service:
         # **The switches and not the settings**, which is the one column of the two a fork inherits.
         # What a plugin has *stored* is about one conversation's context and a branch's context is not
         # that conversation's, so that half starts empty. Which plugins a session runs is the other
-        # half, and it cannot be left to the registration alone: a fork inherits the repository's
-        # registration and sets the console's up afresh, so a bundled or an operator's plugin somebody
-        # turned off would come back on in every branch, and be *executed* there, having been switched
-        # off in the session the branch is of.
+        # half, and it comes across as the *defaults* its settings step is drawn with rather than as a
+        # decision already taken: a branch of a session with a plugin turned off draws it turned off,
+        # and somebody still presses the button to say so.
         if parent.tending.enabled:
             await switch(self.database, forked.id, parent.tending.enabled)
         for key, value in carried.items():
@@ -622,45 +619,21 @@ class Service:
         started_on = recorded.get(opening_tree_key(at))
         if started_on is not None:
             await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
-        # **The repository half of what the parent registered, carried whole**, and the reason is the
-        # one rule the whole plugin design turns on: a fork plants at a *recorded tree*, which is a
-        # tree a model wrote - a snapshot is `git add -A`, so a `.mainplate/` file the model created
-        # on turn 4 is in the tree recorded for turn 5. Re-reading it here would run a plugin the
-        # parent's model authored, one fork away from any session with files.
+        # **Nothing any plugin declared, contributed, or was confirmed for comes across**, and that is
+        # what makes a fork the place a session changes its plugins. A branch's checkpoint holds no
+        # declaration, no registration and no press, so its first pass reads what the tree it is
+        # planted at declares, its page draws the settings step over the turns it carries, and the
+        # press that answers the step is what runs `setup` again. Editing `.mainplate/` and forking is
+        # therefore how a conversation iterates on its own plugins, the setup script that installs its
+        # toolchain included - which a fork *has* to run again, since it plants a fresh worktree and an
+        # ignored directory does not come across in a recorded tree.
         #
-        # The tools and the cards and not merely the names, because "set up what it named again" is
-        # the same launch by another route. Only a session planted at a commit the *repository*
-        # provided ever reads that file or runs what is in it.
-        #
-        # The console's half is deliberately not carried: those scripts are the operator's own and
-        # sit outside every worktree, so nothing a model wrote can reach them, and a fork setting
-        # them up afresh is how a conversation picks up an edited plugin. That is the one place the
-        # tiers are still told apart, and the asymmetry is the security one rather than a timing one.
-        #
-        # Both keys of that half, the declaration as well as the registration, because a fork of a
-        # session that never got past its settings step has only the first: re-reading the file to
-        # draw a switch for it is the same read out of the same model-written tree, one step earlier.
-        for key in (REPOSITORY_DECLARED_KEY, REPOSITORY_PLUGINS_KEY):
-            carried_plugins = recorded.get(key)
-            if carried_plugins is not None:
-                await self.checkpointer.supply(forked.id, key, carried_plugins)
-        # **And the press itself, where the parent has one**, because a fork carries turns and a
-        # session with a turn in it is past its settings step: the step is drawn in place of the
-        # transcript and the route that answers it refuses a session that has been asked anything, so
-        # a fork that had to be confirmed again could not be. Without this its first pass sets nothing
-        # up and its first message is refused for having loaded no plugins, which is every fork of
-        # every session on a console with any.
-        #
-        # It is the parent's press being carried rather than a second one being invented: what somebody
-        # confirmed is executing this console's own scripts under the switches copied above, and both
-        # of those come across unchanged. What the fork then sets up afresh is the console's half, which
-        # is how a branch picks up an edited plugin; the repository's half it inherits and re-runs
-        # nothing of.
-        #
-        # Numbered from zero because the fork's attempts are its own, and a refused setup is retried
-        # by pressing again in the branch.
-        if setups_in(recorded):
-            await self.checkpointer.supply(forked.id, setup_key(0), records.Confirmed().recorded())
+        # **The press being asked for again is the trust boundary rather than a papercut.** A fork
+        # plants at a *recorded tree*, which is a tree a model wrote: a snapshot is `git add -A`, so a
+        # `.mainplate/` file the model created on turn 4 is in the tree recorded for turn 5. What makes
+        # running it legitimate is that somebody chose to fork this conversation and then confirmed the
+        # switches in the branch, which is the same confirmation every new session gives, asked for in
+        # the same place and drawn from the parent's switches as defaults.
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
         if said:
             await self.say(forked.id, said)

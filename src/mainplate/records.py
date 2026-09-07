@@ -428,9 +428,10 @@ class Declared(Record):
     """
     Which plugins a session *could* run, settled on its first pass and drawn on its settings step.
 
-    Two of these per session, under two keys, for the reason there are two registrations: a fork
-    re-reads the operator's declaration and inherits the repository's, because a fork's tree is one a
-    model has been editing.
+    Two of these per session, under two keys, for the reason there are two registrations: the tiers
+    are read from different places and the repository's half can fail on its own, so a repository
+    that will not be read leaves the operator's declaration recorded rather than taking it down too.
+    A fork carries neither and reads both again.
 
     Both are written even where there is nothing declared, which is what makes an empty declaration
     mean *this session has looked* rather than *nobody has looked yet* - the same claim the
@@ -472,10 +473,10 @@ class Registered(Record):
     would invalidate the whole prefix beneath it and leave the turns already recorded having been
     answered by a harness that session no longer has.
 
-    Two of these per session, under two keys, and that is the fork rather than untidiness: a fork
-    sets the operator's plugins up afresh and inherits the repository's whole, because re-running a
-    repository's plugin would be launching a script out of a tree the parent's model had been
-    editing.
+    Two of these per session, under two keys, and that is failure rather than untidiness: nothing is
+    recorded until every plugin in a half has answered, so a repository's plugin that will not set up
+    leaves the operator's half recorded instead of taking it down with it. A fork carries neither and
+    sets both up again.
     """
 
     kind: Literal["plugins"] = "plugins"

@@ -32,15 +32,24 @@ have a helper apiece for that (`taken` and `answered` in `test_console.py`, `tak
 different state: it is queued, and the page draws it as a message waiting for a turn rather than as
 one being answered.
 
-**Creating a session and saying the first thing in it are two calls**, which `started` in
-`conftest.py` does together. A test about the split posts to `/sessions` itself; every other test
-wants a session with a message in it and should not have to know why that is two steps.
+**Creating a session, saying the first thing in it, and answering its settings step are three
+calls**, which `started` in `conftest.py` does together and `a_session` in `test_console.py` does
+over HTTP. A test about the split posts to `/sessions` itself; every other test wants a session ready
+to be looked at and should not have to know why that is three steps.
 
-**A test that renders a session's *page* may also want a registration**, which is `registering` in
-`test_browser.py`. A session that has loaded no plugins is one nobody has answered the settings step
-for, so its page draws that step rather than a transcript - which is honest, and not what most of
-these tests are about. It only matters where a page is being looked at: a session with a turn in it
-is past that step whatever it loaded.
+**A registration is the whole of what takes a session past the settings step**, and the turn count is
+not read at all. So a suite running without a worker has to write one or every page it renders is
+that step: `conftest.registered` is what writes it, `started` calls it, and `taken` in
+`test_console.py` calls it too, because a pass sets a session's plugins up *before* it opens a turn
+and a turn recorded without one is a checkpoint no pass could produce.
+
+**It is write-once, so it has to be the first registration a session gets.** A card to draw goes to
+`started` as `enrolled`; supplied over the top of an empty set it records nothing and leaves the rail
+empty with no failure to point at.
+
+**A fork needs one of its own**, which is `registering` in `test_browser.py` and
+`landed_on_the_branch` beside it. A branch carries its parent's turns and none of its plugins, so it
+holds a conversation and still draws the step - the console working rather than a fixture to loosen.
 
 **A test that wants a session's plugins actually running has to press the button and then run a
 pass**, because that is now two moments: the press records the switches and asks for a pass, and the

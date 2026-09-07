@@ -112,7 +112,11 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
   is the payload's `state`.
 - **A setup must be idempotent, and this is a constraint on plugin authors as well as on us.**
   Nothing is recorded until every plugin has answered, so one that fails means all of them run again.
-- **A repository's declaration is read from the commit the repository supplied, never from a
-  snapshotted tree.** A snapshot is `git add -A`, so a `.mainplate/` file the model wrote on turn 4
-  is *in* the tree recorded for turn 5, and a fork plants at a recorded tree. A fork therefore
-  inherits `plugins:repository` whole and re-reads nothing.
+- **A fork carries nothing about its parent's plugins**, so it declares, draws the settings step over
+  the turns it holds, and runs `setup` again on its own press. That is what lets a session iterate on
+  `.mainplate/` by forking, and it is why the setup that installs a session's toolchain can live in a
+  plugin at all: a branch plants a fresh worktree, and an ignored directory does not come across in a
+  recorded tree. A snapshot is `git add -A`, so the tree a branch is planted at *is* a tree the model
+  wrote, and what makes running it legitimate is the press in the branch rather than the parent's.
+  Anything that would hand a fork a registration, a declaration or a press is the change to push back
+  on.
