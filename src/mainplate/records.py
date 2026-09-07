@@ -68,6 +68,7 @@ type StepKind = Literal[
     "plugin",
     "declared",
     "named",
+    "confirmed",
     "injected",
 ]
 """
@@ -569,6 +570,7 @@ type Step = Annotated[
     | Instructions
     | Declared
     | Registered
+    | Confirmed
     | Injected,
     Field(discriminator="kind"),
 ]

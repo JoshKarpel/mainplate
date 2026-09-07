@@ -120,6 +120,10 @@ see.** These are the ones that turn on it:
   `TestWhereTheCursorIsAfterSending` pin htmx's and the browser's own behaviour, which looks
   identical in the markup either way.
 - `TestWatchingATurnArrive` pins a second render reaching a page nobody reloaded.
+- `TestTheSwitchOnATiersHeading` reads `checked` and `indeterminate` off the heading, because the
+  server renders those once and the script sets them after that: a heading stuck on "some of them"
+  over a group that is entirely on is correct markup, and the switches under it stay right, so
+  nothing that reads the document would notice.
 
 ## Real processes and real clocks
 

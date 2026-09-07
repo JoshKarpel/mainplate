@@ -405,9 +405,14 @@ class Payload(Speech):
     `scratch` is a directory of this plugin's own, which is where anything it installs at `setup`
     lives and where every later event finds it again. **Its own rather than the session's**, because
     the session's scratch is a place the model writes: a plugin that kept an executable there would
-    be running, unattended and at every turn boundary, whatever the model last put at that path.
+    be running, unattended and at every turn boundary, whatever the model last put at that path. It is
+    also `$HOME` inside the namespace, and `$MAINPLATE_PLUGIN_SCRATCH` for a plugin that is a line of
+    shell and parses none of this - not `$MAINPLATE_SCRATCH`, which is what a model's own commands
+    find the *session's* scratch under.
+
     Nothing for a plugin that runs unconfined, which has the operator's own environment and a `$HOME`
-    and needs nothing from this console to find somewhere to write.
+    and needs nothing from this console to find somewhere to write. What a scratch answers is having
+    nowhere to write, which only the namespace creates; something to remember per session is `state`.
     """
 
     state: Mapping[str, object] = Field(default_factory=dict)
@@ -625,6 +630,35 @@ def setting_of(described: Described, control: str, held: object) -> Setting | No
             return None
         return held
     return None
+
+
+def number_of(control: Number, posted: str | None, was: Setting) -> int:
+    """
+    One posted number as the setting its control declares, held to the bounds the control declared.
+
+    **The re-check `Number.least` and `most` promise**, said here rather than at the route because
+    what the bounds mean belongs beside the control that carries them. A `min` on an input is a
+    suggestion a browser was given, so a post that ignored them arrives here and is brought back
+    inside them rather than stored as it came.
+
+    Unreadable is what was already there rather than a refusal, which is `parse_tending`'s stance one
+    layer out: what reaches here that is not a number came from something that is not this page, and
+    quietly keeping the value somebody can see is a better answer than a session that will not render.
+    Left to `str.isdigit`, that promise was not kept: `--5` and `5²` both pass it and neither is an
+    integer, so the refusal escaped the handler as a fault.
+
+    The fallback is bounded too, because a plugin that moved its own floor between one event and the
+    next would otherwise hand itself a value it has since said it will not take.
+    """
+    try:
+        held = int("" if posted is None else posted)
+    except ValueError:
+        held = int(was)
+    if control.least is not None:
+        held = max(held, control.least)
+    if control.most is not None:
+        held = min(held, control.most)
+    return held
 
 
 def carried(said: Sequence[object]) -> tuple[object, ...]:

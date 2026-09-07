@@ -1990,6 +1990,57 @@ class TestAPluginsOwnCard:
         await expect(page.locator(".plugin__unit")).to_have_text("K")
 
 
+class TestTheSwitchOnATiersHeading:
+    """
+    One control over the controls under it, in three states, drawn by the script and nothing else.
+
+    A browser because none of it is in the markup: the server renders the heading's three states from
+    what it knows, and after that every one of them is a property the script sets on an element. Both
+    a heading that has gone stale and one stuck on "some of them" are correct markup showing the wrong
+    thing, and the switches under it stay right either way, so nothing else here would notice.
+    """
+
+    HEADING = '.tier[data-tier="bundled"] .tier__switch input'
+    UNDER = '.tier[data-tier="bundled"] .plugin__switch input[type=checkbox]'
+
+    async def test_a_heading_says_full_when_every_switch_under_it_is_on(self, page: Page, gallery: str) -> None:
+        """
+        Which the hidden `off` field beside each switch is what made hard: counted as a switch, it is
+        one that is never on, so a full group could report at most half of itself and the heading was
+        stuck indeterminate however many were ticked.
+        """
+        await page.goto(f"{gallery}/settings.html", wait_until="load")
+        heading = page.locator(self.HEADING)
+        await expect(heading).to_be_checked()
+
+        await page.locator(self.UNDER).first.uncheck()
+
+        assert await self.state(page) == {"checked": False, "indeterminate": True}, "some of them, and it says so"
+
+        await page.locator(self.UNDER).first.check()
+
+        assert await self.state(page) == {"checked": True, "indeterminate": False}
+
+    async def test_the_heading_sets_every_switch_under_it_and_none_beside_it(self, page: Page, gallery: str) -> None:
+        """The other direction, and the tier it is not: what a session records is a switch per plugin."""
+        await page.goto(f"{gallery}/settings.html", wait_until="load")
+        elsewhere = '.tier[data-tier="user"] .plugin__switch input[type=checkbox]'
+        await expect(page.locator(elsewhere)).to_be_checked()
+
+        await page.locator(self.HEADING).uncheck()
+
+        for each in await page.locator(self.UNDER).all():
+            await expect(each).not_to_be_checked()
+        await expect(page.locator(elsewhere)).to_be_checked()
+
+    async def state(self, page: Page) -> dict[str, bool]:
+        return await page.evaluate(
+            "(selector) => { const box = document.querySelector(selector);"
+            " return {checked: box.checked, indeterminate: box.indeterminate}; }",
+            self.HEADING,
+        )
+
+
 class TestWhereTheComposerSendsTo:
     """
     That pressing Fork lands the reader in a *different* session, driven by a real htmx.

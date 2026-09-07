@@ -252,6 +252,7 @@ EVERY_RECORD: tuple[records.Step, ...] = (
             ),
         )
     ),
+    records.Confirmed(),
     records.Injected(said=("`apps/web/AGENTS.md`, guidance for this part of the repository:",)),
 )
 

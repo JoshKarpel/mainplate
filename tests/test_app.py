@@ -23,6 +23,9 @@ from mainplate.app import build_app
 from mainplate.app import open_console
 from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import messages_key
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.running import Spawned
 from mainplate.service import Service
 from mainplate.settings import Settings
 from mainplate.tending import SETTLE_FIELD
@@ -108,6 +111,45 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
             assert again.status == 200
             async with asyncio.timeout(PATIENCE):
                 await answered.acquire()
+
+
+@pytest.mark.timeout(30)
+async def test_a_plugins_scratch_is_nowhere_the_model_can_write(database: Path) -> None:
+    """
+    The two roots are named a few lines apart in `open_console`, and nothing below them can tell they
+    were given the same path: `Spawned` says its root is not the session's and cannot check it, and a
+    unit test of either half passes on a fixture that names them separately.
+
+    What it costs to get wrong is not a tidiness bug. A session's scratch is bound read-write into the
+    model's namespace and is a root its file tools reach, so a plugin directory under it is `$HOME`
+    for a program the model can overwrite - and this console then runs that program, unattended, at
+    every turn boundary, reporting what it printed into the conversation in the console's own voice.
+    """
+    endpoints = Wires(
+        by_endpoint={
+            name: Stand(offers=OFFERED[name], responding=FunctionModel(unanswered)) for name in CONFIG.endpoints
+        }
+    )
+    async with open_console(Settings(database=database), CONFIG, endpoints) as service:
+        assert service.workspaces is not None
+        assert service.declaring is not None
+        speaking = service.declaring.speaking
+        # `Speaking` is the protocol a plugin is spoken to through, and only the real one knows where
+        # it puts a scratch: this test is about the wiring, so it asks for the wired thing by name.
+        assert isinstance(speaking, Spawned)
+        assert speaking.scratch is not None
+
+        session = "a-session"
+        theirs = service.workspaces.scratch_at(session)
+        mine = speaking.scratch_for(Installed(tier=Tier.REPOSITORY, name="checks", path=Path("/x")), session)
+
+        assert theirs not in mine.parents
+        assert mine not in theirs.parents
+
+
+async def unanswered(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:  # pragma: no cover - never called
+    """A wire that satisfies discovery for a test that asks the console about itself and never talks."""
+    raise AssertionError("this test asks nothing of a model")
 
 
 @pytest.mark.timeout(30)

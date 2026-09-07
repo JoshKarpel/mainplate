@@ -264,7 +264,12 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         console=(*bundled(), *installed_by(Tier.USER, config.plugins)),
         speaking=Spawned(
             bwrap=bwrap,
-            scratch=settings.workspace_root / "scratch",
+            # `plugins` and not `scratch`, and the two roots being different is the whole of what
+            # `Spawned.scratch` promises. The session's scratch is bound read-write into the model's
+            # own namespace and is a root its file tools reach, so a plugin whose directory sat
+            # anywhere under it would be `$HOME` for a program the model can overwrite - and this
+            # console then runs that program, unattended, at every turn boundary.
+            scratch=settings.workspace_root / "plugins",
             config_home=settings.config_home,
         ),
         # A repository's plugin runs behind the namespace `bash` already uses, so a console without

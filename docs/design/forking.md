@@ -48,7 +48,9 @@ under the reader's hand, and there would be one per turn.
 - **What its plugins are set to**, which start on their own declared defaults. A reserve is a
   decision about how much room one conversation's context has left, and a branch's context is not
   that conversation's. See [handing off without being
-  asked](composer.md#handing-off-without-being-asked).
+  asked](composer.md#handing-off-without-being-asked). The *switches* are the other column and are
+  inherited: which plugins run is not a fact about one conversation's context, and left behind, a
+  branch would set up and execute a program somebody had turned off in the session it branched from.
 - **What the operator's plugins are**, which a fork asks afresh. Those scripts sit outside every
   worktree, so nothing a model wrote can reach them, and describing them again is how a conversation
   picks up an edited one. See [plugins](plugins.md#setup).
@@ -68,6 +70,14 @@ file. Both keys rather than the registration alone, because a fork of a session 
 its settings step has only the declaration, and re-reading the file to draw a switch for it is the
 same read one step earlier. See
 [reading it once](plugins.md#read-once-and-never-from-a-tree-this-console-wrote).
+
+And **the press that answered the parent's settings step**, where it has one, which is what lets the
+operator's half be set up afresh at all. A fork carries turns, and a session with a turn in it is past
+that step: the step is drawn in place of the transcript, and the route answering it refuses a session
+that has been asked anything. So a branch that had to be confirmed again could not be, and it would
+reach its first message having loaded nothing and refuse it. What that carries is the parent's own
+confirmation rather than a new one, over the switches copied beside it, so what a branch runs is what
+somebody already looked at and said yes to.
 
 ## There is no rewind
 

@@ -27,7 +27,9 @@ from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import conversing
 from mainplate.conversation import declared_in
+from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
+from mainplate.conversation import setups_in
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import running
@@ -38,6 +40,7 @@ from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.installed import bundled
+from mainplate.plugins.installed import dropping_collisions
 from mainplate.plugins.installed import grouped
 from mainplate.plugins.installed import installed_by
 from mainplate.plugins.installed import repository_plugins
@@ -45,7 +48,9 @@ from mainplate.plugins.installed import without_collisions
 from mainplate.plugins.protocol import EVENTS
 from mainplate.plugins.protocol import Described
 from mainplate.plugins.protocol import Event
+from mainplate.plugins.protocol import Number
 from mainplate.plugins.protocol import Refused
+from mainplate.plugins.protocol import number_of
 from mainplate.plugins.protocol import parse_answer
 from mainplate.plugins.protocol import parse_described
 from mainplate.plugins.protocol import refusing
@@ -227,6 +232,40 @@ class TestSettingsAndState:
         assert state_of(nothing, {"seen": 3}) == {"seen": 3}
 
 
+class TestReadingAPostedNumber:
+    """
+    The boundary a browser is on the wrong side of: a `min` on an input is a suggestion it was given,
+    and what arrives is whatever was posted.
+    """
+
+    CONTROL = Number(name="reserve", label="keep back", default=40, least=10, most=90)
+
+    @pytest.mark.parametrize(
+        ("posted", "reads"),
+        [
+            ("55", 55),
+            ("-7", 10),
+            ("400", 90),
+            # Everything `str.isdigit` waved through that `int` refuses, which is what used to escape
+            # the handler as a fault rather than being kept as it was.
+            ("--5", 22),
+            ("5²", 22),
+            ("²", 22),
+            ("", 22),
+            (None, 22),
+            # And a value already out of range, brought inside them: a plugin that moved its own floor
+            # between one event and the next must not be handed what it has since said it will not take.
+            ("9", 10),
+        ],
+    )
+    def test_what_a_posted_value_is_worth(self, posted: str | None, reads: int) -> None:
+        assert number_of(self.CONTROL, posted, 22) == reads
+
+    def test_a_control_declaring_no_bounds_takes_what_it_is_given(self) -> None:
+        """Most numbers have no floor worth stating, which is why both are optional."""
+        assert number_of(Number(name="reserve", label="keep back"), "-4000", 22) == -4000
+
+
 class TestWhereAPluginComesFrom:
     """Three places one may be declared, and what a tier is allowed to claim."""
 
@@ -333,6 +372,21 @@ class TestWhenTwoPluginsWantOneName:
                 self.enrolled(Tier.USER, "mine", "repo_review_lint"),
                 self.enrolled(Tier.REPOSITORY, "review", "lint"),
             )
+        )
+        assert [each.qualified for each in held] == ["user:mine"]
+
+    def test_the_drop_is_separable_so_a_request_handler_can_apply_it_without_the_refusal(self) -> None:
+        """
+        Both halves are what a pass wants, because a set it cannot settle is a turn it must not open.
+        A handler wants only the drop: refusing there would be a page that will not draw over a
+        session whose settings step is the thing that fixes it, and leaving the drop out would put a
+        row in the composer menu and a card in the rail for something no event will ever reach.
+        """
+        colliding = (self.enrolled(Tier.USER, "mine", "hand_off"), self.enrolled(Tier.BUNDLED, "handoff", "hand_off"))
+        assert len(dropping_collisions(colliding)) == 2, "a collision between two of yours is not the drop's business"
+
+        held = dropping_collisions(
+            (self.enrolled(Tier.USER, "mine", "repo_review_lint"), self.enrolled(Tier.REPOSITORY, "review", "lint"))
         )
         assert [each.qualified for each in held] == ["user:mine"]
 
@@ -504,14 +558,37 @@ class TestWhereARepositorysPluginRuns:
         environment is what a line of shell reaches without parsing anything. The one that binds the
         directory is the one that says where it is, so there is no second place computing the path.
         """
+        own = str(tmp_path / "plugins" / "a-session" / "repository" / "checks")
         sending = await spawned.invocation(self.installed(), spoken(event="setup", worktree=str(worktree.root)))
-        assert sending.payload["scratch"] == str(tmp_path / "plugins" / "a-session" / "repository" / "checks")
 
-    async def test_a_plugin_outside_a_worktree_is_handed_no_scratch_at_all(self, spawned: Spawned) -> None:
-        """It has the operator's own environment and a `$HOME`, and needs nothing from this console."""
+        assert sending.payload["scratch"] == own
+        assert sending.argv[sending.argv.index("MAINPLATE_PLUGIN_SCRATCH") + 1] == own
+
+    async def test_it_is_not_called_what_the_model_calls_the_session_s_own(
+        self, spawned: Spawned, worktree: Any
+    ) -> None:
+        """
+        A model's `bash` finds the *session's* scratch under `MAINPLATE_SCRATCH`, and a plugin's
+        directory is a different place with a different owner. Under one name the two would be told
+        apart only by which process read the variable, which is precisely what a shared vocabulary of
+        place names exists to stop.
+        """
+        sending = await spawned.invocation(self.installed(), spoken(event="setup", worktree=str(worktree.root)))
+
+        assert "MAINPLATE_SCRATCH" not in sending.argv
+
+    async def test_a_plugin_outside_a_worktree_is_handed_no_scratch_at_all(self, tmp_path: Path) -> None:
+        """
+        It has the operator's own environment and a `$HOME`, and needs nothing from this console to
+        find somewhere to write. It may also need the operator's other scripts and caches to do its
+        job, which is the other half of why nothing here rewrites what it runs under.
+        """
+        spawned = Spawned(scratch=tmp_path / "plugins", environ={"HOME": "/home/operator"})
         installed = Installed(tier=Tier.USER, name="notify", path=Path("/opt/notify"))
         sending = await spawned.invocation(installed, spoken(event="setup"))
+
         assert "scratch" not in sending.payload
+        assert sending.environment["HOME"] == "/home/operator"
 
 
 class TestTheBundledHandoff:
@@ -998,6 +1075,98 @@ class TestASessionsPlugins:
             return await read_tending(service.database, session)
 
         return read
+
+
+class TestWhatABranchDoesAboutThem:
+    """
+    A fork carries turns, so it is past the settings step before it has one: the step is drawn in
+    place of the transcript, and the route answering it refuses a session that has been asked
+    anything. So a branch that had to be confirmed again could not be, and everything here turns on
+    the parent's own press coming across.
+
+    Driven with `tendings`, because which plugins a branch sets up is read out of the column the
+    switches carried across, and a pass with no way to read one would set up every declared plugin.
+    """
+
+    @pytest.fixture
+    def declaring(self) -> Declaring:
+        return Declaring(console=bundled(), speaking=Spawned(environ={}))
+
+    async def test_a_branch_of_a_loaded_session_loads_rather_than_stalling(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """
+        **Every fork of every session on a console with any plugins**, which is what made this worth
+        a test of its own: the console's half of a registration is deliberately not carried, so
+        without the press a branch reaches its first message having set nothing up and refuses it for
+        having loaded none.
+        """
+        session = await self.loaded(service, declaring)
+        forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE, said="again")
+        assert forked is not None
+
+        await passing(service, forked.id, self.body(declaring, service))
+
+        recorded = await service.checkpointer.load(forked.id)
+        assert refusal_in(recorded) is None, "the branch is answerable rather than stopped"
+        enrolled = registered_in(recorded)
+        assert enrolled is not None, "and it set the operator's own half up afresh"
+        assert {each.qualified for each in enrolled} == {"bundled:handoff", "bundled:guidance"}
+
+    async def test_a_plugin_switched_off_stays_off_across_the_branch(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """
+        The switches and not the settings, which is the one column a fork inherits. Left behind, a
+        branch would *execute* a program somebody had turned off in the session it is a branch of.
+        """
+        session = await self.loaded(service, declaring, {"bundled:handoff": False})
+        forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE, said="again")
+        assert forked is not None
+
+        await passing(service, forked.id, self.body(declaring, service))
+
+        enrolled = registered_in(await service.checkpointer.load(forked.id))
+        assert enrolled is not None
+        assert [each.qualified for each in enrolled] == ["bundled:guidance"]
+
+    async def test_a_branch_of_a_session_that_never_got_past_the_step_is_still_on_it(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """
+        Nothing to carry, so nothing is: there is no press to inherit, and the branch has no turn in
+        it either, which is exactly the session the step is drawn for.
+        """
+        session = await service.start(DEFAULT_CHOICE)
+        await passing(service, session.id, self.body(declaring, service))
+
+        forked = await service.fork(session.id, at=0, chosen=DEFAULT_CHOICE)
+        assert forked is not None
+
+        await passing(service, forked.id, self.body(declaring, service))
+
+        recorded = await service.checkpointer.load(forked.id)
+        assert setups_in(recorded) == 0, "nobody has pressed anything in either of them"
+        assert registered_in(recorded) is None
+
+    async def loaded(
+        self, service: Service, declaring: Declaring, switches: Mapping[str, bool] | None = None
+    ) -> Session:
+        """A session past its step with one turn answered, which is the shape there is to fork."""
+        session = await service.start(DEFAULT_CHOICE)
+        body = self.body(declaring, service)
+        await passing(service, session.id, body)
+        await replace(service, declaring=declaring).settle(session.id, dict(switches or {}))
+        await passing(service, session.id, body)
+        await service.say(session.id, "first")
+        await passing(service, session.id, body)
+        return session
+
+    def body(self, declaring: Declaring, service: Service) -> Any:
+        async def tendings(session: str) -> Any:
+            return await read_tending(service.database, session)
+
+        return conversing(Provider().endpoints(), INSTRUCTIONS, declaring=declaring, tendings=tendings)
 
 
 class TestARepositorysOwnPlugin:

@@ -38,7 +38,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is the one event with a network and the one with a directory of its own that survives the session,
   which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an
   interpreter and its dependencies there, and a plugin that wants a toolchain in the worktree fetches
-  it there. Every event after it runs with the network shut, because what makes a connected run safe
+  it there. That directory is one plugin's alone in one session, named on every payload as `scratch`
+  and in the environment as `$MAINPLATE_PLUGIN_SCRATCH`, and it is `$HOME` inside the namespace; it is
+  nowhere the session's own scratch reaches, because the model writes that one. Every event after it runs with the network shut, because what makes a connected run safe
   is that it happens before the first message - over the commit the repository supplied, with nothing
   the model wrote in the tree yet. It runs in a pass rather than in the press, so a repository whose
   plugin builds a toolchain shows a page that says it is working instead of a button that hangs; a

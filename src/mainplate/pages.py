@@ -106,6 +106,7 @@ from mainplate.plugins.installed import ON
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
+from mainplate.plugins.installed import dropping_collisions
 from mainplate.plugins.installed import grouped as by_tier
 from mainplate.plugins.protocol import Number
 from mainplate.plugins.protocol import Setting
@@ -4233,10 +4234,14 @@ def running_plugins(showing: Conversation) -> tuple[Enrolled, ...]:
     Asked of the registration and the session's own switches together, which is `running`'s job:
     nothing here decides what a default is, and a plugin that is off contributes no card for the same
     reason it contributes no tool.
+
+    And thinned the way the pass thins it, because a card is a control over something that runs: a
+    repository contribution dropped for claiming a name already taken reaches no event, so a card for
+    it would be a form whose `Set` changes nothing anybody can see.
     """
     if showing.plugins is None:
         return ()
-    return running(showing.plugins, showing.session.tending)
+    return dropping_collisions(running(showing.plugins, showing.session.tending))
 
 
 def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation, reachable: Reachable) -> str:

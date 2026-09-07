@@ -1589,6 +1589,8 @@
       });
     };
 
+    const SWITCHES = ".plugin__switch input[type=checkbox]";
+
     // A tier's own switch sets every switch under it and posts nothing of its own: what a session
     // records is a switch per plugin, so turning a tier off is turning each of its plugins off. A
     // second answer of its own would be a second place the same question is answered.
@@ -1601,7 +1603,11 @@
         if (!(box instanceof HTMLInputElement) || !box.closest(".tier__switch")) return;
         const group = box.closest(".tier");
         if (!group) return;
-        for (const each of group.querySelectorAll(".plugin__switch input")) {
+        // The checkbox and not every input under the label: each switch is drawn with a hidden field
+        // of the same name ahead of it, so that a plugin turned off posts something rather than
+        // nothing. Counted, that field is a second switch that is never on, and a heading could then
+        // never say a full group was full.
+        for (const each of group.querySelectorAll(SWITCHES)) {
           if (each instanceof HTMLInputElement) each.checked = box.checked;
         }
         box.indeterminate = false;
@@ -1615,7 +1621,7 @@
         const group = box.closest(".tier");
         const heading = group?.querySelector(".tier__switch input");
         if (!(heading instanceof HTMLInputElement)) return;
-        const under = [...group.querySelectorAll(".plugin__switch input")];
+        const under = [...group.querySelectorAll(SWITCHES)];
         const on = under.filter((each) => each instanceof HTMLInputElement && each.checked).length;
         heading.checked = on === under.length;
         heading.indeterminate = on > 0 && on < under.length;

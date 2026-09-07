@@ -107,8 +107,7 @@ follows the settings step being answered. Everything it contributes comes back f
 including which events it wants:
 
 ```json
-→ {"event": "setup", "session": "a1b2", "plugin": "bundled:handoff", "worktree": "/…/a1b2",
-   "scratch": "/…/plugins/a1b2/bundled/handoff"}
+→ {"event": "setup", "session": "a1b2", "plugin": "bundled:handoff", "worktree": "/…/a1b2"}
 ← {"events": ["after_turn", "compose"],
    "tools": [{"name": "hand_off", "description": "…", "schema": {…}}],
    "answers": [{"leader": "handoff", "saying": "hand off and clear the context", "demands": false}],
@@ -744,7 +743,14 @@ no to the whole plugin rather than to the fetch.
 ### A scratch of its own, which is not the session's
 
 Every confined plugin is handed a directory nobody else can write: `<workspaces>/plugins/<session>/
-<tier>/<name>`, named on the payload as `scratch` and made `$HOME` inside the namespace.
+<tier>/<name>`, named on the payload as `scratch`, made `$HOME` inside the namespace, and named there
+as `$MAINPLATE_PLUGIN_SCRATCH` for a plugin that is a line of shell and parses no JSON.
+
+**Not `$MAINPLATE_SCRATCH`**, which is what a model's own `bash` finds the *session's* scratch under.
+One word for two directories, told apart by which process happened to read it, is what
+[the shared vocabulary of place names](sandbox.md#the-scratch-directory) exists to stop, and the two
+sandboxes are otherwise the same shape. The root is separate for the same reason and enforced
+nowhere but `app.py`, which is where both are named.
 
 **Its own rather than the session's, and that is a correction.** The session's scratch is a place the
 model writes, so a plugin that kept an executable there would be running whatever the model last put
@@ -756,6 +762,14 @@ model is not privilege but *laundering*, a way to write into the transcript in a
 a command gets, a `uv run --script` shebang resolves an interpreter and a package tree at `setup` and
 finds neither at the next event, with the network shut and no way to fetch them again. Pointing
 `$HOME` at the scratch makes the ordinary case work with no environment variable in any plugin.
+
+**A plugin outside a worktree is handed none of this, and giving it one would be symmetry for its own
+sake.** What a scratch answers is having nowhere to write, which is a problem the namespace creates:
+such a plugin has the operator's `$HOME`, their caches, their `/tmp` and their other scripts, and it
+may well need all four to do its job. Something to remember per session it already has, in the
+payload's `state`. The cost of the other answer is what makes it easy to reject: two empty
+directories per session, for the bundled plugins that would never write to either, that nothing ever
+removes.
 
 Two costs, both real:
 
@@ -868,6 +882,14 @@ planted at a commit the *repository* provided ever reads that file or runs what 
 operator's own and sit outside every worktree, so nothing a model wrote can reach them. That is the
 one place the two tiers are still told apart, and the asymmetry is the security one rather than a
 timing one: it turns on who wrote the file, which is the question the trust switch already asks.
+
+**Setting it up again needs a press, so a fork carries its parent's**, along with the switches that
+say which plugins that press was over. A fork carries turns, and the step is drawn in place of the
+transcript over a session with none, so a branch cannot be asked to confirm again; without the
+carried press it would set nothing up and refuse its first message for having loaded nothing, which
+is every fork of every session on a console with any plugins at all. Carrying the parent's
+confirmation rather than inventing one is what keeps this a trust boundary: what a branch runs is
+what somebody looked at and said yes to, under the switches they left it on.
 
 **Where a session says it does not trust the repository nothing is read**, and the recorded set is
 empty for that session's life. Trusting afterwards reaches sessions started after it and none before,

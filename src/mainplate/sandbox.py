@@ -150,6 +150,16 @@ class InAWorktree:
     worktree: Worktree
     scratch: Path
 
+    scratch_named: RootName = "scratch"
+    """
+    What the scratch is called inside, which is the one thing a plugin's namespace does differently.
+
+    A plugin gets this same shape around a directory of its **own** rather than the session's, so
+    calling it `scratch` in there would give one word two meanings: the place a model writes, and the
+    place this console keeps a plugin's installation out of the model's reach. See
+    `Spawned.scratch_for`.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class OverEverything:
@@ -170,8 +180,8 @@ at all, so there is no confinement to describe rather than an empty one to carry
 async def confined_by(confinement: Confinement) -> Sandbox:
     """The sandbox one confinement means, asked of git where that is what decides the paths."""
     match confinement:
-        case InAWorktree(worktree=worktree, scratch=scratch):
-            return await Sandbox.around(worktree, scratch)
+        case InAWorktree(worktree=worktree, scratch=scratch, scratch_named=named):
+            return await Sandbox.around(worktree, scratch, named)
         case OverEverything():
             return Sandbox.everywhere()
         case _ as unreachable:
@@ -224,7 +234,7 @@ class Sandbox:
     places: tuple[Bind, ...]
 
     @classmethod
-    async def around(cls, worktree: Worktree, scratch: Path) -> Sandbox:
+    async def around(cls, worktree: Worktree, scratch: Path, scratch_named: RootName = "scratch") -> Sandbox:
         """
         A worktree, its clone read-only, and a scratch directory: what a `WORKTREE` session reaches.
 
@@ -252,7 +262,7 @@ class Sandbox:
                 Bind(path=worktree.root, writable=True, name="worktree"),
                 Bind(path=worktree.pointer, writable=False),
                 Bind(path=Path(common), writable=False),
-                Bind(path=scratch, writable=True, name="scratch"),
+                Bind(path=scratch, writable=True, name=scratch_named),
             )
         )
 

@@ -64,8 +64,10 @@ from mainplate.plugins.asking import composed
 from mainplate.plugins.asking import running
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import dropping_collisions
 from mainplate.plugins.protocol import Setting
 from mainplate.plugins.protocol import Switch
+from mainplate.plugins.protocol import number_of
 from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
@@ -586,10 +588,15 @@ class Service:
         # exactly where somebody carries on working and therefore commits.
         chosen = chosen.branching(forked.id)
         await enrol(self.database, forked)
-        # A fork's plugin settings start empty rather than being copied, which is `Tending`'s own
-        # shape: what a plugin has stored is about one conversation's context, and a branch's context
-        # is not that conversation's. What a fork *does* inherit is which plugins it runs, and that
-        # is inherited by inheriting the registration rather than by copying a column.
+        # **The switches and not the settings**, which is the one column of the two a fork inherits.
+        # What a plugin has *stored* is about one conversation's context and a branch's context is not
+        # that conversation's, so that half starts empty. Which plugins a session runs is the other
+        # half, and it cannot be left to the registration alone: a fork inherits the repository's
+        # registration and sets the console's up afresh, so a bundled or an operator's plugin somebody
+        # turned off would come back on in every branch, and be *executed* there, having been switched
+        # off in the session the branch is of.
+        if parent.tending.enabled:
+            await switch(self.database, forked.id, parent.tending.enabled)
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
         # The tree of the turn being re-asked, carried across on its own even though that turn's
@@ -626,6 +633,23 @@ class Service:
             carried_plugins = recorded.get(key)
             if carried_plugins is not None:
                 await self.checkpointer.supply(forked.id, key, carried_plugins)
+        # **And the press itself, where the parent has one**, because a fork carries turns and a
+        # session with a turn in it is past its settings step: the step is drawn in place of the
+        # transcript and the route that answers it refuses a session that has been asked anything, so
+        # a fork that had to be confirmed again could not be. Without this its first pass sets nothing
+        # up and its first message is refused for having loaded no plugins, which is every fork of
+        # every session on a console with any.
+        #
+        # It is the parent's press being carried rather than a second one being invented: what somebody
+        # confirmed is executing this console's own scripts under the switches copied above, and both
+        # of those come across unchanged. What the fork then sets up afresh is the console's half, which
+        # is how a branch picks up an edited plugin; the repository's half it inherits and re-runs
+        # nothing of.
+        #
+        # Numbered from zero because the fork's attempts are its own, and a refused setup is retried
+        # by pressing again in the branch.
+        if setups_in(recorded):
+            await self.checkpointer.supply(forked.id, setup_key(0), records.Confirmed().recorded())
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
         if said:
             await self.say(forked.id, said)
@@ -680,12 +704,16 @@ class Service:
 
         The effects are bound to this session here, so nothing below can reach another one: a
         delivery goes into this inbox and a write goes into this row.
+
+        **Thinned the way a pass thins it**, so a leader a handler answers and a leader the model can
+        reach are one list. A refusal is deliberately not raised here, unlike in a pass: what a pass
+        is about to do with the set is open a turn, and what this is about to do is draw a menu.
         """
         if self.declaring is None or found.plugins is None:
             return None
         return Live(
             session=session,
-            enrolled=running(found.plugins, found.session.tending),
+            enrolled=dropping_collisions(running(found.plugins, found.session.tending)),
             tending=found.session.tending,
             speaking=self.declaring.speaking,
             worktree=found.worktree,
@@ -752,12 +780,10 @@ class Service:
             if isinstance(control, Switch):
                 wanted[control.name] = control.name in posted
                 continue
-            held = posted.get(control.name)
-            # An unreadable number is left as it was rather than refused, which is `parse_tending`'s
-            # stance one layer out: the box carries the plugin's own bounds, so what reaches here
-            # that is not a number came from something that is not this page, and quietly keeping the
-            # value somebody can see is a better answer than a session that will not render.
-            wanted[control.name] = int(held) if held is not None and held.lstrip("-").isdigit() else was[control.name]
+            # Both the parse and the bounds, because the box carries the plugin's own `min` and `max`
+            # and a browser is the only thing those two attributes bind. See `number_of` for what an
+            # unreadable one and an out-of-range one each come back as.
+            wanted[control.name] = number_of(control, posted.get(control.name), was[control.name])
         await set_settings(self.database, session, plugin, wanted)
         for name, value in wanted.items():
             if was.get(name) == value:

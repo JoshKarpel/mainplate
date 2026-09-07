@@ -114,6 +114,12 @@ and pressing again after turning a plugin off is the whole recovery path. It car
 plugins were left on, deliberately: that is the `enabled` column's, and a write-once copy would have
 the second press run exactly what the first one ran.
 
+A fork carries it, numbered from zero, where its parent has one. That is the same asymmetry the pairs
+above have: the operator's half is set up afresh in a branch, and nothing may run a plugin without
+this key, so a branch without one would sit with nothing loaded and refuse its first message. It is
+the parent's confirmation being carried rather than a second one invented, because a fork carries
+turns and [the step is not drawable over a conversation](forking.md#what-a-fork-does-not-inherit).
+
 `choice` goes in before the first message and never again *within a session*. The order is
 load-bearing: the message is what *queues* a session, so writing it first would let a worker take
 the session and find no endpoint to answer on. Never again, because a session that changed endpoint

@@ -28,6 +28,7 @@ from typing import Final
 
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.protocol import SETUP
+from mainplate.roots import environment_named
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
@@ -79,6 +80,19 @@ Where this session's files are, said in the environment as well as in the payloa
 Both, because the two readers are different: the payload is what a plugin parses, and this is what a
 line of shell in a plugin can reach without parsing anything. It costs one variable and makes a
 five-line plugin possible.
+"""
+
+PLUGIN_SCRATCH: Final = environment_named("plugin_scratch")
+"""
+What a confined plugin's own directory is called inside its namespace, derived rather than spelled.
+
+**Not `MAINPLATE_SCRATCH`**, which is what a model's `bash` finds the *session's* scratch under. They
+are two directories with two owners, and one word for both, told apart by which process happened to
+read it, is exactly what a shared vocabulary of place names exists to stop.
+
+Named here as well as in `roots.py` because this is the module that decides a plugin's namespace gets
+it; the string itself is derived, so the variable a plugin reads and the variable the sandbox sets
+cannot come to differ.
 """
 
 
@@ -176,7 +190,8 @@ class Spawned:
     **It is not the root the session's own scratch sits under**, and the two being separate is the
     point rather than tidiness: the session's is a place the model writes, so a plugin that installed
     a program into it would be running whatever the model last left at that path, unattended, at
-    every turn boundary. See `scratch_for`.
+    every turn boundary. Nothing here can check that, so `app.py` is where the two roots are named and
+    where they must stay apart. See `scratch_for`.
     """
 
     bwrap: str | None = None
@@ -294,7 +309,9 @@ class Spawned:
         A plugin outside a worktree is the operator's own and runs as this process does, with the
         environment it has and two variables added saying where the operator's files are and where
         this session's are. It is handed no scratch, because it has the operator's own `$HOME` and a
-        whole filesystem and needs nothing from this console to find somewhere to write.
+        whole filesystem: what a scratch answers is having nowhere to write, which is a problem only
+        the namespace creates, and such a plugin may reach the operator's other scripts and caches to
+        do its job. Something to remember per session it already has, in the payload's `state`.
 
         A repository's runs behind `--clearenv` inside a namespace that reaches the worktree it was
         handed, its clone read-only, a directory of its own, and nothing else - so it is handed no
@@ -334,7 +351,10 @@ class Spawned:
         planted = Path(worktree)
         scratch = self.scratch_for(plugin, session)
         await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
-        confinement = InAWorktree(worktree=Worktree(root=planted), scratch=scratch)
+        # `plugin_scratch` and not `scratch`, which is the name a model's own `bash` finds the
+        # *session's* directory under. One word for two places would have a repository's plugin and
+        # the model it is running beside reading the same variable and reaching different disks.
+        confinement = InAWorktree(worktree=Worktree(root=planted), scratch=scratch, scratch_named="plugin_scratch")
         sandbox = await confined_by(confinement)
         argv = (
             self.bwrap,

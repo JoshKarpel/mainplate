@@ -150,7 +150,12 @@ places. Each difference is deliberate and each is narrow.
   plugin that installed a program there would be running whatever the model last left at that path.
   Confinement is no answer, because both are confined the same way: what a shared directory would
   give the model is not privilege but *voice*, a way to have its own output delivered into the
-  transcript as this repository's checks having failed.
+  transcript as this repository's checks having failed. **Nothing below `app.py` can check this**:
+  `Workspaces` is handed a root and `Spawned` is handed a root, and neither can see what the other
+  was given, so the two roots being different is a property of that one file and of the test that
+  asserts it there. It is `$MAINPLATE_PLUGIN_SCRATCH` inside the namespace and deliberately not
+  `$MAINPLATE_SCRATCH`, which is the name a command finds the session's directory under: one word
+  for both would be the same confusion in the environment that the shared root was on disk.
 - **`$HOME` pointing at that directory**, rather than at a tmpfs. It is what lets a plugin keep what
   it fetched, and it is per plugin per session, so nothing one plugin caches is readable by another.
 

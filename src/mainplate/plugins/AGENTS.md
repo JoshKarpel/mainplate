@@ -100,7 +100,16 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
   plugin keeping an executable there would run whatever the model last left at that path, unattended,
   and report the result into the conversation in this console's voice. It is also `$HOME` inside the
   namespace, which is what makes a `uv run --script` plugin work at all - undo that and inline
-  dependencies resolve at `setup` and are gone by the next event.
+  dependencies resolve at `setup` and are gone by the next event. Nothing here can check it: `Spawned`
+  is handed a root and `Workspaces` is handed a root, and `app.py` is the only place both are named,
+  so that is where the two must stay apart and `test_app.py` is what fails when they do not. It is
+  `$MAINPLATE_PLUGIN_SCRATCH` inside and never `$MAINPLATE_SCRATCH`, which is the name a model's own
+  `bash` finds the *session's* directory under.
+- **A plugin outside a worktree is handed no scratch, and that is a decision.** What a scratch answers
+  is having nowhere to write, which only the namespace creates; such a plugin has the operator's
+  `$HOME`, their caches, their `/tmp` and their other scripts, and may need all four. Giving it one
+  would be two empty directories per session that nothing removes. Something to remember per session
+  is the payload's `state`.
 - **A setup must be idempotent, and this is a constraint on plugin authors as well as on us.**
   Nothing is recorded until every plugin has answered, so one that fails means all of them run again.
 - **A repository's declaration is read from the commit the repository supplied, never from a
