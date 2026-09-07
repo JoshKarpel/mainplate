@@ -202,7 +202,10 @@ def answer(payload: dict[str, Any]) -> dict[str, Any]:
     """What this plugin wants done about one event, which for most events is nothing."""
     event = payload.get("event")
     settings = payload.get("settings") or {}
-    if event == "describe":
+    if event == "setup":
+        # Nothing to install: everything this needs is in the standard library, so setting up is
+        # saying what it contributes and no more. That is the ordinary case for a plugin, and the
+        # reason the event carries both jobs rather than being two.
         return DESCRIBED
     if event == "tool":
         return handing(payload)

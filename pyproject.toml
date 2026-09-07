@@ -177,10 +177,20 @@ skip_covered = true
 line-length = 120
 
 # A bundled plugin is not part of this package. It is a standalone executable this console runs over
-# a pipe, under , which is whatever interpreter the machine has rather than
-# the one `requires-python` pins - so its syntax has to be older than everything else here. Without
-# this the formatter rewrites a parenthesized `except` into PEP 758's unparenthesized form, which is
-# a `SyntaxError` on anything before 3.14 and therefore a plugin that will not run at all.
+# a pipe, under an `/usr/bin/env python3` shebang, which is whatever interpreter the machine has
+# rather than the one `requires-python` pins - so its syntax has to be older than everything else
+# here. Without this the formatter rewrites a parenthesized `except` into PEP 758's unparenthesized
+# form, which is a `SyntaxError` on anything before 3.14 and therefore a plugin that will not run.
+#
+# **Only the bundled ones, and `.mainplate/pre-commit` is why the difference is worth knowing.** That
+# one is a `uv run --script` shebang with a PEP 723 block naming this project's own Python, so it
+# runs on the interpreter this repository pins and needs nothing here. A plugin that says which
+# interpreter it wants gets it; these two say `python3` and take what the machine has, which is the
+# price of a plugin that must run before `uv` is known to be anywhere.
+#
+# **A PEP 723 block does not set the linter's target version, which was checked rather than assumed.**
+# ruff 0.16 ignores `requires-python` in inline script metadata whether the project's own target is
+# set explicitly or inferred, so a bundled plugin carrying one would still be formatted as 3.14.
 [tool.ruff.per-file-target-version]
 "src/mainplate/plugins/bundled/*" = "py39"
 

@@ -472,13 +472,30 @@ class Registered(Record):
     answered by a harness that session no longer has.
 
     Two of these per session, under two keys, and that is the fork rather than untidiness: a fork
-    describes the operator's plugins afresh and inherits the repository's whole, because re-running a
+    sets the operator's plugins up afresh and inherits the repository's whole, because re-running a
     repository's plugin would be launching a script out of a tree the parent's model had been
     editing.
     """
 
     kind: Literal["plugins"] = "plugins"
     plugins: tuple[Enrolled, ...] = ()
+
+
+class Confirmed(Record):
+    """
+    That somebody answered this session's settings step, which is what lets a pass run a plugin.
+
+    **The trust boundary written down.** Everything before it is files being read; this is the record
+    that a person looked at what was declared and pressed the button, and the pass that follows sets
+    up exactly what the switches left on.
+
+    **It holds nothing, and that is the decision rather than an omission.** Which plugins are on is
+    the `enabled` column's answer, and a copy here could never be corrected: what somebody does about
+    a plugin that will not set up is turn it off and press again, and a write-once list would have
+    the second press run exactly what the first one ran.
+    """
+
+    kind: Literal["confirmed"] = "confirmed"
 
 
 class Injected(Record):

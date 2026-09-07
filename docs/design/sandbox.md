@@ -78,6 +78,15 @@ tree and therefore without any ignored file either.
 plan or a notes file kept across turns, which is the one thing in a scratch directory that wants a
 line editor; a build cache never does.
 
+**A plugin gets a different one, and `$HOME` points at it.** `workspaces/plugins/<session>/<tier>/
+<name>` is bound in place of the session's for a repository's plugin, because the session's is a
+place the *model* writes: a plugin that kept an executable in there would be running whatever the
+model last left at that path, at every turn boundary, and reporting the result into the conversation
+as this console's own. `$HOME` rather than only a bound path, because that is where anything that
+fetches keeps what it fetched - on the tmpfs a command gets, a `uv run --script` plugin resolves an
+interpreter at `setup` and finds none at the next event, with the network shut. That is the whole of
+what `Sandbox.argv`'s `home` argument is for, and a command still gets the tmpfs.
+
 ## Roots
 
 Where the file tools may reach. What they *are* is [how a model reaches a file](tools.md).

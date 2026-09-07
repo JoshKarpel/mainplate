@@ -26,14 +26,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   this console may run. Creating a session records the choices and asks for a pass; that pass plants
   the worktree and reads what each tier *declares* out of files, running nothing; the step then lists
   every declared plugin with its path, grouped by where it came from, with a switch apiece and one on
-  each group's heading. `Load plugins` runs `describe` on exactly the ones left on, all at once, and
-  takes you to the conversation. So a plugin somebody switched off is not merely contributing
-  nothing, it was never launched, and a session nobody confirms has executed nothing at all. One that
-  will not describe puts you back on the step with the reason above the switches, rather than
-  stalling the conversation. Which plugins a session runs is then settled for its life, because a
-  tool definition leaving the cached prefix invalidates everything under it exactly as one arriving
-  late does. The real cost: creating a session no longer carries the first message, so you create,
-  wait, confirm, and come back to type.
+  each group's heading. `Load plugins` records the switches and asks for another pass, and *that*
+  pass runs `setup` on exactly the ones left on, all at once, before the conversation opens. So a
+  plugin somebody switched off is not merely contributing nothing, it was never launched, and a
+  session nobody confirms has executed nothing at all. One that will not set up puts you back on the
+  step with the reason above the switches, rather than stalling the conversation. Which plugins a
+  session runs is then settled for its life, because a tool definition leaving the cached prefix
+  invalidates everything under it exactly as one arriving late does. The real cost: creating a
+  session no longer carries the first message, so you create, wait, confirm, and come back to type.
+- **A plugin sets itself up**, in one event that both gets it ready and asks what it contributes. It
+  is the one event with a network and the one with a directory of its own that survives the session,
+  which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an
+  interpreter and its dependencies there, and a plugin that wants a toolchain in the worktree fetches
+  it there. Every event after it runs with the network shut, because what makes a connected run safe
+  is that it happens before the first message - over the commit the repository supplied, with nothing
+  the model wrote in the tree yet. It runs in a pass rather than in the press, so a repository whose
+  plugin builds a toolchain shows a page that says it is working instead of a button that hangs; a
+  setup that will not finish is recorded against that attempt, so turning the plugin off and pressing
+  again is a fresh one. There is deliberately no repo-setup mechanism beside this: a plugin that
+  answers this event already is one.
+- **This repository carries a plugin of its own**, in `.mainplate/`, so a mainplate session working on
+  mainplate runs the project's own `pre-commit` hooks over what it has changed at every turn boundary
+  and is told what is still failing. Ported from a Claude Code `Stop` hook, and different from it in
+  the three ways a console is different from a terminal: it stages nothing, because the clone is
+  read-only and `--files` needs no index; it installs itself at setup, because the namespace has
+  nothing of the machine in it; and it stops chasing one failure after a set number of turns, because
+  every message it delivers is a model request somebody pays for.
 - Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
   `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
   guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.

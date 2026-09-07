@@ -55,6 +55,12 @@ _feature_version=...)` does not reject it either, since that flag gates only a h
 constructs. What actually catches it is `ruff check` under the pin, so raising the floor is one edit
 in `pyproject.toml` and this paragraph.
 
+**A PEP 723 block does not settle this, and that was checked rather than assumed:** ruff 0.16 ignores
+`requires-python` in inline script metadata when it picks a target version. What the block *does*
+settle is which interpreter actually runs the script, which is why `.mainplate/pre-commit` needs no
+entry in that table - it says `uv run --script` and gets the Python this project pins. These two say
+`python3` because they must run before `uv` is known to be anywhere on the machine.
+
 They are also *executables*: `pre-commit` identifies them as Python by shebang, where a path-based
 tool sees no `.py` and skips them. That is why `just check` catches this and `ruff check src/` does
 not, and why anything reaching for them wants the explicit paths rather than a glob.
@@ -67,7 +73,7 @@ than an inconvenience: what ships is a worked example rather than a path no thir
 reach.
 
 So a change to what a handoff says, what it costs, or when it fires is a change to a *script*, and
-the console learns about it through `describe` like any other. The price is stated: `bundled/guidance`
+the console learns about it through `setup` like any other. The price is stated: `bundled/guidance`
 carries a `description:` line reader rather than a YAML parser, because a plugin with no dependencies
 is worth more here than the general case of a field nothing else reads.
 
@@ -77,13 +83,26 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
 ## Two things not to undo
 
 - **Nothing runs a plugin before the settings step.** A session's first pass *declares*, which is
-  reading files, and the request that answers the step *loads*, which is `describe` over exactly the
-  plugins left switched on. Anything that would spawn one earlier, or spawn one somebody switched
-  off, is the change to push back on: this is a trust boundary and not a loading order.
-- **`describe` is once per session and its answer is recorded.** Tool definitions sit above the
+  reading files; the request that answers the step records the switches and asks for a pass; and that
+  pass runs `setup` over exactly the plugins left switched on. Anything that would spawn one earlier,
+  or spawn one somebody switched off, is the change to push back on: this is a trust boundary and not
+  a loading order.
+- **`setup` is once per session and its answer is recorded.** Tool definitions sit above the
   system prompt in the cached prefix, so a set that changed under a conversation would invalidate
-  everything beneath it. That is why `instructions` is a `describe` contribution rather than an
+  everything beneath it. That is why `instructions` is a `setup` contribution rather than an
   event, and it is why a forget no longer picks up a repository's edited guidance - forking does.
+- **`setup` is the only event with a network, and it must stay the only one.** What makes a connected
+  run safe there is *when* it happens: before the first message, over a worktree holding the commit
+  the repository supplied and nothing the model wrote. An event during the conversation with a
+  network would be a plugin that has read whatever the model has been writing and can send it
+  anywhere.
+- **A plugin's scratch is its own and never the session's.** The model writes the session's, so a
+  plugin keeping an executable there would run whatever the model last left at that path, unattended,
+  and report the result into the conversation in this console's voice. It is also `$HOME` inside the
+  namespace, which is what makes a `uv run --script` plugin work at all - undo that and inline
+  dependencies resolve at `setup` and are gone by the next event.
+- **A setup must be idempotent, and this is a constraint on plugin authors as well as on us.**
+  Nothing is recorded until every plugin has answered, so one that fails means all of them run again.
 - **A repository's declaration is read from the commit the repository supplied, never from a
   snapshotted tree.** A snapshot is `git add -A`, so a `.mainplate/` file the model wrote on turn 4
   is *in* the tree recorded for turn 5, and a fork plants at a recorded tree. A fork therefore

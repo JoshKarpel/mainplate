@@ -268,9 +268,18 @@ class Sandbox:
         """
         return cls(places=(Bind(path=Path("/"), writable=True),))
 
-    def argv(self, at: str, venue: Venue = Venue.CONFINED) -> tuple[str, ...]:
+    def argv(self, at: str, venue: Venue = Venue.CONFINED, home: str | None = None) -> tuple[str, ...]:
         """
         The `bwrap` prefix a command runs behind, as the arguments before the command itself.
+
+        `home` is what `$HOME` is inside, and the default is the tmpfs, which is right for a command
+        a *model* asked for: what a session's shell leaves in a home directory is scratch by
+        accident rather than by intent, and a tmpfs makes that true rather than hoping for it.
+
+        A plugin passes its own scratch instead, and that is the whole of what makes a plugin with
+        dependencies possible. Every tool that fetches things keeps them under `$HOME`, so on a
+        tmpfs a plugin that resolved an interpreter and a package tree at setup would find neither
+        at the next event, with the network shut and no way to fetch them again. See `Spawned`.
 
         A `WORKTREE` sandbox binds the worktree read-write, its clone **read-only**, and the scratch
         read-write. The read-only clone is the load-bearing part: it leaves every read working -
@@ -333,7 +342,7 @@ class Sandbox:
             WHERE_COMMANDS_ARE,
             "--setenv",
             "HOME",
-            SOMEWHERE_TO_WRITE,
+            home if home is not None else SOMEWHERE_TO_WRITE,
             "--setenv",
             "TERM",
             "dumb",

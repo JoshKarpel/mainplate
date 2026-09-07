@@ -78,7 +78,7 @@ persistent process spoken to over framed stdio, which changes the transport and 
 payloads below. So the decision is deferred as a value rather than as a second code path, and it is
 deferred knowingly rather than overlooked.
 
-## Declaring is not loading
+## Declaring is not setting up
 
 **A plugin is a program this console executes, so nothing runs one until somebody has said which.**
 That splits what used to be a single moment in two, and the split is the whole reason the settings
@@ -87,26 +87,28 @@ step exists:
 - **Declaring** is reading files. A directory listing for the bundled set, a mapping in the
   operator's `config.yaml`, and a mapping in the repository's own `.mainplate/mainplate.yaml`. It
   yields a name, a tier and a path apiece, and it spawns nothing.
-- **Loading** is running each declared plugin's `describe` to find out what it contributes. It is
-  what the button on the settings step does, to exactly the plugins that step left switched on.
+- **Setting up** is running each declared plugin's `setup` to get it ready and find out what it
+  contributes. It is what the pass after the settings step does, to exactly the plugins that step
+  left switched on.
 
-A session's first pass declares; the press loads. So a session somebody creates and never confirms
-has executed nothing at all, and a plugin somebody switched off was not merely contributing nothing,
-it was never launched.
+A session's first pass declares; the press asks for a second pass, and that one sets up. So a session
+somebody creates and never confirms has executed nothing at all, and a plugin somebody switched off
+was not merely contributing nothing, it was never launched.
 
 **The switches are therefore drawn from the declaration**, which is why they say a name and a path
 rather than what each plugin calls itself: a heading comes off a card, a card comes back from
-`describe`, and asking is running. What a reader is deciding about is whose program this is, and the
+`setup`, and asking is running. What a reader is deciding about is whose program this is, and the
 path is the whole of what there is to go on before it has been asked anything.
 
-## Registration
+## Setup
 
-**The first call to a plugin asks it what it is**, and it happens when the settings step is answered
-rather than when the session's first pass runs. Everything it contributes comes back from one
-`describe`, including which events it wants:
+**The first call to a plugin sets it up and asks what it is**, and it happens on the pass that
+follows the settings step being answered. Everything it contributes comes back from one `setup`,
+including which events it wants:
 
 ```json
-→ {"event": "describe", "session": "a1b2", "plugin": "bundled:handoff", "worktree": "/…/a1b2"}
+→ {"event": "setup", "session": "a1b2", "plugin": "bundled:handoff", "worktree": "/…/a1b2",
+   "scratch": "/…/plugins/a1b2/bundled/handoff"}
 ← {"events": ["after_turn", "compose"],
    "tools": [{"name": "hand_off", "description": "…", "schema": {…}}],
    "answers": [{"leader": "handoff", "saying": "hand off and clear the context", "demands": false}],
@@ -116,10 +118,58 @@ rather than when the session's first pass runs. Everything it contributes comes 
 ```
 
 A plugin may also return **`instructions`**, which are composed into what the session is answered
-under. Those are a `describe` contribution rather than an event for the reason tools are: they sit
+under. Those are a `setup` contribution rather than an event for the reason tools are: they sit
 in front of the cached prefix, so they have to be settled for the session or every request under
 them is re-priced. It is what lets [the guidance
 system](#both-are-ported-and-that-is-the-test) be a plugin at all.
+
+### One event, and it is named after the stage
+
+`setup` does two jobs: a plugin gets itself ready, and it says what it contributes. It was written as
+two events, a `describe` with a setup of its own beside it, and collapsed back into one.
+
+**What collapsed it is that a plugin's first run is already its install.** A `uv run --script`
+shebang resolves an interpreter and a dependency tree the moment the console executes the file,
+whether or not anybody named an event for it; a plugin that wants a program in the worktree runs
+whatever fetches it. So the second event was buying a *scheduling* distinction - fast and pure here,
+slow and effectful there - which is a decision the console can make on its own, at the price of one
+more moment every plugin author has to learn about.
+
+**And it is named after the stage rather than after the answer**, because a plugin is not the only
+thing being set up. Starting a session on a repository means getting that repository ready, and this
+is the stage where that happens. There is deliberately **no repo-setup mechanism of the console's
+own** - no `setup:` field in `.mainplate/mainplate.yaml` running `uv sync` - because a plugin that
+answers this event is already one. A field would be a convenience over what exists, not a capability,
+and it would be a second thing to keep working for ever.
+
+The cost, stated: the name says less about what comes *back* than `describe` did, and a plugin author
+reading only the event name would not guess that the answer is the whole registration.
+
+### It runs in a pass, and that is the second thing that moved
+
+**The press records the switches and asks for a pass; the pass is what runs anything.** Setting up
+fetches and builds - a hook environment per entry in a `.pre-commit-config.yaml`, an interpreter, a
+model - and that is minutes on a cold cache. A request somebody is waiting on is the wrong place for
+minutes, which is the argument this console [already made about the
+clone](workspace.md#where-a-repository-comes-from): a pass is where slow work lives, under a lease,
+with a worker slot and a page that says it is working.
+
+Three things follow, and each is worth stating because each is a change from the draft where the
+press did the work:
+
+- **The failure has to be recorded.** Nobody is waiting on a response any more, so a setup that will
+  not finish has nowhere to put its sentence, and a session would sit under a spinner for ever.
+- **Recorded per attempt, under `plugins:setup:{n}:refused`.** The store keeps the value a key was
+  first given, so an unnumbered refusal would be the sentence every later press showed - and pressing
+  again after turning a plugin off is the whole recovery path.
+- **The confirmation carries no list of its own.** `plugins:setup:{n}` records only *that* somebody
+  pressed; which plugins are on is the `enabled` column's answer, read by the pass. A write-once list
+  would make the second press run exactly what the first one ran, which is the same failure one field
+  along.
+
+**A session waiting on its setup is a fourth state of the settings step**, drawn with a spinner and
+the line that says what is happening. The step now has four: the worktree being planted, a
+declaration that would not parse, a setup out working, and the switches themselves.
 
 **`events` is what stops this being wasteful.** Without it every event goes to every plugin and a
 console with six of them spawns six processes per turn to be told nothing five times. With it, a
@@ -128,15 +178,21 @@ plugin that only wants `after_turn` is never launched for anything else.
 **What comes back is settled for a session's life, and the cached prefix is what decides that.**
 Tool definitions sit above the system prompt in the cached prefix, so introducing one
 mid-conversation invalidates the whole prefix beneath it. So a session's contributions are recorded
-when its settings step is answered, the way everything else settled about a session is, and a plugin
+on the pass that sets them up, the way everything else settled about a session is, and a plugin
 edited underneath a running session reaches it on no turn at all.
+
+**Which makes `setup` idempotent by requirement rather than by convention.** Nothing is recorded
+until every plugin has answered, so one that fails leaves the whole registration unwritten and the
+next attempt sets all of them up again. Recording each separately would still leave a session half
+set up with no way to correct it, and being run twice is what an install is already built to
+survive.
 
 **Under two session-level keys rather than one, and the fork is what decides it.** `plugins:console`
 holds what the bundled set and the operator's own contributed; `plugins:repository` holds what the
 repository's did. They are not turn-prefixed, for the reason `instructions:{n}` is not: `before`
 copies turn-shaped keys by shape, so one name would carry both halves of a parent's registration into
 a branch, and a fork must inherit exactly one of them. Both are written even where nothing was
-loaded, which is what makes an empty registration mean *this session was loaded* rather than *nobody
+set up, which is what makes an empty registration mean *this session was set up* rather than *nobody
 has pressed anything*.
 
 **And two more beside them, `plugins:declared:console` and `plugins:declared:repository`**, holding
@@ -148,7 +204,7 @@ fork of a session that never got past its step has only the first, and re-readin
 switch would be the same read out of the same model-written tree, one step earlier.
 
 **Forking is how a conversation picks up an edited plugin**, and that is the existing answer rather
-than a new one: a fork is a session, so it describes the operator's plugins afresh, and the way to
+than a new one: a fork is a session, so it sets the operator's plugins up afresh, and the way to
 carry work across a plugin change is the control that already carries it across a change of model or
 a change of mind. A repository's plugin is [the exception and cannot be reloaded that
 way](#read-once-and-never-from-a-tree-this-console-wrote); a fresh session is what picks one of
@@ -176,7 +232,7 @@ turn opened on *its own* delivery, or it fires again for as long as the conditio
 true. `opened_on.plugin` and `plugin` are compared, and that is the whole of what stops a handoff
 recursing.
 
-## Starting a session takes three steps
+## Starting a session takes four steps
 
 **A repository's plugin cannot even be named until its worktree is planted**, which is the first
 pass, because [the worker clones and a request handler never does](
@@ -197,8 +253,12 @@ repository. So creation splits:
    **It runs nothing**: at this point the console knows a name, a tier and a path per plugin, and
    nothing else.
 3. **The settings step.** A switch per declared plugin, under a heading per tier, and a button that
-   says `Load plugins`. Pressing it runs `describe` on everything left on, concurrently, records what
-   they said, and takes you to the conversation.
+   says `Load plugins`. Pressing it records the switches, records that somebody pressed, and asks for
+   another pass. **It runs nothing either**, and the redirect lands on a page that says the setup is
+   working.
+4. **The setup pass.** Runs `setup` on everything left on, concurrently and with a network, records
+   what they said, and reaches `opening_turn` again - where the inbox is still empty, so it blocks.
+   The page it fills in is the conversation.
 
 **Nothing about step 2 is a new mechanism.** `opening_turn` already suspends a pass on the inbox,
 and its own note says an empty take raises and the pass comes back `Blocked` until something is
@@ -206,18 +266,20 @@ delivered. So "set up, then stop and wait" is `planting` moving above `opening_t
 plus a session that is queued by `make_ready` rather than by a delivery. A session nobody types into
 holds no lease and no worker slot, because a blocked pass has released its claim.
 
-**Step 3 runs in the request handler, which is where this console does not usually put work**, and
-what decides it is what somebody is waiting for. Describing is a handful of short-lived processes
-asked all at once, not the clone that made planting the worker's job; and the answer decides which
-page they get, where a pass could only leave a stalled session behind. The result is a checkpoint key
-all the same, so a later pass replays it rather than asking anything again.
+**Step 4 is a pass rather than the press, and this is the one that changed.** An earlier build ran
+the whole thing in the request handler, on the argument that describing was a handful of short-lived
+processes and the answer decided which page somebody got. That argument does not survive a plugin
+that *installs*: a repository whose plugin fetches a toolchain would hold the press open for minutes
+with nothing on screen. So the work moved to where slow work already lives, and the answer moved with
+it - what a reader gets back is the same page either way, filled in by [the live
+connection](console.md) when the pass finishes.
 
-**You do not reach the conversation until the load has finished.** The step is the last thing on
-screen until every plugin left on has answered, so nothing is ever half-loaded behind a message box,
+**You do not reach the conversation until the setup has finished.** The step is the last thing on
+screen until every plugin left on has answered, so nothing is ever half set up behind a message box,
 and the rail cannot draw a plugin's card on the screen that exists to decide whether to run that
 plugin.
 
-**Every plugin is loaded there, the user's included**, rather than the user's at process startup and
+**Every plugin is set up there, the user's included**, rather than the user's at process startup and
 the repository's later. One moment for all of them is worth more than the earlier read: it removes a
 tier's worth of asymmetry, it puts every launch behind one confirmation, and a plugin edited on disk
 reaches the next new session without the console being restarted, which matters most while somebody
@@ -250,14 +312,14 @@ of its plugins off, and a tier that recorded an answer of its own would be a sec
 question is answered. It works only with the script present, which is the standing bargain every
 scripted control here takes - without `mainplate.js` each plugin's own switch still works.
 
-The switches are live at step 3 because nothing has been loaded yet, and gone afterwards because a
+The switches are live at step 3 because nothing has been run yet, and gone afterwards because a
 tool definition leaving the prefix invalidates everything under it exactly as one arriving late
 does. So the rail draws each running plugin's *card* and never these, and [forking](forking.md) is
 how a conversation changes its mind, as it is for the model and the repository.
 
-**A plugin's settings stay live where its being loaded does not**, and the two are different
+**A plugin's settings stay live where its being run at all does not**, and the two are different
 questions rather than an inconsistency. A setting is a value the plugin reads when it runs; being
-loaded decides what is in the cached prefix. That is what keeps the auto-handoff switch behaving
+set up decides what is in the cached prefix. That is what keeps the auto-handoff switch behaving
 exactly as it does today, taking effect on the press, while the plugin behind it is fixed for the
 session.
 
@@ -275,33 +337,39 @@ decide whether to run it. Which shape the page takes is one predicate, `settling
 connection](console.md) reads the same one to decide which regions to send, so the page and the
 connection driving it cannot disagree about what is on screen.
 
-### A plugin that will not load comes back to the step
+### A plugin that will not set up comes back to the step
 
-**A load either records both halves or records nothing.** Every plugin left on is described at once,
+**A setup either records both halves or records nothing.** Every plugin left on is set up at once,
 before anything is written, so a tier that failed does not leave the other one recorded: the store
 keeps the value a key was first given, and a half-written registration could never be corrected.
 
-**A failure answers with the settings step again, with the reason above the switches.** That is where
-a reader can act on it, because the thing to do about a plugin that will not describe is turn it off,
-and the switch is a line down. Nothing about the failure is recorded, which is deliberate for the
-same write-once reason: the first failure would otherwise be the sentence every later attempt showed.
+**The failure is recorded against the attempt, and the page draws the step again with the reason
+above the switches.** That is where a reader can act on it, because the thing to do about a plugin
+that will not set up is turn it off, and the switch is a line down.
+
+**Recorded is the change, and the numbering is what makes it survive a write-once store.** While the
+press did the work the sentence rode back on the response and was written nowhere, on the argument
+that the first failure would otherwise be what every later attempt showed. In a pass there is no
+response to ride on, so it goes under `plugins:setup:{n}:refused` and a second press opens attempt
+`n+1` - which has no refusal under it, so what the page draws is the spinner rather than the sentence
+somebody just acted on.
 
 The step's own `Try again` is a different button for a different failure. It asks for another
 *declaring* pass, which is what a worktree that would not plant or a `.mainplate/mainplate.yaml` that
-would not parse needs; that failure *is* recorded, under `plugins:refused`, because it happened in a
-pass with nobody waiting on it.
+would not parse needs; that failure is recorded under `plugins:refused`, unnumbered, because nothing
+about it is per attempt - the files are the same files.
 
-**One broken plugin stopping the load is the right answer in every tier**, by the question
+**One broken plugin stopping the setup is the right answer in every tier**, by the question
 [refusing at startup](../philosophy.md#refusing-at-startup-or-promising-not-to-raise) asks: a
 repository plugin is one you kept trusted and a user plugin is one you configured, so either failing
 silently leaves somebody holding a choice they cannot use. A session that quietly ran without it
 would be answering under a setup nobody asked for.
 
 **Which puts the bundled plugins on that same path, and handoff is on in every session**, so a
-handoff that will not describe is a console whose sessions cannot be loaded. That reads alarming and
+handoff that will not set up is a console whose sessions cannot start. That reads alarming and
 is the correct severity: a console whose handoff is broken *is* broken, and it is broken in this
 repository rather than in somebody's configuration. It is also the one tier where the failure is not
-a realistic runtime mode, because a bundled plugin that cannot describe fails this repository's own
+a realistic runtime mode, because a bundled plugin that cannot set up fails this repository's own
 suite long before it reaches anybody. What stays realistic is the user's own plugin and the
 repository's, which is where the sentence naming the plugin and the switch beside it are aimed.
 
@@ -314,11 +382,17 @@ deliberately: a boundary in front of executing somebody else's program is worth 
 convenience, and the convenience is recoverable later in a way a session that ran a plugin nobody
 looked at is not.
 
-**And the press itself waits.** Loading is concurrent across every plugin, so it is one plugin's
-slowest `describe` rather than the sum of them, but it is still a request that spawns processes and
-holds while they answer. The alternative was letting the conversation open while the load ran behind
-it, which trades the wait for a page whose rail and composer fill in some moments later - a worse
-deal, since what is filling in is the thing you were just asked to approve.
+**And the wait after the press is now unbounded by anything this console controls.** Setting up is
+concurrent across every plugin, so it is one plugin's slowest `setup` rather than the sum of them,
+but that one is somebody else's program fetching whatever it needs: a repository plugin building a
+hook environment per entry in its config is a minute, and a cold interpreter download is another.
+`SETTING_UP` caps it at twenty minutes and reports which plugin ran out, which is a bound on the
+damage rather than on the wait.
+
+That is the price of a plugin that can install things, and it is paid once per session rather than
+once per turn. The alternative was letting the conversation open while the setup ran behind it, which
+trades the wait for a page whose rail and composer fill in some moments later - a worse deal, since
+what is filling in is the thing you were just asked to approve.
 
 **A session is `UNTITLED` until its first message lands.** The name still comes from that message
 and is still written once, so [the claim the session index rests
@@ -348,12 +422,17 @@ Each carries its own payload and takes its own effects. They are a short list th
 
 | Event | Fired | Payload beyond `session` and settings | Effects it may ask for |
 |---|---|---|---|
-| `describe` | once per session | nothing | the contributions above |
+| `setup` | once per session, before its first turn | nothing | the contributions above |
 | `tool` | the model called one of its tools | `tool`, `args` | `return`, `retry`, `deliver`, `set` |
-| `before_request` | a model request is about to be sent | `messages`, `worktree` | `inject` |
-| `after_turn` | a turn was recorded | `turn`, `opened_on`, `context`, `window`, `worktree` | `deliver`, `set` |
+| `before_request` | a model request is about to be sent | `messages` | `inject` |
+| `after_turn` | a turn was recorded | `turn`, `opened_on`, `context`, `window` | `deliver`, `set` |
 | `compose` | its answer was submitted | `said` | `deliver`, `set` |
 | `action` | a control on its card was pressed | `control`, `value` | `set`, `deliver` |
+
+Every payload also carries `worktree` and, for a confined plugin, `scratch`: where this session's
+files are and where this plugin alone may write. `worktree` is on all of them rather than only the
+two that act inside a turn, because a plugin composing instructions out of the repository's own files
+reads them at `setup` or not at all.
 
 **`before_request` is the one inside a turn, and it exists because [guidance is being ported onto
 this protocol](#both-are-ported-and-that-is-the-test).** Its answer is
@@ -516,7 +595,7 @@ rule an author has to know and observe.
 
 ## A card is declared, not rendered
 
-**A plugin declares the shape of its card once, in `describe`; the console draws it.** A render
+**A plugin declares the shape of its card once, at `setup`; the console draws it.** A render
 executes nothing, and only an `action` runs the script.
 
 That is what lets a card come from a repository, and it is the answer to the instinct that cards
@@ -570,13 +649,13 @@ plugins, and all three can be on at once.
 plugins written by two different people who both called theirs `guidance`. They are installed under
 keys in one mapping, and a mapping's keys are unique, so the operator picks `alice-guidance` and
 `bob-guidance` and neither file is touched. That is [why a plugin declares no name of its
-own](#registration): a rule tying the key to a declared name would make that pair uninstallable
+own](#setup): a rule tying the key to a declared name would make that pair uninstallable
 together. Two repositories each carrying a `review` were never a collision either, since no session
 holds both.
 
 **Nothing is a stack, and a claimed name settles nothing.** An operator's `guidance` and the bundled
 `guidance` are two plugins, both on, both listed on [the settings
-step](#starting-a-session-takes-three-steps) with a switch apiece. Installing one is the decision; this
+step](#starting-a-session-takes-four-steps) with a switch apiece. Installing one is the decision; this
 console does not read a second meaning into the name you happened to give it.
 
 Two designs were tried here and both are worse, in the same way and by degrees. **Shadowing** - one
@@ -632,14 +711,64 @@ reaches the worktree it was handed and nothing else.
 
 **Its confinement is fixed and narrow, and is never the session's own.** A session on
 `Filesystem.EVERYTHING` gets `OverEverything`, so its `bash` reaches `/`; a repository's plugin in
-that session still gets `InAWorktree`, and its network is shut whatever the session chose. The
-isolation a session picked is a decision about what the **model** may reach, and a plugin is not the
-model. Inheriting it would mean the one control that widens a session quietly widens somebody else's
-code along with it.
+that session still gets `InAWorktree`, whatever the session chose. The isolation a session picked is
+a decision about what the **model** may reach, and a plugin is not the model. Inheriting it would
+mean the one control that widens a session quietly widens somebody else's code along with it.
 
 **A console with no sandbox runs none of them at all.** That is a refusal rather than a fallback: a
 repository's plugin is safe to run because the process is confined, so a console that cannot confine
 one has nothing to offer in its place.
+
+### Before the conversation, connected; during it, never
+
+**`setup` is the one event with a network, and every event after it has none.** That is not inherited
+from the session either: a session with the network shut is a statement about the model, and a
+repository plugin's own network answer turns on *which event* it is answering.
+
+Without it the whole stage is one that can only fail. A plugin that needs a program has to fetch one,
+and the two things a plugin most obviously wants - its own dependencies and the tooling a repository
+runs its checks with - are both downloads.
+
+**What makes it safe to offer is when it happens rather than a check on what is fetched.** `setup`
+runs before the first message: the worktree holds the commit the repository supplied and nothing
+else, no credential of this console's is inside the namespace, and nothing the model has written
+exists yet. So what a connected run there can carry out is the repository's own code, to its own
+author, which is not an exfiltration in any useful sense. Every later event is shut again, and that
+is the half that matters - a turn boundary is where a plugin has read whatever the model has been
+writing.
+
+The cost, stated: **a repository plugin can reach the network once per session, and a session that
+chose no network still gives it that.** The trust switch in the picker is what says no, and it says
+no to the whole plugin rather than to the fetch.
+
+### A scratch of its own, which is not the session's
+
+Every confined plugin is handed a directory nobody else can write: `<workspaces>/plugins/<session>/
+<tier>/<name>`, named on the payload as `scratch` and made `$HOME` inside the namespace.
+
+**Its own rather than the session's, and that is a correction.** The session's scratch is a place the
+model writes, so a plugin that kept an executable there would be running whatever the model last put
+at that path - unattended, at every turn boundary, and reported into the conversation as though this
+console had run it. Confinement does not help: both are confined the same way, so what it buys the
+model is not privilege but *laundering*, a way to write into the transcript in another party's voice.
+
+**`$HOME` and not just a bound path**, because that is where tools keep what they fetch. On the tmpfs
+a command gets, a `uv run --script` shebang resolves an interpreter and a package tree at `setup` and
+finds neither at the next event, with the network shut and no way to fetch them again. Pointing
+`$HOME` at the scratch makes the ordinary case work with no environment variable in any plugin.
+
+Two costs, both real:
+
+- **It is per session and never shared.** A repository plugin that pulls its own interpreter pays for
+  it once per session. Measured on `.mainplate/pre-commit`, which fetches CPython 3.14, `pre-commit`
+  and a hook environment per entry in this repository's config, that is about 120MB and twenty
+  seconds against a warm `uv` cache. A shared cache would be quicker and would have to be keyed by
+  repository as well as by name, or two repositories declaring a plugin under one name would share a
+  directory - which is exactly the channel the split above closes. Not worth reopening for the
+  seconds.
+- **Nothing removes it.** Neither this nor a session's worktree is collected today, so the disk a
+  session takes is the disk it keeps. This is a new line item on a bill that already exists rather
+  than a new bill, and whatever eventually answers for worktrees answers for these.
 
 ### The control is the refusal, not the permission
 
@@ -696,7 +825,7 @@ the model no shell at all. That second one is why it is drawn in the picker rath
 the isolation: the two are near enough to look like one question and are not.
 
 **The exposure is made visible rather than the answer made precise.** That is what the [settings
-step](#starting-a-session-takes-three-steps) is for: it runs *before* `describe` and before the first
+step](#starting-a-session-takes-four-steps) is for: it runs *before* `setup` and before the first
 message, so every session shows what it is about to run, in the terms above, before any of it has
 been executed and before anything has been said.
 
@@ -709,7 +838,7 @@ repository tier and nothing was fetched to find that out.
 **Which plugins a session runs, and what they registered, is settled when the step is answered.**
 That is `turn:0:tree:0`'s own shape and the only other thing here like it: a fact about one session
 that could only be learned by doing the work, recorded once and replayed after. It is also what
-[registration once per session](#registration) needs in order to be true across a restart.
+[registration once per session](#setup) needs in order to be true across a restart.
 
 ### Read once, and never from a tree this console wrote
 
@@ -727,7 +856,7 @@ like it covers the case when it does not. A snapshot is a tree a model wrote: it
 its own worktree would run a plugin the parent's model authored, one fork away from any session with
 files.
 
-**So a fork inherits the repository half of what its parent recorded, and describes it afresh for
+**So a fork inherits the repository half of what its parent recorded, and sets it up afresh for
 nothing.** What it inherits is the whole of that half, the tools and the cards and not merely the
 names, because re-running a repository's plugin would be launching a script out of a tree the
 parent's model had been editing. Both keys come across, the declaration as well as the registration:
@@ -735,7 +864,7 @@ a fork of a session that never got past its settings step has only the first, an
 to draw a switch for it is the same read out of the same tree, one step earlier. Only a session
 planted at a commit the *repository* provided ever reads that file or runs what is in it.
 
-**The user half is a different question and a fork re-describes it**, because those scripts are the
+**The user half is a different question and a fork sets it up again**, because those scripts are the
 operator's own and sit outside every worktree, so nothing a model wrote can reach them. That is the
 one place the two tiers are still told apart, and the asymmetry is the security one rather than a
 timing one: it turns on who wrote the file, which is the question the trust switch already asks.
@@ -785,7 +914,7 @@ One question sorts them: **can you describe mainplate with this absent and still
   only thing it loses: its panel keeps the word and the hover text it has today, since those are a
   `label` and a `title` on the delivery rather than a kind of its own.
 - **[What a session is told](guidance.md): yes**, both halves. The operator's guidance, the
-  repository's `AGENTS.md` and the directory index are instructions contributed at `describe`; the
+  repository's `AGENTS.md` and the directory index are instructions contributed at `setup`; the
   nested handover is an injection into a request. It is the half handoff does not exercise.
 
 ### Both are ported, and that is the test
@@ -794,7 +923,7 @@ Not afterwards, and not as a demonstration. Between them **handoff and guidance 
 event, every effect and every contribution**, which is what makes the pair a test rather than a pair
 of examples:
 
-- **Events**: `describe`, `tool`, `before_request`, `after_turn`, `compose`.
+- **Events**: `setup`, `tool`, `before_request`, `after_turn`, `compose`.
 - **Effects**: `return`, `retry`, `deliver`, `inject`.
 - **Contributions**: tools, instructions, an answer in the composer, a card, and a panel's `label`,
   `title` and `tone`.
@@ -804,19 +933,44 @@ those three. A protocol that cannot carry the two is wrong, and finding that out
 was far cheaper than hearing it from the first plugin somebody else writes - it is what turned up
 that `compose` and `action` were being fired at plugins that never asked for them.
 
-**Two things the pair leaves unexercised, and they are named rather than assumed.** `action` and
-`set` are what a plugin uses to act at the moment a control is pressed and to remember something
-between events, and neither of these two wants either: a handoff reads its reserve when it runs, and
-guidance holds nothing between requests. What covers them instead is `tests/test_plugins.py`, over
-plugins written for the purpose.
+Neither of them installs anything, which is the ordinary case and worth saying: a plugin whose
+`setup` is one `return` of a constant is a plugin that had nothing to fetch, not one that skipped a
+step.
 
 **And a third tier is exercised by a fixture rather than by a bundled plugin.** `tests/plugins/git-status`
 is a **bash** script a test repository carries, ported from a `SessionStart` hook: it is declared by
 `.mainplate/mainplate.yaml`, it runs behind the sandbox, and it contributes the worktree's git status
-as `instructions`. It is there because it is the one plugin in this repository that is none of
-Python, none of ours and none of the console's own tiers, so it proves the three claims that would
-otherwise only be asserted in prose - any language, reaches nothing it was not handed, and a
-repository's own script can contribute to what a session is told.
+as `instructions`. It is there because it is none of Python, none of ours and none of the console's
+own tiers, so it proves three claims that would otherwise only be asserted in prose - any language,
+reaches nothing it was not handed, and a repository's own script can contribute to what a session is
+told.
+
+### And this repository carries one, which is the rest of the proof
+
+`.mainplate/pre-commit` runs this project's own hooks over what a session has changed, at every turn
+boundary, and tells the model what is still failing. It is a port of a Claude Code `Stop` hook, and
+**it is what turned the two unexercised corners of the protocol into used ones**: `action` and `set`
+were covered by test plugins written for the purpose, and they are now covered by a plugin somebody
+actually wants.
+
+It is also the only thing here that exercises what a repository plugin is *for*, end to end and on
+real work:
+
+- **It installs at `setup`**, both halves. Its shebang is `uv run --script`, so the console executing
+  it is what resolves the interpreter and `pre-commit` itself; what its `setup` then does is build a
+  hook environment per entry in the config, which is the part `uv` knows nothing about.
+- **It runs confined for the rest of the session**, with the network shut, out of a scratch nothing
+  else can write. That is why it contributes a `tool`: it holds the only `pre-commit` a session can
+  reach, so the model cannot run one from `bash` and has to ask.
+- **It bounds itself.** Each delivery opens a turn and a turn is a model request, so a hook the model
+  cannot satisfy would bill for itself until somebody noticed. `most` is a number on its card saying
+  how many turns in a row it will chase one failure, and any message from a person resets it. The
+  hook it came from needed no such thing, because the thing it interrupted was a person.
+
+Three things it does *not* do, each because the console already answers them: it never stages, since
+`--files` needs no index and the clone is read-only anyway; it never announces a run that only fixed
+things, since `edit` is anchored on what was read and a stale anchor is refused; and it says nothing
+about which turn it is on, since `opened_on` carries that.
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
 ours and turns ours off with one switch on the settings step. The two are separate plugins with
@@ -848,7 +1002,7 @@ answers with no effects at all is using this exactly as intended.
 
 Two things that looked speculative when this was first written are not, because [porting
 guidance](#both-are-ported-and-that-is-the-test) commits to them:
-`instructions` as a `describe` contribution, and `before_request` with its `inject`. Both are in the
+`instructions` as a `setup` contribution, and `before_request` with its `inject`. Both are in the
 tables above.
 
 What is left genuinely open fits the shape and needs a payload and an answer defined, not a new

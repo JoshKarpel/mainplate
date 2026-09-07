@@ -42,10 +42,19 @@ for, so its page draws that step rather than a transcript - which is honest, and
 these tests are about. It only matters where a page is being looked at: a session with a turn in it
 is past that step whatever it loaded.
 
-**A test that wants a session's plugins actually running has to press the button**, because nothing
-else runs one: `set_up` in `test_plugins.py` does the pass and the press together, and `loaded` in
-`test_app.py` does it over HTTP. A test that skipped the press and delivered a message would find a
-session refusing to answer, which is the boundary working rather than a fixture to loosen.
+**A test that wants a session's plugins actually running has to press the button and then run a
+pass**, because that is now two moments: the press records the switches and asks for a pass, and the
+pass is what runs `setup`. `set_up` in `test_plugins.py` does all three, and `loaded` in
+`test_app.py` does it over HTTP. A test that skipped either would find a session refusing to answer,
+which is the boundary working rather than a fixture to loosen.
+
+**`passing` in `conftest.py` is how a suite with no worker drives one pass**, and it is there rather
+than in one file because two suites want it: `test_console.py` presses the button through a route and
+then has to run the pass the press asked for, which is the only way to assert what the press caused.
+
+**A pass that sets plugins up needs `tendings`.** Which plugins are on is a column the *pass* reads
+now, so `conversing` built without a way to read it sets up every declared plugin regardless of what
+the switches said. A test asserting that a plugin left off was never launched must pass one.
 
 **Every response fixture carries a timestamp.** `ModelResponse.timestamp` defaults to the moment it
 was constructed, so a fixture without one is the moment the test ran, and an assertion over a whole
@@ -123,6 +132,18 @@ the actual signal.
 *is* a file this console runs: a fake answering in-process would exercise everything but the one
 claim that matters. Its repository-tier tests need `bwrap` and fail loudly without it, for
 `test_sandbox.py`'s reason - what they assert is what a mount namespace actually does.
+
+**`TestThisRepositorysOwnPlugin` runs `.mainplate/pre-commit` and never installs anything.** What its
+`setup` does for real is fetch - an interpreter, `pre-commit`, and a hook environment per entry in
+the config - which is minutes on a cold cache and a dependency on an index, so a stub `pre_commit`
+module goes on `PYTHONPATH` and the two runs it makes are driven by exit codes. The `uv run --script`
+shebang still resolves the plugin's own dependency, so a cold machine pays for that once, like the
+browsers.
+
+**What that stub cannot cover is asserted against arguments instead.**
+`TestWhereARepositorysPluginRuns` reads the `bwrap` argv this console builds - the network on `setup`
+and shut everywhere else, `$HOME` in the plugin's own scratch, a scratch per plugin per session -
+because running it to find out would be the same assertions made slowly and over a network.
 
 `test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
 fixtures there hand an absolute workspace root and so would never notice a path resolved against the

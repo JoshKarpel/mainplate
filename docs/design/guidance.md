@@ -6,7 +6,7 @@ concatenated. **Repository guidance** is the project's own `AGENTS.md`, read out
 session works in. Both go into the agent's `instructions`.
 
 **All of it is a [plugin](plugins.md)**, in `src/mainplate/plugins/bundled/guidance`, and it is the
-half of the protocol handoff does not exercise: `instructions` contributed at `describe`, and an
+half of the protocol handoff does not exercise: `instructions` contributed at `setup`, and an
 `inject` at `before_request`. So what follows describes a script this console speaks to over a pipe,
 and everything below is that script's rather than the console's unless it says otherwise - what the
 console keeps is `instructing`, which is the one join that puts the operator's standing instructions,
@@ -56,8 +56,8 @@ read the prefix from cache, and a forget has just thrown the whole prefix away. 
 exactly there is therefore free.
 
 **What it recomposes is the join and not the guidance**, and that is the one thing the port to a
-plugin took away. A plugin describes once per session, so what it contributed is settled from the
-moment its [settings step](plugins.md#starting-a-session-takes-three-steps) was answered; a forget
+plugin took away. A plugin is set up once per session, so what it contributed is settled from the
+moment its [settings step](plugins.md#starting-a-session-takes-four-steps) was answered; a forget
 composes the stretch's own `instructions:{n}` again and every block in it says the same thing. So an edited `AGENTS.md` is picked up by [forking](forking.md) rather than by
 forgetting, which is the answer this console gives to every other question about a session's terms.
 

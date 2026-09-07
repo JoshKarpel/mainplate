@@ -9,7 +9,7 @@
 #
 # What comes *back* crossed a trust boundary and is parsed here, strictly. `extra="forbid"` is the
 # one place this console refuses a field it has no answer for, and it is deliberate: a plugin that
-# declares `tool` where the word is `tools` has made a mistake, and a describe that fails naming the
+# declares `tool` where the word is `tools` has made a mistake, and a setup that fails naming the
 # plugin is how somebody finds out. That is the opposite of `records.Record`, which ignores what it
 # does not know, and the difference is who wrote the value - a record was written by an older build
 # of this console, where a plugin's answer was written by somebody who can be told.
@@ -32,16 +32,36 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError
 from pydantic import model_validator
 
-type Event = Literal["describe", "tool", "before_request", "after_turn", "compose", "action"]
+type Event = Literal["setup", "tool", "before_request", "after_turn", "compose", "action"]
 """
 Every moment a plugin can be asked about, which is a short list this console owns.
 
 Not a seam per point in the agent's loop, and not a set a plugin can add to: what decides whether a
 moment is here at all is whether the console can record the answer as a step and apply it through a
 mechanism it already has. See `docs/design/plugins.md`.
+
+**`setup` is one event and not two**, which is worth saying because the pair is what it looks like it
+should be: a plugin says what it contributes *and* gets itself ready in the same call. It was written
+as two, `describe` beside a setup of its own, and collapsed again: a plugin's first run is already
+the moment it installs, since a `uv run --script` shebang resolves its dependencies there whether or
+not anybody named an event for it. The second event bought a scheduling distinction the console can
+make on its own, at the price of a moment every plugin author has to learn about.
+
+**And it is named after the stage rather than after the answer**, because it is one stage of starting
+a session and a plugin is not the only thing in it: the repository is set up in the same stage, and a
+name meaning *tell me what you are* would have said so of only half.
 """
 
-EVENTS: Final[tuple[Event, ...]] = ("describe", "tool", "before_request", "after_turn", "compose", "action")
+SETUP: Final[Event] = "setup"
+"""
+The one event that happens before the conversation does, named where two modules have to agree on it.
+
+`running.py` reads it to decide the network and how long a plugin has to answer, and `asking.py`
+sends it. Written once here for the reason `roots.py` exists: two spellings of one word is the kind
+of disagreement nothing reports.
+"""
+
+EVENTS: Final[tuple[Event, ...]] = ("setup", "tool", "before_request", "after_turn", "compose", "action")
 """
 The same list as a value, for the places that enumerate it rather than match on it.
 
@@ -160,7 +180,7 @@ class Row(Speech):
 
     A pair of optionals with a rule rather than a tagged union, because that is the shape the wire
     already has: a plugin writes `{"switch": {...}}`, and the key it used is the tag. Held to exactly
-    one so a row that names both is a describe that fails rather than a card that quietly draws the
+    one so a row that names both is a setup that fails rather than a card that quietly draws the
     first.
     """
 
@@ -174,7 +194,7 @@ class Row(Speech):
         drawn.
 
         A row naming both controls or neither is a plugin that cannot be drawn, and finding that out
-        at `describe` is a session that says which plugin and why; found at render time it would be a
+        at `setup` is a session that says which plugin and why; found at render time it would be a
         page that will not draw.
         """
         if (self.switch is None) == (self.number is None):
@@ -242,7 +262,7 @@ class Described(Speech):
     """
     Everything a plugin contributes, which comes back from one call.
 
-    One `describe` rather than a manifest beside the script, because a plugin is a package and not a
+    One `setup` rather than a manifest beside the script, because a plugin is a package and not a
     pile of files: a handoff is a tool *and* a condition *and* a card *and* a composer answer, and
     those share one string, one setting and one idea.
 
@@ -263,7 +283,7 @@ class Described(Speech):
     """
     What the session is told, composed into what it is answered under.
 
-    A `describe` contribution rather than an event for the reason tools are: instructions sit in
+    A `setup` contribution rather than an event for the reason tools are: instructions sit in
     front of the cached prefix, so they have to be settled for the session or every request under
     them is re-priced.
     """
@@ -311,9 +331,9 @@ class Answered(Speech):
     message in an inbox *queues* a session, so a plugin writing its own would be writing to the
     queue from inside the pass still holding the claim on it.
 
-    Where each effect is allowed is not decided here. `tool` alone may `return` or `retry`, and only
-    `before_request` may `inject`; the caller that sent the event is the one that knows which it
-    sent, so it is the one that refuses. See `refusing`.
+    Where each effect is allowed is not decided here. `tool` alone may `return` or `retry`, only
+    `before_request` may `inject`, and `setup` may ask for nothing but `set`; the caller that sent
+    the event is the one that knows which it sent, so it is the one that refuses. See `refusing`.
     """
 
     returned: object | None = Field(default=None, alias="return")
@@ -362,6 +382,7 @@ class Payload(Speech):
     plugin: str
     settings: Mapping[str, Setting] = Field(default_factory=dict)
     worktree: str | None = None
+    scratch: str | None = None
 
     """
     What every event carries, before the fields the event itself adds.
@@ -377,9 +398,16 @@ class Payload(Speech):
     for a session with none.
 
     **`worktree` is on every payload rather than only the two events that act inside a turn**, which
-    is a departure worth stating: `describe` needs it because a plugin composing instructions out of
-    the repository's own files reads them at describe time or not at all. A session with no
+    is a departure worth stating: `setup` needs it because a plugin composing instructions out of
+    the repository's own files reads them at setup time or not at all. A session with no
     repository is handed nothing, which is what it has.
+
+    `scratch` is a directory of this plugin's own, which is where anything it installs at `setup`
+    lives and where every later event finds it again. **Its own rather than the session's**, because
+    the session's scratch is a place the model writes: a plugin that kept an executable there would
+    be running, unattended and at every turn boundary, whatever the model last put at that path.
+    Nothing for a plugin that runs unconfined, which has the operator's own environment and a `$HOME`
+    and needs nothing from this console to find somewhere to write.
     """
 
     state: Mapping[str, object] = Field(default_factory=dict)
@@ -398,10 +426,21 @@ class Payload(Speech):
     """
 
 
-class Describing(Payload):
-    """The first call, which asks a plugin what it is. It carries nothing the envelope does not."""
+class SettingUp(Payload):
+    """
+    The first call, which asks a plugin to get ready and say what it is.
 
-    event: Literal["describe"] = "describe"
+    It carries nothing the envelope does not, because everything it needs is already there: the
+    worktree it is being set up against, and a scratch directory of its own to install into.
+
+    **Both halves in one call, and the answer is what the session records.** A plugin with
+    dependencies resolves them by being run at all; a plugin that wants a program in the worktree
+    fetches it here, because this is the one event with a network. What it returns is `Described`,
+    which is settled for the session's life: tool definitions sit above the system prompt in the
+    cached prefix, so a set that changed mid-conversation would invalidate everything under it.
+    """
+
+    event: Literal["setup"] = "setup"
 
 
 class Calling(Payload):

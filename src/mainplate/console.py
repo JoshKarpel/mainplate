@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
-from dataclasses import replace
 from typing import assert_never
 from urllib.parse import parse_qs
 
@@ -571,9 +570,9 @@ async def start(service: Service, started: Started) -> Response:
     Mint a session on the chosen endpoint, and go to it so it can be set up.
 
     **Nothing is said in it here**, which is the change the plugin protocol forced: a repository's
-    plugin cannot be described until its worktree is planted, the worker plants it, and a session's
-    settings step is drawn from what was described. So this records the choice and asks for a pass,
-    and the message box is on the session's own page once there is a session to type into.
+    plugin cannot be *named* until its worktree is planted, the worker plants it, and a session's
+    settings step is drawn from what those files declared. So this records the choice and asks for a
+    pass, and the message box is on the session's own page once there is a session to type into.
 
     An ordinary form post rather than an htmx one, because this is the request that changes which
     session the browser is looking at, and htmx never sees a redirect: the browser follows it
@@ -880,12 +879,12 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
 @post(t"/sessions/{session_id}/setup", session_id, setting_up, summary="Load the plugins a session runs")
 async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     """
-    Answer the settings step: record the switches, run what they left on, and go to the conversation.
+    Answer the settings step: record the switches, say somebody pressed, and ask for a pass.
 
-    **This is the request that first executes a plugin, and that is what the step is for.** Nothing
-    before it has run one: the pass that planted the worktree read what each tier *declares* out of
-    files, and the switches on this form are drawn from that. So the press is the confirmation, and
-    the load is what it confirms.
+    **This is the request that lets a plugin be executed at all, and that is what the step is for.**
+    Nothing before it has run one: the pass that planted the worktree read what each tier *declares*
+    out of files, and the switches on this form are drawn from that. So the press is the
+    confirmation, and the pass that follows is what it confirms.
 
     **Live before anything has been asked, and refused afterwards.** A tool definition leaving the
     cached prefix invalidates everything under it exactly as one arriving late does, so a session
@@ -895,15 +894,13 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
 
     Two buttons and one route, told apart by a field rather than by the shape of the post. `Try
     again` asks for another *declaring* pass, which is the whole of what retrying a session whose
-    worktree or whose `.mainplate/mainplate.yaml` refused is. Anything else loads.
+    worktree or whose `.mainplate/mainplate.yaml` refused is. Anything else asks for the setup.
 
-    Three answers, and each is the page somebody can act on. A load that worked is a `303` to the
-    session, for the reason `start` returns one: what the browser is looking at is a different page
-    afterwards, since a loaded session has a message box and a rail and one on its step has neither,
-    and refreshing then repeats a `GET` rather than the press. A load that failed is the step again
-    with the reason above the switches, because the thing to do about a plugin that will not describe
-    is to turn it off. Nothing is recorded either way but the switches, so pressing again is a fresh
-    attempt.
+    **One answer now, where there used to be two.** Both buttons end in a `303` to the session,
+    because the press no longer decides anything: what it does is record the switches and queue a
+    pass, and what that pass makes of them arrives on the page the redirect lands on. A setup that
+    will not finish is the step again with the reason above the switches, drawn from what the pass
+    recorded rather than from what this handler happened to see, so a reload says the same thing.
     """
     found = await service.read(session)
     if found is None:
@@ -915,18 +912,8 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     if wanted.again:
         await service.setup_again(session)
         return seeing(LINKS.to_session(session))
-    await service.switch(session, wanted.switches)
-    # Read again, because the switches this load is about were written a line ago and `found` was
-    # read before them: which plugins run is exactly what the press just changed.
-    asked = await service.read(session)
-    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    why = await service.load(session, asked)
-    if why is None:
-        return seeing(LINKS.to_session(session))
-    return page_response(
-        200, session_page(LINKS, await service.listed(), replace(asked, refused_load=why), service.reachable)
-    )
+    await service.settle(session, wanted.switches)
+    return seeing(LINKS.to_session(session))
 
 
 @post(t"/sessions/{session_id}/plugins", session_id, pressing, summary="Set one plugin's own settings")

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -37,7 +36,6 @@ from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
 from mainplate.commands import Slot
 from mainplate.conversation import CHOICE_KEY
-from mainplate.conversation import PLUGINS_KEY
 from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import Transcript
@@ -53,6 +51,9 @@ from mainplate.conversation import recorded_steer
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
 from mainplate.conversation import requested_at
+from mainplate.conversation import setup_key
+from mainplate.conversation import setup_refused_in
+from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
@@ -60,16 +61,11 @@ from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import acted
 from mainplate.plugins.asking import composed
-from mainplate.plugins.asking import describing
-from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.asking import running
-from mainplate.plugins.installed import ON
-from mainplate.plugins.installed import BadDeclaration
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.protocol import Setting
 from mainplate.plugins.protocol import Switch
-from mainplate.plugins.running import PluginFailed
 from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
@@ -201,15 +197,15 @@ class Conversation:
 
     plugins: tuple[Enrolled, ...] | None = None
     """
-    Everything this session loaded, or nothing at all where nobody has answered its settings step.
+    Everything this session set up, or nothing at all where that has not happened yet.
 
     **`None` is what puts a session on that step, and it is the trust boundary rather than a loading
     state.** A plugin is a program this console executes, so the list is empty of consequence until
-    somebody has said which programs to run; `Service.load` is what fills it, from a request handler,
-    at the moment they say so.
+    somebody has said which programs to run; the pass that follows the press is what fills it, from
+    `setting_plugins_up`, once they have.
 
-    What is here is exactly the set that was loaded, which is the set that was switched on: a plugin
-    somebody turned off was never described and contributes nothing, because it was never run at all.
+    What is here is exactly the set that was set up, which is the set that was switched on: a plugin
+    somebody turned off contributes nothing because it was never run at all.
     """
 
     refused_plugins: records.Refused | None = None
@@ -224,18 +220,24 @@ class Conversation:
     happened in a pass with nobody waiting on it, so it had to be written down.
     """
 
-    refused_load: str | None = None
+    settling_up: bool = False
     """
-    Why the last attempt to load this session's plugins failed, where one just did.
+    Whether a pass is out setting this session's plugins up, which is a press with no answer yet.
 
-    **Not read from anywhere and never recorded**, which is what separates it from every other field
-    here: a failed load wrote nothing, so there is nothing to read. It is set by the handler that
-    tried, on the response to the press that tried, so a plugin that will not describe puts somebody
-    back on the settings step with the reason above the switches - which is a screen they can act on,
-    where a stalled conversation is not.
+    The state that exists because setting up moved into a pass: somebody answered the step, the
+    worker has the session, and what is on screen has to say so rather than showing the button they
+    just pressed. It ends when the registration lands, and the live connection is what redraws the
+    page it lands on.
+    """
 
-    Recording it would be worse than useless: the store keeps the value a key was first given, so the
-    first failure would be the sentence every later attempt showed.
+    refused_setup: records.Refused | None = None
+    """
+    Why the latest attempt at setting this session's plugins up stopped, where it did.
+
+    Recorded, unlike the sentence this replaced, and the move into a pass is what forced it: nobody
+    is waiting on a response any more, so a failure with nowhere to go is a session sitting under a
+    spinner for ever. It is written against the attempt it belongs to, which is what keeps a
+    write-once store honest here - pressing again opens a new attempt, and this reads the newest.
     """
 
     resending: Resending | None = None
@@ -383,6 +385,15 @@ class Service:
             # breadcrumb is about: a pass that failed to read the files wrote it, and a later pass
             # that succeeded wrote the declaration, which is the authoritative answer.
             refused_plugins=None if declared is not None else plugins_refused_in(recorded),
+            # Whether a pass is out setting this session's plugins up right now, which is one press
+            # answered and nothing recorded against it yet. Two facts rather than one, because the
+            # third state is the one worth drawing: pressed and still working, pressed and stopped
+            # with a reason, or never pressed at all.
+            settling_up=registered is None and setups_in(recorded) > 0,
+            # Read only where there is no registration to read instead, exactly as the declaration's
+            # own breadcrumb is: an attempt that failed before one that worked is history, and what
+            # this field means is why the session is *still* on its step.
+            refused_setup=None if registered is not None else setup_refused_in(recorded),
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             refused=refusal_in(recorded),
             repository=self.repository_of(chosen),
@@ -599,13 +610,13 @@ class Service:
         # on turn 4 is in the tree recorded for turn 5. Re-reading it here would run a plugin the
         # parent's model authored, one fork away from any session with files.
         #
-        # The tools and the cards and not merely the names, because "re-describe what it named" is
+        # The tools and the cards and not merely the names, because "set up what it named again" is
         # the same launch by another route. Only a session planted at a commit the *repository*
         # provided ever reads that file or runs what is in it.
         #
         # The console's half is deliberately not carried: those scripts are the operator's own and
-        # sit outside every worktree, so nothing a model wrote can reach them, and a fork describing
-        # them afresh is how a conversation picks up an edited plugin. That is the one place the
+        # sit outside every worktree, so nothing a model wrote can reach them, and a fork setting
+        # them up afresh is how a conversation picks up an edited plugin. That is the one place the
         # tiers are still told apart, and the asymmetry is the security one rather than a timing one.
         #
         # Both keys of that half, the declaration as well as the registration, because a fork of a
@@ -662,10 +673,10 @@ class Service:
         """
         One session's running plugins, as a request handler asks them things.
 
-        Built per request rather than held, because everything in it is that session's: what it
-        loaded, what its plugins are set to, and where its files are. `None` where nobody has answered
-        its settings step, which is the one state a handler has to refuse rather than guess at - a
-        plugin nothing has described has no leader to answer to and no control to press.
+        Built per request rather than held, because everything in it is that session's: what it set
+        up, what its plugins are set to, and where its files are. `None` where its plugins have not
+        been set up yet, which is the one state a handler has to refuse rather than guess at - a
+        plugin nothing has run has no leader to answer to and no control to press.
 
         The effects are bound to this session here, so nothing below can reach another one: a
         delivery goes into this inbox and a write goes into this row.
@@ -784,63 +795,27 @@ class Service:
         """
         await switch(self.database, session, enabled)
 
-    async def load(self, session: str, found: Conversation) -> str | None:
+    async def settle(self, session: str, enabled: Mapping[str, bool]) -> None:
         """
-        Run the plugins this session was told to run, and record what they said. The reason it failed,
-        or nothing at all.
+        Answer the settings step: record the switches, say that somebody pressed, and ask for a pass.
 
-        **The one place a plugin is executed on somebody's say-so, and the whole of why the settings
-        step exists.** A plugin is a program, so nothing runs one until a person has looked at what is
-        declared and pressed the button; what runs here is exactly the set the switches left on, so a
-        plugin turned off is not merely contributing nothing, it was never launched.
+        **The press is the confirmation and the pass is what it confirms.** A plugin is a program, so
+        nothing has run one before this: the pass that planted the worktree read what each tier
+        declares out of files, and `setup_key` is the recorded fact that a person has since looked at
+        that list. The pass that follows sets up exactly the plugins the switches left on.
 
-        **In a request handler rather than in a pass**, which is where this console does not usually
-        put work, and the reason is what somebody is waiting for. Describing is a handful of
-        short-lived processes asked concurrently, not the clone that made planting the worker's job,
-        and the answer decides which page they get: a load that failed has to put them back on the
-        step with the sentence, and a pass could only leave a stalled session behind.
+        **Nothing is run here**, which is the change this console made after asking a plugin to
+        install things: a setup fetches and builds, and a request somebody is waiting on is the wrong
+        place for minutes of that. It is the same argument that put the clone in a pass.
 
-        The result is a checkpoint key all the same, so a later pass replays it rather than asking
-        anything again. `supply` keeps the value a key was first given, which is what makes a fork's
-        inherited repository half safe: it is already recorded, so it is not described here at all.
-
-        **One broken plugin stops the load in every tier.** A repository plugin is one you kept
-        trusted and a user plugin is one you configured, so either failing silently leaves somebody
-        holding a choice they cannot use, and a session that quietly ran without it would be answering
-        under a setup nobody asked for.
+        Three writes and no wait: the column, the key, and the queue. The key is numbered, so pressing
+        again after a setup that would not finish is a new attempt rather than a slot that keeps its
+        first answer.
         """
-        if found.chosen is None:  # pragma: no cover - a session on its settings step records a choice
-            return "this session records no endpoint"
-        if self.declaring is None or self.declaring.speaking is None:
-            # A console with no way to run a plugin loads none and says so by recording two empty
-            # sets, which is what takes such a session past the step exactly as a full load does.
-            await self.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(()))
-            await self.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
-            return None
-        speaking = self.declaring.speaking
-        # Only what is on, and only under a key nothing has recorded yet. The second is the fork: a
-        # branch inherits its parent's repository registration whole, because re-describing would
-        # launch a script out of a tree the parent's model had been editing.
+        await switch(self.database, session, enabled)
         recorded = await self.checkpointer.load(session)
-        wanting = [each for each in (found.declared or ()) if found.session.tending.on(each.qualified, ON)]
-        asking = [
-            (key, [each for each in wanting if each.confined is confined])
-            for key, confined in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
-            if key not in recorded
-        ]
-        try:
-            # Both tiers at once, and every plugin within a tier at once, because they are independent
-            # processes and somebody is waiting on all of them. Described before anything is written,
-            # so a tier that failed does not leave the other one recorded: the store keeps the value a
-            # key was first given, and a half-written load could never be corrected.
-            described = await asyncio.gather(
-                *(describing(asked, speaking, session, found.worktree) for _, asked in asking)
-            )
-        except (PluginFailed, BadDeclaration) as raised:
-            return str(raised)
-        for (key, _), enrolled in zip(asking, described, strict=True):
-            await self.checkpointer.supply(session, key, recorded_registration(enrolled))
-        return None
+        await self.checkpointer.supply(session, setup_key(setups_in(recorded)), records.Confirmed().recorded())
+        await self.durable.scheduler.make_ready(session)
 
     async def say(self, session: str, said: str, *, forget: bool = False) -> None:
         """

@@ -78,6 +78,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -148,8 +149,11 @@ from mainplate.plugins.asking import opening_of
 from mainplate.plugins.asking import parse_declaration
 from mainplate.plugins.asking import parse_registration
 from mainplate.plugins.asking import recorded_declaration
+from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.asking import running
+from mainplate.plugins.asking import setting_up
 from mainplate.plugins.asking import unstored
+from mainplate.plugins.installed import ON
 from mainplate.plugins.installed import BadDeclaration
 from mainplate.plugins.installed import Collides
 from mainplate.plugins.installed import Enrolled
@@ -160,6 +164,7 @@ from mainplate.plugins.protocol import PLAIN
 from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Tone
 from mainplate.plugins.protocol import toned
+from mainplate.plugins.running import PluginFailed
 from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
@@ -210,7 +215,7 @@ and a mapping in a YAML document, which say what a session *could* run. Nothing 
 it, so a session reaches its settings step having invoked nothing.
 
 Recorded rather than re-read on every render for the reason the registration is: what a page draws a
-switch for has to be the same list the load then describes, and the operator's files can be edited
+switch for has to be the same list the setup then runs, and the operator's files can be edited
 while a session sits on the step.
 """
 
@@ -232,18 +237,44 @@ PLUGINS_REFUSED_KEY: StepKey = "plugins:refused"
 """
 Why a session's plugins could not be *declared*, where they could not.
 
-About the pass rather than about the load, which is the whole of what this key is for now: a worktree
-that would not plant or a `.mainplate/mainplate.yaml` that would not parse happens in a pass with
-nobody waiting on it, so it needs somewhere to be recorded and a `Try again` on the step. A load that
-fails is the other half and is *not* here - it happens in a request handler, so it is answered with
-the step and the sentence rather than written down. Recording it would be worse than useless: the
-store keeps the value a key was first given, so the first failure would be the sentence every later
-attempt showed.
+About reading files rather than about running any of them, which is the whole of what this key is
+for: a worktree that would not plant or a `.mainplate/mainplate.yaml` that would not parse happens in
+a pass with nobody waiting on it, so it needs somewhere to be recorded and a `Try again` on the step.
+Setting up is the other half and is numbered per attempt, because it is a thing somebody retries by
+moving a switch; see `setup_refused_key`.
 
-Written and never read by any pass, which is the one key here of that shape and is what makes it
-safe in a write-once store: a later pass that succeeds writes the declaration and the page reads
-*that*, so this is a breadcrumb consulted only while there is no declaration to read instead.
+Written and never read by any pass, which is what makes it safe in a write-once store: a later pass
+that succeeds writes the declaration and the page reads *that*, so this is a breadcrumb consulted
+only while there is no declaration to read instead.
 """
+
+
+def setup_key(attempt: int) -> StepKey:
+    """
+    That somebody answered the settings step, for the nth time, which is what lets a pass set up.
+
+    **The trust boundary as a recorded fact.** A plugin is a program this console executes, so the
+    pass that plants a worktree reads what each tier declares and stops; what this says is that a
+    person has since looked at that list and pressed the button, and it is the only thing that lets
+    the next pass run any of it.
+
+    It carries no list of which plugins were left on, deliberately: that is the `enabled` column's,
+    and a copy here would be a copy that cannot be corrected. What makes the difference concrete is
+    the retry - a setup that failed is fixed by turning a plugin off and pressing again, and a
+    write-once list would have the second press load exactly what the first one did.
+
+    **Numbered, because pressing again is an ordinary thing to do.** A refusal is recorded against
+    the attempt it belongs to, so a press that follows one is a session with a new attempt open and
+    no refusal under it, which is what the page draws its spinner from. Unnumbered, the first
+    failure would be the sentence every later press showed.
+    """
+    return f"plugins:setup:{attempt}"
+
+
+def setup_refused_key(attempt: int) -> StepKey:
+    """Why the nth attempt at setting a session's plugins up did not finish, where it did not."""
+    return f"plugins:setup:{attempt}:refused"
+
 
 # What the thinking level is called inside the recorded choice. Named once here because the writer
 # and the reader are both in this file and must not drift, which is the same reason the keys are.
@@ -924,7 +955,7 @@ def instructing(*blocks: str | None) -> str:
     The instructions one request carries, composed from every scope that had something to say.
 
     In order of increasing specificity, so the last word belongs to whatever is most local: the
-    operator's standing instructions, then whatever each running plugin contributed at `describe`,
+    operator's standing instructions, then whatever each running plugin contributed at `setup`,
     then the note saying what this session's tools reach. Empty blocks are dropped rather than
     joined, so a console with no plugins produces exactly what this console produced before there
     were any.
@@ -2022,6 +2053,35 @@ def plugins_refused_in(recorded: Mapping[str, object]) -> records.Refused | None
     return None if said is None else parse_refused(said)
 
 
+def setups_in(recorded: Mapping[str, object]) -> int:
+    """
+    How many times somebody has answered this session's settings step, which is zero until they have.
+
+    Counted by walking the keys rather than held as a number, which is what every other count here
+    does: `refusal_in` walks turns and `reached` walks the same way. There is nothing to keep in step,
+    and a session that has been pressed once and failed once is a `1` with a refusal under it.
+    """
+    attempt = 0
+    while setup_key(attempt) in recorded:
+        attempt += 1
+    return attempt
+
+
+def setup_refused_in(recorded: Mapping[str, object]) -> records.Refused | None:
+    """
+    Why the latest attempt at setting this session's plugins up did not finish, where it did not.
+
+    Asked of the last attempt and of no earlier one, which is what makes the numbering worth having:
+    a refusal against an attempt somebody has already pressed past is history, and what the page has
+    to say is whether the *current* attempt is still working or has stopped with a reason.
+    """
+    attempts = setups_in(recorded)
+    if attempts == 0:
+        return None
+    said = recorded.get(setup_refused_key(attempts - 1))
+    return None if said is None else parse_refused(said)
+
+
 def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
     """
     Why this conversation stopped and will not start again on its own, or nothing where it has not.
@@ -2560,8 +2620,8 @@ async def declaring_plugins(
     **Nothing is executed by this**, and that is the point rather than an implementation note. A
     plugin is a program, so the console asks somebody which programs to run before it runs any: this
     half is a directory listing, a mapping in `config.yaml`, and a mapping in the repository's own
-    `.mainplate/mainplate.yaml`. What each of them *is* comes back from `describe`, which happens
-    when the settings step is answered. See `Service.load`.
+    `.mainplate/mainplate.yaml`. What each of them *is* comes back from `setup`, which the pass after
+    the settings step runs. See `setting_plugins_up`.
 
     **Two steps, one per tier group**, because a fork inherits one and re-reads the other. The
     console's own scripts sit outside every worktree, so nothing a model wrote can reach them and a
@@ -2594,6 +2654,77 @@ async def declaring_plugins(
         *await run.step(DECLARED_KEY, console, parse_declaration),
         *await run.step(REPOSITORY_DECLARED_KEY, repository, parse_declaration),
     )
+
+
+async def setting_plugins_up(
+    run: Run,
+    declaring: Declaring,
+    declared: Sequence[Installed],
+    tended: Tending,
+    worktree: Worktree | None,
+) -> tuple[Enrolled, ...] | None:
+    """
+    Set up exactly the plugins somebody left switched on, and record what each of them contributed.
+
+    **The one place a plugin is executed on somebody's say-so, and the whole of why the settings step
+    exists.** Nothing before this has run one: the pass that planted the worktree read what each tier
+    *declares* out of files, and `setup_key` says a person has since looked at that list and pressed
+    the button. What runs is exactly the set the switches left on, so a plugin turned off is not
+    merely contributing nothing, it was never launched.
+
+    **In a pass rather than in the request handler that took the press**, which is the argument this
+    console already made about the clone: a setup fetches and builds, which is minutes on a cold
+    cache, and a request somebody is waiting on is the wrong place for minutes. So the press records
+    the switches and asks for a pass, and this is what the pass does before it opens a turn.
+
+    `None` where the step has not been answered, which is the state the first pass of every session
+    is in, and which `opening_turn` then holds on an empty inbox.
+
+    **Both tiers at once, and every plugin within a tier at once**, because they are independent
+    processes and the session waits on all of them. Nothing is written until every one has answered,
+    so a tier that failed does not leave the other one recorded: the store keeps the value a key was
+    first given, and a half-written registration could never be corrected.
+
+    Only under a key nothing has recorded yet, which is the fork: a branch inherits its parent's
+    repository registration whole, because setting one up again would launch a script out of a tree
+    the parent's model had been editing.
+    """
+    if setups_in(run.recorded) == 0:
+        return None
+    speaking = declaring.speaking
+    if speaking is None:
+        # A console with no way to run a plugin loads none and says so by recording two empty sets,
+        # which is what takes such a session past the step exactly as a full setup does.
+        return (
+            *await run.step(PLUGINS_KEY, empty_registration, parse_registration),
+            *await run.step(REPOSITORY_PLUGINS_KEY, empty_registration, parse_registration),
+        )
+    on = [each for each in declared if tended.on(each.qualified, ON)]
+    asking = [
+        (key, [each for each in on if each.confined is confined])
+        for key, confined in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
+    ]
+    unrecorded = [(key, asked) for key, asked in asking if key not in run.recorded]
+    said = await asyncio.gather(
+        *(
+            setting_up(asked, speaking, run.workflow, None if worktree is None else worktree.root)
+            for _, asked in unrecorded
+        )
+    )
+    ready = dict(zip((key for key, _ in unrecorded), said, strict=True))
+
+    async def recording(enrolled: Sequence[Enrolled]) -> object:
+        return recorded_registration(enrolled)
+
+    settled: list[Enrolled] = []
+    for key, _ in asking:
+        settled.extend(await run.step(key, partial(recording, ready.get(key, ())), parse_registration))
+    return tuple(settled)
+
+
+async def empty_registration() -> object:
+    """No plugins at all, as the value both registration keys take on a console that can run none."""
+    return recorded_registration(())
 
 
 def conversing(
@@ -2710,11 +2841,24 @@ def conversing(
             failed = records.Refused(why=str(raised))
             await run.step(PLUGINS_REFUSED_KEY, partial(as_recorded, failed), parse_refused)
             return Stalled()
-        # What was actually loaded, which a *request handler* wrote when somebody answered the
-        # settings step: `describe` executes a program, so it happens once somebody has said which
-        # programs to execute, and never on the pass that merely reads what is declared. `None` here
-        # is a session still sitting on that step, and the guard below is what keeps it there.
+        # What this session runs, set up here on the pass that follows the settings step being
+        # answered: `setup` executes a program, so it happens once somebody has said which programs
+        # to execute, and never on the pass that merely reads what is declared. `None` is a session
+        # still sitting on that step, and the guard below is what keeps it there.
         enrolled = registered_in(run.recorded)
+        if enrolled is None:
+            try:
+                enrolled = await setting_plugins_up(run, declaring or Declaring(), declared, tended, worktree)
+            except (PluginFailed, Refused, BadDeclaration) as raised:
+                # **Recorded against the attempt it belongs to**, which is what makes the step
+                # somebody can act on: turning the plugin off and pressing again opens a new attempt
+                # with no refusal under it, and the page draws that as working rather than as the
+                # sentence it just showed. `Stalled` for `declaring_plugins`' reason - the next pass
+                # would ask the identical question of the identical scripts.
+                stopped = records.Refused(why=str(raised))
+                against = setup_refused_key(setups_in(run.recorded) - 1)
+                await run.step(against, partial(as_recorded, stopped), parse_refused)
+                return Stalled()
         on = running(enrolled or (), tended)
         live = Live(
             session=run.workflow,
@@ -2776,8 +2920,8 @@ def conversing(
             # appended, it would be a sentence the model carried that no record held, recomposed on
             # every turn in front of a cached prefix it is supposed to sit still behind.
             #
-            # What every plugin contributed is already settled: `describe` ran on the first pass and
-            # its answer is recorded, so this reads a value rather than running anything.
+            # What every plugin contributed is already settled: `setup` ran above this loop, on this
+            # pass or an earlier one, and its answer is recorded - so this reads a value.
             said_under = (
                 instructions,
                 *live.instructions(),

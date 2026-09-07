@@ -41,7 +41,7 @@ the session, what was said, whether it is stalled and the model's window, and fo
 from one value are four chances for a caller to pair a transcript with another session's window.
 
 **One connection drives whichever regions the page's shape has**, which is what `partial` was always
-for. A session past [its settings step](plugins.md#starting-a-session-takes-three-steps) is the
+for. A session past [its settings step](plugins.md#starting-a-session-takes-four-steps) is the
 transcript and [the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in
 the composer; a session still on that step is the step, which has neither of those and is the only
 region there is. One predicate, `settling`, decides both which shape the page is drawn in and which
@@ -166,7 +166,7 @@ question here that decides nothing about how the session runs.
 plugins cannot even be named until its worktree is planted, which a pass does, and none of them may
 be run until somebody has seen the list. So this page decides what a session *is*, the settings step
 decides what it loads, and the box is on the session's own page once there is a conversation to type
-into. See [the settings step](plugins.md#starting-a-session-takes-three-steps).
+into. See [the settings step](plugins.md#starting-a-session-takes-four-steps).
 
 **Every question the picker asks with a closed set of answers is one component.** `choosing` in
 `pages.py` takes a legend, a toggle id, the names on offer and a body of cards, and gives back a

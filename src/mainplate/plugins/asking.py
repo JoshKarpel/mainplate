@@ -41,13 +41,13 @@ from mainplate.plugins.protocol import Answered
 from mainplate.plugins.protocol import Calling
 from mainplate.plugins.protocol import Composing
 from mainplate.plugins.protocol import Delivery
-from mainplate.plugins.protocol import Describing
 from mainplate.plugins.protocol import Ending
 from mainplate.plugins.protocol import Event
 from mainplate.plugins.protocol import Opening
 from mainplate.plugins.protocol import Payload
 from mainplate.plugins.protocol import Requesting
 from mainplate.plugins.protocol import Setting
+from mainplate.plugins.protocol import SettingUp
 from mainplate.plugins.protocol import parse_answer
 from mainplate.plugins.protocol import parse_described
 from mainplate.plugins.protocol import refusing
@@ -255,25 +255,31 @@ def opening_of(said: records.Delivered) -> Opening:
     return Opening(kind=said.kind, plugin=said.plugin if isinstance(said, records.Note) else None)
 
 
-async def describing(
+async def setting_up(
     installed: Sequence[Installed], speaking: Speaking, session: str, worktree: Path | None
 ) -> tuple[Enrolled, ...]:
     """
-    Ask every declared plugin what it is, all at once, and fail naming whichever one will not say.
+    Set every declared plugin up, all at once, and fail naming whichever one will not answer.
 
-    **The first call to a plugin asks it what it is**, and everything it contributes comes back from
-    that one call. Concurrent because the plugins are independent and each is a cold process, and in
-    the order they were declared because the record is what a settings step is drawn from twice.
+    **The first call to a plugin sets it up and asks what it is**, and everything it contributes
+    comes back from that one call. Concurrent because the plugins are independent and each is a cold
+    process doing the slowest thing it will ever do, and in the order they were declared because the
+    record is what a settings step is drawn from twice.
 
     **One broken plugin stopping the whole session is the right answer in every tier.** A repository
     plugin is one you granted and a user plugin is one you configured, so either failing silently
     leaves somebody holding a choice they cannot use, and a session that quietly ran without it would
     be answering under a setup nobody asked for.
+
+    **A setup has to be idempotent, and this is where that constraint comes from.** What it produces
+    is recorded once every plugin has answered, so one that fails leaves nothing recorded and the
+    next attempt sets all of them up again. Recording each separately would still leave a session
+    half set up, and being run twice is what an install is already built to survive.
     """
     where = None if worktree is None else str(worktree)
     said = await asyncio.gather(
         *(
-            speaking(each, Describing(session=session, plugin=each.qualified, worktree=where).spoken())
+            speaking(each, SettingUp(session=session, plugin=each.qualified, worktree=where).spoken())
             for each in installed
         )
     )

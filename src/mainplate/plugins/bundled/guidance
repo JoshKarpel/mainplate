@@ -16,7 +16,7 @@
 #
 # **It is the other half of what the protocol has to carry**, which is why it ships beside `handoff`:
 # between them the two exercise every event, every effect and every contribution. This one is
-# `instructions` at `describe` and an `inject` at `before_request`, and nothing else.
+# `instructions` at `setup` and an `inject` at `before_request`, and nothing else.
 #
 # Nothing here imports mainplate. A bundled plugin runs on exactly the path a third-party plugin runs
 # on, so what ships is a worked example rather than a privileged one - and the price is stated: the
@@ -354,7 +354,7 @@ def describing(payload: dict[str, Any]) -> dict[str, Any]:
     """
     What this plugin is, and what it has to say about this session before its first request.
 
-    **`instructions` is a `describe` contribution rather than an event**, and that is the cache
+    **`instructions` is a `setup` contribution rather than an event**, and that is the cache
     rather than tidiness: instructions sit in front of the cached prefix, so composing them again on
     a later turn would re-price every remaining request the moment the repository's own `AGENTS.md`
     moved - and a session working on a repository's guidance moves it constantly. Reading it again
@@ -381,7 +381,7 @@ def describing(payload: dict[str, Any]) -> dict[str, Any]:
 def answer(payload: dict[str, Any]) -> dict[str, Any]:
     """What this plugin wants done about one event, which for most events is nothing."""
     event = payload.get("event")
-    if event == "describe":
+    if event == "setup":
         return describing(payload)
     if event == "before_request":
         where = payload.get("worktree")

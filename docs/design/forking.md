@@ -51,7 +51,7 @@ under the reader's hand, and there would be one per turn.
   asked](composer.md#handing-off-without-being-asked).
 - **What the operator's plugins are**, which a fork asks afresh. Those scripts sit outside every
   worktree, so nothing a model wrote can reach them, and describing them again is how a conversation
-  picks up an edited one. See [plugins](plugins.md#registration).
+  picks up an edited one. See [plugins](plugins.md#setup).
 - **A repository it does not have.** A fork may *attach* one and may not *swap* one; see [the
   workspace](workspace.md#a-fork-may-attach-a-repository-and-may-not-swap-one).
 

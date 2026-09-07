@@ -3301,12 +3301,12 @@ def plugin_switch(plugin: Installed, on: bool, form: str | None = None) -> Eleme
     """
     One plugin's own on-and-off, which is the whole of what the settings step decides.
 
-    **Drawn from what was declared and never from what was described**, because nothing has described
-    anything yet: this is the control that decides which of these programs is run at all, so it is
-    made of the name somebody installed the plugin under and the file it is. What a plugin calls
-    itself is on its card, and its card comes back from having asked it.
+    **Drawn from what was declared and never from what a plugin said**, because none of them has
+    been asked anything yet: this is the control that decides which of these programs is run at all,
+    so it is made of the name somebody installed the plugin under and the file it is. What a plugin
+    calls itself is on its card, and its card comes back from having asked it.
 
-    **Live here because nothing has been loaded yet, and gone afterwards**, which is not a
+    **Live here because nothing has been run yet, and gone afterwards**, which is not a
     preference: a tool definition leaving the cached prefix invalidates everything under it exactly
     as one arriving late does, so what plugins a session runs is settled the moment they are loaded.
     The rail then draws each running plugin's card and does not draw these, and forking is how a
@@ -3394,16 +3394,27 @@ def tier_group(tier: Tier, plugins: Sequence[Installed], tending: Tending, form:
 
 
 SETUP_SAYS: Final = (
-    "None of these has been run. Loading executes each one you leave on, once, to ask it what it "
-    "contributes; that set is then fixed for this conversation, and forking is how it changes."
+    "None of these has been run. Setting up executes each one you leave on, once, to install "
+    "whatever it needs and ask it what it contributes; that set is then fixed for this "
+    "conversation, and forking is how it changes."
 )
 """
 The line above the switches, which says what the button does rather than what the list is.
 
 **A reader deciding here is deciding whether to execute somebody else's program**, and nothing else
 on the page says so: the tier lines say who wrote each one, and the names say what they are called.
-Both halves of the sentence are load-bearing - that nothing has run yet is why the step is worth
-stopping at, and that the set is then fixed is why it cannot be left until later.
+Three halves of the sentence are load-bearing - that nothing has run yet is why the step is worth
+stopping at, that a setup *installs* is why it is the one moment with a network, and that the set is
+then fixed is why it cannot be left until later.
+"""
+
+SETUP_WORKING: Final = "Setting up: each plugin is installing whatever it needs and saying what it contributes."
+"""
+What the page says while the pass that answers the press is out.
+
+It names the slow half rather than the press, because that is what somebody is waiting on and what
+can take minutes: a repository plugin fetching a toolchain is a session sitting here, and a line
+saying only "loading" would read as this console being slow.
 """
 
 
@@ -3436,10 +3447,12 @@ def setup_step(links: Links, showing: Conversation) -> Element:
     exists to decide whether to run it. Which shape the page takes is `settling`, and the live
     connection sends whichever regions that shape has.
 
-    Three states, and each says the one thing a reader can act on. Nothing declared yet is the clone
-    and the worktree, which is the only slow moment in a session's life. A refusal names what could
-    not be read and offers another pass. Otherwise it is the tiers, with a switch apiece, under the
-    button that loads them - carrying the reason the last press failed, where one did.
+    Four states, and each says the one thing a reader can act on. Nothing declared yet is the clone
+    and the worktree. A refusal names what could not be read and offers another pass. A press that
+    has been answered and not yet finished is the setup itself, which is the other slow moment in a
+    session's life and the one a repository's own plugin decides the length of. Otherwise it is the
+    tiers, with a switch apiece, under the button that sets them up - carrying the reason the last
+    attempt stopped, where one did.
 
     Every button here is a plain submit and none of them swaps, because what each one leads to is a
     differently shaped page: settling and loaded are the two halves of `settling`'s own condition, so
@@ -3478,6 +3491,18 @@ def setup_step(links: Links, showing: Conversation) -> Element:
                 ],
             ),
         )
+    if showing.settling_up and showing.refused_setup is None:
+        return div(
+            cls="setup",
+            attrs={"id": SETUP_ID},
+            children=div(
+                cls="settling",
+                children=[
+                    p(cls="setup__working", children=working()),
+                    p(cls="setup__says", children=SETUP_WORKING),
+                ],
+            ),
+        )
     return div(
         cls="setup",
         attrs={"id": SETUP_ID},
@@ -3493,11 +3518,15 @@ def setup_step(links: Links, showing: Conversation) -> Element:
                 },
                 children=[
                     p(cls="setup__says", children=SETUP_SAYS),
-                    # Why the last press did not get anywhere, above the switches rather than beside
-                    # the plugin it names: what a reader does about a plugin that will not describe is
-                    # turn it off, and the switch is one line down. Nothing recorded it, so it is gone
-                    # on the next render, which is right - it is a fact about an attempt.
-                    *(() if showing.refused_load is None else (p(cls="setup__failed", children=showing.refused_load),)),
+                    # Why the last attempt did not get anywhere, above the switches rather than
+                    # beside the plugin it names: what a reader does about a plugin that will not set
+                    # up is turn it off, and the switch is one line down. It is recorded against that
+                    # attempt, so pressing again is a new one and this sentence goes.
+                    *(
+                        ()
+                        if showing.refused_setup is None
+                        else (p(cls="setup__failed", children=showing.refused_setup.why),)
+                    ),
                     *(
                         tier_group(tier, plugins, showing.session.tending, form=SETUP_ID + "-form")
                         for tier, plugins in by_tier(showing.declared)
@@ -4182,9 +4211,10 @@ def settling(showing: Conversation) -> bool:
     Whether this session is still on its settings step, which is what shape its page takes.
 
     **Both halves are load-bearing and the turn count is the one easy to leave out.** A session that
-    has loaded nothing is on the step, because loading happens in the request that answers it and
-    nowhere else, so an unloaded session is held there by the same fact that makes it safe to be
-    there. And a session with a turn in it is past the step whatever its plugins say, because a tool
+    has set nothing up is on the step, whether nobody has pressed the button yet or a pass is out
+    answering the press, because the thing that takes a session past the step is a registration and
+    nothing else writes one. And a session with a turn in it is past the step whatever its plugins
+    say, because a tool
     definition leaving the cached prefix invalidates everything under it exactly as one arriving late
     does - without that, a session recorded before any of this existed would draw the step over a
     conversation.

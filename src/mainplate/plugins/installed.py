@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -61,6 +62,19 @@ What a repository's tool names are prefixed with, and what no other tier's may b
 and if a collision refused then a repository could stop your session starting - which is the thing
 every other rule here is built to prevent. Prefixing costs description tokens and a clumsier name in
 the prefix, and buys a tier that cannot interfere with anything.
+"""
+
+NAMED: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+"""
+What a plugin may be called, which is one path segment and nothing that could be read as another.
+
+A name is not only a label. It is the key of a settings blob, half of a tool name and half of a
+leader, and it is the directory a plugin's own scratch is made at - so a key of `../elsewhere` would
+be a repository naming a directory outside the one this console made for it. Held to a segment here,
+at the moment a file is read, so nothing downstream has to wonder.
+
+Leading dots are out as well, which is the same rule one step further: `.` and `..` are segments and
+neither of them names a plugin.
 """
 
 LEADER_SEPARATOR: Final = ":"
@@ -241,7 +255,13 @@ def installed_by(tier: Tier, declared: Mapping[str, Path], relative_to: Path | N
     the repository and the repository is somewhere this console chose to put it. An operator's paths
     are theirs, and a relative one there is resolved against the process's directory, which is the
     ordinary meaning of a relative path in a file somebody edits by hand.
+
+    A key that is not a name is refused here, where the file it came from can be named, rather than
+    much later where a directory turns out to be somewhere else. See `NAMED`.
     """
+    for name in declared:
+        if not NAMED.match(name):
+            raise BadDeclaration(f"{name!r} is not a plugin name: a name is letters, digits, and any of `.`, `-`, `_`")
     return tuple(
         Installed(tier=tier, name=name, path=(relative_to / path if relative_to is not None else path.expanduser()))
         for name, path in sorted(declared.items())

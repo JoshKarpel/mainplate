@@ -130,7 +130,8 @@ change:
   sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
   executes a plugin before somebody presses the button on that step**, which is a trust boundary and
   not a loading order. **Handoff and what a session is told are both plugins**, so a change to either
-  is a change to a script in `src/mainplate/plugins/bundled/` rather than to the console.
+  is a change to a script in `src/mainplate/plugins/bundled/` rather than to the console. **And this
+  repository carries one of its own**, in `.mainplate/`, described below.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
@@ -152,6 +153,25 @@ a browser, and `scripts/` for the gallery and the seeder.
 **Those say what must hold; the design notes say why.** A page argues for four lowercase letters and
 the file beside `anchors.py` says do not make it three, so write a new constraint beside the code
 and its reasoning on the page, rather than either in both.
+
+## This repository runs a plugin of its own
+
+`.mainplate/mainplate.yaml` declares `.mainplate/pre-commit`, so **a mainplate session working on
+mainplate runs this project's own hooks at every turn boundary** and is told what is still failing.
+It is a repository-tier plugin like anybody else's: it runs behind the sandbox, with a network only
+at `setup`, out of a scratch directory nothing else can write.
+
+Two things follow for anybody changing it:
+
+- **It is the only `pre-commit` a session can reach.** The model's `bash` has no network to install
+  one and no way into that scratch, so the plugin's `repo_pre-commit_run` tool is the whole of how a
+  session checks itself. Removing the tool would leave a session unable to run the checks this
+  repository asks for before saying anything is done.
+- **Changing it changes nothing about a session already running.** A repository's plugin is read once
+  and set up once, so an edit reaches the next *new* session and no turn of any existing one.
+
+Try it by hand rather than by starting a session:
+`echo '{"event":"setup","session":"x","plugin":"repository:pre-commit","worktree":"'$PWD'","scratch":"/tmp/x"}' | .mainplate/pre-commit`.
 
 ## Dependencies
 

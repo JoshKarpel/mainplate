@@ -799,15 +799,20 @@ def pages() -> dict[str, str]:
         LISTED[1], {inbox_key(0): recorded_prompt("Why does the poll stop after one answer?")}, started=False
     )
     # The step between creating a session and typing into it, which is where a person says which
-    # programs this console may run. Three states, drawn differently, and the difference is the whole
+    # programs this console may run. Four states, drawn differently, and the difference is the whole
     # of what a reader can do about each: a first pass still planting has nothing to switch, one that
-    # has read the declarations has a switch per plugin under a heading per tier, and a load that
-    # failed says which plugin would not answer, above the switch that turns it off.
-    setting_up = showing(LISTED[1], {}, started=False, plugins=None, declared=None)
+    # has read the declarations has a switch per plugin under a heading per tier, one whose press has
+    # been answered is a pass out installing whatever those plugins need, and one whose setup stopped
+    # says which plugin would not answer, above the switch that turns it off.
+    planting = showing(LISTED[1], {}, started=False, plugins=None, declared=None)
     choosing_plugins = showing(LISTED[1], {}, started=False, plugins=None)
-    failed_load = replace(
+    installing = replace(choosing_plugins, settling_up=True)
+    failed_setup = replace(
         choosing_plugins,
-        refused_load="repository:lint exited 127: .mainplate/lint: line 3: shellcheck: command not found",
+        settling_up=True,
+        refused_setup=records.Refused(
+            why="repository:lint exited 127: .mainplate/lint: line 3: shellcheck: command not found"
+        ),
     )
 
     return {
@@ -815,9 +820,10 @@ def pages() -> dict[str, str]:
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
         "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
-        "setting-up.html": session_page(LINKS, LISTED, setting_up, REACHABLE),
+        "setting-up.html": session_page(LINKS, LISTED, planting, REACHABLE),
         "settings.html": session_page(LINKS, LISTED, choosing_plugins, REACHABLE),
-        "settings-refused.html": session_page(LINKS, LISTED, failed_load, REACHABLE),
+        "settings-installing.html": session_page(LINKS, LISTED, installing, REACHABLE),
+        "settings-refused.html": session_page(LINKS, LISTED, failed_setup, REACHABLE),
         "opening.html": session_page(LINKS, LISTED, queued, REACHABLE),
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),

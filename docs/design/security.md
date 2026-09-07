@@ -135,6 +135,30 @@ them:
 - **A repository's plugin.** It runs in the same `InAWorktree` confinement, so the first bullet
   covers it.
 
+## What a plugin gets that a command does not, and why each is safe
+
+A repository's plugin and a session's `bash` run behind the same namespace, and then differ in three
+places. Each difference is deliberate and each is narrow.
+
+- **A network, at `setup` and never again.** A plugin that needs a program has to fetch one, so the
+  event that runs before the first message is connected and every event during the conversation is
+  not. What makes it safe is *when*: at that moment the worktree holds the commit the repository
+  supplied, nothing the model has written exists, and no credential of this console's is inside the
+  namespace, so what a connected run can carry out is the repository's own code to its own author.
+  A turn boundary is the opposite of that in every respect, which is why it is shut.
+- **A scratch directory of its own**, rather than the session's. The model writes the session's, so a
+  plugin that installed a program there would be running whatever the model last left at that path.
+  Confinement is no answer, because both are confined the same way: what a shared directory would
+  give the model is not privilege but *voice*, a way to have its own output delivered into the
+  transcript as this repository's checks having failed.
+- **`$HOME` pointing at that directory**, rather than at a tmpfs. It is what lets a plugin keep what
+  it fetched, and it is per plugin per session, so nothing one plugin caches is readable by another.
+
+**The trust switch still governs all three**, because it governs whether the plugin runs at all. What
+it does not do is scale with them: a session that says no gets none of this, and a session that says
+yes gets all of it. There is deliberately no finer control, for [the reason there is no per-repository
+grant](plugins.md#the-control-is-the-refusal-not-the-permission).
+
 **This is why `Run` needs no defence.** It stays a shell, unsandboxed, in the worktree, with the
 console's environment, and that is what it is for. The problem was never that `Run` is trusted; it
 was that something untrusted could stage a trap in advance and wait for a person to walk into it

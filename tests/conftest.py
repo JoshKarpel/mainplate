@@ -13,6 +13,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -27,8 +28,10 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.settings import ModelSettings
 from without_asgi import ASGIApp
+from without_durability.interfaces import claimed
 from without_durability.interfaces import inbox_key
 from without_durability.stepwise import Run
+from without_durability.stepwise import resume
 
 from mainplate import records
 from mainplate.agent import Choice
@@ -465,6 +468,20 @@ async def started(service: Service, said: str, chosen: Choice = DEFAULT_CHOICE, 
     await service.say(session.id, said)
     found = await read_session(service.database, session.id)
     return found if found is not None else session
+
+
+async def passing(service: Service, session: str, body: Any) -> Any:
+    """
+    One pass of a session, claimed and released, which the suites with no worker drive by hand.
+
+    Here rather than in one of them because two now want it: setting a session's plugins up happens
+    in a pass, so a test about the *press* has to be able to run the pass the press asked for.
+    """
+    holder = await claimed(service.checkpointer, session)
+    try:
+        return await resume(holder, service.checkpointer, body)
+    finally:
+        await service.checkpointer.release(holder)
 
 
 async def run(*arguments: str, cwd: Path) -> str:

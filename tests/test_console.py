@@ -13,10 +13,13 @@ import pytest
 from calling import calling
 from conftest import CONFIG
 from conftest import DEFAULT_CHOICE
+from conftest import INSTRUCTIONS
 from conftest import WHEN
+from conftest import Provider
 from conftest import already
 from conftest import answered_with
 from conftest import came_back
+from conftest import passing
 from conftest import recorded_turn
 from conftest import snapshotted
 from without_asgi import ASGIApp
@@ -41,6 +44,7 @@ from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
+from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
 from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
@@ -67,6 +71,7 @@ from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
+from mainplate.sessions import read_tending
 from mainplate.tending import AGAIN
 from mainplate.tending import SETTLE_FIELD
 from mainplate.tending import SETTLED
@@ -1740,6 +1745,23 @@ class TestLoadingASessionsPlugins:
         await service.checkpointer.supply(session.id, REPOSITORY_DECLARED_KEY, recorded_declaration(()))
         return session.id
 
+    async def setting_up(self, service: Service, session: str, answering: Answering) -> object:
+        """
+        The pass the press asks for, which is where a plugin is actually run.
+
+        Driven by hand because these tests have no worker, and driven at all because the press is
+        only half the claim: what somebody confirms and what then runs have to be the same set, and
+        that is two moments now rather than one.
+        """
+        declaring = Declaring(console=DECLARES, speaking=answering)
+        body = conversing(
+            Provider().endpoints(),
+            INSTRUCTIONS,
+            declaring=declaring,
+            tendings=lambda held: read_tending(service.database, held),
+        )
+        return await passing(service, session, body)
+
     async def test_the_step_offers_switches_and_nothing_to_type_into(self, service: Service) -> None:
         """
         A session being set up has no transcript, no message box and no rail: every control in those
@@ -1763,10 +1785,14 @@ class TestLoadingASessionsPlugins:
         assert 'class="rail"' not in page.text
         assert answering.asked == [], "and nothing has been run to draw it"
 
-    async def test_the_press_runs_only_what_was_left_on(self, service: Service) -> None:
+    async def test_the_press_itself_runs_nothing_and_the_pass_runs_what_was_left_on(self, service: Service) -> None:
         """
-        Which is the whole of the boundary: a plugin somebody switched off is not merely contributing
-        nothing, it was never launched.
+        Which is the whole of the boundary, in the two moments it now takes: the press records the
+        switches and asks for a pass, and the pass runs exactly the plugins they left on.
+
+        **The press spawning nothing is the half that moved**, and it moved because setting a plugin
+        up fetches things: a repository whose plugin installs a toolchain would otherwise hold this
+        very request open for minutes.
         """
         answering = Answering()
         app, running = await self.console(service, answering)
@@ -1779,6 +1805,11 @@ class TestLoadingASessionsPlugins:
 
         assert pressed.status == 303, "the conversation is where to go next"
         assert pressed.location.endswith(session)
+        assert answering.asked == [], "and the press itself ran none of them"
+        assert registered_in(await running.checkpointer.load(session)) is None
+
+        await self.setting_up(running, session, answering)
+
         assert answering.asked == ["user:lint"]
         enrolled = registered_in(await running.checkpointer.load(session))
         assert enrolled is not None
@@ -1800,13 +1831,18 @@ class TestLoadingASessionsPlugins:
             )
 
         assert pressed.status == 303
+        await self.setting_up(running, session, answering)
         assert answering.asked == []
         assert registered_in(await running.checkpointer.load(session)) == ()
 
-    async def test_a_plugin_that_will_not_load_comes_back_to_the_step(self, service: Service) -> None:
+    async def test_a_plugin_that_will_not_set_up_comes_back_to_the_step(self, service: Service) -> None:
         """
-        Rather than stalling a conversation, because the thing to do about a plugin that will not
-        describe is turn it off - and the switch is on the screen this answers with.
+        Rather than stalling a conversation, because the thing to do about a plugin that will not set
+        up is turn it off - and the switch is on the screen this answers with.
+
+        **The reason is recorded now, against the attempt it belongs to**, which is what the move
+        into a pass forced: nobody is waiting on a response any more, so a failure with nowhere to go
+        would be a spinner that never resolves.
         """
         answering = Answering(refusing="user:notify")
         app, running = await self.console(service, answering)
@@ -1816,12 +1852,47 @@ class TestLoadingASessionsPlugins:
                 f"/sessions/{session}/setup",
                 {"on:user:lint": "on", "on:user:notify": "on", SETTLE_FIELD: SETTLED},
             )
+            assert pressed.status == 303
+            await self.setting_up(running, session, answering)
+            page = await caller.get(f"/sessions/{session}")
 
-        assert pressed.status == 200
-        assert "user:notify exited 1" in pressed.text
-        assert ">Load plugins</button>" in pressed.text, "with the switches still there to change"
+        assert page.status == 200
+        assert "user:notify exited 1" in page.text
+        assert ">Load plugins</button>" in page.text, "with the switches still there to change"
         recorded = await running.checkpointer.load(session)
-        assert registered_in(recorded) is None, "and nothing was written, so pressing again is a fresh attempt"
+        assert registered_in(recorded) is None, "and nothing was registered, so pressing again is a fresh attempt"
+
+    async def test_pressing_again_after_a_failure_is_a_fresh_attempt_with_no_sentence_on_it(
+        self, service: Service
+    ) -> None:
+        """
+        Which is what the attempt number buys, and the reason the confirmation records no list of its
+        own: a write-once one would have the second press run exactly what the first one ran, and a
+        write-once refusal would be the sentence every later press showed.
+        """
+        answering = Answering(refusing="user:notify")
+        app, running = await self.console(service, answering)
+        session = await self.declared(running)
+        async with calling(app) as caller:
+            await caller.post(
+                f"/sessions/{session}/setup",
+                {"on:user:lint": "on", "on:user:notify": "on", SETTLE_FIELD: SETTLED},
+            )
+            await self.setting_up(running, session, answering)
+            await caller.post(
+                f"/sessions/{session}/setup",
+                {"on:user:lint": "on", "on:user:notify": "off", SETTLE_FIELD: SETTLED},
+            )
+            waiting = await caller.get(f"/sessions/{session}")
+            await self.setting_up(running, session, answering)
+            page = await caller.get(f"/sessions/{session}")
+
+        assert "user:notify exited 1" not in waiting.text, "the failed attempt's sentence is behind us"
+        assert "Setting up" in waiting.text, "and what is on screen is the pass that was asked for"
+        assert page.status == 200
+        enrolled = registered_in(await running.checkpointer.load(session))
+        assert enrolled is not None
+        assert [each.qualified for each in enrolled] == ["user:lint"]
 
     async def test_a_session_that_has_been_asked_something_is_refused(self, service: Service) -> None:
         """

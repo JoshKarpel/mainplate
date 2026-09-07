@@ -374,7 +374,7 @@ ways at once:
 definitions sit above the system prompt in the cached prefix, so adding one invalidates the whole
 conversation beneath it: introduced at handoff time it would cost a full uncached read of the
 window, where a permanent one costs its own description at cache-read prices on every request. Four
-orders of magnitude. What a plugin contributes is therefore settled at `describe`, once per session,
+orders of magnitude. What a plugin contributes is therefore settled at `setup`, once per session,
 and a plugin's tools are not conditioned on the isolation the way the file tools are, because what
 one reaches is decided by its own tier rather than by what the *model* may touch.
 
@@ -558,7 +558,7 @@ schema language and no way for the card and the settings to disagree.
 known only once it has been *run*, a repository's cannot be run until its worktree is planted, and
 none of them is run until that step is answered. So the step draws a switch per plugin and no cards
 at all, and each running plugin's card is in the rail from the moment it is loaded. See
-[the three steps](plugins.md#starting-a-session-takes-three-steps).
+[the four steps](plugins.md#starting-a-session-takes-four-steps).
 
 **A fork starts on the declared defaults rather than inheriting what its parent was set to.** A
 reserve is a decision about how much room one conversation's context has left, and a branch's context
