@@ -66,6 +66,13 @@ decision as snapshots honouring a `.gitignore`, arrived at one level out: going 
 call should not uninstall what was installed since. The cost is the one an ignored path already
 carries, that what is in there goes stale while the source around it moves back.
 
+**It is `$HOME` for a session's commands**, rather than the tmpfs, because that is where every tool
+that fetches keeps what it fetched: a toolchain a repository's `.mainplate/setup` installs lands
+under `$HOME`, and a shell whose `$HOME` is anywhere else cannot find its own tools. `home_in` is
+where that is decided, and it retires the earlier reading that what a shell leaves in a home
+directory is scratch by accident - it is scratch by intent now, and the cost is that a stray dotfile
+survives the call. A session over the whole machine has no scratch and keeps the tmpfs.
+
 Outside the worktree rather than under it, and that is not tidiness. `list` passes `--others`, so a
 directory inside the worktree is in every listing and every `git status` until something excludes
 it, and the only place to write that exclusion is a git directory read-only wherever a command can
@@ -85,10 +92,12 @@ line editor; a build cache never does.
 <name>` is bound in place of the session's for a repository's plugin, because the session's is a
 place the *model* writes: a plugin that kept an executable in there would be running whatever the
 model last left at that path, at every turn boundary, and reporting the result into the conversation
-as this console's own. `$HOME` rather than only a bound path, because that is where anything that
-fetches keeps what it fetched - on the tmpfs a command gets, a `uv run --script` plugin resolves an
-interpreter at `setup` and finds none at the next event, with the network shut. That is the whole of
-what `Sandbox.argv`'s `home` argument is for, and a command still gets the tmpfs.
+as this console's own. `$HOME` rather than only a bound path, for the reason a session's scratch is
+its commands' `$HOME`: that is where anything that fetches keeps what it fetched, so a `uv run
+--script` plugin resolves an interpreter at `setup` and finds it again at the next event, with the
+network shut. `Sandbox.argv`'s `home` argument is how each namespace is told which directory that
+is, and its `environment` argument is what a session's commands are additionally told, which nothing
+hands to a plugin's own namespace.
 
 ## Roots
 

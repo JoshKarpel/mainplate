@@ -48,7 +48,7 @@ under the reader's hand, and there would be one per turn.
 - **What its plugins are set to**, which start on their own declared defaults. A reserve is a
   decision about how much room one conversation's context has left, and a branch's context is not
   that conversation's. See [handing off without being
-  asked](composer.md#handing-off-without-being-asked). The *switches* are the other column and are
+  asked](../plugins/handoff.md#handing-off-without-being-asked). The *switches* are the other column and are
   inherited: which plugins run is not a fact about one conversation's context, and left behind, a
   branch would set up and execute a program somebody had turned off in the session it branched from.
 - **What its plugins *are*, at every tier**, which a fork declares and sets up afresh. Nothing about
@@ -73,8 +73,9 @@ survive is a plugin set changing under a request already made, and a branch has 
 *recorded* turns, which is a different thing.
 
 **Editing `.mainplate/` and forking is therefore how a session iterates on its own plugins**,
-including the setup script that installs its toolchain - which a branch has to run again anyway,
-since it plants a fresh worktree and an ignored directory does not come across in a recorded tree.
+including [the setup script](setup.md) that installs its toolchain - which a branch has to run again
+anyway, since it plants a fresh worktree with a scratch of its own and neither carries what the
+parent installed.
 
 **And the press is asked for again rather than inherited**, because a branch is planted at a tree a
 model wrote, so what licenses running what it names is the decision to fork plus the confirmation in

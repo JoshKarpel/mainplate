@@ -45,6 +45,7 @@ from mainplate.plugins.protocol import Declared
 from mainplate.plugins.protocol import Delivery
 from mainplate.plugins.protocol import Ending
 from mainplate.plugins.protocol import Event
+from mainplate.plugins.protocol import Gating
 from mainplate.plugins.protocol import Opening
 from mainplate.plugins.protocol import Payload
 from mainplate.plugins.protocol import Requesting
@@ -123,6 +124,19 @@ class Live:
     session: str
     enrolled: tuple[Enrolled, ...] = ()
     tending: Tending = TENDED
+    """
+    What this session's plugins are set to and remember, **captured once at the top of the pass.**
+
+    So a `set` lands in the column and reaches the next pass, and no event of this one: not another
+    plugin's, and not the writer's own next event. A plugin that writes at `tool` and reads at
+    `after_turn` in the same turn reads what the pass began with. The bundled plugins never notice,
+    because every `set` they make rides beside a `deliver` and a delivery ends the pass; a plugin
+    that writes without delivering is the one this matters to.
+
+    Once rather than re-read per event, because a setting is a place two writers share: a switch
+    flicked while a turn was in flight would have that turn answered under one value and judged
+    under another. The cost is stated in the design note beside the mechanism.
+    """
     speaking: Speaking | None = None
     worktree: Worktree | None = None
     """
@@ -303,16 +317,21 @@ async def setting_up(
     )
 
 
-def recorded_declaration(installed: Sequence[Installed]) -> dict[str, object]:
+def recorded_declaration(installed: Sequence[Installed], setup: bool = False) -> dict[str, object]:
     """
     What one tier's declaring file named, as the JSON-native value the store's codec will take.
 
     The counterpart of `recorded_registration` one moment earlier, and the pair is the trust boundary
     made structural: this is written by reading files and that is written by running programs, so a
     session sitting on its settings step has one and not the other.
+
+    `setup` is the repository's half saying it carries a `.mainplate/setup`, which is not a plugin
+    and is read on the same pass for the same reason: the step draws a switch for it, and nothing
+    that draws a switch may have run anything.
     """
     return records.Declared(
-        plugins=tuple(records.Named(name=each.name, tier=each.tier.value, path=str(each.path)) for each in installed)
+        plugins=tuple(records.Named(name=each.name, tier=each.tier.value, path=str(each.path)) for each in installed),
+        setup=setup,
     ).recorded()
 
 
@@ -511,6 +530,43 @@ def asking_through(live: Live) -> Asking:
     return call
 
 
+def declined(refusals: Sequence[tuple[str, str]]) -> str:
+    """
+    What the model is told in a refused call's place: who refused it, and why, one line apiece.
+
+    Composed by the console rather than by whichever plugin spoke first, because several may refuse
+    one call and the model should hear all of them. Each names its plugin, so a model told twice can
+    tell two policies from one said twice.
+    """
+    return "\n\n".join(f"Refused by {plugin}: {reason}" for plugin, reason in refusals)
+
+
+async def gating(live: Live, tool: str, args: Mapping[str, object]) -> str | None:
+    """
+    Ask every plugin that wants to know that a tool is about to run, and say whether it may.
+
+    **Any one refusal is enough**, and every refusal is told: the answer is what the model is handed
+    in the call's place, or nothing where every plugin let it through. The call is not run either
+    way until this has returned, which is what makes a refusal a refusal rather than a comment.
+
+    Asked and performed inside the step that records the call, the way a `tool` answer is, so a
+    delivery asked for here is made where it is asked and a resumed pass replays the recorded answer
+    without asking again. Concurrent across plugins and performed in enrolment order, for
+    `injections`' reason.
+    """
+    wanting = live.wanting("before_tool")
+    answers = await asyncio.gather(
+        *(live.ask(plugin, Gating(tool=tool, args=dict(args), **live.payload(plugin))) for plugin in wanting)
+    )
+    refusals: list[tuple[str, str]] = []
+    for plugin, answered in zip(wanting, answers, strict=True):
+        for note in await live.perform(plugin, answered):
+            await live.delivering(note)
+        if answered.refuse is not None:
+            refusals.append((plugin.qualified, answered.refuse))
+    return declined(refusals) if refusals else None
+
+
 async def injections(live: Live, messages: Sequence[object]) -> tuple[str, ...]:
     """
     What every plugin wants appended to the request about to go out, in enrolment order.
@@ -522,9 +578,10 @@ async def injections(live: Live, messages: Sequence[object]) -> tuple[str, ...]:
     **Asked concurrently and performed in order**, which is `setting_up`'s bargain on a smaller
     scale: each ask is a process spawned and waited on, so asking one at a time makes a request stall
     for the sum of their round trips where nothing orders them. What a plugin is handed is the
-    `Tending` this pass captured once at the top, so none can observe another's `set` within one
-    event. The effects and the order they are appended in are sequential all the same, because
-    enrolment order is what the record is read back in.
+    `Tending` this pass captured once at the top, so a `set` is invisible for the rest of the pass -
+    to the other plugins and to the one that wrote it. See `Live.tending`. The effects and the order
+    they are appended in are sequential all the same, because enrolment order is what the record is
+    read back in.
     """
     wanting = live.wanting("before_request")
     answers = await asyncio.gather(

@@ -52,8 +52,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the model wrote in the tree yet. It runs in a pass rather than in the press, so a repository whose
   plugin builds a toolchain shows a page that says it is working instead of a button that hangs; a
   setup that will not finish is recorded against that attempt, so turning the plugin off and pressing
-  again is a fresh one. There is deliberately no repo-setup mechanism beside this: a plugin that
-  answers this event already is one.
+  again is a fresh one.
+- **A repository sets itself up with a script.** `.mainplate/setup`, where a repository carries one,
+  runs once per session on the pass that answers the settings step: behind the same namespace
+  `bash` gets, with the network on, starting in the worktree, and with the session's own scratch as
+  `$HOME`, which is now what every command in a session gets as its `$HOME` too. So `uv sync` in a
+  three-line script is what it takes for a session to be able to run `just test`, and nothing in the
+  console knows what a Python is. What the script appends to the file `$MAINPLATE_ENV` names, as
+  `KEY=value` lines, is set for the session's commands and for nothing else; a `PATH` written there is
+  the `PATH`. It is not a plugin, and it has a switch of its own on the settings step under the
+  repository's tier, so a session reading a repository rather than working in it can leave it off.
+  Off, the session opens as it would over a repository carrying no script; failing, the session comes
+  back to the step with the last lines the script printed. This repository carries one, which installs
+  mise, the tools `mise.toml` pins, and `just dependencies` - the half of `just setup` a session can
+  run, split out because the other half installs a git hook into a clone bound read-only.
 - **This repository carries a plugin of its own**, in `.mainplate/`, so a mainplate session working on
   mainplate runs the project's own `pre-commit` hooks over what it has changed at every turn boundary
   and is told what is still failing. Ported from a Claude Code `Stop` hook, and different from it in
@@ -61,6 +73,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read-only and `--files` needs no index; it installs itself at setup, because the namespace has
   nothing of the machine in it; and it stops chasing one failure after a set number of turns, because
   every message it delivers is a model request somebody pays for.
+- **A plugin may refuse a tool call.** A plugin that asks for `before_tool` is told every call the
+  model makes, of any toolset, before it runs, and may answer `refuse` with a reason; the call then
+  does not run and the model is handed the reason in its place, naming the plugin, so that what a
+  refusal is for - `edit` rather than `sed -i`, this repository's own tool rather than a `bash` that
+  cannot reach it - is an answer the model can act on rather than a call that silently went nowhere.
+  A refusal is the call's return and not a retry, because nothing about the call was malformed, and
+  it is recorded in the call's own step, so a resumed pass replays it without asking the plugin
+  again. The cost: a process per tool call, per plugin that asked.
 - Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
   `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
   guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.

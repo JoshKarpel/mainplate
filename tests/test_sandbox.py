@@ -285,6 +285,37 @@ class TestTheScratchDirectory:
         assert "kept" in said
         assert "exit 0" in said
 
+    async def test_it_is_the_home_directory_of_every_command(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        """
+        The scratch rather than the tmpfs, because that is where a toolchain the repository's setup
+        installed keeps what it fetched, and a `$HOME` anywhere else is a shell that cannot find its
+        own tools. Asked by writing through it, for the reason the name below is.
+        """
+        await inside(worktree, scratch, bwrap, 'echo home > "$HOME/dotfile"')
+
+        assert (scratch / "dotfile").read_text() == "home\n"
+
+    async def test_what_the_setup_recorded_is_set_for_every_command(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        """
+        And set whole, after everything the sandbox sets itself, so a `PATH` a setup recorded is the
+        `PATH` rather than a fragment of one.
+        """
+        said = await ran(
+            InAWorktree(worktree=worktree, scratch=scratch),
+            bwrap,
+            Venue.CONFINED,
+            'echo "$GREETING" && echo "$PATH"',
+            seconds=20,
+            environment={"GREETING": "hi there", "PATH": f"{scratch}/bin:/usr/bin:/bin"},
+        )
+
+        assert "hi there" in said
+        assert f"{scratch}/bin:/usr/bin:/bin" in said
+
     async def test_it_is_reachable_by_name_rather_than_by_its_path(
         self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:

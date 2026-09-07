@@ -31,7 +31,7 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError
 from pydantic import model_validator
 
-type Event = Literal["setup", "tool", "before_request", "after_turn", "compose", "action"]
+type Event = Literal["setup", "tool", "before_tool", "before_request", "after_turn", "compose", "action"]
 """
 Every moment a plugin can be asked about, which is a short list this console owns.
 
@@ -60,7 +60,7 @@ sends it. Written once here for the reason `roots.py` exists: two spellings of o
 of disagreement nothing reports.
 """
 
-EVENTS: Final[tuple[Event, ...]] = ("setup", "tool", "before_request", "after_turn", "compose", "action")
+EVENTS: Final[tuple[Event, ...]] = ("setup", "tool", "before_tool", "before_request", "after_turn", "compose", "action")
 """
 The same list as a value, for the places that enumerate it rather than match on it.
 
@@ -69,12 +69,13 @@ runtime reading of a static thing and this is six words. `test_plugins.py` is wh
 against each other.
 """
 
-type Effect = Literal["return", "retry", "inject", "deliver", "set"]
+type Effect = Literal["return", "retry", "refuse", "inject", "deliver", "set"]
 """Every thing a plugin may ask the console to do, which the console does and the plugin never does."""
 
 ALLOWED: Final[Mapping[Event, frozenset[Effect]]] = {
     "setup": frozenset(),
     "tool": frozenset(("return", "retry", "deliver", "set")),
+    "before_tool": frozenset(("refuse", "deliver", "set")),
     "before_request": frozenset(("inject", "deliver", "set")),
     "after_turn": frozenset(("deliver", "set")),
     "compose": frozenset(("deliver", "set")),
@@ -88,8 +89,10 @@ code rather than a claim about it: a seventh event added to `Event` fails this m
 exhaustiveness rather than arriving with nothing refused for it.
 
 `return` and `retry` are a tool call's alone, because they are answers *to* a call and nothing else
-has one to answer. `inject` belongs to the one event that has a request to append to. `deliver` and
-`set` are everybody's, since a note and a write make sense wherever a plugin is asked anything.
+has one to answer. `refuse` belongs to the one event that stands in front of a call, since what it
+answers is whether the call happens at all. `inject` belongs to the one event that has a request to
+append to. `deliver` and `set` are everybody's, since a note and a write make sense wherever a
+plugin is asked anything.
 
 **`setup` is empty because no answer to it is an `Answered` at all**: what a plugin returns there is
 `Described`, parsed by `setting_up`, which never reaches here. The row is written out rather than
@@ -361,6 +364,20 @@ class Answered(Speech):
 
     returned: object | None = Field(default=None, alias="return")
     retry: str | None = None
+    refuse: str | None = None
+    """
+    Why the call this plugin was asked about must not run, said to the model in the call's place.
+
+    **A refusal is a value, which is what lets it be offered at all.** The line the durability layer
+    draws is whether an answer can be written down, and a call that did not happen is recorded
+    exactly as one that did: a `Returned` holding the reason, replayed on every later pass without
+    the plugin being asked again.
+
+    The model is told, and told who said so, because what a refusal is *for* is redirection - `edit`
+    rather than `sed -i`, this repository's own tool rather than a `bash` that cannot reach it - and
+    a call that silently went nowhere would be a model retrying the same thing. It reaches the model
+    as the call's result rather than as a `retry`, since nothing about the call was malformed.
+    """
     deliver: tuple[Delivery, ...] = ()
     inject: tuple[str, ...] = ()
 
@@ -483,6 +500,21 @@ class Calling(Payload):
     args: Mapping[str, object] = Field(default_factory=dict)
 
 
+class Gating(Payload):
+    """
+    A tool the model has called, of any toolset, before it runs.
+
+    `tool` is the name the model used, which for a plugin's own tool is the prefixed one where the
+    tier prefixes; `args` are the arguments as the model wrote them, since what a plugin is judging
+    is the call the model made. Every tool goes through here alike - the console's file tools,
+    `bash`, and every plugin's - because what wraps a call in a step does not know whose it is.
+    """
+
+    event: Literal["before_tool"] = "before_tool"
+    tool: str
+    args: Mapping[str, object] = Field(default_factory=dict)
+
+
 class Requesting(Payload):
     """
     A model request about to be sent, with the history it will carry.
@@ -590,6 +622,7 @@ def asked_for(answered: Answered) -> frozenset[Effect]:
         {
             *(("return",) if answered.returned is not None else ()),
             *(("retry",) if answered.retry is not None else ()),
+            *(("refuse",) if answered.refuse is not None else ()),
             *(("inject",) if answered.inject else ()),
             *(("deliver",) if answered.deliver else ()),
             *(("set",) if answered.setting else ()),

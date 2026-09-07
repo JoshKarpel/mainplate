@@ -140,6 +140,7 @@ class Installed:
         a `bash` that reaches `/`; a repository's plugin in that session still reaches the worktree
         it was handed and nothing else. The isolation a session picked is a decision about what the
         *model* may reach, and a plugin is not the model.
+
         """
         return self.tier is Tier.REPOSITORY
 

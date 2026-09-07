@@ -179,6 +179,15 @@ it does not do is scale with them: a session that says no gets none of this, and
 yes gets all of it. There is deliberately no finer control, for [the reason there is no per-repository
 grant](plugins.md#the-control-is-the-refusal-not-the-permission).
 
+**A repository's `.mainplate/setup` is the fourth thing that runs behind the namespace, and it is the
+console that runs it.** The same namespace, the network on for the same reason a plugin's `setup`
+has it, and the *session's* scratch as `$HOME` rather than a directory of its own, because what it
+installs is for the session's commands and runs once before anything is unattended. What crosses
+back to the parent is a file of `KEY=value` lines the parent reads as a value and never as a
+program, and those lines reach the session's commands and no plugin's namespace. It has a switch of
+its own on the settings step, under the trust switch. [Setting a repository up](setup.md) is the
+whole of it.
+
 **This is why `Run` needs no defence.** It stays a shell, unsandboxed, in the worktree, with the
 console's environment, and that is what it is for. The problem was never that `Run` is trusted; it
 was that something untrusted could stage a trap in advance and wait for a person to walk into it

@@ -38,7 +38,7 @@ above the system prompt: introducing one at handoff time would cost a full uncac
 window, where a permanent one costs its own description at cache-read prices on every request. Four
 orders of magnitude. It takes the document as an argument rather than reading one out of the turn's
 prose, because a model asked for a handoff in words leaks the framing around it into what the next
-model is told. Both are argued in full in [the composer](composer.md#handoff).
+model is told. Both are argued in full on [the handoff plugin's page](../plugins/handoff.md).
 
 ## `list`
 
@@ -225,6 +225,10 @@ message: a stale anchor, a `find` occurring twice, a batch that overlaps. `RETRI
 Pydantic AI's default of one for that reason, and the reason is observed rather than theoretical: a
 smaller model got an operation's shape wrong once and the default turned a correctable mistake into
 a failed turn.
+
+A call a *plugin* turns away is the other kind, and arrives as the call's return rather than as a
+retry: the call was well-formed and is not happening, which is an answer to act on rather than a
+mistake to correct. See [refusing a call](plugins.md#refusing-a-call).
 
 ## Line endings
 

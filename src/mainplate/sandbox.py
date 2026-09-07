@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum
@@ -199,6 +200,25 @@ def starting_at(confinement: Confinement) -> Path:
             assert_never(unreachable)
 
 
+def home_in(confinement: Confinement) -> Path | None:
+    """
+    What `$HOME` is for a session's own commands, which is its scratch where it has one.
+
+    The scratch rather than the tmpfs, because that is where a toolchain the session's `setup` script
+    installed keeps what it fetched, and a `$HOME` anywhere else is a shell that cannot find its own
+    tools. What a shell leaves in a home directory is therefore scratch by intent rather than by
+    accident, which is the cost of a session that can be set up at all. Nothing for a session over
+    the whole machine, which has no scratch and gets the tmpfs.
+    """
+    match confinement:
+        case InAWorktree(scratch=scratch):
+            return scratch
+        case OverEverything():
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def sandbox_command() -> str:
     """
     Where `bwrap` is, or a refusal naming it.
@@ -282,18 +302,29 @@ class Sandbox:
         """
         return cls(places=(Bind(path=Path("/"), writable=True),))
 
-    def argv(self, at: str, venue: Venue = Venue.CONFINED, home: str | None = None) -> tuple[str, ...]:
+    def argv(
+        self,
+        at: str,
+        venue: Venue = Venue.CONFINED,
+        home: str | None = None,
+        environment: Mapping[str, str] | None = None,
+    ) -> tuple[str, ...]:
         """
         The `bwrap` prefix a command runs behind, as the arguments before the command itself.
 
-        `home` is what `$HOME` is inside, and the default is the tmpfs, which is right for a command
-        a *model* asked for: what a session's shell leaves in a home directory is scratch by
-        accident rather than by intent, and a tmpfs makes that true rather than hoping for it.
+        `home` is what `$HOME` is inside, and the default is the tmpfs, which is what a session over
+        the whole machine gets. A session in a worktree passes its scratch, and a confined plugin
+        passes whichever directory is its to keep things in: every tool that fetches keeps what it
+        fetched under `$HOME`, so on a tmpfs a `setup` that resolved an interpreter and a package
+        tree would find neither at the next call, with the network shut and no way to fetch them
+        again. See `home_in` and `Spawned`.
 
-        A plugin passes its own scratch instead, and that is the whole of what makes a plugin with
-        dependencies possible. Every tool that fetches things keeps them under `$HOME`, so on a
-        tmpfs a plugin that resolved an interpreter and a package tree at setup would find neither
-        at the next event, with the network shut and no way to fetch them again. See `Spawned`.
+        `environment` is what a session's plugins asked to have set here, and it goes **last**, so a
+        plugin's `PATH` is the `PATH` rather than a fragment of one. It is what makes a toolchain a
+        `setup` script installed reachable without this console knowing what a shim is. Nothing hands
+        it to a plugin's own namespace, and that is the constraint rather than an omission: a
+        repository's script setting `PATH` for every plugin would redirect what the repository's
+        other plugins execute at every turn boundary.
 
         A `WORKTREE` sandbox binds the worktree read-write, its clone **read-only**, and the scratch
         read-write. The read-only clone is the load-bearing part: it leaves every read working -
@@ -330,6 +361,9 @@ class Sandbox:
             places.extend(("--bind" if bind.writable else "--ro-bind", str(bind.path), str(bind.path)))
             if bind.name is not None:
                 named.extend(("--setenv", environment_named(bind.name), str(bind.path)))
+        asked: list[str] = []
+        for name, value in (environment or {}).items():
+            asked.extend(("--setenv", name, value))
         return (
             *binds,
             "--proc",
@@ -361,6 +395,7 @@ class Sandbox:
             "TERM",
             "dumb",
             *named,
+            *asked,
             "--chdir",
             at,
         )

@@ -29,6 +29,7 @@ written in two places.
 
 ```console
 $ just setup            # uv sync, the browsers, and pre-commit as a git hook
+$ just dependencies     # the same without the hook, which is the half a session's `.mainplate/setup` runs
 $ just test             # mypy, then pytest
 $ just test tests/test_console.py::TestTheConsole  # extra args go straight to pytest
 $ just check            # pre-commit over all files, then mypy
@@ -118,8 +119,6 @@ change:
   handoff, steering, and running a command.
 - [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's worktree,
   where in it and on what branch, and snapshots.
-- [`docs/design/guidance.md`](docs/design/guidance.md): what a session is told, and the nested
-  guidance handed over as the model reaches into a directory.
 - [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
 - [`docs/design/sandbox.md`](docs/design/sandbox.md): the mount namespace `bash` runs behind, and
@@ -135,6 +134,10 @@ change:
   not a loading order. **Handoff and what a session is told are both plugins**, so a change to either
   is a change to a script in `src/mainplate/plugins/bundled/` rather than to the console. **And this
   repository carries one of its own**, in `.mainplate/`, described below.
+- [`docs/design/setup.md`](docs/design/setup.md): `.mainplate/setup`, the script a repository
+  carries to get itself ready, run by the console once per session behind the sandbox with the
+  session's scratch as `$HOME`. **It is not a plugin, and this repository carries one**, described
+  below.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
@@ -175,6 +178,26 @@ Two things follow for anybody changing it:
 
 Try it by hand rather than by starting a session:
 `echo '{"event":"setup","session":"x","plugin":"repository:pre-commit","worktree":"'$PWD'","scratch":"/tmp/x"}' | .mainplate/pre-commit`.
+
+## And a setup script, which is not a plugin
+
+`.mainplate/setup` is what a mainplate session runs, once, to be able to run `just test` here: it
+installs mise into the session's scratch, `mise install`s the tools `mise.toml` pins, and runs `just
+dependencies` under them. The console runs it itself, behind the sandbox, with the network on and the
+session's scratch as `$HOME`, and what the script appends to `$MAINPLATE_ENV` is set for the
+session's commands. [`docs/design/setup.md`](docs/design/setup.md) is the whole of it.
+
+Two things follow for anybody changing it:
+
+- **`just dependencies` and never `just setup`**, because the other half of `setup` installs a git
+  hook into the clone's common directory, which is shared by every worktree of it and bound read-only
+  in a session. A step that has to write git belongs in the composer's `Run`, as the person.
+- **The `PATH` it writes is the session's whole `PATH`.** Leave the system directories on the end,
+  or the session's commands lose `sh`.
+
+It is not run by the suite, since what it does is fetch a toolchain. `tests/test_preparing.py` runs
+scripts of its own through the same mechanism, and the switch and the record are
+`tests/test_plugins.py`'s to prove.
 
 ## Dependencies
 

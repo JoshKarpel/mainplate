@@ -329,7 +329,7 @@ in, which reads worse than no colour. The palette is the console's own hues in `
 an imported Pygments theme with its own opinion about light and dark.
 
 The two converters, and why a message's newlines are treated differently from a document's, are in
-[what a session is told](guidance.md#the-system-prompt-is-drawn-as-a-panel).
+[what a session is told](../plugins/guidance.md#the-system-prompt-is-drawn-as-a-panel).
 
 ## Panels and rules
 

@@ -30,9 +30,13 @@ from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import Unconfirmed
 from mainplate.conversation import conversing
 from mainplate.conversation import declared_in
+from mainplate.conversation import environment_in
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
+from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
+from mainplate.conversation import tool_key
+from mainplate.durability import parse_returned
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import running
@@ -56,6 +60,7 @@ from mainplate.plugins.protocol import Described
 from mainplate.plugins.protocol import Effect
 from mainplate.plugins.protocol import Ending
 from mainplate.plugins.protocol import Event
+from mainplate.plugins.protocol import Gating
 from mainplate.plugins.protocol import Number
 from mainplate.plugins.protocol import Opening
 from mainplate.plugins.protocol import Payload
@@ -76,6 +81,7 @@ from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
+from mainplate.tending import SETUP_SWITCH
 from mainplate.tending import TENDED
 
 # Where the fixture plugins live. A directory of real executables rather than strings written into
@@ -90,6 +96,7 @@ FIXTURES = Path(__file__).parent / "plugins"
 SHAPES: Final[Mapping[str, type[Payload]]] = {
     "setup": SettingUp,
     "tool": Calling,
+    "before_tool": Gating,
     "before_request": Requesting,
     "after_turn": Ending,
     "compose": Composing,
@@ -107,6 +114,7 @@ def spoken(event: str = "setup", **fields: object) -> Payload:
 ASKING: Final[Mapping[str, dict[str, object]]] = {
     "return": {"return": "recorded"},
     "retry": {"retry": "have another go"},
+    "refuse": {"refuse": "not that one"},
     "inject": {"inject": ["a sentence"]},
     "deliver": {"deliver": [{"said": "a note"}]},
     "set": {"set": {"seen": 3}},
@@ -119,6 +127,7 @@ ASKING: Final[Mapping[str, dict[str, object]]] = {
 PERMITS: Final[Mapping[str, frozenset[str]]] = {
     "setup": frozenset(),
     "tool": frozenset(("return", "retry", "deliver", "set")),
+    "before_tool": frozenset(("refuse", "deliver", "set")),
     "before_request": frozenset(("inject", "deliver", "set")),
     "after_turn": frozenset(("deliver", "set")),
     "compose": frozenset(("deliver", "set")),
@@ -575,6 +584,7 @@ class TestWhereARepositorysPluginRuns:
     # the plugin and by nothing else in the payload.
     ENOUGH: Final[Mapping[str, Mapping[str, object]]] = {
         "tool": {"tool": "check"},
+        "before_tool": {"tool": "bash"},
         "after_turn": {"turn": 0, "opened_on": Opening(kind="prompt")},
         "compose": {"leader": "checks"},
         "action": {"control": "strict", "value": True},
@@ -591,7 +601,7 @@ class TestWhereARepositorysPluginRuns:
         repository supplied, and nothing the model wrote exists yet.
         """
         assert "--unshare-net" not in await self.invocation(spawned, "setup", worktree)
-        for event in ("tool", "before_request", "after_turn", "compose", "action"):
+        for event in ("tool", "before_tool", "before_request", "after_turn", "compose", "action"):
             assert "--unshare-net" in await self.invocation(spawned, event, worktree), event
 
     async def test_home_is_the_plugins_own_scratch_and_not_the_tmpfs_a_command_gets(
@@ -1149,6 +1159,97 @@ class TestASessionsPlugins:
         return read
 
 
+class TestRefusingACall:
+    """
+    A plugin standing in front of every tool call, and what becomes of the ones it turns away.
+
+    **A refusal is a value**, which is the whole of why it can be offered: a call that did not run is
+    recorded in the call's own step as one that returned the reason, so the model is told, the record
+    says who said so, and a resumed pass replays it without the plugin being asked twice.
+    """
+
+    def declaring(self, asked: Path | None = None) -> Declaring:
+        gatekeeper = Installed(tier=Tier.USER, name="gatekeeper", path=FIXTURES / "gatekeeper")
+        environ = {} if asked is None else {"GATEKEEPER_ASKED": str(asked)}
+        return Declaring(console=(*bundled(), gatekeeper), speaking=Spawned(environ=environ))
+
+    def calling(self, document: str) -> Scripted:
+        return Scripted(
+            script=(
+                ModelResponse(
+                    parts=[ToolCallPart(tool_name="hand_off", args={"document": document}, tool_call_id="c1")]
+                ),
+                ModelResponse(parts=[TextPart("done")]),
+            )
+        )
+
+    async def test_a_refused_call_is_recorded_in_its_own_step_as_the_reason_and_never_runs(
+        self, service: Service
+    ) -> None:
+        declaring = self.declaring()
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        delivered: list[records.Note] = []
+
+        async def collecting(into: str, note: records.Note) -> None:
+            delivered.append(note)
+
+        scripted = self.calling("forbidden " * 60)
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring, delivering=collecting)
+        await passing(service, session.id, body)
+
+        recorded = parse_returned((await service.checkpointer.load(session.id))[tool_key(0, "c1")])
+        assert recorded.returned == (
+            "Refused by user:gatekeeper: hand_off may not be called with that; use something allowed"
+        )
+        assert recorded.took is None, "nothing ran, so nothing was timed"
+        assert delivered == [], "the handoff never ran, so it delivered nothing"
+        assert scripted.asked == 2, "and the model was told, since it was asked again"
+
+    async def test_a_call_let_through_runs_exactly_as_it_would_have(self, service: Service) -> None:
+        """The gate standing there costs a call nothing but the asking."""
+        declaring = self.declaring()
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        delivered: list[records.Note] = []
+
+        async def collecting(into: str, note: records.Note) -> None:
+            delivered.append(note)
+
+        scripted = self.calling("allowed " * 60)
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring, delivering=collecting)
+        await passing(service, session.id, body)
+
+        recorded = parse_returned((await service.checkpointer.load(session.id))[tool_key(0, "c1")])
+        assert "starts again" in str(recorded.returned), "the handoff's own answer, not a refusal"
+        assert recorded.took is not None
+        assert len(delivered) == 1
+
+    async def test_a_resumed_pass_replays_the_refusal_rather_than_asking_again(
+        self, service: Service, tmp_path: Path
+    ) -> None:
+        """
+        Asked inside the step that records the call, so the record is the whole of what a replay
+        needs. Observed through what the plugin wrote down when it was asked, because a replayed
+        refusal and a second asking leave the same record and the same process table behind.
+        """
+        asked = tmp_path / "asked"
+        declaring = self.declaring(asked)
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        scripted = self.calling("forbidden " * 60)
+        # One request per pass: the first pass asks the model, runs the gate, records the refusal
+        # and stops at the second request; the second pass replays all three and makes it.
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring, allowance=1)
+        await passing(service, session.id, body)
+        assert asked.read_text() == "hand_off\n"
+        await passing(service, session.id, body)
+
+        assert asked.read_text() == "hand_off\n", "the second pass asked nothing"
+        assert scripted.asked == 2
+        assert isinstance(await passing(service, session.id, body), Blocked), "the turn is answered"
+
+
 class TestWhatABranchDoesAboutThem:
     """
     A fork carries turns and nothing about its parent's plugins, so it holds a conversation and still
@@ -1346,6 +1447,142 @@ class TestARepositorysOwnPlugin:
         )
         assert declared_in(await planting.checkpointer.load(session.id)) == ()
         assert registered_in(await planting.checkpointer.load(session.id)) == ()
+
+
+class TestARepositorysSetupScript:
+    """
+    `.mainplate/setup`, which is not a plugin: the console runs it itself, on the setup pass, behind
+    the sandbox with the session's scratch as `$HOME`, and records what it asked to have set.
+
+    Its switch is the step's like any plugin's, and that is what most of these are about: declared
+    but not run until the press, not run at all when the switch is off, and never even read where
+    the repository is not trusted.
+    """
+
+    @pytest.fixture
+    def bwrap(self) -> str:
+        return sandbox_command()
+
+    @pytest.fixture
+    async def declaring_setup(self, worktree: Any, tmp_path: Path, bwrap: str) -> Declaring:
+        """The fixture repository carrying a setup script that installs a marker and sets one variable."""
+        root = worktree.root
+        (root / ".mainplate").mkdir()
+        script = root / ".mainplate" / "setup"
+        script.write_text('#!/bin/sh\ntouch "$HOME/installed"\necho "GREETING=hello" >> "$MAINPLATE_ENV"\n')
+        script.chmod(0o755)
+        await run("git", "add", "-A", cwd=root)
+        await run("git", "commit", "-qm", "carry a setup script", cwd=root)
+        return Declaring(
+            console=(), speaking=Spawned(bwrap=bwrap, scratch=tmp_path / "scratch", environ={}), confining=True
+        )
+
+    async def loaded(
+        self,
+        service: Service,
+        declaring: Declaring,
+        workspaces: Workspaces,
+        chosen: Choice,
+        switches: Mapping[str, bool],
+    ) -> Session:
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start(chosen)
+
+        async def tendings(held: str) -> Any:
+            return await read_tending(service.database, held)
+
+        # With `tendings`, because the switch is a column the *pass* reads: a pass given no way to
+        # read it would run the script whatever the press said.
+        body = conversing(
+            Provider().endpoints(),
+            INSTRUCTIONS,
+            workspaces,
+            bwrap=sandbox_command(),
+            declaring=declaring,
+            tendings=tendings,
+        )
+        await passing(planting, session.id, body)
+        await replace(planting, declaring=declaring).settle(session.id, dict(switches), 0)
+        await passing(planting, session.id, body)
+        return session
+
+    async def test_it_is_declared_and_drawn_before_it_is_run(
+        self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
+    ) -> None:
+        """Read on the declaring pass beside the plugins, and run by nothing until the press."""
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start(replace(DEFAULT_CHOICE, repository=FIXTURE))
+        body = conversing(
+            Provider().endpoints(), INSTRUCTIONS, workspaces, bwrap=sandbox_command(), declaring=declaring_setup
+        )
+        await passing(planting, session.id, body)
+
+        shown = await replace(planting, declaring=declaring_setup).read(session.id)
+        assert shown is not None
+        assert shown.setup_script, "the step has a switch to draw"
+        assert not (workspaces.scratch_at(session.id) / "installed").exists(), "and nothing has run it"
+        assert environment_in(await planting.checkpointer.load(session.id)) == {}
+
+    async def test_the_setup_pass_runs_it_and_records_what_it_asked_for(
+        self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
+    ) -> None:
+        session = await self.loaded(
+            service, declaring_setup, workspaces, replace(DEFAULT_CHOICE, repository=FIXTURE), {}
+        )
+
+        recorded = await service.checkpointer.load(session.id)
+        assert environment_in(recorded) == {"GREETING": "hello"}
+        assert (workspaces.scratch_at(session.id) / "installed").exists(), "it installed into the session's scratch"
+        assert registered_in(recorded) == (), "and registered as no plugin, because it is not one"
+
+    async def test_switched_off_it_never_runs_and_the_session_still_opens(
+        self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
+    ) -> None:
+        session = await self.loaded(
+            service, declaring_setup, workspaces, replace(DEFAULT_CHOICE, repository=FIXTURE), {SETUP_SWITCH: False}
+        )
+
+        recorded = await service.checkpointer.load(session.id)
+        assert environment_in(recorded) == {}
+        assert not (workspaces.scratch_at(session.id) / "installed").exists()
+        assert registered_in(recorded) is not None, "past the step all the same"
+
+    async def test_an_untrusted_repositorys_script_is_not_even_read(
+        self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
+    ) -> None:
+        planting = replace(service, workspaces=workspaces)
+        session = await planting.start(replace(DEFAULT_CHOICE, repository=FIXTURE, trusted=False))
+        body = conversing(
+            Provider().endpoints(), INSTRUCTIONS, workspaces, bwrap=sandbox_command(), declaring=declaring_setup
+        )
+        await passing(planting, session.id, body)
+
+        shown = await replace(planting, declaring=declaring_setup).read(session.id)
+        assert shown is not None
+        assert not shown.setup_script
+
+    async def test_a_script_that_fails_puts_the_session_back_on_the_step(
+        self, service: Service, workspaces: Workspaces, worktree: Any, tmp_path: Path, bwrap: str
+    ) -> None:
+        """With the reason above the switches, where the thing to do about it is a line away."""
+        root = worktree.root
+        (root / ".mainplate").mkdir()
+        script = root / ".mainplate" / "setup"
+        script.write_text("#!/bin/sh\necho the toolchain is not there >&2\nexit 2\n")
+        script.chmod(0o755)
+        await run("git", "add", "-A", cwd=root)
+        await run("git", "commit", "-qm", "carry a broken setup script", cwd=root)
+        declaring = Declaring(
+            console=(), speaking=Spawned(bwrap=bwrap, scratch=tmp_path / "scratch", environ={}), confining=True
+        )
+
+        session = await self.loaded(service, declaring, workspaces, replace(DEFAULT_CHOICE, repository=FIXTURE), {})
+
+        recorded = await service.checkpointer.load(session.id)
+        assert registered_in(recorded) is None, "still on the step"
+        refused = setup_refused_in(recorded)
+        assert refused is not None
+        assert "the toolchain is not there" in refused.why
 
 
 class TestThisRepositorysOwnPlugin:

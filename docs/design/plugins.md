@@ -6,7 +6,7 @@ sent, the effects it may ask for, and what has to be true before a repository's 
 ## Handoff is the specification
 
 The protocol was not designed and then tried against something. It was read off [the handoff](
-composer.md#handoff), which is the most demanding thing this console does that a plugin should be
+../plugins/handoff.md), which is the most demanding thing this console does that a plugin should be
 able to do, and which turns out to need almost everything at once.
 
 `hand_off` alone produced three separate effects from one call: a correctable refusal where the
@@ -136,10 +136,10 @@ more moment every plugin author has to learn about.
 
 **And it is named after the stage rather than after the answer**, because a plugin is not the only
 thing being set up. Starting a session on a repository means getting that repository ready, and this
-is the stage where that happens. There is deliberately **no repo-setup mechanism of the console's
-own** - no `setup:` field in `.mainplate/mainplate.yaml` running `uv sync` - because a plugin that
-answers this event is already one. A field would be a convenience over what exists, not a capability,
-and it would be a second thing to keep working for ever.
+is the stage where that happens: the repository's own `.mainplate/setup` runs on the same pass,
+beside the plugins, and it is [not a plugin](setup.md#why-it-is-not-a-plugin). A plugin that fetches
+its own toolchain at this event is still the way a *plugin* gets ready; a repository that wants its
+dependencies fetched once for the session writes the script.
 
 The cost, stated: the name says less about what comes *back* than `describe` did, and a plugin author
 reading only the event name would not guess that the answer is the whole registration.
@@ -431,6 +431,7 @@ Each carries its own payload and takes its own effects. They are a short list th
 |---|---|---|---|
 | `setup` | once per session, before its first turn | nothing | the contributions above |
 | `tool` | the model called one of its tools | `tool`, `args` | `return`, `retry`, `deliver`, `set` |
+| `before_tool` | the model called any tool, and it has not run yet | `tool`, `args` | `refuse`, `deliver`, `set` |
 | `before_request` | a model request is about to be sent | `messages` | `inject`, `deliver`, `set` |
 | `after_turn` | a turn was recorded | `turn`, `opened_on`, `context`, `window` | `deliver`, `set` |
 | `compose` | its answer was submitted | `said` | `deliver`, `set` |
@@ -441,21 +442,31 @@ and `refusing` is a set difference against it, so a seventh event is a row someb
 rather than one that arrives permitting everything. `deliver` and `set` are on every event that
 carries an answer at all, since a note and a write make sense wherever a plugin is asked something;
 what is narrow is `return` and `retry`, which answer a call and so belong to the event that is one,
-and `inject`, which needs a request to append to. `setup` takes no effects because its answer is a
-`Described` rather than an `Answered`: what a plugin wants remembered from it is a `set` on the first
-event that carries one.
+`refuse`, which decides whether a call happens and so belongs to the event that stands in front of
+one, and `inject`, which needs a request to append to. `setup` takes no effects because its answer is
+a `Described` rather than an `Answered`: what a plugin wants remembered from it is a `set` on the
+first event that carries one.
 
 Every payload also carries `worktree` and, for a confined plugin, `scratch`: where this session's
 files are and where this plugin alone may write. `worktree` is on all of them rather than only the
 two that act inside a turn, because a plugin composing instructions out of the repository's own files
 reads them at `setup` or not at all.
 
-**`before_request` is the one inside a turn, and it exists because [guidance is being ported onto
-this protocol](#both-are-ported-and-that-is-the-test).** Its answer is
+**`before_request` and `before_tool` are the two inside a turn.** The first exists because
+[guidance is being ported onto this protocol](#both-are-ported-and-that-is-the-test): its answer is
 `inject`, a system-voice message appended to the request about to go out, which costs the cached
 prefix nothing where an edited instruction re-prices everything under it. What it answers is
 recorded, so a resumed pass replays the injection rather than recomputing it from a plugin that may
 not be pure.
+
+**`before_tool` is asked of every tool call alike**, the console's file tools and `bash` and every
+plugin's, because what wraps a call in a step does not know whose it is. `tool` is the name the model
+used and `args` are the arguments as the model wrote them, since what a plugin is judging is the call
+the model made. Its answer is [`refuse`](#refusing-a-call), and it is the one event whose cost falls
+on the model's own loop: a call is not run until every plugin that asked has answered, and each ask
+is a process, so a plugin that wants this pays a spawn per call in every turn. The gate is checked
+against what was declared before anything is spawned, so a session none of whose plugins asked
+spawns nothing.
 
 **`after_turn`'s payload is the one that has to be rich, and it is where the constrained vocabulary
 is paid for.** A plugin can only decide on what it is handed, so unless that payload carries the
@@ -481,12 +492,13 @@ and writes no second entry.
 which is what keeps a plugin out of the queue it would otherwise be racing: putting a message in an
 inbox *queues* a session, so a plugin writing its own would be writing to the queue from inside the
 pass still holding the claim on it. It is the split
-[`Crossed`](composer.md#handing-off-without-being-asked) made, generalised into `Noting`.
+[`Crossed`](../plugins/handoff.md#handing-off-without-being-asked) made, generalised into `Noting`.
 
 | Effect | Means | Where |
 |---|---|---|
 | `return` | hand this value back to the model | `tool` only |
 | `retry` | tell the model to try again, correctably | `tool` only, becomes a `ModelRetry` |
+| `refuse` | do not run this call, and tell the model why | `before_tool` only, becomes the call's return |
 | `deliver` | put this message in the session's inbox | anywhere |
 | `set` | write these values into my own store | anywhere |
 
@@ -495,10 +507,41 @@ is attributed to the plugin that asked for it. Several plugins answering one eve
 conflict needing a tiebreak: each `deliver` is one inbox entry, and the inbox is already a queue
 that orders them and opens a turn per message.
 
-**The vocabulary is closed and the console owns it.** A fifth effect is something somebody adds
+**The vocabulary is closed and the console owns it.** A seventh effect is something somebody adds
 deliberately, which is what keeps every plugin speaking one language and keeps the set of things a
 plugin can do to a conversation readable in one table. An answer asking for an effect the event it
 answers has no room for is **refused**, naming the plugin, rather than quietly doing nothing.
+
+### Refusing a call
+
+**A plugin may turn a tool call away, and what it says goes to the model in the call's place.** Any
+one refusal is enough to stop the call, every refusal is told, and each names the plugin that made
+it, so a model told twice can tell two policies from one said twice. A call nobody refused runs
+exactly as it would have, and costs only the asking.
+
+**It is the call's return and not a `retry`, because nothing about the call was malformed.** A retry
+says the arguments were wrong and counts against the model's allowance of them; a refusal says the
+call was well-formed and is not happening, and what it is *for* is redirection - `edit` rather than
+`sed -i`, this repository's own tool rather than a `bash` that cannot reach it - which is an answer
+to read and act on, not a mistake to correct. Making it a retry would have a policy the model cannot
+satisfy fail the turn after three attempts, where a return leaves the model to do something else.
+
+**It is recorded in the call's own step**, as a `Returned` holding the reason and no duration, since
+nothing ran. So the record is the whole of what a replay needs: a resumed pass hands the model the
+recorded refusal and asks the plugin nothing, exactly as it replays a return without running the
+tool. That is [what lets it be offered at all](#what-the-durability-layer-allows).
+
+**The console does not decide policy, and this is not the mechanism that does.** The mount namespace
+is what bounds where a command reaches, and [which tools a session gets is a pure function of its
+isolation](tools.md#which-tools-a-session-gets). A refusal is judgement over a call that was already
+allowed to exist, made by a script somebody chose to run, and the trust it needs is the same trust
+every other event here runs on: a repository's plugin refusing every `edit` is a repository stopping a
+session from working, which is the same thing it could do with a `deliver` on every turn and is what
+the switch on the settings step is for.
+
+The cost, stated: **a process per tool call, per plugin that asked.** A model calls tools several
+times a turn while the pass holds its lease, so this is the event that makes the transport question
+above concrete rather than deferred; a plugin that wants it should want it knowing that.
 
 ### Settings are already a place, so state is a setting with nothing in front of it
 
@@ -516,6 +559,16 @@ somebody has to remember.
 A setting's value is a switch's or a number's, because that is what a control can hold; state is
 whatever JSON the plugin likes. Both are settled per session, so a fork starts with none and two
 sessions running one plugin never see each other's.
+
+**What a plugin is handed is a snapshot taken once at the top of the pass, and a `set` reaches the
+next pass and no event of this one.** Not another plugin's event, and not the writer's own: a plugin
+that writes at `tool` and reads at `after_turn` in the same turn reads what the pass began with. Once
+rather than re-read per event, because a setting is a place two writers share, and a switch flicked
+while a turn was in flight would have that turn answered under one value and judged under another.
+The bundled plugins and this repository's own never notice, because every `set` they make rides
+beside a `deliver` and a delivery ends the pass; a plugin that writes without delivering is the one
+this costs, and it is stated here because a plugin author will assume the store reads back what was
+just written.
 
 ### What a delivered message becomes
 
@@ -594,6 +647,9 @@ tight.** What decides is whether the answer is a *value the console can write do
 inside a turn qualify:
 
 - **A tool call**, recorded as `records.Returned`.
+- **Whether a tool call happens at all.** A refusal is a value too, and it is written into the same
+  record a return would have been, so a call that was turned away and a call that ran are replayed
+  by one mechanism. [Refusing a call](#refusing-a-call) is what that buys.
 - **Whatever is added to a request before it is sent.** `guiding` already does exactly this: it
   appends system-voice guidance in `before_model_request`, cheaply, because an appended message
   costs the cached prefix nothing where an edited instruction re-prices every request under it.
@@ -625,6 +681,68 @@ subject of [the controls rules](../philosophy.md#controls).
 is a boolean setting and a number box is a number setting, so one declaration is what the rail
 draws, what the settings blob holds, and what arrives in every payload that plugin receives. There
 is no second schema language and no way for the card and the settings to disagree.
+
+### The controls on a card
+
+**The switch takes effect on the press and the number does not**, which is the difference between a
+control you set and one you type into. A checkbox says the whole of what it means the moment it
+moves, so waiting for `Set` leaves a console that looks switched off and is not; a number is
+half-written for as long as somebody is writing it, so a `change` on that box would post whatever
+was in it when they tabbed away. The form's `hx-trigger` is `submit, change from:.plugin__switch`
+for exactly that, and `submit` stays beside it because `Set` is what the number is sent with and
+what the form does with no script at all. Either way the whole form posts, so a number typed and
+then a switch flicked saves both rather than losing the typing.
+
+**Which leaves `Set` to say there is something to press.** `data-dirty` is the mark, set by
+comparing the box against its own `defaultValue`, which is exactly the `value` the server rendered,
+so nothing is kept anywhere and a swap needs no repaint: the box that comes back is a new element
+carrying the new default and no mark. Undoing a change unmarks it, because it is a comparison rather
+than a flag the first keystroke sets. `--mark` is the gold every control here draws its focus ring
+in, and the border alone rather than a fill, since a filled button reads as pressed.
+
+**No spinner on the box, because no increment is right**: a step of 1 is a hundred presses to move a
+number anywhere worth moving it, and any larger one is a value this console would have to invent on a
+plugin's behalf. The type stays `number` for the keypad it asks for on a phone and the bounds it
+validates against, and the arrows go, since they sit inside the box and take the room a further digit
+needs. Four digits is the width, which is a bound rather than a guess: a control declared in units is
+chosen in round ones, and a box sized for six is one nobody can read at a glance.
+
+**The card answers itself rather than the transcript.** Nothing about the conversation changed, so
+swapping the transcript would replace the whole region in order to show what is already in the rail.
+What comes back is the card holding the values as they were recorded, which is worth doing rather
+than leaving the browser's own state alone precisely because a declared unit means the box and the
+record are not in the same numbers.
+
+**The box carries the unit the plugin declared and the value behind it is the plugin's own.** A
+reserve is only ever chosen in round thousands and six digits is a number to count the zeroes of, so
+the handoff's control holds `40` with a `K` beside it. What the `K` means is the plugin's business:
+the console draws the unit and stores the number, and the multiplication happens where the
+arithmetic does.
+
+**The whole card posts and only what moved is announced.** A form submits every control it holds
+whether the trigger was `Set` or a switch changing, so which one moved is not in the post - it is the
+difference between the post and what is stored. That is resolvable rather than ambiguous, because the
+card declares every control it has, so an absent name on a card that was posted is a switch that is
+off. The console writes the card whole and sends an `action` for each control that actually changed,
+which is both the honest reading and what an `action` means.
+
+**A bound the plugin declared is said to the browser and re-checked at the boundary.** A `min` on an
+input is a suggestion a browser was given, and a value that reaches the handler outside the declared
+bounds came from something that is not this page. An unreadable one leaves the control as it was
+rather than refusing, which is the stance `parse_tending` takes one layer out: quietly keeping a value
+somebody can see is a better answer than a session that will not render.
+
+**A session nobody can answer may still have its plugins set**, unlike a message, which such a
+session refuses. One nobody can answer is exactly one somebody might want a plugin to stop spending
+on, and that is the only useful thing left to do with it. What *is* settled for a session's life is
+which plugins run, not what they are set to.
+
+**The cards sit under the shelf, one per running plugin that declared one, and the theme sits below
+them at the foot.** The shelf is the boundary in that column: everything above it reads the
+conversation, and these are the first things that change how the conversation is run. What
+`margin-top: auto` pins to the bottom is the theme, because it is the one card there that is not
+about this conversation at all, being the reader's across every session, so it is what somebody
+scanning the rail for something about *this* session can skip.
 
 **The cost, stated: a plugin cannot draw a control the vocabulary has no word for.** The reserve mark
 is the worked example of that cost being real.
@@ -780,6 +898,12 @@ a command gets, a `uv run --script` shebang resolves an interpreter and a packag
 finds neither at the next event, with the network shut and no way to fetch them again. Pointing
 `$HOME` at the scratch makes the ordinary case work with no environment variable in any plugin.
 
+**The one program a repository supplies that does get the session's scratch as `$HOME` is not a
+plugin.** [Its setup script](setup.md) runs once, before anything is unattended, and what it installs
+is *for* the session's commands to run, so landing it where they look is the point rather than the
+hazard. That is the difference between a program that populates the directory and one that executes
+out of it.
+
 **A plugin outside a worktree is handed none of this, and giving it one would be symmetry for its own
 sake.** What a scratch answers is having nowhere to write, which is a problem the namespace creates:
 such a plugin has the operator's `$HOME`, their caches, their `/tmp` and their other scripts, and it
@@ -925,9 +1049,34 @@ Three things get called settings here and they stay apart: **process configurati
 and `config.yaml`, read once at startup; **a session's settled choice** is `Choice`, fixed for life;
 and **a session's mutable state** is what a plugin's `set` writes.
 
+**`Tending` is the one thing about a session that changes, and it has nowhere else to live.** A
+session's `Choice` is recorded before the first message and fixed for life; this is what is being
+done *to* a running session, so it has to be changeable or it is not a setting. Neither place this
+console otherwise keeps things will take it: `without-durability-sqlite` writes steps with `ON
+CONFLICT ... DO UPDATE SET value = workflow_checkpoint.value`, so a key keeps the value it was first
+given and a setting saved twice would keep its first answer for ever; and `localStorage` is in a
+browser where the worker that acts on this may be another process. So it is columns on the
+`sessions` row, arriving through `ADDED` the way `forked_aside` did. That is [not the second copy the
+index otherwise refuses](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies),
+because it is recorded nowhere else.
+
 `hands_off` and `reserve` were columns, and the columns cannot grow: a plugin cannot run `ALTER
 TABLE`, and `ADDED` was five migrations long already. So they became a `settings TEXT` column holding
 a mapping keyed by qualified plugin name.
+
+**Absent reads as the plugin's own default rather than as a console constant.** The card *is* the
+settings schema, so a control nobody has touched follows the control's declared default, and moving a
+default in the plugin moves every session nobody has told anything. A process-wide answer would be a
+second place a session's question is answered, exactly as a process-wide model would be. It follows
+that touching nothing writes no column at all: somebody who sets exactly the defaults is
+indistinguishable from somebody who left them, and that is the correct reading of both.
+
+`tending.py` is a module of its own for `thinking.py`'s reason, which is a cycle: the columns live
+on the session index and the decision is made inside a pass, so `sessions.py` and `conversation.py`
+both read it, and `sessions.py` already reads `conversation.py` for the key scheme. The field names
+the controls post under live there too, by `roots.py`'s rule: `pages.py` renders the controls and
+`console.py` parses them, and the module that owns the vocabulary is the one both can read without
+closing a ring.
 
 **And an `enabled TEXT` beside it, because the two have two owners.** `settings` is each plugin's own
 - what its card declares and what it remembers - and `enabled` is the console's decision about which
@@ -956,7 +1105,7 @@ One question sorts them: **can you describe mainplate with this absent and still
 - **Handoff: yes, and it is the proof**, because the protocol was derived from it. The gauge is the
   only thing it loses: its panel keeps the word and the hover text it has today, since those are a
   `label` and a `title` on the delivery rather than a kind of its own.
-- **[What a session is told](guidance.md): yes**, both halves. The operator's guidance, the
+- **[What a session is told](../plugins/guidance.md): yes**, both halves. The operator's guidance, the
   repository's `AGENTS.md` and the directory index are instructions contributed at `setup`; the
   nested handover is an injection into a request. It is the half handoff does not exercise.
 
@@ -975,6 +1124,12 @@ Handoff reaches all of it but `before_request`, `inject` and `instructions`; gui
 those three. A protocol that cannot carry the two is wrong, and finding that out while porting them
 was far cheaper than hearing it from the first plugin somebody else writes - it is what turned up
 that `compose` and `action` were being fired at plugins that never asked for them.
+
+What neither reaches is `before_tool` and `refuse`, which no bundled plugin has a reason to want, so
+`tests/plugins/gatekeeper` is the fixture that exercises them: a plugin that turns away any call whose
+arguments say `forbidden`, run for real through the whole pass, so that the refusal being recorded in
+the call's place and replayed without a second asking are claims the suite makes rather than this
+page.
 
 Neither of them installs anything, which is the ordinary case and worth saying: a plugin whose
 `setup` is one `return` of a constant is a plugin that had nothing to fetch, not one that skipped a
@@ -1048,11 +1203,12 @@ guidance](#both-are-ported-and-that-is-the-test) commits to them:
 `instructions` as a `setup` contribution, and `before_request` with its `inject`. Both are in the
 tables above.
 
+A gate before a tool runs sat here too, and is [written now](#refusing-a-call): the refusal becomes
+the return, which made it a payload away rather than a question.
+
 What is left genuinely open fits the shape and needs a payload and an answer defined, not a new
 mechanism:
 
-- **A gate before a console tool runs**, refusing a command or a path. Recordable, since the refusal
-  becomes the return, so this is a payload away rather than a question.
 - **Starting a session**, for anything wanting to delegate. The first one that is genuinely hard,
   because it reaches the fork machinery rather than adding a field.
 

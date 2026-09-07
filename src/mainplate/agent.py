@@ -797,6 +797,7 @@ def agent_for(
     scratch: Path | None = None,
     bwrap: str | None = None,
     plugins: Live | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> Agent[None, str]:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -827,6 +828,10 @@ def agent_for(
     A session with no plugins gets no such toolset at all rather than an empty one, which is the
     same answer `reaching` gives a session with no roots: an empty toolset costs nothing on the wire
     and everything in what somebody reading this has to hold in their head.
+
+    `environment` is what the session's own commands run under, on top of what the sandbox sets:
+    what a repository's setup recorded for the session, handed in as the value it was recorded as
+    rather than looked up here. See `Sandbox.argv`.
     """
     wire = wires.for_endpoint(chosen.endpoint)
     reach = reaching(chosen.isolation, worktree, scratch, bwrap)
@@ -836,7 +841,7 @@ def agent_for(
     if reach.roots:
         tools.append(file_tools(Files(roots=reach.roots)))
     if reach.confinement is not None and bwrap is not None:
-        tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue))
+        tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(
         wire.model(chosen.model),
         name="mainplate",

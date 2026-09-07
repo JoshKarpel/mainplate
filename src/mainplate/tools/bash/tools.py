@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Final
 
 from pydantic_ai import ModelRetry
@@ -10,6 +11,7 @@ from mainplate.sandbox import Confinement
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
+from mainplate.sandbox import home_in
 from mainplate.sandbox import starting_at
 
 SHELL: Final = "/bin/sh"
@@ -64,7 +66,14 @@ def reported(command: str, code: int | None, output: str) -> str:
     return "\n".join((f"$ {command}", "", body, "", ended)) if body else "\n".join((f"$ {command}", "", ended))
 
 
-async def ran(confinement: Confinement, bwrap: str, venue: Venue, command: str, seconds: int) -> str:
+async def ran(
+    confinement: Confinement,
+    bwrap: str,
+    venue: Venue,
+    command: str,
+    seconds: int,
+    environment: Mapping[str, str] | None = None,
+) -> str:
     """
     One command, inside a namespace of its own, for at most `seconds`.
 
@@ -76,6 +85,10 @@ async def ran(confinement: Confinement, bwrap: str, venue: Venue, command: str, 
     `stderr` is folded into `stdout` rather than reported beside it, so what comes back is the
     interleaving the command actually produced. Split into two blocks, a warning and the line it is
     about end up in different halves of the answer.
+
+    `environment` is what the session's plugins asked to have set for its commands, which is how a
+    toolchain a `setup` script installed into the scratch is on `PATH` without this tool knowing
+    what was installed. See `Sandbox.argv`.
     """
     if not command.strip():
         raise Refused("a command to run is required")
@@ -86,9 +99,15 @@ async def ran(confinement: Confinement, bwrap: str, venue: Venue, command: str, 
         scratch = confinement.scratch
         await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
     sandbox = await confined_by(confinement)
+    home = home_in(confinement)
     process = await asyncio.create_subprocess_exec(
         bwrap,
-        *sandbox.argv(at=str(starting_at(confinement)), venue=venue),
+        *sandbox.argv(
+            at=str(starting_at(confinement)),
+            venue=venue,
+            home=None if home is None else str(home),
+            environment=environment,
+        ),
         SHELL,
         "-c",
         command,
@@ -115,7 +134,9 @@ async def ran(confinement: Confinement, bwrap: str, venue: Venue, command: str, 
     return reported(command, process.returncode, out.decode(errors="replace"))
 
 
-def bash_tools(confinement: Confinement, bwrap: str, venue: Venue) -> FunctionToolset[None]:
+def bash_tools(
+    confinement: Confinement, bwrap: str, venue: Venue, environment: Mapping[str, str] | None = None
+) -> FunctionToolset[None]:
     """
     One tool, bound to what this session's commands may see and whether they may dial out.
 
@@ -123,6 +144,9 @@ def bash_tools(confinement: Confinement, bwrap: str, venue: Venue) -> FunctionTo
     the namespace it runs in, and every session picks its own. The confinement is a value rather
     than a built sandbox because a worktree does not exist yet at this moment - the session's first
     pass plants it, and this runs before that.
+
+    `environment` is settled per session too, since it is what the session's plugins recorded at
+    `setup`, and is handed to every command alike.
     """
     toolset = FunctionToolset[None]()
 
@@ -153,7 +177,7 @@ def bash_tools(confinement: Confinement, bwrap: str, venue: Venue) -> FunctionTo
 
         """
         try:
-            return await ran(confinement, bwrap, venue, command, seconds)
+            return await ran(confinement, bwrap, venue, command, seconds, environment)
         except Refused as refusal:
             raise ModelRetry(str(refusal)) from None
 

@@ -29,6 +29,7 @@ from collections.abc import AsyncGenerator
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from contextlib import contextmanager
@@ -329,6 +330,17 @@ down. A plugin cannot be trusted to be pure, so what was injected is recorded an
 replays it rather than asking again.
 """
 
+type Gating = Callable[[str, Mapping[str, object]], Awaitable[str | None]]
+"""
+Whether a tool call the model just made may run, asked of the session's plugins before it does.
+
+The call as the model wrote it goes in; what comes back is what to hand the model in the call's
+place, or nothing where the call may go ahead. A function for `Injecting`'s reason, and it takes no
+key because it needs none: it is asked *inside* the step that records the call, so what it answered
+is in that record and a resumed pass replays the refusal as it would replay the return.
+"""
+
+
 type Pricer = Callable[[RequestUsage], Decimal | None]
 """
 What one model request came to, in US dollars, asked of whatever knows the rates.
@@ -375,6 +387,7 @@ class Stepping:
     pricer: Pricer | None = None
     draining: Draining | None = None
     injecting: Injecting | None = None
+    gating: Gating | None = None
     allowance: Allowance = field(default_factory=lambda: Allowance(limit=None))
     taken: Counter[str] = field(default_factory=Counter)
     allowed: set[StepKey] = field(default_factory=set)
@@ -509,6 +522,18 @@ class Stepping:
             return ()
         return tuple(await self.injecting(self.key("injected"), messages))
 
+    async def gated(self, call: ToolCallPart) -> str | None:
+        """
+        What to hand the model in this call's place, or nothing where the session's plugins let it run.
+
+        No key of its own, unlike the drain and the injection: this is asked from inside
+        `wrap_tool_execute`'s step, so the answer lands in the call's own `Returned` and needs no
+        second record to be replayed from.
+        """
+        if self.gating is None:
+            return None
+        return await self.gating(call.tool_name, call.args_as_dict())
+
     def price(self, answered: ModelResponse) -> None:
         """
         Fill in what this request cost, **before** it is recorded rather than after.
@@ -570,6 +595,7 @@ def stepping(
     draining: Draining | None = None,
     allowance: Allowance | None = None,
     injecting: Injecting | None = None,
+    gating: Gating | None = None,
 ) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
@@ -591,6 +617,7 @@ def stepping(
         pricer=pricer,
         draining=draining,
         injecting=injecting,
+        gating=gating,
         allowance=allowance if allowance is not None else Allowance(limit=None),
     )
     token = current_stepping.set(scope)
@@ -780,7 +807,7 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         # block onward. How it *reaches* the model is the provider's business and varies - a real
         # `{"role": "system"}` entry on the OpenAI wire and on the four Anthropic models that honour
         # one, `<system>`-tagged user text everywhere else - so do not write code here that depends on
-        # which. See `docs/design/guidance.md`.
+        # which. See `docs/plugins/guidance.md`.
         for said in await scope.injected(request_context.messages):
             request_context.messages.append(ModelRequest(parts=[SystemPromptPart(content=said)]))
         if scope.draining is None:
@@ -851,12 +878,20 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         after it. A tool that raises records nothing at all - the `ModelRetry` propagates out of the
         step and the call stays out until a retry lands - so a failed call has no duration for the
         same reason it has no return.
+
+        **A call a plugin refused is recorded as one that returned the refusal**, inside this same
+        step, so the record is the whole of what a replay needs and the plugin is never asked twice.
+        It has no duration, because nothing ran: what took time was the asking, which is the
+        plugin's and not the tool's.
         """
         scope = current_stepping.get()
         if scope is None:
             return await handler(args)
 
         async def perform() -> object:
+            refused = await scope.gated(call)
+            if refused is not None:
+                return records.Returned(returned=refused).recorded()
             started = monotonic()
             came_back = to_jsonable_python(await handler(args))
             return records.Returned(returned=came_back, took=timedelta(seconds=monotonic() - started)).recorded()

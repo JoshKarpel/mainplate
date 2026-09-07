@@ -1815,6 +1815,35 @@ class TestLoadingASessionsPlugins:
         assert 'class="rail"' not in page.text
         assert answering.asked == [], "and nothing has been run to draw it"
 
+    async def test_a_repositorys_setup_script_gets_a_switch_under_its_tier(self, service: Service) -> None:
+        """
+        The one switch on the step that is not a plugin's, drawn with the repository's plugins
+        because it is the repository's code and answered by the same press: the same hidden `off`,
+        the same field shape, under a key no qualified name can be.
+        """
+        answering = Answering()
+        app, running = await self.console(service, answering)
+        session = await running.start(DEFAULT_CHOICE)
+        await running.checkpointer.supply(session.id, DECLARED_KEY, recorded_declaration(DECLARES))
+        await running.checkpointer.supply(session.id, REPOSITORY_DECLARED_KEY, recorded_declaration((), setup=True))
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session.id}")
+
+        assert page.status == 200
+        assert 'type="hidden" name="on:setup" value="off"' in page.text
+        assert 'type="checkbox" name="on:setup" checked' in page.text
+        assert ".mainplate/setup" in page.text
+        assert answering.asked == []
+
+    async def test_a_repository_carrying_no_setup_script_draws_no_switch_for_one(self, service: Service) -> None:
+        answering = Answering()
+        app, running = await self.console(service, answering)
+        session = await self.declared(running)
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session}")
+
+        assert 'name="on:setup"' not in page.text
+
     async def test_the_press_itself_runs_nothing_and_the_pass_runs_what_was_left_on(self, service: Service) -> None:
         """
         Which is the whole of the boundary, in the two moments it now takes: the press records the

@@ -128,6 +128,7 @@ from mainplate.durability import TOOK
 from mainplate.durability import Allowance
 from mainplate.durability import AllowanceSpent
 from mainplate.durability import Draining
+from mainplate.durability import Gating
 from mainplate.durability import Injecting
 from mainplate.durability import RequestRefused
 from mainplate.durability import as_recorded
@@ -142,6 +143,7 @@ from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import ending
+from mainplate.plugins.asking import gating
 from mainplate.plugins.asking import injections
 from mainplate.plugins.asking import nowhere
 from mainplate.plugins.asking import opening_of
@@ -157,6 +159,7 @@ from mainplate.plugins.installed import BadDeclaration
 from mainplate.plugins.installed import Collides
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
 from mainplate.plugins.installed import refuse_collisions
 from mainplate.plugins.installed import repository_plugins
 from mainplate.plugins.protocol import PLAIN
@@ -164,12 +167,16 @@ from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Tone
 from mainplate.plugins.protocol import toned
 from mainplate.plugins.running import PluginFailed
+from mainplate.preparing import PreparationFailed
+from mainplate.preparing import has_setup
+from mainplate.preparing import prepared
 from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.snapshots import Worktree
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
+from mainplate.tending import SETUP_SWITCH
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
 from mainplate.thinking import BY_LEVEL
@@ -224,13 +231,25 @@ REPOSITORY_DECLARED_KEY: StepKey = "plugins:declared:repository"
 The same for what the session's repository names about itself, read once from the tree it was planted
 at.
 
-Its own key rather than a half of the one above, and the fork is what decides it, exactly as it
-decides the two registration keys: a fork re-reads the operator's declaration, because those files
-sit outside every worktree, and inherits this one whole, because a fork's tree is one a model has
-been editing. `Service.fork` copies it beside `plugins:repository` for that reason.
+Its own key rather than a half of the one above, for failure isolation rather than because a fork
+treats the two differently: the operator's files sit outside every worktree and a repository's is in
+one, so one can fail to read on its own and the other should stay recorded. A fork carries neither
+and reads both again, out of the tree it is planted at.
 
 Empty for a session with no repository, for one whose grant was never given, and for a repository
-carrying no such file, which are three states with one meaning and no need to be told apart.
+carrying no such file, which are three states with one meaning and no need to be told apart. It is
+also where the repository says whether it carries a `.mainplate/setup`, since that is read on the
+same pass and drawn on the same step.
+"""
+
+SETUP_ENVIRONMENT_KEY: StepKey = "setup:environment"
+"""
+What the repository's `.mainplate/setup` asked to have set for this session's commands.
+
+Written on the pass that ran the script, beside the two registrations and under the same rule -
+nothing is recorded until every setup has answered - so a session past its settings step always has
+it, empty where the script was not run. Not turn-prefixed, for the reason the registrations are not:
+`before` copies turn-shaped keys by shape, and a fork sets up again and records its own.
 """
 
 PLUGINS_REFUSED_KEY: StepKey = "plugins:refused"
@@ -1099,7 +1118,7 @@ type Outcome = Literal["success", "failed", "denied", "interrupted"]
 # cached prefix, where this is a `SystemPromptPart` appended into the message history at a position.
 # Two mechanisms, two places in the request, two things a reader may want to quiet separately - so
 # two words, by the same rule that keeps `steer` apart from `prompt`. How each one reaches the model
-# differs too, and by more than the wire: see `docs/design/guidance.md`. It takes the
+# differs too, and by more than the wire: see `docs/plugins/guidance.md`. It takes the
 # person's hue for the reason `system-prompt` does.
 #
 # `note` is the one kind nobody in the conversation wrote: a plugin asked for it and the console put
@@ -2042,6 +2061,34 @@ def declared_in(recorded: Mapping[str, object]) -> tuple[Installed, ...] | None:
     return (*parse_declaration(console), *(() if held is None else parse_declaration(held)))
 
 
+def setup_declared_in(recorded: Mapping[str, object]) -> bool:
+    """
+    Whether this session's repository carries a `.mainplate/setup`, as its declaring pass recorded.
+
+    Off the repository's declaration and nowhere else, so a session that does not trust its
+    repository, or has none, or has not planted its worktree yet, reads as carrying none - which is
+    the right answer to "should the step draw a switch for it" in all three.
+    """
+    held = recorded.get(REPOSITORY_DECLARED_KEY)
+    return held is not None and records.Declared.model_validate(held).setup
+
+
+def environment_in(recorded: Mapping[str, object]) -> dict[str, str]:
+    """
+    What this session's commands run under beyond what the sandbox sets, as its setup recorded.
+
+    Empty where nothing recorded any, which is every session whose repository carries no setup
+    script and every session recorded before there was one: a command then runs exactly as it
+    always did.
+    """
+    held = recorded.get(SETUP_ENVIRONMENT_KEY)
+    return {} if held is None else parse_environment(held).values
+
+
+def parse_environment(recorded: object) -> records.Environment:
+    return records.Environment.model_validate(recorded)
+
+
 def plugins_refused_in(recorded: Mapping[str, object]) -> records.Refused | None:
     """
     Why this session's plugins could not be declared, where they could not.
@@ -2649,12 +2696,11 @@ async def declaring_plugins(
     `.mainplate/mainplate.yaml`. What each of them *is* comes back from `setup`, which the pass after
     the settings step runs. See `setting_plugins_up`.
 
-    **Two steps, one per tier group**, because a fork inherits one and re-reads the other. The
-    console's own scripts sit outside every worktree, so nothing a model wrote can reach them and a
-    fork reads them afresh; a repository's are named by a file in a tree, and a fork's tree is one a
-    model has been editing, so a fork replays whatever its parent recorded and reads no file. That
-    asymmetry is the security one rather than a timing one: it turns on who wrote the file, which is
-    the question the grant already asks.
+    **Two steps, one per tier group**, for failure isolation rather than because a fork treats them
+    differently: the console's own scripts are read from files outside every worktree and a
+    repository's from a file in one, so one of the two can fail on its own, and a declaration that
+    would not parse should leave the other half recorded. A fork carries neither and reads both
+    afresh, which is what lets a branch pick up an edited `.mainplate/`.
 
     **Without trust nothing is read**, and the recorded set is empty for that session's life.
     Trusting afterwards reaches sessions started after it and none before, which is the answer
@@ -2674,12 +2720,24 @@ async def declaring_plugins(
     async def repository() -> object:
         if where is None or not declaring.runs(chosen.repository, chosen.trusted):
             return recorded_declaration(())
-        return recorded_declaration(repository_plugins(where))
+        # Whether the repository carries a setup script, read here beside its plugins because the
+        # settings step draws a switch for it and nothing that draws a switch may have run anything.
+        return recorded_declaration(repository_plugins(where), setup=has_setup(where))
 
     return (
         *await run.step(DECLARED_KEY, console, parse_declaration),
         *await run.step(REPOSITORY_DECLARED_KEY, repository, parse_declaration),
     )
+
+
+type Preparing = Callable[[str, Worktree], Awaitable[Mapping[str, str]]]
+"""
+Running a session's repository setup script, by session and worktree, injected like `Speaking` is.
+
+A function for the reason `Speaking` is one: what answers it builds a sandbox, needs `bwrap` and the
+workspace's scratch, and a pass given none of that simply runs no script - which is what every test
+that is not about setup wants.
+"""
 
 
 async def setting_plugins_up(
@@ -2688,6 +2746,7 @@ async def setting_plugins_up(
     declared: Sequence[Installed],
     tended: Tending,
     worktree: Worktree | None,
+    preparing: Preparing | None = None,
 ) -> tuple[Enrolled, ...] | None:
     """
     Set up exactly the plugins somebody left switched on, and record what each of them contributed.
@@ -2711,9 +2770,15 @@ async def setting_plugins_up(
     so a tier that failed does not leave the other one recorded: the store keeps the value a key was
     first given, and a half-written registration could never be corrected.
 
-    Only under a key nothing has recorded yet, which is what a resumed pass turns on: the two keys are
+    Only under a key nothing has recorded yet, which is what a resumed pass turns on: the keys are
     written one after the other, so a pass that died between them comes back with one recorded, and
     launching that tier's processes again to throw the answer away is work nobody asked for.
+
+    **The repository's own setup script runs here too, beside the plugins and under the same rule.**
+    It is not a plugin: the console runs it itself, in the session's own namespace with a network,
+    and what it asked to have set is recorded under `SETUP_ENVIRONMENT_KEY` before either
+    registration, so a session past its step always has an answer there. Its switch is the step's
+    like any plugin's, keyed `SETUP_SWITCH` in the same column. See `preparing.py`.
     """
     if setups_in(run.recorded) == 0:
         return None
@@ -2726,13 +2791,37 @@ async def setting_plugins_up(
             *await run.step(REPOSITORY_PLUGINS_KEY, partial(recorded_plugins, ()), parse_registration),
         )
     on = [each for each in declared if tended.on(each.qualified, ON)]
+    # By tier, because that is the question the two keys answer: failure isolation between what was
+    # read from files outside every worktree and what was read from one. Confinement happens to
+    # draw the same line today and is a different question.
     asking = [
-        (key, [each for each in on if each.confined is confined])
-        for key, confined in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
+        (key, [each for each in on if (each.tier is Tier.REPOSITORY) is repository])
+        for key, repository in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
     ]
     unrecorded = [(key, asked) for key, asked in asking if key not in run.recorded]
-    said = await asyncio.gather(*(setting_up(asked, speaking, run.workflow, worktree) for _, asked in unrecorded))
+    prepares = (
+        preparing is not None
+        and worktree is not None
+        and SETUP_ENVIRONMENT_KEY not in run.recorded
+        and setup_declared_in(run.recorded)
+        and tended.on(SETUP_SWITCH, ON)
+    )
+
+    async def preparation() -> Mapping[str, str]:
+        if not prepares or preparing is None or worktree is None:
+            return {}
+        return await preparing(run.workflow, worktree)
+
+    said, environment = await asyncio.gather(
+        asyncio.gather(*(setting_up(asked, speaking, run.workflow, worktree) for _, asked in unrecorded)),
+        preparation(),
+    )
     ready = dict(zip((key for key, _ in unrecorded), said, strict=True))
+
+    async def recorded_environment() -> object:
+        return records.Environment(values=dict(environment)).recorded()
+
+    await run.step(SETUP_ENVIRONMENT_KEY, recorded_environment, parse_environment)
     settled: list[Enrolled] = []
     for key, _ in asking:
         settled.extend(await run.step(key, partial(recorded_plugins, ready.get(key, ())), parse_registration))
@@ -2850,6 +2939,9 @@ def conversing(
         # Settled once, so the three readers below cannot come to differ over what a console given no
         # `Declaring` runs: no scripts, no way to speak to one, and nothing a repository may add.
         sourcing = declaring or Declaring()
+        # How the repository's own setup script is run, where this console can run one at all: it
+        # needs the sandbox and the workspace's scratch, and a console with neither runs no script.
+        preparing = None if workspaces is None or bwrap is None else preparing_through(workspaces, bwrap)
         try:
             declared = await declaring_plugins(run, sourcing, chosen, worktree)
         except (Refused, BadDeclaration) as raised:
@@ -2868,8 +2960,8 @@ def conversing(
         enrolled = registered_in(run.recorded)
         if enrolled is None:
             try:
-                enrolled = await setting_plugins_up(run, sourcing, declared, tended, worktree)
-            except (PluginFailed, Refused, BadDeclaration) as raised:
+                enrolled = await setting_plugins_up(run, sourcing, declared, tended, worktree, preparing)
+            except (PluginFailed, PreparationFailed, Refused, BadDeclaration) as raised:
                 # **Recorded against the attempt it belongs to**, which is what makes the step
                 # somebody can act on: turning the plugin off and pressing again opens a new attempt
                 # with no refusal under it, and the page draws that as working rather than as the
@@ -2969,6 +3061,9 @@ def conversing(
                 scratch=scratch,
                 bwrap=bwrap,
                 plugins=live,
+                # What the repository's setup asked to have set for this session's commands, read
+                # off the record the setup pass wrote: a value, settled for the session's life.
+                environment=environment_in(run.recorded),
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
@@ -2985,7 +3080,10 @@ def conversing(
             # What the session's plugins want appended to each request, recorded per request so a
             # resumed pass replays the sentence rather than asking a script that may not be pure.
             injecting = injecting_through(run, live)
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting):
+            # Whether each tool call may run, asked inside the step that records the call, so the
+            # refusal is in the same record the return would have been.
+            gating = gating_through(live)
+            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating):
                 try:
                     answered = await agent.run(asked.said, message_history=list(at.history))
                 except AllowanceSpent:
@@ -3048,3 +3146,37 @@ def injecting_through(run: Run, live: Live) -> Injecting:
         return await run.step(key, asking, parse_injected)
 
     return inject
+
+
+def preparing_through(workspaces: Workspaces, bwrap: str) -> Preparing:
+    """
+    Running a session's repository setup script in that session's own scratch, behind the sandbox.
+
+    The scratch by the workspace's own derivation, so the directory the script installs into and the
+    directory the session's `bash` gets as `$HOME` cannot be two spellings of one path.
+    """
+
+    async def prepare(session: str, worktree: Worktree) -> Mapping[str, str]:
+        return await prepared(worktree, workspaces.scratch_at(session), bwrap)
+
+    return prepare
+
+
+def gating_through(live: Live) -> Gating:
+    """
+    Whether a tool call may run, asked of a session's plugins from inside the step that records it.
+
+    Not a step of its own, and that is the difference from `injecting_through`: the durability layer
+    asks this inside `wrap_tool_execute`'s own step, so the refusal is written into the call's
+    `Returned` and replayed with it. A second key would be a second record of one call.
+
+    A session none of whose plugins asked about `before_tool` spawns nothing here: the gate is
+    checked against what was declared before any process is started.
+    """
+
+    async def gate(tool: str, args: Mapping[str, object]) -> str | None:
+        if not live.wanting("before_tool"):
+            return None
+        return await gating(live, tool, args)
+
+    return gate

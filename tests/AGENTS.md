@@ -154,6 +154,12 @@ module goes on `PYTHONPATH` and the two runs it makes are driven by exit codes. 
 shebang still resolves the plugin's own dependency, so a cold machine pays for that once, like the
 browsers.
 
+**`test_preparing.py` runs setup scripts of its own through the real sandbox, and never this
+repository's.** What `.mainplate/setup` here does is fetch a toolchain; what the suite asserts is the
+mechanism - `$HOME` is the session's scratch, the worktree is where it starts, only the environment
+file crosses back, a failure is loud. `TestARepositorysSetupScript` in `test_plugins.py` is the
+switch and the record, driven through a real pass, and it needs `tendings` for the reason above.
+
 **What that stub cannot cover is asserted against arguments instead.**
 `TestWhereARepositorysPluginRuns` reads the `bwrap` argv this console builds - the network on `setup`
 and shut everywhere else, `$HOME` in the plugin's own scratch, a scratch per plugin per session -

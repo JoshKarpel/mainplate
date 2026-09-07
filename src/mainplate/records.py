@@ -70,6 +70,7 @@ type StepKind = Literal[
     "named",
     "confirmed",
     "injected",
+    "environment",
 ]
 """
 What a record says it is, and what a turn's keys are named by.
@@ -441,6 +442,16 @@ class Declared(Record):
     kind: Literal["declared"] = "declared"
     plugins: tuple[Named, ...] = ()
 
+    setup: bool = False
+    """
+    Whether the repository carries a `.mainplate/setup` script, read on the same pass as its plugins.
+
+    On the repository's declaration only, and beside the plugins rather than as a plugin: it is a
+    program the console runs itself, in the session's own namespace with a network, so it is drawn on
+    the settings step with a switch of its own and is registered nowhere. Recorded here so that what
+    the step offers and what the pass may run are one reading of the tree.
+    """
+
 
 class Enrolled(Record):
     """
@@ -516,6 +527,21 @@ class Injected(Record):
 
     kind: Literal["injected"] = "injected"
     said: tuple[str, ...] = ()
+
+
+class Environment(Record):
+    """
+    What a repository's `.mainplate/setup` asked to have set for the session's own commands.
+
+    Recorded on the pass that ran the script, beside the registrations, and fixed for the session's
+    life like them: what a session's commands run under is part of its terms, and a fork sets up
+    again and records its own. Empty where the script was never run, whether because the repository
+    carries none, the switch was off, or the session has no worktree, which are three ways of saying
+    the same thing to a command.
+    """
+
+    kind: Literal["environment"] = "environment"
+    values: dict[str, str] = {}
 
 
 type Delivered = Annotated[Prompt | Note | Steer | Command, Field(discriminator="kind")]

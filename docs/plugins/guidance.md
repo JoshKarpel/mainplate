@@ -5,7 +5,7 @@ operator's own, every `.md` file under `<config home>/mainplate/guidance/`, sort
 concatenated. **Repository guidance** is the project's own `AGENTS.md`, read out of the worktree the
 session works in. Both go into the agent's `instructions`.
 
-**All of it is a [plugin](plugins.md)**, in `src/mainplate/plugins/bundled/guidance`, and it is the
+**All of it is a [plugin](../design/plugins.md)**, in `src/mainplate/plugins/bundled/guidance`, and it is the
 half of the protocol handoff does not exercise: `instructions` contributed at `setup`, and an
 `inject` at `before_request`. So what follows describes a script this console speaks to over a pipe,
 and everything below is that script's rather than the console's unless it says otherwise - what the
@@ -57,8 +57,9 @@ exactly there is therefore free.
 
 **What it recomposes is the join and not the guidance**, and that is the one thing the port to a
 plugin took away. A plugin is set up once per session, so what it contributed is settled from the
-moment its [settings step](plugins.md#starting-a-session-takes-four-steps) was answered; a forget
-composes the stretch's own `instructions:{n}` again and every block in it says the same thing. So an edited `AGENTS.md` is picked up by [forking](forking.md) rather than by
+moment its [settings step](../design/plugins.md#starting-a-session-takes-four-steps) was answered;
+a forget composes the stretch's own `instructions:{n}` again and every block in it says the same
+thing. So an edited `AGENTS.md` is picked up by [forking](../design/forking.md) rather than by
 forgetting, which is the answer this console gives to every other question about a session's terms.
 
 `history_began` asks the same `forgets` predicate `reached` clears history on, so the two cannot
@@ -159,7 +160,7 @@ things there are decided:
     are the same thing, and what separates them is where each sits in the request, which is what the
     *panel* around each says. The document's opening line is on the panel's row, which is what
     identifies it without opening it. See [every panel folds, from its own
-    row](console.md#every-panel-folds-from-its-own-row).
+    row](../design/console.md#every-panel-folds-from-its-own-row).
 
 The panel takes the person's hue, by the same rule as `command`: the axis is who produced the text,
 and what is in a system prompt was written by the operator and by whoever wrote the repository's

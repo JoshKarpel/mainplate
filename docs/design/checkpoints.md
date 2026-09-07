@@ -103,8 +103,14 @@ turn-prefixed, and they come in two pairs one moment apart. `plugins:declared:co
 `plugins:declared:repository` hold what each tier's files *name*, written by the session's first pass
 and read by [the settings step](plugins.md#starting-a-session-takes-four-steps);
 `plugins:console` and `plugins:repository` hold what those plugins said when they were *run*, written
-by the pass that follows that step being answered. The console half of each pair is re-read by a fork
-and the repository half is inherited, because a fork's tree is one a model has been editing.
+by the pass that follows that step being answered. A fork carries none of the four and reads and
+runs both tiers again, out of the tree it is planted at.
+
+`setup:environment` is written on that same pass, before the two registrations and under the same
+rule that nothing is recorded until every setup has answered: it holds what the repository's
+[`.mainplate/setup`](setup.md) asked to have set for the session's commands, and it is empty where
+that script was not run. Session-level for the reason the four above are, and its switch is the
+`enabled` column's under the key `setup`.
 
 **`plugins:setup:{n}` is numbered where those four are not**, and the retry is what decides it. It
 records that somebody answered the step for the `n`th time, which is the only thing that lets a pass

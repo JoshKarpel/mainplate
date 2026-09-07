@@ -23,8 +23,6 @@ the cross-cutting rules the pages cite rather than restate.
   where a message goes, the shelf, `forget`, handoff, steering, and running a command.
 - **[The workspace](workspace.md)** is the git side: where a repository is reached from, the
   worktree a session gets, and how a tree is snapshotted at every model request.
-- **[What a session is told](guidance.md)** is the instructions: console guidance, a repository's
-  own `AGENTS.md`, and the nested guidance handed over as the model reaches into a directory.
 - **[How a model reaches a file](tools.md)** is the toolset: which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
 - **[Where a command runs](sandbox.md)** is the mount namespace `bash` runs behind, and the two
@@ -38,12 +36,17 @@ the cross-cutting rules the pages cite rather than restate.
   plugin speaks, the events it is sent, the effects it may ask for, and what has to be true before a
   repository's own plugin runs. Handoff and what a session is told are both plugins, which is what
   makes the pair a test of the protocol rather than two examples of it.
+- **[Setting a repository up](setup.md)** is `.mainplate/setup`: the script a repository carries to
+  get itself ready, where the console runs it, what crosses back, and the switch in front of it.
 - **[The console](console.md)** is the page: the live connection, the transcript, panels and rules,
   and the controls around them.
 - **[The stylesheet and the grid](assets.md)** is what draws it: the three shapes, the one value
   that scales the page, and the vendored monospace face box drawing depends on.
 - **[Running it as a service](deployment.md)** is the systemd unit `mainplate install` renders, and
   why the service is not itself confined.
+
+What ships *as* plugins rather than as the console, handoff and what a session is told, has [a
+section of its own](../plugins/index.md), one page per bundled plugin.
 
 The toolchain around the source, rather than any part of the console, is
 [maintaining mainplate](../maintaining.md): the dependency choices, the checks, and this site.
