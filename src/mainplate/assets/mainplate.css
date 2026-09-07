@@ -1728,13 +1728,12 @@ pre > .copy {
    every legend and card name on this page takes, in the person's hue because starting a session is
    the person's act.
 
-   Left-aligned under the choosing, on the edge every legend, card and field above it starts at, so a
-   reader's eye comes down one line rather than crossing the page to find the thing that acts. */
+   The last thing in the picker rather than a band pinned under it: left-aligned on the edge every
+   legend, card and field above it starts at, so a reader's eye comes down one line rather than
+   crossing the page to find the thing that acts. Pinned it cost `main` a row held open for it and
+   put a gap between the last question and the button that answers all of them. */
 .starting {
     display: flex;
-    width: 100%;
-    max-width: var(--wide);
-    margin: 0 auto;
 }
 
 .starting button {
@@ -1759,10 +1758,25 @@ pre > .copy {
 
 /* --- Choosing what a session runs on ----------------------------------- */
 
-/* The middle of the start page, and the body of the fork page. `main` is a grid whose middle row
-   grows, so putting this there is what gives the choosing the room and leaves the box at the
-   bottom - which is the opposite arrangement to a session page and right for the same reason:
-   there is no conversation yet, and what somebody is doing is deciding what to talk to. */
+/* The form the start page posts, and the only thing in `main` on it. It passes `main`'s growing row
+   straight through to the choosing rather than sitting between them as a plain block, because a
+   block here is floored at its own content: the row then sizes to the whole picker, the page
+   overflows `100dvh`, and `.setup` never becomes the scroller it is written to be. The symptom that
+   shows is a dead zone - `.models` stays at its full height, so it is a scroll container with
+   nothing to scroll, and a wheel over the model list moves neither it nor the page under it. */
+.choosing {
+    display: grid;
+    /* `main > *` sets only `min-width`, and a grid item's minimum is its min-content on both axes:
+       without this the row this sits in grows to the picker and the bound above is never taken. */
+    min-height: 0;
+}
+
+/* The body of the two pages with no conversation on them yet: the choosing on the start page, and
+   what a session loaded on the settings step. Both put it in `main`'s growing row, which is where a
+   session page puts the transcript and right for the same reason - it is the thing being read, and
+   what is under it is a row of its own height. On the settings step that row is the message box; on
+   the start page there is nothing in it, because the button that acts is the last question's
+   neighbour rather than a band pinned below the lot. See `.starting`. */
 .setup {
     display: flex;
     flex-direction: column;
@@ -1929,6 +1943,28 @@ pre > .copy {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
     gap: var(--space-3);
+    margin-top: var(--space-3);
+}
+
+/* The dots while the forge is being asked what branches it has, on a row of their own above the
+   fields they stand in for.
+
+   `display` and not the `opacity` htmx's own indicator rules toggle, which is the one place here
+   that reaches for `htmx-request` directly: an element hidden by `opacity` still holds its row, so
+   the block would carry a permanent gap above the two fields for the sake of dots that are shown
+   for a second. Hidden by `display` it costs the layout nothing until the request starts. */
+.basis__loading {
+    display: none;
+    grid-column: 1 / -1;
+}
+
+.basis__loading.htmx-request {
+    display: inline-flex;
+}
+
+/* Alone, it is standing in a block that has no fields yet - picking a repository from `no files` -
+   so it carries the space the arriving block will have rather than sitting flush under the cards. */
+.basis__loading:only-child {
     margin-top: var(--space-3);
 }
 
@@ -2272,10 +2308,16 @@ pre > .copy {
 
        The floor is what stops "shrink to fit" becoming "shrink to nothing": past it the outer block
        scrolls after all, which is the right answer in a window too short to show a choice and a
-       message box at once. */
+       message box at once.
+
+       And it chains, deliberately: `overscroll-behavior: contain` here made the end of the list a
+       wall, so a wheel that started over the models could not reach the rest of the page it sits in
+       - on the fork page, seventeen pixels of list and then nothing, with five hundred left below.
+       `contain` belongs on a scroller that *is* the reading surface, which the transcript is and a
+       bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on
+       into the block around it, which is what a reader who kept flicking asked for. */
     min-height: 7rem;
     overflow-y: auto;
-    overscroll-behavior: contain;
 }
 
 .models__provider {
@@ -3508,9 +3550,9 @@ main:has(> .forking) {
        row that grows, the picker is taller than it whatever happens, so the part that was meant to
        give had nothing to give from.
 
-       So the models simply stop scrolling and `.setup` carries the lot. The message box is still
-       pinned under it, which is the property that mattered: however far down the list somebody
-       scrolls, the thing they came to type in has not moved.
+       So the models simply stop scrolling and `.setup` carries the lot, which is one box scrolling
+       inside a document that does not - the property that mattered, and the same one every other
+       page here has.
 
        The `flex: none` is the other half and is not optional. Every `min-height: 0` above exists to
        let a part shrink so the models can be the one that gives; with nothing left to scroll, that

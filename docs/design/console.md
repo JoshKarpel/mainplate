@@ -238,17 +238,16 @@ down twice. It sets a window narrower than the suite's own, because at 1400 the 
 its `max-width` with room to spare and the clipping, which is every narrower window and so the
 common case, does not happen at all.
 
-The picker's controls are **associated with their form by name, not by nesting**, and that is
-load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned
-under it, so every radio in every group is a *sibling* of the form that posts them;
-`form="choosing"` (`CHOOSING_ID` in `pages.py`) is the whole of what makes them submit, and without
+The picker's controls are **associated with their form by name, not by nesting**, and what makes
+that worth doing is that half of them are also *fragments*. `model_cards` and `starting_at` are
+served both as part of a page and as the answer to a swap, and a fragment is markup with no ancestor
+at all until it lands; `form="choosing"` (`CHOOSING_ID` in `pages.py`) makes a control's association
+a property of the control rather than of wherever it was put, so one component serves both. Without
 it the console refuses its own page with a 422 saying a message needs an endpoint and a model. The
-fork page nests its picker inside a form of the same name, so `model_cards` can carry one attribute
-and serve both the pages and the `/fragments/models` swap. The fold's own checkbox is the one
-control that deliberately carries *neither* a `name` nor a `form`: it is how a group is looked at,
-not part of what a session is decided by. A markup assertion cannot see any of this, which is why
-`TestWhatAFormPosts` asks a browser what `form.elements` holds and `TestFoldingAGroupOfCards` asks
-what a shut group still posts.
+fold's own checkbox is the one control that deliberately carries *neither* a `name` nor a `form`: it
+is how a group is looked at, not part of what a session is decided by. A markup assertion cannot see
+any of this, which is why `TestWhatAFormPosts` asks a browser what `form.elements` holds and
+`TestFoldingAGroupOfCards` asks what a shut group still posts.
 
 ## The message box
 

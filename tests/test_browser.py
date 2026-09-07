@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
@@ -28,6 +29,7 @@ from conftest import started
 from playwright.async_api import Browser
 from playwright.async_api import Locator
 from playwright.async_api import Page
+from playwright.async_api import Route
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
 from playwright.async_api import expect
@@ -745,6 +747,75 @@ class TestTheShapeOfANarrowWindow:
         # goes to the conversation. A count alone is satisfied by `none`, which is what a shell that
         # had stopped being a grid at all would report.
         assert columns.split() == [f"{PHONE['width']}px"]
+
+
+# Short enough that the choosing with a group open is longer than the window, which is the whole
+# point of it: at the suite's own thousand the start page fits and a layout that had stopped bounding
+# anything still looks right.
+SHORT = ViewportSize(width=1400, height=620)
+
+
+class TestWhatScrollsOnTheStartPage:
+    """
+    The choosing scrolls inside itself, the model list is what gives, and the document never moves.
+
+    A browser, and for `TestTheShapeOfANarrowWindow`'s reason one axis over: every rendering of this
+    is a correct picture of *some* page, and what is wrong when it breaks is that the page grew past
+    the window. The symptom a reader meets is not the growth. `.models` is bounded by the room left,
+    so a block that never took a bound leaves it at its full height - a scroll container with nothing
+    to scroll - and a wheel anywhere over the model list then moves nothing at all.
+    """
+
+    async def test_the_choosing_takes_the_window_rather_than_growing_past_it(self, page: Page, gallery: str) -> None:
+        await page.set_viewport_size(SHORT)
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+
+        room = await page.evaluate(
+            "() => ({ document: document.documentElement.scrollHeight,"
+            " viewport: document.documentElement.clientHeight })"
+        )
+        assert room["document"] <= room["viewport"]
+
+    async def test_the_model_list_is_the_part_that_gives(self, page: Page, gallery: str) -> None:
+        await page.set_viewport_size(SHORT)
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+
+        # Bounded by the room left, so it holds more than it shows. The negation is the broken shape:
+        # a list at its content height reports these equal and scrolls nowhere.
+        held = await page.evaluate(
+            "() => { const models = document.querySelector('.models');"
+            " return { holds: models.scrollHeight, shows: models.clientHeight }; }"
+        )
+        assert held["holds"] > held["shows"]
+
+    async def test_a_wheel_over_the_model_list_reaches_the_end_of_the_list_and_then_the_page(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        What a reader actually does, and the assertion the two above exist to explain.
+
+        Both ends of one gesture: the list moves, and once it has nowhere left to go the block around
+        it takes the rest. `overscroll-behavior: contain` here made the second half of that a wall,
+        so a wheel that started over the models could not reach the questions under them.
+        """
+        await page.set_viewport_size(SHORT)
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+        over = await page.locator(".models").bounding_box()
+        assert over is not None
+        await page.mouse.move(over["x"] + over["width"] / 2, over["y"] + 20)
+
+        for _ in range(12):
+            await page.mouse.wheel(0, 300)
+
+        moved = await page.evaluate(
+            "() => ({ models: document.querySelector('.models').scrollTop,"
+            " choosing: document.querySelector('.setup').scrollTop })"
+        )
+        assert moved["models"] > 0
+        assert moved["choosing"] > 0
 
 
 # Where a conversation draws monospace, which is the fenced blocks a model answers in and the body of
@@ -2659,6 +2730,39 @@ class TestNarrowingTheBranches:
         await expect(page.locator('[name="branch"]')).to_have_count(0)
         # The block itself stays, since it is what the next pick swaps over.
         await expect(page.locator("#basis")).to_be_attached()
+
+    async def test_the_dots_stand_in_for_the_fields_while_the_forge_is_being_asked(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        A cold clone is seconds of a block that has not changed, which reads as a card that did
+        nothing. The request is held open here rather than raced, because the window it is shown in
+        is exactly as long as a loopback round trip and a test that waited for it would be asserting
+        on whichever side of it the scheduler landed.
+        """
+        url, _ = working
+        await page.goto(f"{url}/", wait_until="load")
+
+        # Hidden by `display` and not by `opacity`, so the block carries no row for it at rest. The
+        # difference is invisible to `to_be_hidden`, which is why the height is asked for too.
+        await expect(page.locator("#basis-loading")).to_be_hidden()
+        assert await page.evaluate("() => document.querySelector('#basis-loading').getBoundingClientRect().height") == 0
+
+        answering = asyncio.Event()
+
+        async def hold(route: Route) -> None:
+            await answering.wait()
+            await route.continue_()
+
+        await page.route("**/fragments/branches*", hold)
+        await page.click('label[for="open-repository"]')
+        await page.click(f'.repo[data-name="{FIXTURE_NAME}"]')
+
+        await expect(page.locator("#basis-loading")).to_be_visible()
+
+        answering.set()
+        await expect(page.locator(".basis__box")).to_be_attached()
+        await expect(page.locator("#basis-loading")).to_be_hidden()
 
 
 class TestWhereTheCursorIsAfterSending:

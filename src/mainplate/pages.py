@@ -186,6 +186,10 @@ BASIS_ID: Final = "basis"
 BRANCHES_ID: Final = "branches"
 FOUND_ID: Final = "branches-found"
 
+# The dots inside that block, shown while the forge is being asked what branches it has. Named here
+# for the same reason the block is: the card points `hx-indicator` at it and the block draws it.
+BASIS_LOADING_ID: Final = "basis-loading"
+
 SENDING_ID: Final = "sending"
 
 # Whether the provider still holds this conversation's prefix, and what the next request pays if it
@@ -195,13 +199,13 @@ SENDING_ID: Final = "sending"
 # `streaming.py` was built for. See `cache_note`.
 CACHE_ID: Final = "cache"
 
-# The form the picker's controls belong to, named because on the start page they do not sit inside
-# it. There the choosing fills `main`'s growing row and the box is pinned under it, so the endpoint
-# radios, the model radios and the two selects are *siblings* of the form that posts them; without
-# this the browser submits a message with no endpoint and no model on it and the console refuses its
-# own page. `form` is what associates a control with a form it is not inside, so the layout stays
-# what it is and the page still posts with no script at all. The fork page nests its picker inside
-# the same-named form, where the attribute simply names the ancestor it already had.
+# The form the picker's controls belong to, named rather than relied on by nesting. Both pages nest
+# them inside it today, so on both the `form` attribute names the ancestor a control already had -
+# but what carries it is `model_cards` and `starting_at`, which are also served as fragments, and a
+# fragment is markup with no ancestor at all until the swap lands. Naming the form is what makes a
+# control's association a property of the control rather than of wherever it is put, which is what
+# lets one component serve the page and the swap. `TestWhatAFormPosts` is what fails when it goes,
+# by asking a browser what `form.elements` holds.
 CHOOSING_ID: Final = "choosing"
 
 # What each kind of panel is called where a person reads it: the role label on the panel, and the
@@ -1466,6 +1470,12 @@ def workspace_card(links: Links, naming: str, value: str, saying: str, chosen: b
                     "hx-get": links.to_workspace_branches(),
                     "hx-target": f"#{BASIS_ID}",
                     "hx-swap": "outerHTML",
+                    # The dots inside the block being replaced, rather than the card that asked:
+                    # what a reader is waiting on is the fields, and the card has already answered
+                    # by drawing itself picked. Being inside the target is what makes it right
+                    # rather than a problem - it is shown for exactly as long as the block it is
+                    # standing in for has not arrived, and the swap that ends the request removes it.
+                    "hx-indicator": f"#{BASIS_LOADING_ID}",
                     "hx-status:4xx": "swap:none",
                     "hx-status:5xx": "swap:none",
                 },
@@ -1519,12 +1529,19 @@ def starting_at(repository: str | None, base: str | None, branch: str | None, br
     would stop the next one planting at all. So one says where to begin and the other says what to
     begin, and the placeholder on this one has to say so rather than implying the first answers both.
     """
+    # The branches come off a forge, so a card is picked and the fields under it *arrive*: on a cold
+    # clone that is seconds of a block that has not changed yet, which reads as a card that did
+    # nothing. The dots are drawn in both shapes because both are what a pick lands on, including the
+    # empty anchor a repository is picked *from*. They take no room until the request starts; see
+    # `.basis__loading`.
+    loading = working(saying="loading branches", extra="basis__loading", identified=BASIS_LOADING_ID)
     if repository is None:
-        return div(attrs={"id": BASIS_ID})
+        return div(attrs={"id": BASIS_ID}, children=loading)
     return div(
         cls="basis",
         attrs={"id": BASIS_ID},
         children=[
+            loading,
             label(
                 cls="basis__field",
                 children=[
@@ -1691,6 +1708,7 @@ def picker(
     reference: Reference | None,
     chosen: Choice | None = None,
     naming: Placed = None,
+    acting: Placed = None,
 ) -> Element:
     """
     Everything a session is decided by, laid out as the question it actually is.
@@ -1767,6 +1785,10 @@ def picker(
             # reader will call it. Handed in rather than drawn here, because the fork page asks the
             # same five questions and has nothing to name.
             naming,
+            # And what acts on all of it, under the last question rather than pinned below the
+            # picker. Pinned it needed a row of its own that `main`'s grid had to hold open, and a
+            # reader who has answered the last question is already looking at the bottom of the list.
+            acting,
         ],
     )
 
@@ -1883,17 +1905,23 @@ def written(text: str, *, document: bool = False) -> Element:
     return div(cls="text", children=as_document(text) if document else as_message(text))
 
 
-def working() -> Element:
+def working(*, saying: str = "working", extra: str | None = None, identified: str | None = None) -> Element:
     """
     Three dots that say something is still happening.
 
-    Not an `hx-indicator`: those show while a *request* is in flight, and this is the opposite
-    case, a fact read off the checkpoint that holds across however many renders it takes. The two
-    are drawn alike because a reader is being told the same thing.
+    Drawn the same whichever thing is still happening, because a reader is being told the same
+    thing, and that is the whole of what these share. A turn with no answer yet, a tool call that has
+    not returned, a session whose worktree is still being planted: each is a fact read off the
+    checkpoint, holding across however many renders it takes. A request in flight is htmx's instead,
+    held for one round trip and shown by whatever points `hx-indicator` at it, which is what `extra`
+    and `identified` are for.
+
+    What a caller must not do is read one off the other. A panel that drew itself working because a
+    form was posting would be saying the model is answering when what is happening is a swap.
     """
     return span(
-        cls="waiting",
-        attrs={"role": "status", "aria-label": "working"},
+        cls=("waiting", extra),
+        attrs={"id": identified, "role": "status", "aria-label": saying},
         children=[span(), span(), span()],
     )
 
@@ -4042,13 +4070,17 @@ def start_page(
                 form(
                     cls="choosing",
                     attrs={"id": CHOOSING_ID, "method": "post", "action": links.to_start()},
-                    children=[
-                        div(
-                            cls="setup",
-                            children=picker(links, catalogue, reachable, reference, naming=naming()),
+                    children=div(
+                        cls="setup",
+                        children=picker(
+                            links,
+                            catalogue,
+                            reachable,
+                            reference,
+                            naming=naming(),
+                            acting=div(cls="starting", children=button(attrs={"type": "submit"}, children="Start")),
                         ),
-                        div(cls="starting", children=button(attrs={"type": "submit"}, children="Start")),
-                    ],
+                    ),
                 )
             ],
         ),
