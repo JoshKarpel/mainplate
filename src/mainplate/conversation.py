@@ -141,25 +141,25 @@ from mainplate.durability import stepping
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
-from mainplate.plugins.asking import describing
 from mainplate.plugins.asking import ending
 from mainplate.plugins.asking import injections
 from mainplate.plugins.asking import nowhere
 from mainplate.plugins.asking import opening_of
+from mainplate.plugins.asking import parse_declaration
 from mainplate.plugins.asking import parse_registration
-from mainplate.plugins.asking import recorded_registration
+from mainplate.plugins.asking import recorded_declaration
 from mainplate.plugins.asking import running
 from mainplate.plugins.asking import unstored
 from mainplate.plugins.installed import BadDeclaration
 from mainplate.plugins.installed import Collides
 from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import repository_plugins
 from mainplate.plugins.installed import without_collisions
 from mainplate.plugins.protocol import PLAIN
 from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Tone
 from mainplate.plugins.protocol import toned
-from mainplate.plugins.running import PluginFailed
 from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
@@ -200,14 +200,49 @@ Empty for a session with no repository, for one whose grant was never given, and
 carrying no such file, which are three states with one meaning and no need to be told apart.
 """
 
+DECLARED_KEY: StepKey = "plugins:declared:console"
+"""
+Which plugins the bundled set and the operator's `config.yaml` name, read without running any of them.
+
+**Declaring and loading are two moments, and the settings step is between them**, because running a
+plugin is executing a program somebody may not want executed. This half is files: a directory listing
+and a mapping in a YAML document, which say what a session *could* run. Nothing is spawned to record
+it, so a session reaches its settings step having invoked nothing.
+
+Recorded rather than re-read on every render for the reason the registration is: what a page draws a
+switch for has to be the same list the load then describes, and the operator's files can be edited
+while a session sits on the step.
+"""
+
+REPOSITORY_DECLARED_KEY: StepKey = "plugins:declared:repository"
+"""
+The same for what the session's repository names about itself, read once from the tree it was planted
+at.
+
+Its own key rather than a half of the one above, and the fork is what decides it, exactly as it
+decides the two registration keys: a fork re-reads the operator's declaration, because those files
+sit outside every worktree, and inherits this one whole, because a fork's tree is one a model has
+been editing. `Service.fork` copies it beside `plugins:repository` for that reason.
+
+Empty for a session with no repository, for one whose grant was never given, and for a repository
+carrying no such file, which are three states with one meaning and no need to be told apart.
+"""
+
 PLUGINS_REFUSED_KEY: StepKey = "plugins:refused"
 """
-Why a session's plugins could not be registered, where they could not.
+Why a session's plugins could not be *declared*, where they could not.
+
+About the pass rather than about the load, which is the whole of what this key is for now: a worktree
+that would not plant or a `.mainplate/mainplate.yaml` that would not parse happens in a pass with
+nobody waiting on it, so it needs somewhere to be recorded and a `Try again` on the step. A load that
+fails is the other half and is *not* here - it happens in a request handler, so it is answered with
+the step and the sentence rather than written down. Recording it would be worse than useless: the
+store keeps the value a key was first given, so the first failure would be the sentence every later
+attempt showed.
 
 Written and never read by any pass, which is the one key here of that shape and is what makes it
-safe in a write-once store: a later pass that succeeds writes the registration and the page reads
-*that*, so this is a breadcrumb consulted only while there is no registration to read instead. Its
-reader is `refusal_in`'s neighbour on the settings step, and what it says is which plugin and why.
+safe in a write-once store: a later pass that succeeds writes the declaration and the page reads
+*that*, so this is a breadcrumb consulted only while there is no declaration to read instead.
 """
 
 # What the thinking level is called inside the recorded choice. Named once here because the writer
@@ -1938,16 +1973,16 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
 
 def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None:
     """
-    Everything a session registered, or nothing at all where its setup pass has not finished.
+    Everything a session loaded, or nothing at all where nobody has answered its settings step.
 
     The two halves read as one list, because nothing downstream cares which key a plugin came back
     under: the tiers are told apart by what each plugin *is*, which it carries, and the keys exist
     for the fork rather than for any reader.
 
-    `None` and not an empty tuple, because the difference is the whole of what the settings step
-    draws: a session that has registered nothing is one whose worktree is still being planted, and a
-    session that registered an empty set is one with no plugins at all. The console's own half is
-    what decides, since it is written first and is never empty on a console that ships any.
+    `None` and not an empty tuple, and here the difference is the trust boundary rather than a
+    loading state: a session that has loaded nothing is one nobody has confirmed, and a session that
+    loaded an empty set is one somebody confirmed with every switch off. The console's own half is
+    what decides, since both are written together and only one of them can be empty for a reason.
     """
     console = recorded.get(PLUGINS_KEY)
     if console is None:
@@ -1956,12 +1991,32 @@ def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None
     return (*parse_registration(console), *(() if held is None else parse_registration(held)))
 
 
+def declared_in(recorded: Mapping[str, object]) -> tuple[Installed, ...] | None:
+    """
+    Every plugin this session may run, or nothing at all where its worktree is still being planted.
+
+    The two halves read as one list, exactly as the registration's do: which key a plugin came back
+    under is the fork's question and no reader's, and what tells the tiers apart is what each plugin
+    carries.
+
+    `None` and not an empty tuple, because the difference is what the settings step draws: a session
+    that has declared nothing is one whose first pass has not finished, and a session that declared an
+    empty set is a console with no plugins at all. The console's own half decides, since it is written
+    first and is a directory listing rather than anything a repository can affect.
+    """
+    console = recorded.get(DECLARED_KEY)
+    if console is None:
+        return None
+    held = recorded.get(REPOSITORY_DECLARED_KEY)
+    return (*parse_declaration(console), *(() if held is None else parse_declaration(held)))
+
+
 def plugins_refused_in(recorded: Mapping[str, object]) -> records.Refused | None:
     """
-    Why this session's plugins could not be registered, where they could not.
+    Why this session's plugins could not be declared, where they could not.
 
-    Read only where there is no registration to read instead, which is what makes a write-once
-    breadcrumb sound: a later pass that succeeds writes the registration, and the page reads that.
+    Read only where there is no declaration to read instead, which is what makes a write-once
+    breadcrumb sound: a later pass that succeeds writes the declaration, and the page reads that.
     """
     said = recorded.get(PLUGINS_REFUSED_KEY)
     return None if said is None else parse_refused(said)
@@ -2496,50 +2551,48 @@ words.
 """
 
 
-async def registering(
+async def declaring_plugins(
     run: Run, declaring: Declaring, chosen: Choice, worktree: Worktree | None
-) -> tuple[Enrolled, ...]:
+) -> tuple[Installed, ...]:
     """
-    Which plugins this session runs and what they contributed, settled on its first pass.
+    Which plugins this session *may* run, read out of files on its first pass and never run here.
 
-    **Two steps, one per tier group**, because a fork inherits one and describes the other. The
+    **Nothing is executed by this**, and that is the point rather than an implementation note. A
+    plugin is a program, so the console asks somebody which programs to run before it runs any: this
+    half is a directory listing, a mapping in `config.yaml`, and a mapping in the repository's own
+    `.mainplate/mainplate.yaml`. What each of them *is* comes back from `describe`, which happens
+    when the settings step is answered. See `Service.load`.
+
+    **Two steps, one per tier group**, because a fork inherits one and re-reads the other. The
     console's own scripts sit outside every worktree, so nothing a model wrote can reach them and a
-    fork asks them afresh; a repository's are read out of a tree, and a fork's tree is one a model
-    has been editing, so a fork replays whatever its parent recorded and reads no file. That
+    fork reads them afresh; a repository's are named by a file in a tree, and a fork's tree is one a
+    model has been editing, so a fork replays whatever its parent recorded and reads no file. That
     asymmetry is the security one rather than a timing one: it turns on who wrote the file, which is
     the question the grant already asks.
-
-    **Every plugin is described here, the operator's included**, rather than the operator's at process
-    startup and the repository's later. One moment for both is worth more than the earlier read: it
-    removes a tier's worth of asymmetry, and a plugin edited on disk reaches the next new session
-    without the console being restarted, which matters most while somebody is writing one.
 
     **Without trust nothing is read**, and the recorded set is empty for that session's life.
     Trusting afterwards reaches sessions started after it and none before, which is the answer
     `Choice` gives to every other question; forking is how a session changes its mind.
 
-    **Both steps are taken even where there is nothing to describe**, which is what makes an empty
-    registration mean "this session is set up" rather than "nobody has looked". A console with no
-    plugins at all records two empty sets and its sessions leave the settings step exactly as a
+    **Both steps are taken even where there is nothing declared**, which is what makes an empty
+    declaration mean "this session has looked" rather than "nobody has looked". A console with no
+    plugins at all records two empty sets and its sessions reach the settings step exactly as a
     console with six do; without the write there would be no way to tell a console with none from a
     session whose worktree is still being planted.
     """
-    speaking = declaring.speaking
     where = None if worktree is None else worktree.root
 
     async def console() -> object:
-        if speaking is None:
-            return recorded_registration(())
-        return recorded_registration(await describing(declaring.console, speaking, run.workflow, where))
+        return recorded_declaration(declaring.console)
 
     async def repository() -> object:
-        if speaking is None or where is None or not declaring.runs(chosen.repository, chosen.trusted):
-            return recorded_registration(())
-        return recorded_registration(await describing(repository_plugins(where), speaking, run.workflow, where))
+        if where is None or not declaring.runs(chosen.repository, chosen.trusted):
+            return recorded_declaration(())
+        return recorded_declaration(repository_plugins(where))
 
     return (
-        *await run.step(PLUGINS_KEY, console, parse_registration),
-        *await run.step(REPOSITORY_PLUGINS_KEY, repository, parse_registration),
+        *await run.step(DECLARED_KEY, console, parse_declaration),
+        *await run.step(REPOSITORY_DECLARED_KEY, repository, parse_declaration),
     )
 
 
@@ -2642,26 +2695,30 @@ def conversing(
         # and nothing for a replay to disagree with.
         #
         # **Above `opening_turn` rather than below it**, which is the whole of what makes a settings
-        # step possible: a repository's plugins cannot be described until its worktree is planted, and
-        # the worktree is planted by a pass. So the first pass of a session plants, registers, and
-        # then blocks with an empty inbox.
+        # step possible: a repository's plugins cannot be *named* until its worktree is planted, and
+        # the worktree is planted by a pass. So the first pass of a session plants, reads what is
+        # declared, and then blocks with an empty inbox.
         await planting(workspaces, run, chosen, at.turn)
         try:
-            enrolled = await registering(run, declaring or Declaring(), chosen, worktree)
-        except (PluginFailed, Refused, BadDeclaration) as raised:
-            # **A failure ends the pass with nothing registered**, and the reason is written where the
-            # page can say which plugin and why. `Stalled` rather than a raise, because the next pass
+            declared = await declaring_plugins(run, declaring or Declaring(), chosen, worktree)
+        except (Refused, BadDeclaration) as raised:
+            # **A failure ends the pass with nothing declared**, and the reason is written where the
+            # page can say which file and why. `Stalled` rather than a raise, because the next pass
             # would ask the identical question of the identical files and be told the identical
             # thing - which, left to the worker's own redelivery, is a session retried once per lease
             # for ever with only a log line to show for it.
             failed = records.Refused(why=str(raised))
             await run.step(PLUGINS_REFUSED_KEY, partial(as_recorded, failed), parse_refused)
             return Stalled()
-        on, off = running(enrolled, tended)
+        # What was actually loaded, which a *request handler* wrote when somebody answered the
+        # settings step: `describe` executes a program, so it happens once somebody has said which
+        # programs to execute, and never on the pass that merely reads what is declared. `None` here
+        # is a session still sitting on that step, and the guard below is what keeps it there.
+        enrolled = registered_in(run.recorded)
+        on = running(enrolled or (), tended)
         live = Live(
             session=run.workflow,
             enrolled=on,
-            off=off,
             tending=tended,
             speaking=declaring.speaking if declaring is not None else None,
             worktree=None if worktree is None else worktree.root,
@@ -2672,6 +2729,20 @@ def conversing(
         )
         while True:
             asked = await opening_turn(run, at.turn)
+            # A session that declares plugins and has loaded none has nothing to answer with, and
+            # answering anyway would put a turn in the cached prefix under a harness nobody chose. It
+            # cannot arise through the console, since the message box is on the other side of the
+            # settings step; it is refused rather than assumed away because the alternative is a
+            # conversation quietly running without the plugins somebody installed. `opening_turn`
+            # above is what holds an ordinary session here, blocked on an empty inbox, until the step
+            # is answered.
+            #
+            # Asked of what was *declared*, so a console with no plugins at all needs no confirmation:
+            # what the step confirms is executing somebody's program, and there is none to execute.
+            if enrolled is None and declared:
+                never = records.Refused(why="this session's plugins were never loaded, so it cannot be answered")
+                await run.step(refused_key(at.turn, 0), partial(as_recorded, never), parse_refused)
+                return Stalled()
             # Read off the message this pass just parked on rather than by asking the store again,
             # which is the whole reason the boundary rides on the message itself: a pass carries its
             # history forward between turns, so a marker delivered beside the message while it was

@@ -76,6 +76,10 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
 
 ## Two things not to undo
 
+- **Nothing runs a plugin before the settings step.** A session's first pass *declares*, which is
+  reading files, and the request that answers the step *loads*, which is `describe` over exactly the
+  plugins left switched on. Anything that would spawn one earlier, or spawn one somebody switched
+  off, is the change to push back on: this is a trust boundary and not a loading order.
 - **`describe` is once per session and its answer is recorded.** Tool definitions sit above the
   system prompt in the cached prefix, so a set that changed under a conversation would invalidate
   everything beneath it. That is why `instructions` is a `describe` contribution rather than an

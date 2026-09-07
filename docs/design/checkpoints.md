@@ -98,6 +98,14 @@ fork that attached a repository its parent never had would inherit instructions 
 them. Not session-level, because a forget ends a stretch of context and composing again there is
 free: the prefix it would have invalidated has just been thrown away.
 
+The four `plugins:…` keys are session-level for the same reason `instructions:{n}` is not
+turn-prefixed, and they come in two pairs one moment apart. `plugins:declared:console` and
+`plugins:declared:repository` hold what each tier's files *name*, written by the session's first pass
+and read by [the settings step](plugins.md#starting-a-session-takes-three-steps);
+`plugins:console` and `plugins:repository` hold what those plugins said when they were *run*, written
+by the request that answers that step. The console half of each pair is re-read by a fork and the
+repository half is inherited, because a fork's tree is one a model has been editing.
+
 `choice` goes in before the first message and never again *within a session*. The order is
 load-bearing: the message is what *queues* a session, so writing it first would let a worker take
 the session and find no endpoint to answer on. Never again, because a session that changed endpoint

@@ -98,9 +98,10 @@ change:
 - [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, and what one
   pass does.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
-  sent, the effects it may ask for, and the switch in front of a repository's own plugin. **Handoff
-  and what a session is told are both plugins**, so a change to either is a change to a script in
-  `src/mainplate/plugins/bundled/` rather than to the console.
+  sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
+  executes a plugin before somebody presses the button on that step**, which is a trust boundary and
+  not a loading order. **Handoff and what a session is told are both plugins**, so a change to either
+  is a change to a script in `src/mainplate/plugins/bundled/` rather than to the console.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the

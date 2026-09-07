@@ -40,8 +40,13 @@ because every caller had one in hand and was taking it apart the same way. What 
 the session, what was said, whether it is stalled and the model's window, and four arguments derived
 from one value are four chances for a caller to pair a transcript with another session's window.
 
-**One connection drives two regions**, which is what `partial` was always for: the transcript, and
-[the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in the composer.
+**One connection drives whichever regions the page's shape has**, which is what `partial` was always
+for. A session past [its settings step](plugins.md#starting-a-session-takes-three-steps) is the
+transcript and [the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in
+the composer; a session still on that step is the step, which has neither of those and is the only
+region there is. One predicate, `settling`, decides both which shape the page is drawn in and which
+partials the stream sends, so the two cannot disagree - and they must not, because a partial naming a
+target that is not there is dropped in silence, which is a spinner that never resolves.
 
 Three things about that connection are decided rather than incidental:
 
@@ -157,11 +162,11 @@ adjacent because they are a pair, the list being whatever the endpoint above it 
 level is a setting *on* the model, so it sits under it. The name comes last because it is the one
 question here that decides nothing about how the session runs.
 
-**There is no message box on this page.** A plugin's settings are the controls on its card, its card
-comes back from `describe`, and a repository's plugin cannot be described until its worktree is
-planted - which a pass does. So this page decides what a session *is*, and the box is on the
-session's own page once there is a session to type into. See [the settings
-step](plugins.md#starting-a-session-takes-two-steps).
+**There is no message box on this page, and its button says `Create session`.** A repository's
+plugins cannot even be named until its worktree is planted, which a pass does, and none of them may
+be run until somebody has seen the list. So this page decides what a session *is*, the settings step
+decides what it loads, and the box is on the session's own page once there is a conversation to type
+into. See [the settings step](plugins.md#starting-a-session-takes-three-steps).
 
 **Every question the picker asks with a closed set of answers is one component.** `choosing` in
 `pages.py` takes a legend, a toggle id, the names on offer and a body of cards, and gives back a

@@ -76,10 +76,10 @@ class PluginFailed(RuntimeError):
     same thing to a reader - this plugin did not answer - and all four are reported as a sentence on
     the session's page naming which plugin.
 
-    **A failure ends the pass with nothing written**, so retrying is another pass and `describe` runs
-    again from scratch with nothing recorded to conflict with. That is forced rather than chosen: the
-    store keeps the value a key was first given, so a turn-0 record written with one plugin missing
-    could never be corrected.
+    **A failure at `describe` ends the load with nothing written**, so the settings step is drawn
+    again with this sentence above the switches and pressing the button is a fresh attempt. That is
+    forced rather than chosen: the store keeps the value a key was first given, so a registration
+    written with one plugin missing could never be corrected.
     """
 
 

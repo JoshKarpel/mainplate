@@ -592,10 +592,20 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
     }
 
 
-# What a session's first pass registered, as one plugin with a card of both kinds of control. Written
-# out rather than asked of the bundled handoff, because a gallery answers every question with a
-# fixture and asking would mean spawning a process: the point of this file is that a page is a pure
-# function of already-answered questions.
+# What a session's first pass read out of files, which is what the settings step draws a switch for.
+# Three tiers with something in two of them, because what that step is *for* is provenance: a reader
+# deciding what to load is deciding whose program to run, and a shot of one tier would not show it.
+DECLARED: tuple[Installed, ...] = (
+    Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/opt/mainplate/plugins/handoff")),
+    Installed(tier=Tier.BUNDLED, name="guidance", path=Path("/opt/mainplate/plugins/guidance")),
+    Installed(tier=Tier.USER, name="notify", path=Path("/home/you/.config/mainplate/plugins/notify")),
+    Installed(tier=Tier.REPOSITORY, name="lint", path=Path("/srv/mainplate/worktrees/f3c1/.mainplate/lint")),
+)
+
+# And what the press then ran, as one plugin with a card of both kinds of control. Written out rather
+# than asked of the bundled handoff, because a gallery answers every question with a fixture and
+# asking would mean spawning a process: the point of this file is that a page is a pure function of
+# already-answered questions.
 ENROLLED: tuple[Enrolled, ...] = (
     Enrolled(
         installed=Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/opt/mainplate/plugins/handoff")),
@@ -643,6 +653,7 @@ def showing(
     refused: records.Refused | None = None,
     since: timedelta | None = SINCE,
     plugins: tuple[Enrolled, ...] | None = ENROLLED,
+    declared: tuple[Installed, ...] | None = DECLARED,
 ) -> Conversation:
     """
     One session as a page sees it.
@@ -657,11 +668,12 @@ def showing(
     than computed for that reason, and given a value under the retention by default so the cache note
     is drawn in the state a reader is usually in.
 
-    `plugins` is what the session's first pass registered, and `None` is a session whose setup pass
-    has not finished - which is a real state and the one the settings step is drawn for. It defaults
-    to a plugin with a card, because that is what every ordinary page shows: the rail draws a card per
-    running plugin, and a gallery of pages with an empty rail would be a gallery of a console nobody
-    has.
+    `declared` is what the session's first pass read out of files, and `plugins` is what the press on
+    the settings step then ran. The pair is the trust boundary and so is the pair of states worth
+    drawing: `plugins` of `None` is a session still on that step, and `declared` of `None` as well is
+    one whose worktree is still being planted. Both default to something, because that is what every
+    ordinary page shows - the rail draws a card per running plugin, and a gallery of pages with an
+    empty rail would be a gallery of a console nobody has.
     """
     chosen = CATALOGUE.default if working else replace(CATALOGUE.default, repository=None)
     said = transcript(snapshotted(written) if working and started else written)
@@ -672,6 +684,7 @@ def showing(
         chosen=chosen,
         answerable=answerable,
         plugins=plugins,
+        declared=declared,
         refused=refused,
         repository=REPOSITORY if working else None,
         worktree=WORKSPACE / session.id if working else None,
@@ -785,13 +798,17 @@ def pages() -> dict[str, str]:
     queued = showing(
         LISTED[1], {inbox_key(0): recorded_prompt("Why does the poll stop after one answer?")}, started=False
     )
-    # The step between creating a session and typing into it: nothing has been said, so what stands
-    # where the transcript will be is what this session loaded and which of it to run. Two states,
-    # because they are drawn differently and the difference is the whole of what a reader can do
-    # about either - a setup pass still running has nothing to switch, and one that finished has a
-    # switch per plugin under a heading per tier.
-    setting_up = showing(LISTED[1], {}, started=False, plugins=None)
-    settled_setup = showing(LISTED[1], {}, started=False)
+    # The step between creating a session and typing into it, which is where a person says which
+    # programs this console may run. Three states, drawn differently, and the difference is the whole
+    # of what a reader can do about each: a first pass still planting has nothing to switch, one that
+    # has read the declarations has a switch per plugin under a heading per tier, and a load that
+    # failed says which plugin would not answer, above the switch that turns it off.
+    setting_up = showing(LISTED[1], {}, started=False, plugins=None, declared=None)
+    choosing_plugins = showing(LISTED[1], {}, started=False, plugins=None)
+    failed_load = replace(
+        choosing_plugins,
+        refused_load="repository:lint exited 127: .mainplate/lint: line 3: shellcheck: command not found",
+    )
 
     return {
         "start.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, REFERENCE),
@@ -799,7 +816,8 @@ def pages() -> dict[str, str]:
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
         "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
         "setting-up.html": session_page(LINKS, LISTED, setting_up, REACHABLE),
-        "settings.html": session_page(LINKS, LISTED, settled_setup, REACHABLE),
+        "settings.html": session_page(LINKS, LISTED, choosing_plugins, REACHABLE),
+        "settings-refused.html": session_page(LINKS, LISTED, failed_load, REACHABLE),
         "opening.html": session_page(LINKS, LISTED, queued, REACHABLE),
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from calling import calling
@@ -20,14 +21,37 @@ from pydantic_ai.models.function import FunctionModel
 from mainplate.agent import Wires
 from mainplate.app import build_app
 from mainplate.app import open_console
+from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import messages_key
+from mainplate.service import Service
 from mainplate.settings import Settings
+from mainplate.tending import SETTLE_FIELD
+from mainplate.tending import SETTLED
 
 # A bound on each half of the exchange rather than a wait for it. Every assertion below is an
 # event, so this only turns a wiring that never connects into a failure instead of a hung suite.
 # It has to sit under this test's own timeout, or a wiring failure kills the xdist worker instead
 # of reporting which wait went unanswered.
 PATIENCE = 5
+
+
+async def loaded(caller: Any, service: Service, session: str) -> None:
+    """
+    Press `Load plugins`, which every session goes through before there is anywhere to type.
+
+    A wait first, because the switches are drawn from what the *first pass* read out of files, and
+    the press is what actually runs them. That is the order somebody clicking through has, with the
+    poll standing in for the live connection their page holds.
+
+    Here rather than in `conftest.py` because this is the one suite where the bundled plugins are
+    really installed: `open_console` is what installs them, so it is the only place the step has
+    anything in it.
+    """
+    async with asyncio.timeout(PATIENCE):
+        while DECLARED_KEY not in await service.checkpointer.load(session):
+            await asyncio.sleep(0.05)
+    pressed = await caller.post(f"/sessions/{session}/setup", {SETTLE_FIELD: SETTLED})
+    assert pressed.status == 303, "the plugins loaded and the conversation is where to go next"
 
 
 @pytest.mark.timeout(30)
@@ -67,9 +91,11 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
             )
             assert started.status == 303
             session = started.location.rsplit("/", 1)[-1]
-            # Creating one no longer says anything in it: the first pass plants and registers, and
-            # the first message is a second post. This is also the one test where the bundled
-            # plugins are actually run, since `open_console` is what installs them.
+            # Creating one no longer says anything in it: the first pass plants and reads what is
+            # declared, the press loads it, and the first message is a third request. This is also
+            # the one test where the bundled plugins are actually run, since `open_console` is what
+            # installs them and the press is what runs them.
+            await loaded(caller, service, session)
             said = await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})
             assert said.status == 200
             async with asyncio.timeout(PATIENCE):
@@ -118,6 +144,7 @@ async def test_a_turn_of_more_than_one_request_is_carried_on_by_the_pass_after_i
                 "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
             )
             session = started.location.rsplit("/", 1)[-1]
+            await loaded(caller, service, session)
             assert (await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})).status == 200
             # Twice, which is what a second pass had to happen for: the first request is the tool
             # call, and the second is the one the pass after it made.

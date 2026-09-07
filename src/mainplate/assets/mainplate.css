@@ -2734,13 +2734,31 @@ mark.hit.current {
     color: var(--mark);
 }
 
-/* The step between creating a session and typing into it: what it loaded, and which of it to run.
-   It stands where the transcript will be, because that is what it is - there is no conversation yet,
-   and what a reader is doing is looking at what the session loaded. */
+/* The step between creating a session and typing into it: which of the plugins it declares to run.
+   It stands alone in `main`, because a session being set up has no transcript to read, nothing to
+   type into and nothing to navigate.
+
+   The column `.picker` is on the start page, and deliberately the same one: these are the two pages
+   with no conversation on them, they are consecutive, and a reader crossing from one to the other
+   should not watch the measure move under them. The padding is inside the scroller rather than on
+   it, for `.picker`'s own reason - `.setup` computes `overflow-x` to `auto`, so a focus ring flush
+   with its edge is clipped, and this is the room that ring reaches into. */
+.settling {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+    min-height: 0;
+    padding-block: var(--gap);
+    padding-inline: var(--space-2);
+}
+
 .setup__plugins {
     display: flex;
     flex-direction: column;
-    gap: var(--space-4);
+    gap: var(--space-6);
     align-items: start;
 }
 
@@ -2751,7 +2769,21 @@ mark.hit.current {
 .setup__says {
     margin: 0;
     color: var(--ink-soft);
-    max-inline-size: 46ch;
+    max-inline-size: 60ch;
+}
+
+/* Why the last press did not load, above the switches rather than beside the plugin it names: what a
+   reader does about a plugin that will not describe is turn it off, and the switch is a line down.
+   The refusal ink, because this is the same kind of sentence a stalled session's is. */
+.setup__failed {
+    margin: 0;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--error-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--ink-soft);
+    max-inline-size: 60ch;
+    overflow-wrap: anywhere;
 }
 
 /* Grouped by where a plugin came from rather than by what it does, which is the whole point: the
@@ -2799,20 +2831,29 @@ mark.hit.current {
     color: var(--ink);
 }
 
-/* What the plugin's card calls itself, beside the name it was installed under: a reader deciding
-   what to leave on wants both, since the key is theirs and the heading is the plugin's. */
+/* The file a plugin is, beside the name it was installed under. Nothing has been run at this point,
+   so there is no card and no heading to print: what a reader is deciding is whether that program
+   runs, and the path is the whole of what there is to go on. */
 .plugin__says {
     color: var(--ink-faint);
 }
 
+/* What loads them, and the one primary action on this page. It takes `.starting button`'s rules
+   rather than a settings control's, because it is the same kind of press one page earlier: the last
+   thing in the column, on the edge every heading above it starts at, so a reader's eye comes down one
+   line rather than crossing the page to find the thing that acts. */
 .setup__set,
 .setup__again button {
-    padding: 0.25rem 0.5rem;
-    border: 1px solid var(--edge);
-    border-radius: 0.35rem;
-    background: transparent;
-    color: var(--ink-soft);
-    font: inherit;
+    padding: var(--space-3) var(--space-6);
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
     cursor: pointer;
 }
 
@@ -2820,7 +2861,7 @@ mark.hit.current {
 .setup__set:focus-visible,
 .setup__again button:hover,
 .setup__again button:focus-visible {
-    background: var(--sunk);
+    border-color: var(--mark);
     color: var(--mark);
 }
 

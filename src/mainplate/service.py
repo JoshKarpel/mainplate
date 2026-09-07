@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -36,10 +37,13 @@ from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
 from mainplate.commands import Slot
 from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import PLUGINS_KEY
+from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
+from mainplate.conversation import declared_in
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
@@ -56,10 +60,16 @@ from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import acted
 from mainplate.plugins.asking import composed
+from mainplate.plugins.asking import describing
+from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.asking import running
+from mainplate.plugins.installed import ON
+from mainplate.plugins.installed import BadDeclaration
 from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
 from mainplate.plugins.protocol import Setting
 from mainplate.plugins.protocol import Switch
+from mainplate.plugins.running import PluginFailed
 from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
@@ -177,27 +187,55 @@ class Conversation:
     keeps it current; see `cache_note`.
     """
 
+    declared: tuple[Installed, ...] | None = None
+    """
+    Every plugin this session *may* run, read out of files, or nothing while its worktree is planted.
+
+    What the settings step draws a switch for, and the reason it can be drawn without a single plugin
+    having been executed: a name, a tier and a path are all read from a directory listing and two YAML
+    mappings. What each of them *is* is not here, because asking is running.
+
+    `None` is the state the step's spinner is drawn for: the choice is recorded, the worktree is being
+    planted, and what the session even declares is not yet known.
+    """
+
     plugins: tuple[Enrolled, ...] | None = None
     """
-    Everything this session registered, or nothing at all where its setup pass has not finished.
+    Everything this session loaded, or nothing at all where nobody has answered its settings step.
 
-    `None` is the state the settings step is drawn for: the choice is recorded, the worktree is
-    being planted, and what the session's plugins are is not yet known. It is a real state rather
-    than a missing read, because a clone is minutes and a session's page exists from the moment it
-    does.
+    **`None` is what puts a session on that step, and it is the trust boundary rather than a loading
+    state.** A plugin is a program this console executes, so the list is empty of consequence until
+    somebody has said which programs to run; `Service.load` is what fills it, from a request handler,
+    at the moment they say so.
 
-    What is here is every plugin, running or not, because the step draws a switch for each: nothing
-    is off without a control showing it. Which of them actually run is `Tending`'s answer over this
-    list, and `Service.live` is where the two are put together.
+    What is here is exactly the set that was loaded, which is the set that was switched on: a plugin
+    somebody turned off was never described and contributes nothing, because it was never run at all.
     """
 
     refused_plugins: records.Refused | None = None
     """
-    Why this session's plugins could not be registered, where they could not.
+    Why this session's plugins could not be declared, where they could not.
 
     A third way to be stuck, beside a missing endpoint and a refused request, and it ends in the same
-    place: a sentence in place of a spinner. Read only where `plugins` is absent, since a later pass
-    that succeeded wrote the registration and that is the authoritative answer.
+    place: a sentence in place of a spinner. Read only where `declared` is absent, since a later pass
+    that succeeded wrote the declaration and that is the authoritative answer.
+
+    Against `refused_load` below, which is the *other* failure and is not read from anywhere: this one
+    happened in a pass with nobody waiting on it, so it had to be written down.
+    """
+
+    refused_load: str | None = None
+    """
+    Why the last attempt to load this session's plugins failed, where one just did.
+
+    **Not read from anywhere and never recorded**, which is what separates it from every other field
+    here: a failed load wrote nothing, so there is nothing to read. It is set by the handler that
+    tried, on the response to the press that tried, so a plugin that will not describe puts somebody
+    back on the settings step with the reason above the switches - which is a screen they can act on,
+    where a stalled conversation is not.
+
+    Recording it would be worse than useless: the store keeps the value a key was first given, so the
+    first failure would be the sentence every later attempt showed.
     """
 
     resending: Resending | None = None
@@ -332,6 +370,7 @@ class Service:
         # because a page is a pure function of already-answered questions. See `Conversation.since`.
         since = None if said.answered_at is None else self.now() - said.answered_at
         registered = registered_in(recorded)
+        declared = declared_in(recorded)
         return Conversation(
             session=found,
             said=said,
@@ -339,7 +378,11 @@ class Service:
             plugins=registered,
             # Read only where there is no registration to read instead, which is what makes a
             # write-once breadcrumb sound: a later pass that succeeded wrote the registration.
-            refused_plugins=None if registered is not None else plugins_refused_in(recorded),
+            declared=declared,
+            # Asked of the *declaration* rather than of the registration, because that is what this
+            # breadcrumb is about: a pass that failed to read the files wrote it, and a later pass
+            # that succeeded wrote the declaration, which is the authoritative answer.
+            refused_plugins=None if declared is not None else plugins_refused_in(recorded),
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             refused=refusal_in(recorded),
             repository=self.repository_of(chosen),
@@ -395,19 +438,21 @@ class Service:
         """
         A new session on `chosen`, ready to be set up, with nothing said in it yet.
 
-        **Creating a session and saying the first thing in it are two steps now**, and the split is
-        forced rather than chosen: a plugin's settings are the controls on its card, its card comes
-        back from `describe`, and a repository's plugin cannot be described until its worktree is
-        planted - which the worker does, on a pass. So creation records the choice, enrols the
-        session, and asks for a pass; that pass plants, registers, and blocks on an empty inbox; and
-        the page swaps in a step showing what was registered. The first message leaves that step.
+        **Creating a session, loading its plugins and saying the first thing in it are three steps
+        now**, and the split is forced rather than chosen. A repository's plugins cannot be *named*
+        until its worktree is planted, which the worker does on a pass; and none of them may be *run*
+        until somebody has seen the list, because running one is executing a program somebody may not
+        want executed. So creation records the choice, enrols the session, and asks for a pass; that
+        pass plants, reads what each tier declares, and blocks on an empty inbox; the page draws the
+        settings step; and `Service.load` runs what that step left on. The first message comes after
+        all of it.
 
         The cost, stated: **creation stops being fire-and-forget.** Time to a first answer is
-        unchanged, since the clone happens either way, but you now create, wait, and come back to
-        type, where before you could type and walk away. That is bigger than an extra click, and it
-        is taken deliberately: a setup that cannot half-happen is worth more here than the
-        convenience, and the convenience is recoverable later in a way a half-configured session is
-        not.
+        unchanged, since the clone happens either way, but you now create, wait, confirm, and come
+        back to type, where before you could type and walk away. That is bigger than an extra click,
+        and it is taken deliberately: a boundary in front of executing somebody else's program is
+        worth more here than the convenience, and the convenience is recoverable later in a way a
+        session that ran a plugin nobody looked at is not.
 
         `make_ready` rather than a delivery, which is the other half of the same split: what queues a
         session used to be a message, and there is no message yet. Nothing else about the queue
@@ -562,9 +607,14 @@ class Service:
         # sit outside every worktree, so nothing a model wrote can reach them, and a fork describing
         # them afresh is how a conversation picks up an edited plugin. That is the one place the
         # tiers are still told apart, and the asymmetry is the security one rather than a timing one.
-        carried_plugins = recorded.get(REPOSITORY_PLUGINS_KEY)
-        if carried_plugins is not None:
-            await self.checkpointer.supply(forked.id, REPOSITORY_PLUGINS_KEY, carried_plugins)
+        #
+        # Both keys of that half, the declaration as well as the registration, because a fork of a
+        # session that never got past its settings step has only the first: re-reading the file to
+        # draw a switch for it is the same read out of the same model-written tree, one step earlier.
+        for key in (REPOSITORY_DECLARED_KEY, REPOSITORY_PLUGINS_KEY):
+            carried_plugins = recorded.get(key)
+            if carried_plugins is not None:
+                await self.checkpointer.supply(forked.id, key, carried_plugins)
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
         if said:
             await self.say(forked.id, said)
@@ -613,20 +663,18 @@ class Service:
         One session's running plugins, as a request handler asks them things.
 
         Built per request rather than held, because everything in it is that session's: what it
-        registered, what its plugins are set to, and where its files are. `None` where the session's
-        setup pass has not finished, which is the one state a handler has to refuse rather than guess
-        at - a plugin nothing has described has no leader to answer to and no control to press.
+        loaded, what its plugins are set to, and where its files are. `None` where nobody has answered
+        its settings step, which is the one state a handler has to refuse rather than guess at - a
+        plugin nothing has described has no leader to answer to and no control to press.
 
         The effects are bound to this session here, so nothing below can reach another one: a
         delivery goes into this inbox and a write goes into this row.
         """
         if self.declaring is None or found.plugins is None:
             return None
-        on, off = running(found.plugins, found.session.tending)
         return Live(
             session=session,
-            enrolled=on,
-            off=off,
+            enrolled=running(found.plugins, found.session.tending),
             tending=found.session.tending,
             speaking=self.declaring.speaking,
             worktree=found.worktree,
@@ -709,13 +757,13 @@ class Service:
 
     async def setup_again(self, session: str) -> None:
         """
-        Ask for another setup pass, which is the whole of what retrying a failed registration is.
+        Ask for another setup pass, which is the whole of what retrying a refused declaration is.
 
-        `make_ready` and nothing else: a pass that failed to register wrote no registration, so
-        `describe` runs again from scratch with nothing recorded to conflict with. That is forced
-        rather than chosen - the store keeps the value a key was first given, so a registration
-        written with one plugin missing could never be corrected and a control that rewrote it would
-        be writing into a slot that ignores it.
+        `make_ready` and nothing else: a pass that could not read what a session declares wrote no
+        declaration, so it is read again from scratch with nothing recorded to conflict with. That is
+        forced rather than chosen - the store keeps the value a key was first given, so a declaration
+        written with one tier missing could never be corrected and a control that rewrote it would be
+        writing into a slot that ignores it.
         """
         await self.durable.scheduler.make_ready(session)
 
@@ -735,6 +783,64 @@ class Service:
         checkpoint.
         """
         await switch(self.database, session, enabled)
+
+    async def load(self, session: str, found: Conversation) -> str | None:
+        """
+        Run the plugins this session was told to run, and record what they said. The reason it failed,
+        or nothing at all.
+
+        **The one place a plugin is executed on somebody's say-so, and the whole of why the settings
+        step exists.** A plugin is a program, so nothing runs one until a person has looked at what is
+        declared and pressed the button; what runs here is exactly the set the switches left on, so a
+        plugin turned off is not merely contributing nothing, it was never launched.
+
+        **In a request handler rather than in a pass**, which is where this console does not usually
+        put work, and the reason is what somebody is waiting for. Describing is a handful of
+        short-lived processes asked concurrently, not the clone that made planting the worker's job,
+        and the answer decides which page they get: a load that failed has to put them back on the
+        step with the sentence, and a pass could only leave a stalled session behind.
+
+        The result is a checkpoint key all the same, so a later pass replays it rather than asking
+        anything again. `supply` keeps the value a key was first given, which is what makes a fork's
+        inherited repository half safe: it is already recorded, so it is not described here at all.
+
+        **One broken plugin stops the load in every tier.** A repository plugin is one you kept
+        trusted and a user plugin is one you configured, so either failing silently leaves somebody
+        holding a choice they cannot use, and a session that quietly ran without it would be answering
+        under a setup nobody asked for.
+        """
+        if found.chosen is None:  # pragma: no cover - a session on its settings step records a choice
+            return "this session records no endpoint"
+        if self.declaring is None or self.declaring.speaking is None:
+            # A console with no way to run a plugin loads none and says so by recording two empty
+            # sets, which is what takes such a session past the step exactly as a full load does.
+            await self.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(()))
+            await self.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
+            return None
+        speaking = self.declaring.speaking
+        # Only what is on, and only under a key nothing has recorded yet. The second is the fork: a
+        # branch inherits its parent's repository registration whole, because re-describing would
+        # launch a script out of a tree the parent's model had been editing.
+        recorded = await self.checkpointer.load(session)
+        wanting = [each for each in (found.declared or ()) if found.session.tending.on(each.qualified, ON)]
+        asking = [
+            (key, [each for each in wanting if each.confined is confined])
+            for key, confined in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
+            if key not in recorded
+        ]
+        try:
+            # Both tiers at once, and every plugin within a tier at once, because they are independent
+            # processes and somebody is waiting on all of them. Described before anything is written,
+            # so a tier that failed does not leave the other one recorded: the store keeps the value a
+            # key was first given, and a half-written load could never be corrected.
+            described = await asyncio.gather(
+                *(describing(asked, speaking, session, found.worktree) for _, asked in asking)
+            )
+        except (PluginFailed, BadDeclaration) as raised:
+            return str(raised)
+        for (key, _), enrolled in zip(asking, described, strict=True):
+            await self.checkpointer.supply(session, key, recorded_registration(enrolled))
+        return None
 
     async def say(self, session: str, said: str, *, forget: bool = False) -> None:
         """

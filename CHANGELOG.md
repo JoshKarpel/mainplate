@@ -22,12 +22,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   per session, settled before the first message: choosing to work in a repository is already choosing
   to run its build, its tests and its hooks, so the control is the *refusal* - a session reading a
   stranger's pull request says so in the picker and none of that repository's code runs unattended.
-- A step between creating a session and typing into it, showing what it loaded: every plugin it
-  registered, grouped by where it came from, with a switch apiece and one on each group's heading.
-  Which plugins a session runs is settled from its first message, because a tool definition leaving
-  the cached prefix invalidates everything under it exactly as one arriving late does. Creating a
-  session therefore no longer carries the first message, which is the real cost: you create, wait,
-  and come back to type.
+- A step between creating a session and typing into it, which is where somebody says which programs
+  this console may run. Creating a session records the choices and asks for a pass; that pass plants
+  the worktree and reads what each tier *declares* out of files, running nothing; the step then lists
+  every declared plugin with its path, grouped by where it came from, with a switch apiece and one on
+  each group's heading. `Load plugins` runs `describe` on exactly the ones left on, all at once, and
+  takes you to the conversation. So a plugin somebody switched off is not merely contributing
+  nothing, it was never launched, and a session nobody confirms has executed nothing at all. One that
+  will not describe puts you back on the step with the reason above the switches, rather than
+  stalling the conversation. Which plugins a session runs is then settled for its life, because a
+  tool definition leaving the cached prefix invalidates everything under it exactly as one arriving
+  late does. The real cost: creating a session no longer carries the first message, so you create,
+  wait, confirm, and come back to type.
 - Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
   `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
   guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.

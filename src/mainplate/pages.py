@@ -104,6 +104,7 @@ from mainplate.markup import as_message
 from mainplate.plugins.asking import running
 from mainplate.plugins.installed import ON
 from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.installed import grouped as by_tier
 from mainplate.plugins.protocol import Number
@@ -120,8 +121,11 @@ from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import Session
 from mainplate.snapshots import LONGEST_REF
+from mainplate.tending import AGAIN
 from mainplate.tending import ENABLED_FIELD
 from mainplate.tending import PLUGIN_FIELD
+from mainplate.tending import SETTLE_FIELD
+from mainplate.tending import SETTLED
 from mainplate.tending import Tending
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
@@ -3268,7 +3272,7 @@ def plugin_card(links: Links, session: str, plugin: Enrolled, settings: Mapping[
 
 TIER_NAMES: Final[dict[Tier, tuple[str, str]]] = {
     Tier.BUNDLED: ("bundled", "Shipped with this console."),
-    Tier.USER: ("yours", "Installed by whoever runs this console, in `config.yaml`."),
+    Tier.USER: ("yours", "Installed by whoever runs this console, in its config.yaml."),
     Tier.REPOSITORY: (
         "this repository's",
         "Carried by the repository this session works in. They run unattended at every turn boundary, "
@@ -3293,19 +3297,31 @@ SETUP_ID: Final = "setup"
 """The step's own id, because it is what its own form swaps and what the live connection replaces."""
 
 
-def plugin_switch(plugin: Enrolled, on: bool, form: str | None = None) -> Element:
+def plugin_switch(plugin: Installed, on: bool, form: str | None = None) -> Element:
     """
     One plugin's own on-and-off, which is the whole of what the settings step decides.
 
-    **Live here because nothing has been asked yet, and frozen afterwards**, which is not a
+    **Drawn from what was declared and never from what was described**, because nothing has described
+    anything yet: this is the control that decides which of these programs is run at all, so it is
+    made of the name somebody installed the plugin under and the file it is. What a plugin calls
+    itself is on its card, and its card comes back from having asked it.
+
+    **Live here because nothing has been loaded yet, and gone afterwards**, which is not a
     preference: a tool definition leaving the cached prefix invalidates everything under it exactly
-    as one arriving late does, so what plugins a session runs is settled the moment it answers a turn.
+    as one arriving late does, so what plugins a session runs is settled the moment they are loaded.
     The rail then draws each running plugin's card and does not draw these, and forking is how a
     conversation changes its mind, as it is for the model and the repository.
     """
     return label(
         cls=SWITCH_CLASS,
         children=[
+            # The same name, `off`, ahead of the box: an unchecked checkbox posts no field at all, so
+            # without this a plugin somebody turned off is indistinguishable from one this form never
+            # carried, and a step with every switch off posts nothing whatsoever. The box wins where
+            # it is checked because both values arrive and the reader takes the last.
+            input_(
+                attrs={"type": "hidden", "name": f"{ENABLED_FIELD}:{plugin.qualified}", "value": "off", "form": form}
+            ),
             input_(
                 attrs={
                     "type": "checkbox",
@@ -3314,23 +3330,17 @@ def plugin_switch(plugin: Enrolled, on: bool, form: str | None = None) -> Elemen
                     "form": form,
                 }
             ),
-            span(cls="plugin__name", children=plugin.installed.name),
-            # And what the plugin calls itself, where that is not the word it was installed under. A
-            # reader deciding what to leave on wants both, since the key is theirs and the heading is
-            # the plugin's - but a bundled `handoff` whose card also says `handoff` would print the
-            # word twice, which reads as a rendering fault rather than as two facts that agree.
-            *((span(cls="plugin__says", children=said),) if (said := heading_of(plugin)) is not None else ()),
+            span(cls="plugin__name", children=plugin.name),
+            # And the file it is, for the two tiers where a reader is deciding about a program
+            # somebody else wrote: the path is the whole of what there is to go on before it has been
+            # asked anything, and it is what tells two plugins with the same name apart. A bundled
+            # one's path is inside this package and says nothing a reader can act on.
+            *(() if plugin.tier is Tier.BUNDLED else (span(cls="plugin__says", children=str(plugin.path)),)),
         ],
     )
 
 
-def heading_of(plugin: Enrolled) -> str | None:
-    """What a plugin calls itself, where that is not already the name it was installed under."""
-    said = plugin.described.card.heading if plugin.described.card is not None else None
-    return None if said is None or said == plugin.installed.name else said
-
-
-def tier_group(tier: Tier, plugins: Sequence[Enrolled], tending: Tending, form: str) -> Element:
+def tier_group(tier: Tier, plugins: Sequence[Installed], tending: Tending, form: str) -> Element:
     """
     One tier's plugins, under a heading whose switch sets every switch below it.
 
@@ -3383,84 +3393,123 @@ def tier_group(tier: Tier, plugins: Sequence[Enrolled], tending: Tending, form: 
     )
 
 
+SETUP_SAYS: Final = (
+    "None of these has been run. Loading executes each one you leave on, once, to ask it what it "
+    "contributes; that set is then fixed for this conversation, and forking is how it changes."
+)
+"""
+The line above the switches, which says what the button does rather than what the list is.
+
+**A reader deciding here is deciding whether to execute somebody else's program**, and nothing else
+on the page says so: the tier lines say who wrote each one, and the names say what they are called.
+Both halves of the sentence are load-bearing - that nothing has run yet is why the step is worth
+stopping at, and that the set is then fixed is why it cannot be left until later.
+"""
+
+
 def setup_step(links: Links, showing: Conversation) -> Element:
     """
-    What a session loaded, and which of it to run, drawn between creating one and typing into it.
+    Which of the plugins a session declares to load, drawn between creating one and typing into it.
 
-    **Always drawn while it applies, and there is always something in it.** Skipping it when no
-    plugin declares settings would make the number of steps depend on what a repository happens to
-    carry, so the flow could not be described, learned or tested as one thing - and the empty version
-    is not a case worth designing around anyway, because a console ships bundled plugins and so the
-    step always has at least a heading and a switch in it.
+    **The step is the confirmation before anything is executed.** A plugin is a program, so the pass
+    that plants a session's worktree reads only what each tier *declares* - a directory listing and
+    two YAML mappings - and the switches here are drawn from that. Pressing the button is what runs
+    them, in the request that answers this form, and only the ones left on. So a session that never
+    gets past this screen has invoked nothing at all.
+
+    **Always drawn while it applies, and there is always something in it.** Skipping it when nothing
+    is declared would make the number of steps depend on what a repository happens to carry, so the
+    flow could not be described, learned or tested as one thing - and the empty version is not a case
+    worth designing around anyway, because a console ships bundled plugins and so the step always has
+    at least a heading and a switch in it.
 
     **It is a state of the session page and not a route of its own.** The session id exists from the
     moment the choices are posted, so the URL is stable and bookmarkable while the clone runs, and
-    the page already has the live connection that fills this in when the registration lands. A second
+    the page already has the live connection that fills this in when the declaration lands. A second
     address would be a page somebody can be sitting on when the thing it is waiting for arrives
     somewhere else.
 
-    Three states, and each says the one thing a reader can act on. Nothing registered yet is the
-    clone and the describe still running, which is the only slow moment in a session's life. A
-    refusal names which plugin and why, and offers another pass. Otherwise it is the tiers, with a
-    switch apiece.
+    **It stands alone on that page rather than above the conversation.** A session being set up has
+    no transcript to read, nothing to type into and nothing to navigate, so a message box and a rail
+    drawn beside this are controls pointed at a conversation that does not exist yet - and the rail
+    draws a card per *running plugin*, which is a plugin's own surface standing on the screen that
+    exists to decide whether to run it. Which shape the page takes is `settling`, and the live
+    connection sends whichever regions that shape has.
+
+    Three states, and each says the one thing a reader can act on. Nothing declared yet is the clone
+    and the worktree, which is the only slow moment in a session's life. A refusal names what could
+    not be read and offers another pass. Otherwise it is the tiers, with a switch apiece, under the
+    button that loads them - carrying the reason the last press failed, where one did.
+
+    Every button here is a plain submit and none of them swaps, because what each one leads to is a
+    differently shaped page: settling and loaded are the two halves of `settling`'s own condition, so
+    answering with a fragment would leave a reader on the half they had just left.
     """
-    if showing.plugins is None:
+    if showing.declared is None:
         return div(
             cls="setup",
             attrs={"id": SETUP_ID},
-            children=[
-                p(cls="setup__working", children=working()),
-                p(
-                    cls="setup__says",
-                    children=(
-                        "Setting up: planting this session's worktree and asking its plugins what they are."
-                        if showing.refused_plugins is None
-                        else showing.refused_plugins.why
-                    ),
-                ),
-                *(
-                    (
-                        form(
-                            cls="setup__again",
-                            attrs={
-                                "method": "post",
-                                "action": links.to_setup(showing.session.id),
-                                "hx-post": links.to_setup(showing.session.id),
-                                "hx-target": f"#{SETUP_ID}",
-                                "hx-swap": "outerHTML",
-                            },
-                            children=button(attrs={"type": "submit"}, children="Try again"),
+            children=div(
+                cls="settling",
+                children=[
+                    p(cls="setup__working", children=working()),
+                    p(
+                        cls="setup__says",
+                        children=(
+                            "Setting up: planting this session's worktree and reading what it declares."
+                            if showing.refused_plugins is None
+                            else showing.refused_plugins.why
                         ),
-                    )
-                    if showing.refused_plugins is not None
-                    else ()
-                ),
-            ],
+                    ),
+                    *(
+                        (
+                            form(
+                                cls="setup__again",
+                                attrs={"method": "post", "action": links.to_setup(showing.session.id)},
+                                children=button(
+                                    attrs={"type": "submit", "name": SETTLE_FIELD, "value": AGAIN},
+                                    children="Try again",
+                                ),
+                            ),
+                        )
+                        if showing.refused_plugins is not None
+                        else ()
+                    ),
+                ],
+            ),
         )
     return div(
         cls="setup",
         attrs={"id": SETUP_ID},
-        children=[
-            form(
+        children=div(
+            cls="settling",
+            children=form(
                 cls="setup__plugins",
                 attrs={
                     "id": SETUP_ID + "-form",
                     "method": "post",
                     "action": links.to_setup(showing.session.id),
-                    "hx-post": links.to_setup(showing.session.id),
-                    "hx-target": f"#{SETUP_ID}",
-                    "hx-swap": "outerHTML",
-                    "aria-label": "Which plugins this session runs",
+                    "aria-label": "Which plugins this session loads",
                 },
                 children=[
+                    p(cls="setup__says", children=SETUP_SAYS),
+                    # Why the last press did not get anywhere, above the switches rather than beside
+                    # the plugin it names: what a reader does about a plugin that will not describe is
+                    # turn it off, and the switch is one line down. Nothing recorded it, so it is gone
+                    # on the next render, which is right - it is a fact about an attempt.
+                    *(() if showing.refused_load is None else (p(cls="setup__failed", children=showing.refused_load),)),
                     *(
                         tier_group(tier, plugins, showing.session.tending, form=SETUP_ID + "-form")
-                        for tier, plugins in by_tier(showing.plugins)
+                        for tier, plugins in by_tier(showing.declared)
                     ),
-                    button(cls="setup__set", attrs={"type": "submit"}, children="Set"),
+                    button(
+                        cls="setup__set",
+                        attrs={"type": "submit", "name": SETTLE_FIELD, "value": SETTLED},
+                        children="Load plugins",
+                    ),
                 ],
-            )
-        ],
+            ),
+        ),
     )
 
 
@@ -3690,7 +3739,7 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
     `Run` is not a message at all, and `Keep` sends it nowhere.
 
     **A plugin's own answers are not here**, and they are appended by `composer` rather than merged
-    into this list: what a session offers depends on what it registered, where these are the
+    into this list: what a session offers depends on what it loaded, where these are the
     console's own and are the same on every session. `handoff` used to be one of these and is now the
     bundled handoff plugin's leader, which is what makes the pair worth keeping apart - this list is
     a constant, and that one is read off a session.
@@ -4043,17 +4092,16 @@ def start_page(
     """
     Where a session begins: everything it is decided by, and the button that creates it.
 
-    **There is no message box here any more**, and that is the visible half of a change with a
-    mechanical cause. A plugin's settings are the controls on its card, its card comes back from
-    `describe`, and a repository's plugin cannot be described until its worktree is planted - which
-    the worker does, on a pass. So creating a session and saying the first thing in it are two steps:
-    this page records the choices, the session's own page shows what it loaded, and the message box
-    is there once there is a session to type into.
+    **There is no message box here any more**, and that is the visible half of a change with two
+    mechanical causes. A repository's plugins cannot be named until its worktree is planted, which the
+    worker does on a pass; and none of them may be run until somebody has seen the list, because
+    running one is executing a program. So this page records the choices, the settings step on the
+    session's own page decides what it loads, and the message box is there once both are settled.
 
     The cost, stated: **creating stops being fire-and-forget.** Time to a first answer is unchanged,
-    since the clone happens either way, but you now create, wait, and come back to type. That is
-    bigger than an extra click, and it is taken because a setup that cannot half-happen is worth more
-    here than the convenience.
+    since the clone happens either way, but you now create, wait, confirm, and come back to type.
+    That is bigger than an extra click, and it is taken because a boundary in front of executing
+    somebody else's program is worth more here than the convenience.
 
     There is no transcript element on this page at all, for the reason there never was: what somebody
     is doing here is deciding what they are about to talk to.
@@ -4078,7 +4126,12 @@ def start_page(
                             reachable,
                             reference,
                             naming=naming(),
-                            acting=div(cls="starting", children=button(attrs={"type": "submit"}, children="Start")),
+                            # Named for what it makes rather than for what it begins, because the
+                            # page after this one is the settings step and not a conversation: a
+                            # button saying `Start` promised a session you could type into.
+                            acting=div(
+                                cls="starting", children=button(attrs={"type": "submit"}, children="Create session")
+                            ),
                         ),
                     ),
                 )
@@ -4126,20 +4179,21 @@ def stalled_by(showing: Conversation) -> str | None:
 
 def settling(showing: Conversation) -> bool:
     """
-    Whether this session is still deciding which plugins it runs, which is before its first message.
+    Whether this session is still on its settings step, which is what shape its page takes.
 
-    **Asked of what has been said and never of what was registered**, and that is the one thing here
-    easy to get backwards: a session with a turn in it is past this step whatever its registration
-    says, because a tool definition leaving the cached prefix invalidates everything under it exactly
-    as one arriving late does. Read the other way round, a session whose registration is missing -
-    one recorded before there were plugins, say - would draw the step over a conversation.
+    **Both halves are load-bearing and the turn count is the one easy to leave out.** A session that
+    has loaded nothing is on the step, because loading happens in the request that answers it and
+    nowhere else, so an unloaded session is held there by the same fact that makes it safe to be
+    there. And a session with a turn in it is past the step whatever its plugins say, because a tool
+    definition leaving the cached prefix invalidates everything under it exactly as one arriving late
+    does - without that, a session recorded before any of this existed would draw the step over a
+    conversation.
 
-    So the step covers exactly the window between creating a session and typing into it, which is
-    both states it has to draw: a setup pass still running, and one that finished and is waiting. The
-    rail draws each running plugin's card afterwards, and forking is how a conversation changes its
-    mind.
+    Two shapes of one page rather than one page with a banner: settling is the step alone, and loaded
+    is the transcript, the message box and the rail. The live connection sends whichever regions the
+    shape it finds has, so this is the one predicate both sides read.
     """
-    return showing.said.turns == 0
+    return showing.said.turns == 0 and showing.plugins is None
 
 
 def running_plugins(showing: Conversation) -> tuple[Enrolled, ...]:
@@ -4152,11 +4206,28 @@ def running_plugins(showing: Conversation) -> tuple[Enrolled, ...]:
     """
     if showing.plugins is None:
         return ()
-    on, _ = running(showing.plugins, showing.session.tending)
-    return on
+    return running(showing.plugins, showing.session.tending)
 
 
 def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation, reachable: Reachable) -> str:
+    """
+    One session, in whichever of its two shapes it is in.
+
+    **Settling is the step alone**, in the transcript's own place because that is what it stands in
+    for: there is no conversation yet, so a message box would be pointed at nothing and every control
+    in the rail would navigate an empty transcript. Settled is the page this console is otherwise
+    about. `settling` is what decides, and `streaming.watching` reads the same predicate to decide
+    which regions to send, so the page and the connection driving it cannot disagree about which
+    shape is on screen.
+    """
+    if settling(showing):
+        return document(
+            links,
+            showing.session.title or UNTITLED,
+            shell(links, listed, showing=showing.session.id, reachable=reachable, pane=[setup_step(links, showing)]),
+            session=showing.session.id,
+            forked_from=showing.session.forked.session if showing.session.forked is not None else None,
+        )
     stalled = stalled_by(showing)
     return document(
         links,
@@ -4167,11 +4238,6 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             showing=showing.session.id,
             reachable=reachable,
             pane=[
-                # The step between creating a session and typing into it, drawn in the transcript's
-                # own place because that is what it is: there is no conversation yet, and what a
-                # reader is doing is looking at what the session loaded. It goes away by itself when
-                # the first message lands, since the live connection sends this region.
-                *((setup_step(links, showing),) if settling(showing) else ()),
                 transcript_region(links, showing),
                 composer(
                     links.to_say(showing.session.id),
@@ -4201,9 +4267,6 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     plugins=running_plugins(showing),
                 ),
             ],
-            # Only where there is a conversation to navigate. On the page where a session does not
-            # exist yet every control in it would be pointed at an empty transcript, which is a
-            # row of dead buttons rather than an offer.
             aside_rail=[rail(links, showing.session.id, showing.session.tending, running_plugins(showing))],
         ),
         session=showing.session.id,

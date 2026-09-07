@@ -237,11 +237,11 @@ async def taking(service: Service, session: str, turn: int = 0) -> None:
 
 async def registering(service: Service, session: str, *enrolled: Enrolled) -> None:
     """
-    What a session's first pass registered, written by hand for the reason `taking` is.
+    What a session loaded when somebody answered its settings step, written by hand as `taking` is.
 
-    A session with no registration is one whose setup pass has not finished, so its page draws the
-    settings step rather than a transcript - which is the honest state and not the one most of these
-    tests are about. Both keys, because both are written: the console's own half and the repository's.
+    A session with no registration is one nobody has answered that step for, so its page draws the
+    step rather than a transcript - which is the honest state and not the one most of these tests are
+    about. Both keys, because both are written: the console's own half and the repository's.
     """
     await service.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(enrolled))
     await service.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))

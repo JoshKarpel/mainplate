@@ -66,6 +66,8 @@ type StepKind = Literal[
     "messages",
     "plugins",
     "plugin",
+    "declared",
+    "named",
     "injected",
 ]
 """
@@ -405,6 +407,39 @@ class Messages(Record):
     messages: list[object]
 
 
+class Named(Record):
+    """
+    One plugin as a declaring file named it: where it came from, what it is called, and what to run.
+
+    **Everything here is read out of a file, and nothing here was run.** That is the whole difference
+    from `Enrolled` below, which is this plus what the plugin said when it was asked. A session
+    records these before its settings step and the other after it, because running a plugin is
+    executing a program and the step is where somebody says which ones to execute.
+    """
+
+    kind: Literal["named"] = "named"
+    name: str
+    tier: str
+    path: str
+
+
+class Declared(Record):
+    """
+    Which plugins a session *could* run, settled on its first pass and drawn on its settings step.
+
+    Two of these per session, under two keys, for the reason there are two registrations: a fork
+    re-reads the operator's declaration and inherits the repository's, because a fork's tree is one a
+    model has been editing.
+
+    Both are written even where there is nothing declared, which is what makes an empty declaration
+    mean *this session has looked* rather than *nobody has looked yet* - the same claim the
+    registration's own emptiness makes, one moment earlier.
+    """
+
+    kind: Literal["declared"] = "declared"
+    plugins: tuple[Named, ...] = ()
+
+
 class Enrolled(Record):
     """
     One plugin as a session recorded it: where it came from, what to run, and everything it declared.
@@ -415,8 +450,8 @@ class Enrolled(Record):
     field there and no migration here.
 
     `path` is recorded beside the name because a later pass has to run the same script without
-    reading any declaring file again: a repository's declaration is read once, at turn 0, and every
-    pass after replays this.
+    reading any declaring file again: a repository's declaration is read once, on the session's first
+    pass, and every pass after replays this.
     """
 
     kind: Literal["plugin"] = "plugin"
@@ -428,7 +463,7 @@ class Enrolled(Record):
 
 class Registered(Record):
     """
-    Which plugins a session runs and what they contributed, settled on its first pass.
+    Which plugins a session ran and what they contributed, settled when its settings step was answered.
 
     **Recorded rather than re-read**, which is `turn:0:tree:0`'s own shape: a fact about one session
     that could only be learned by doing the work, written once and replayed after. Tool definitions
@@ -515,6 +550,7 @@ type Step = Annotated[
     | Messages
     | Returned
     | Instructions
+    | Declared
     | Registered
     | Injected,
     Field(discriminator="kind"),

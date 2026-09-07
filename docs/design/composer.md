@@ -554,10 +554,11 @@ a boolean setting and a number box is an integer setting, so one declaration is 
 what the column holds, and what arrives in every payload that plugin receives. There is no second
 schema language and no way for the card and the settings to disagree.
 
-**It is not in the picker at all**, because there is nothing to draw there: what a plugin declares is
-known only once it has been asked, and a repository's cannot be asked until its worktree is planted.
-The [settings step](plugins.md#starting-a-session-takes-two-steps) is where a session's plugins are
-first seen, and each one's card is in the rail from then on.
+**It is not in the picker at all**, and neither is it on the settings step: what a plugin declares is
+known only once it has been *run*, a repository's cannot be run until its worktree is planted, and
+none of them is run until that step is answered. So the step draws a switch per plugin and no cards
+at all, and each running plugin's card is in the rail from the moment it is loaded. See
+[the three steps](plugins.md#starting-a-session-takes-three-steps).
 
 **A fork starts on the declared defaults rather than inheriting what its parent was set to.** A
 reserve is a decision about how much room one conversation's context has left, and a branch's context

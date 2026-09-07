@@ -14,7 +14,6 @@ from conftest import INSTRUCTIONS
 from conftest import Provider
 from conftest import Scripted
 from conftest import run
-from conftest import started
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ToolCallPart
@@ -23,9 +22,11 @@ from without_durability.stepwise import Blocked
 from without_durability.stepwise import resume
 
 from mainplate import records
-from mainplate.conversation import PLUGINS_KEY
-from mainplate.conversation import REPOSITORY_PLUGINS_KEY
+from mainplate.agent import Choice
+from mainplate.conversation import DECLARED_KEY
+from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import conversing
+from mainplate.conversation import declared_in
 from mainplate.conversation import registered_in
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
@@ -55,6 +56,7 @@ from mainplate.plugins.running import PluginFailed
 from mainplate.plugins.running import Spawned
 from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
+from mainplate.sessions import Session
 from mainplate.sessions import read_tending
 from mainplate.tending import TENDED
 
@@ -278,27 +280,22 @@ class TestWhereAPluginComesFrom:
                 Installed(tier=Tier.USER, name="guidance", path=Path("/b")),
             )
         )
-        on, off = running(enrolled, TENDED)
-        assert [each.qualified for each in on] == ["bundled:guidance", "user:guidance"]
-        assert off == ()
+        assert [each.qualified for each in running(enrolled, TENDED)] == ["bundled:guidance", "user:guidance"]
 
     def test_a_switch_a_session_recorded_wins_over_the_default(self) -> None:
         enrolled = (
             Enrolled(installed=Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/a")), described=Described()),
         )
-        on, off = running(enrolled, TENDED.switched("bundled:handoff", False))
-        assert on == ()
-        assert [each.qualified for each in off] == ["bundled:handoff"]
+        assert running(enrolled, TENDED.switched("bundled:handoff", False)) == ()
 
     def test_the_settings_step_draws_every_tier_including_the_empty_ones(self) -> None:
         """
         So the step is the same shape on every session and the flow can be learned and tested as one
         thing rather than as however many lists a repository happens to produce.
         """
-        enrolled = (
-            Enrolled(installed=Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/a")), described=Described()),
+        assert [tier for tier, _ in grouped((Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/a")),))] == list(
+            Tier
         )
-        assert [tier for tier, _ in grouped(enrolled)] == list(Tier)
 
 
 class TestWhenTwoPluginsWantOneName:
@@ -769,51 +766,102 @@ class TestWhatTheBundledSetIs:
             assert each.path.stat().st_mode & 0o111, f"{each.name} is not executable"
 
 
+async def passing(service: Service, session: str, body: Any) -> Any:
+    """One pass of a session, claimed and released, which every test here does at least twice."""
+    holder = await claimed(service.checkpointer, session)
+    try:
+        return await resume(holder, service.checkpointer, body)
+    finally:
+        await service.checkpointer.release(holder)
+
+
+async def set_up(
+    service: Service, declaring: Declaring, chosen: Choice = DEFAULT_CHOICE, workspaces: Workspaces | None = None
+) -> Session:
+    """
+    A session past its settings step, which is the two moments the console actually has.
+
+    A pass, to plant the worktree and read what each tier *declares*, and then the press, which is
+    the only thing in this console that runs a plugin. Written here rather than in `conftest.py`
+    because it is what this suite is about: everywhere else a session with plugins in it is
+    incidental, and here the order is the claim.
+    """
+    session = await service.start(chosen)
+    await passing(
+        service, session.id, conversing(Provider().endpoints(), INSTRUCTIONS, workspaces, declaring=declaring)
+    )
+    console = replace(service, declaring=declaring)
+    found = await console.read(session.id)
+    assert found is not None
+    assert await console.load(session.id, found) is None, "the load worked"
+    return session
+
+
 class TestASessionsPlugins:
-    """What a pass does about them: register once, run what is on, and record what they asked for."""
+    """What the two moments do: read what is declared, load what is on, and record what they asked for."""
 
     @pytest.fixture
     def declaring(self) -> Declaring:
         return Declaring(console=bundled(), speaking=Spawned(environ={}))
 
-    async def test_the_first_pass_registers_and_then_waits(self, service: Service, declaring: Declaring) -> None:
+    async def test_the_first_pass_declares_without_running_anything(
+        self, service: Service, declaring: Declaring
+    ) -> None:
         """
-        **The first pass of a session answers nothing**, which is the shape rather than an accident:
-        it plants, asks every plugin what it is, records both, and comes back `Blocked` on an empty
-        inbox. That is `planting` moving above `opening_turn` and nothing else.
+        **The first pass of a session answers nothing and executes nothing**, which is the trust
+        boundary rather than an accident: it plants, reads what each tier declares out of files, and
+        comes back `Blocked` on an empty inbox. What each plugin *is* is not known yet, because
+        asking is running and nobody has said to.
         """
         session = await service.start(DEFAULT_CHOICE)
         provider = Provider()
-        body = conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring)
-        holder = await claimed(service.checkpointer, session.id)
-        try:
-            ended = await resume(holder, service.checkpointer, body)
-        finally:
-            await service.checkpointer.release(holder)
+        ended = await passing(service, session.id, conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring))
 
         assert isinstance(ended, Blocked), "it is waiting on a message rather than finished"
         assert provider.asked == 0, "and it asked no provider anything"
         recorded = await service.checkpointer.load(session.id)
-        assert PLUGINS_KEY in recorded
-        assert REPOSITORY_PLUGINS_KEY in recorded
-        enrolled = registered_in(recorded)
+        assert DECLARED_KEY in recorded
+        assert REPOSITORY_DECLARED_KEY in recorded
+        assert registered_in(recorded) is None, "nothing has been run, so nothing has been registered"
+        declared = declared_in(recorded)
+        assert declared is not None
+        assert {each.qualified for each in declared} == {"bundled:handoff", "bundled:guidance"}
+
+    async def test_the_press_is_what_runs_them(self, service: Service, declaring: Declaring) -> None:
+        """
+        Which is the whole of the settings step: a plugin is a program, so what executes one is
+        somebody having looked at the list and said so.
+        """
+        session = await set_up(service, declaring)
+        enrolled = registered_in(await service.checkpointer.load(session.id))
         assert enrolled is not None
         assert {each.qualified for each in enrolled} == {"bundled:handoff", "bundled:guidance"}
 
+    async def test_a_plugin_left_off_is_never_run_at_all(self, service: Service, declaring: Declaring) -> None:
+        """
+        Not merely contributing nothing: the switch decides which programs are executed, so a plugin
+        somebody turned off is absent from the registration because it was never asked anything.
+        """
+        session = await service.start(DEFAULT_CHOICE)
+        await passing(service, session.id, conversing(Provider().endpoints(), INSTRUCTIONS, declaring=declaring))
+        await service.switch(session.id, {"bundled:handoff": False})
+        console = replace(service, declaring=declaring)
+        found = await console.read(session.id)
+        assert found is not None
+        assert await console.load(session.id, found) is None
+        enrolled = registered_in(await service.checkpointer.load(session.id))
+        assert enrolled is not None
+        assert [each.qualified for each in enrolled] == ["bundled:guidance"]
+
     async def test_a_console_with_no_plugins_still_records_that_it_looked(self, service: Service) -> None:
         """
-        Which is what makes an empty registration mean "this session is set up" rather than "nobody
+        Which is what makes an empty declaration mean "this session has looked" rather than "nobody
         has looked": without the write there is no way to tell a console with none from a session
         whose worktree is still being planted.
         """
         session = await service.start(DEFAULT_CHOICE)
-        body = conversing(Provider().endpoints(), INSTRUCTIONS)
-        holder = await claimed(service.checkpointer, session.id)
-        try:
-            await resume(holder, service.checkpointer, body)
-        finally:
-            await service.checkpointer.release(holder)
-        assert registered_in(await service.checkpointer.load(session.id)) == ()
+        await passing(service, session.id, conversing(Provider().endpoints(), INSTRUCTIONS))
+        assert declared_in(await service.checkpointer.load(session.id)) == ()
 
     async def test_a_plugins_tool_is_in_the_prefix_and_its_answer_is_recorded(
         self, service: Service, declaring: Declaring
@@ -823,7 +871,8 @@ class TestASessionsPlugins:
         `wrap_tool_execute` wraps every call in a step, so a plugin-provided tool's answer is recorded
         and a resumed pass replays it without running the script again.
         """
-        session = await started(service, "hello")
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
         written = "x" * 400
         # Where the notes a plugin asked for go, collected rather than delivered: what this asserts
         # is that the tool's `deliver` reached the console, and an inbox would be a second thing to
@@ -842,11 +891,7 @@ class TestASessionsPlugins:
             )
         )
         body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring, delivering=collecting)
-        holder = await claimed(service.checkpointer, session.id)
-        try:
-            await resume(holder, service.checkpointer, body)
-        finally:
-            await service.checkpointer.release(holder)
+        await passing(service, session.id, body)
 
         recorded = await service.checkpointer.load(session.id)
         assert any(key.endswith(":tool:c1") for key in recorded), "the call is a recorded step"
@@ -854,22 +899,24 @@ class TestASessionsPlugins:
         assert delivered[0].plugin == "bundled:handoff", "attributed to whoever asked for it"
         assert delivered[0].forget is True, "and it starts the model's history again"
 
-    async def test_a_plugin_that_is_off_contributes_nothing_at_all(
+    async def test_a_session_that_loaded_none_of_them_answers_all_the_same(
         self, service: Service, declaring: Declaring
     ) -> None:
         """No tool in the prefix, no card, no answer in the composer, and no events."""
-        session = await started(service, "hello")
+        session = await service.start(DEFAULT_CHOICE)
+        await passing(service, session.id, conversing(Provider().endpoints(), INSTRUCTIONS, declaring=declaring))
         await service.switch(session.id, {"bundled:handoff": False, "bundled:guidance": False})
+        console = replace(service, declaring=declaring)
+        found = await console.read(session.id)
+        assert found is not None
+        assert await console.load(session.id, found) is None
+        await service.say(session.id, "hello")
         scripted = Scripted(script=(ModelResponse(parts=[TextPart("done")]),))
         body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring, tendings=self.tending(service))
-        holder = await claimed(service.checkpointer, session.id)
-        try:
-            await resume(holder, service.checkpointer, body)
-        finally:
-            await service.checkpointer.release(holder)
+        await passing(service, session.id, body)
         # The turn answered, which is what says the agent was built at all, and it was built with no
         # plugin toolset: a `hand_off` in the prefix would have been offered to the stand-in.
-        assert registered_in(await service.checkpointer.load(session.id)) is not None
+        assert registered_in(await service.checkpointer.load(session.id)) == ()
 
     def tending(self, service: Service) -> Any:
         async def read(session: str) -> Any:
@@ -924,13 +971,9 @@ class TestARepositorysOwnPlugin:
         runs behind the sandbox, and what it says lands in the session's instructions.
         """
         planting = replace(service, workspaces=workspaces)
-        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
-        body = conversing(Provider().endpoints(), INSTRUCTIONS, workspaces, declaring=declaring_repository)
-        holder = await claimed(planting.checkpointer, session.id)
-        try:
-            await resume(holder, planting.checkpointer, body)
-        finally:
-            await planting.checkpointer.release(holder)
+        session = await set_up(
+            planting, declaring_repository, replace(DEFAULT_CHOICE, repository=FIXTURE), workspaces=workspaces
+        )
 
         enrolled = registered_in(await planting.checkpointer.load(session.id))
         assert enrolled is not None
@@ -947,13 +990,13 @@ class TestARepositorysOwnPlugin:
         started after it and none before, which is the answer `Choice` gives to every other question.
         """
         planting = replace(service, workspaces=workspaces)
-        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE, trusted=False))
-        body = conversing(Provider().endpoints(), INSTRUCTIONS, workspaces, declaring=declaring_repository)
-        holder = await claimed(planting.checkpointer, session.id)
-        try:
-            await resume(holder, planting.checkpointer, body)
-        finally:
-            await planting.checkpointer.release(holder)
+        session = await set_up(
+            planting,
+            declaring_repository,
+            replace(DEFAULT_CHOICE, repository=FIXTURE, trusted=False),
+            workspaces=workspaces,
+        )
+        assert declared_in(await planting.checkpointer.load(session.id)) == (), "nothing was even read"
         assert registered_in(await planting.checkpointer.load(session.id)) == ()
 
     async def test_a_console_with_no_sandbox_runs_none_of_them(
@@ -964,16 +1007,11 @@ class TestARepositorysOwnPlugin:
         confined, so a console that cannot confine one has nothing to offer in its place.
         """
         planting = replace(service, workspaces=workspaces)
-        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
-        body = conversing(
-            Provider().endpoints(),
-            INSTRUCTIONS,
-            workspaces,
-            declaring=replace(declaring_repository, confining=False),
+        session = await set_up(
+            planting,
+            replace(declaring_repository, confining=False),
+            replace(DEFAULT_CHOICE, repository=FIXTURE),
+            workspaces=workspaces,
         )
-        holder = await claimed(planting.checkpointer, session.id)
-        try:
-            await resume(holder, planting.checkpointer, body)
-        finally:
-            await planting.checkpointer.release(holder)
+        assert declared_in(await planting.checkpointer.load(session.id)) == ()
         assert registered_in(await planting.checkpointer.load(session.id)) == ()

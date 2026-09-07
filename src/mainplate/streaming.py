@@ -30,10 +30,13 @@ from without_html import element
 from without_html import render
 
 from mainplate.pages import CACHE_ID
+from mainplate.pages import SETUP_ID
 from mainplate.pages import SWAP
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.pages import Links
 from mainplate.pages import cache_note
+from mainplate.pages import settling
+from mainplate.pages import setup_step
 from mainplate.pages import transcript_region
 from mainplate.service import Service
 
@@ -78,18 +81,28 @@ async def watching(service: Service, links: Links, session: str, every: timedelt
             showing = await service.read(session)
             if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
                 return
-            # Two regions on one connection, which is what `partial` exists for. The cache note lives
-            # in the composer rather than in the transcript, so nothing else replaces it, and what it
-            # says goes stale on every turn: the context it prices grows, and when the prefix was last
-            # written moves. `outerHTML` rather than the transcript's morph, because it is one short
-            # line with nothing in it worth preserving across a swap.
-            yield Event(
-                data=render(
-                    [
-                        partial(TRANSCRIPT_ID, SWAP, transcript_region(links, showing)),
-                        partial(CACHE_ID, "outerHTML", cache_note(showing)),
-                    ]
-                ),
-                id=str(now),
+            # Whichever regions the page's *shape* has, which `settling` decides for both sides: a
+            # session on its settings step has no transcript and no message box, and one past it has
+            # no step. Sending both sets would name a target that is not there on either page, and a
+            # partial with nowhere to go is silently dropped, so the reader would never learn that
+            # the message had nothing to say to them.
+            #
+            # Settled is two regions on one connection, which is what `partial` exists for. The cache
+            # note lives in the composer rather than in the transcript, so nothing else replaces it,
+            # and what it says goes stale on every turn: the context it prices grows, and when the
+            # prefix was last written moves. `outerHTML` rather than the transcript's morph, because
+            # it is one short line with nothing in it worth preserving across a swap.
+            #
+            # Settling is the one region there is, and it is the only thing that makes the step
+            # resolve: the registration lands in a worker, so a page that did not watch for it would
+            # spin until somebody reloaded.
+            regions = (
+                [partial(SETUP_ID, "outerHTML", setup_step(links, showing))]
+                if settling(showing)
+                else [
+                    partial(TRANSCRIPT_ID, SWAP, transcript_region(links, showing)),
+                    partial(CACHE_ID, "outerHTML", cache_note(showing)),
+                ]
             )
+            yield Event(data=render(regions), id=str(now))
         await asyncio.sleep(every.total_seconds())

@@ -25,6 +25,7 @@ const targets = (requested.length ? requested : [
   "start-unreferenced.html",
   "setting-up.html",
   "settings.html",
+  "settings-refused.html",
   "session.html",
   "waiting.html",
   "answering.html",

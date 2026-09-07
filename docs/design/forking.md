@@ -59,11 +59,14 @@ What it *does* inherit, besides the turns, is the worktree state: a fork's workt
 at the tree the forked turn originally saw, so a branch re-asks its question against the files that
 question was asked about.
 
-And **the repository half of what its parent registered**, whole, which is the one place the plugin
-tiers are told apart. A fork plants at a *recorded tree*, which is a tree a model wrote - a snapshot
-is `git add -A`, so a `.mainplate/` file written on turn 4 is in the tree recorded for turn 5. Re-
-reading it here would run a plugin the parent's model authored, one fork away from any session with
-files, so only a session planted at a commit the repository provided ever reads that file. See
+And **the repository half of what its parent declared and loaded**, both keys and whole, which is the
+one place the plugin tiers are told apart. A fork plants at a *recorded tree*, which is a tree a model
+wrote - a snapshot is `git add -A`, so a `.mainplate/` file written on turn 4 is in the tree recorded
+for turn 5. Re-reading it here would run a plugin the parent's model authored, one fork away from any
+session with files, so only a session planted at a commit the repository provided ever reads that
+file. Both keys rather than the registration alone, because a fork of a session that never got past
+its settings step has only the declaration, and re-reading the file to draw a switch for it is the
+same read one step earlier. See
 [reading it once](plugins.md#read-once-and-never-from-a-tree-this-console-wrote).
 
 ## There is no rewind

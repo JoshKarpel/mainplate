@@ -241,6 +241,7 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.Returned(returned={"lines": [1, 2]}, took=timedelta(seconds=0.25)),
     records.Messages(messages=[]),
     records.Instructions(said="answer as a fixture would"),
+    records.Declared(plugins=(records.Named(name="handoff", tier="bundled", path="/opt/mainplate/plugins/handoff"),)),
     records.Registered(
         plugins=(
             records.Enrolled(

@@ -35,6 +35,21 @@ it can share a name with one a plugin declares without anything having to be res
 arrive on different forms and are read by different routes.
 """
 
+SETTLE_FIELD: Final = "done"
+"""
+Which of the settings step's two buttons was pressed, as the name they share and the value they differ in.
+
+Here beside `ENABLED_FIELD` because it is the same kind of thing and has the same two readers: the
+step renders it and the route that answers the step parses it. It is not a plugin's setting and is
+not written anywhere - what it decides is which of two things the route does.
+"""
+
+AGAIN: Final = "again"
+"""Ask for another setup pass, which is what the button beside a refusal posts."""
+
+SETTLED: Final = "settled"
+"""Finish the step and go to the conversation, which is what the button under the switches posts."""
+
 PLUGIN_FIELD: Final = "plugin"
 """Which plugin a posted control belongs to, by qualified name."""
 

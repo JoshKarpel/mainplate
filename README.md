@@ -68,12 +68,14 @@ commands may reach the **network**; whether the repository's own **plugins** run
 and **model**; and a **thinking level**. All of it is fixed for the session's life, and **forking is
 how it changes**.
 
-Creating one takes you to its page, where it plants its worktree and asks its plugins what they are.
-What they came back with is a step you pass through before typing: every plugin the session
-registered, grouped by where it came from, with a switch apiece. Which plugins a session runs is
-settled from its first message, because a tool definition leaving the cached prefix invalidates the
-whole conversation beneath it. What each plugin is *set to* stays changeable, on its own card in the
-rail.
+Creating one takes you to its page, where it plants its worktree and reads what each tier of plugins
+*declares* out of files. It runs none of them: a plugin is a program, so the step you pass through
+next is where you say which ones may be executed. Every declared plugin is listed with its path,
+grouped by where it came from, with a switch apiece; **Load plugins** runs exactly the ones left on,
+all at once, and lands you in the conversation. Which plugins a session runs is settled from there,
+because a tool definition leaving the cached prefix invalidates the whole conversation beneath it,
+and **forking is how it changes**. What each plugin is *set to* stays changeable, on its own card in
+the rail.
 
 Pick a repository and two more fields appear: **where in it to start** and **what branch to start
 there**, both optional. Left blank the worktree is checked out at the repository's default branch as

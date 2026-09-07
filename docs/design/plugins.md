@@ -78,9 +78,31 @@ persistent process spoken to over framed stdio, which changes the transport and 
 payloads below. So the decision is deferred as a value rather than as a second code path, and it is
 deferred knowingly rather than overlooked.
 
+## Declaring is not loading
+
+**A plugin is a program this console executes, so nothing runs one until somebody has said which.**
+That splits what used to be a single moment in two, and the split is the whole reason the settings
+step exists:
+
+- **Declaring** is reading files. A directory listing for the bundled set, a mapping in the
+  operator's `config.yaml`, and a mapping in the repository's own `.mainplate/mainplate.yaml`. It
+  yields a name, a tier and a path apiece, and it spawns nothing.
+- **Loading** is running each declared plugin's `describe` to find out what it contributes. It is
+  what the button on the settings step does, to exactly the plugins that step left switched on.
+
+A session's first pass declares; the press loads. So a session somebody creates and never confirms
+has executed nothing at all, and a plugin somebody switched off was not merely contributing nothing,
+it was never launched.
+
+**The switches are therefore drawn from the declaration**, which is why they say a name and a path
+rather than what each plugin calls itself: a heading comes off a card, a card comes back from
+`describe`, and asking is running. What a reader is deciding about is whose program this is, and the
+path is the whole of what there is to go on before it has been asked anything.
+
 ## Registration
 
-**The first call to a plugin asks it what it is.** Everything it contributes comes back from one
+**The first call to a plugin asks it what it is**, and it happens when the settings step is answered
+rather than when the session's first pass runs. Everything it contributes comes back from one
 `describe`, including which events it wants:
 
 ```json
@@ -106,16 +128,24 @@ plugin that only wants `after_turn` is never launched for anything else.
 **What comes back is settled for a session's life, and the cached prefix is what decides that.**
 Tool definitions sit above the system prompt in the cached prefix, so introducing one
 mid-conversation invalidates the whole prefix beneath it. So a session's contributions are recorded
-on its first pass, the way everything else settled about a session is, and a plugin edited underneath
-a running session reaches it on no turn at all.
+when its settings step is answered, the way everything else settled about a session is, and a plugin
+edited underneath a running session reaches it on no turn at all.
 
 **Under two session-level keys rather than one, and the fork is what decides it.** `plugins:console`
-holds what the bundled set and the operator's own declared; `plugins:repository` holds what the
-repository did. They are not turn-prefixed, for the reason `instructions:{n}` is not: `before` copies
-turn-shaped keys by shape, so one name would carry both halves of a parent's registration into a
-branch, and a fork must inherit exactly one of them. Both are written even where there is nothing to
-describe, which is what makes an empty registration mean *this session is set up* rather than *nobody
-has looked*.
+holds what the bundled set and the operator's own contributed; `plugins:repository` holds what the
+repository's did. They are not turn-prefixed, for the reason `instructions:{n}` is not: `before`
+copies turn-shaped keys by shape, so one name would carry both halves of a parent's registration into
+a branch, and a fork must inherit exactly one of them. Both are written even where nothing was
+loaded, which is what makes an empty registration mean *this session was loaded* rather than *nobody
+has pressed anything*.
+
+**And two more beside them, `plugins:declared:console` and `plugins:declared:repository`**, holding
+what was read out of files before any of it ran. Four keys rather than two because the two questions
+have different answers at different moments: between them a session is on its settings step, with a
+declaration to draw switches from and no registration at all. They split by tier on the same rule and
+for the same reason, so a fork inherits the repository's declaration as well as its registration - a
+fork of a session that never got past its step has only the first, and re-reading the file to draw a
+switch would be the same read out of the same model-written tree, one step earlier.
 
 **Forking is how a conversation picks up an edited plugin**, and that is the existing answer rather
 than a new one: a fork is a session, so it describes the operator's plugins afresh, and the way to
@@ -146,24 +176,29 @@ turn opened on *its own* delivery, or it fires again for as long as the conditio
 true. `opened_on.plugin` and `plugin` are compared, and that is the whole of what stops a handoff
 recursing.
 
-## Starting a session takes two steps
+## Starting a session takes three steps
 
-A plugin's settings are the controls on its card, and its card comes back from `describe`. So
-nothing knows a plugin's settings exist until it has been run, and **a repository's plugin cannot be
-run until its worktree is planted**, which is the first pass, because [the worker clones and a
-request handler never does](workspace.md#where-a-repository-comes-from).
+**A repository's plugin cannot even be named until its worktree is planted**, which is the first
+pass, because [the worker clones and a request handler never does](
+workspace.md#where-a-repository-comes-from). And no plugin in any tier may be *run* until somebody
+has seen the list and said so, because running one is executing a program somebody may not want
+executed.
 
-The old shape cannot absorb that. Creating a session used to record the choice and queue the first
+The old shape cannot absorb either. Creating a session used to record the choice and queue the first
 message in one POST, so the first turn would be answered before anything had been read out of the
 repository. So creation splits:
 
-1. **The choices.** Endpoint, model, repository, isolation, and whether the repository's own
-   code runs. This records the
-   `Choice`, enrols the session, calls `make_ready`, and redirects to the session's own page.
-2. **The setup pass.** Plants the worktree, `describe`s every plugin, and records what they declared
-   at turn 0. Then it reaches `opening_turn`, finds an empty inbox, and comes back `Blocked`.
-3. **The settings.** The page swaps in a step showing every plugin's card, or what went wrong. The
-   first message leaves it.
+1. **The choices.** Endpoint, model, repository, isolation, and whether the repository's own code may
+   run at all. This records the `Choice`, enrols the session, calls `make_ready`, and redirects to
+   the session's own page. Its button says `Create session`, because what it makes is a session and
+   not yet a conversation.
+2. **The declaring pass.** Plants the worktree, reads what each tier declares out of files, records
+   both halves. Then it reaches `opening_turn`, finds an empty inbox, and comes back `Blocked`.
+   **It runs nothing**: at this point the console knows a name, a tier and a path per plugin, and
+   nothing else.
+3. **The settings step.** A switch per declared plugin, under a heading per tier, and a button that
+   says `Load plugins`. Pressing it runs `describe` on everything left on, concurrently, records what
+   they said, and takes you to the conversation.
 
 **Nothing about step 2 is a new mechanism.** `opening_turn` already suspends a pass on the inbox,
 and its own note says an empty take raises and the pass comes back `Blocked` until something is
@@ -171,14 +206,26 @@ delivered. So "set up, then stop and wait" is `planting` moving above `opening_t
 plus a session that is queued by `make_ready` rather than by a delivery. A session nobody types into
 holds no lease and no worker slot, because a blocked pass has released its claim.
 
-**Every plugin is `describe`d there, the user's included**, rather than the user's at process
-startup and the repository's later. One moment for both is worth more than the earlier read: it
-removes a tier's worth of asymmetry, and a plugin edited on disk reaches the next new session
-without the console being restarted, which matters most while somebody is writing one.
+**Step 3 runs in the request handler, which is where this console does not usually put work**, and
+what decides it is what somebody is waiting for. Describing is a handful of short-lived processes
+asked all at once, not the clone that made planting the worker's job; and the answer decides which
+page they get, where a pass could only leave a stalled session behind. The result is a checkpoint key
+all the same, so a later pass replays it rather than asking anything again.
 
-**Step 3 is always drawn, and there is always something in it.** Skipping it when no plugin declares
-settings would make the number of steps depend on what a repository happens to carry, so the flow
-could not be described, learned or tested as one thing.
+**You do not reach the conversation until the load has finished.** The step is the last thing on
+screen until every plugin left on has answered, so nothing is ever half-loaded behind a message box,
+and the rail cannot draw a plugin's card on the screen that exists to decide whether to run that
+plugin.
+
+**Every plugin is loaded there, the user's included**, rather than the user's at process startup and
+the repository's later. One moment for all of them is worth more than the earlier read: it removes a
+tier's worth of asymmetry, it puts every launch behind one confirmation, and a plugin edited on disk
+reaches the next new session without the console being restarted, which matters most while somebody
+is writing one.
+
+**Step 3 is always drawn, and there is always something in it.** Skipping it when nothing is declared
+would make the number of steps depend on what a repository happens to carry, so the flow could not be
+described, learned or tested as one thing.
 
 The empty version of that step is not a case worth designing around anyway, because **handoff ships
 as a plugin and is on in every session**: there is no console with no plugins, so the step always
@@ -203,7 +250,7 @@ of its plugins off, and a tier that recorded an answer of its own would be a sec
 question is answered. It works only with the script present, which is the standing bargain every
 scripted control here takes - without `mainplate.js` each plugin's own switch still works.
 
-The switches are live at step 3 because nothing has been asked yet, and frozen afterwards because a
+The switches are live at step 3 because nothing has been loaded yet, and gone afterwards because a
 tool definition leaving the prefix invalidates everything under it exactly as one arriving late
 does. So the rail draws each running plugin's *card* and never these, and [forking](forking.md) is
 how a conversation changes its mind, as it is for the model and the repository.
@@ -217,41 +264,61 @@ session.
 **It is a state of the session page and not a route of its own.** The session id exists from step 1,
 so the URL is stable and bookmarkable while the clone runs, and the console already renders a
 session whose worktree is not yet planted and already has the live connection that fills it in when
-turn 0 lands. A second address would be a page somebody can be sitting on when the thing it is
-waiting for arrives somewhere else.
+the declaration lands. A second address would be a page somebody can be sitting on when the thing it
+is waiting for arrives somewhere else.
 
-### A plugin that will not load stops the session
+**It stands alone on that page rather than above the conversation.** A session being set up has no
+transcript to read, nothing to type into and nothing to navigate, so a message box and a rail drawn
+beside it are controls pointed at a conversation that does not exist yet - and the rail draws a card
+per *running plugin*, which would be a plugin's own surface standing on the screen that exists to
+decide whether to run it. Which shape the page takes is one predicate, `settling`, and [the live
+connection](console.md) reads the same one to decide which regions to send, so the page and the
+connection driving it cannot disagree about what is on screen.
 
-**Turn 0 is recorded only once every declared plugin has described.** A failure ends the pass with
-nothing written, the page says which plugin and why, and **retrying is another pass**: `make_ready`
-is the whole of the mechanism, and `describe` runs again from scratch with nothing recorded to
-conflict with.
+### A plugin that will not load comes back to the step
 
-That is forced rather than chosen. The store keeps the value a key was first given, so a turn-0
-record written with one plugin missing could never be corrected, and a reload control that rewrote
-it would be writing into a slot that ignores it.
+**A load either records both halves or records nothing.** Every plugin left on is described at once,
+before anything is written, so a tier that failed does not leave the other one recorded: the store
+keeps the value a key was first given, and a half-written registration could never be corrected.
 
-**One broken plugin stopping the whole session is the right answer in every tier**, by the question
+**A failure answers with the settings step again, with the reason above the switches.** That is where
+a reader can act on it, because the thing to do about a plugin that will not describe is turn it off,
+and the switch is a line down. Nothing about the failure is recorded, which is deliberate for the
+same write-once reason: the first failure would otherwise be the sentence every later attempt showed.
+
+The step's own `Try again` is a different button for a different failure. It asks for another
+*declaring* pass, which is what a worktree that would not plant or a `.mainplate/mainplate.yaml` that
+would not parse needs; that failure *is* recorded, under `plugins:refused`, because it happened in a
+pass with nobody waiting on it.
+
+**One broken plugin stopping the load is the right answer in every tier**, by the question
 [refusing at startup](../philosophy.md#refusing-at-startup-or-promising-not-to-raise) asks: a
 repository plugin is one you kept trusted and a user plugin is one you configured, so either failing
 silently leaves somebody holding a choice they cannot use. A session that quietly ran without it
 would be answering under a setup nobody asked for.
 
 **Which puts the bundled plugins on that same path, and handoff is on in every session**, so a
-handoff that will not describe is a console that starts no sessions at all. That reads alarming and
+handoff that will not describe is a console whose sessions cannot be loaded. That reads alarming and
 is the correct severity: a console whose handoff is broken *is* broken, and it is broken in this
 repository rather than in somebody's configuration. It is also the one tier where the failure is not
 a realistic runtime mode, because a bundled plugin that cannot describe fails this repository's own
 suite long before it reaches anybody. What stays realistic is the user's own plugin and the
-repository's, which is where the retry and the message naming the plugin are aimed.
+repository's, which is where the sentence naming the plugin and the switch beside it are aimed.
 
 ### What this costs, and the title
 
 **Creation stops being fire-and-forget.** Time to a first answer is unchanged, since the clone
-happens either way, but you now create, wait, and come back to type, where before you could type and
-walk away. That is the real cost and it is bigger than an extra click. It is taken deliberately:
-consistency and a setup that cannot half-happen are worth more here than the convenience, and the
-convenience is recoverable later in a way a half-configured session is not.
+happens either way, but you now create, wait, confirm, and come back to type, where before you could
+type and walk away. That is the real cost and it is bigger than an extra click. It is taken
+deliberately: a boundary in front of executing somebody else's program is worth more here than the
+convenience, and the convenience is recoverable later in a way a session that ran a plugin nobody
+looked at is not.
+
+**And the press itself waits.** Loading is concurrent across every plugin, so it is one plugin's
+slowest `describe` rather than the sum of them, but it is still a request that spawns processes and
+holds while they answer. The alternative was letting the conversation open while the load ran behind
+it, which trades the wait for a page whose rail and composer fill in some moments later - a worse
+deal, since what is filling in is the thing you were just asked to approve.
 
 **A session is `UNTITLED` until its first message lands.** The name still comes from that message
 and is still written once, so [the claim the session index rests
@@ -269,9 +336,10 @@ the list with nothing in it is the visible failure and a session being answered 
 is the invisible one. An empty session waiting for a message is now the *intended* state, so the
 thing that ordering protected against has stopped being a failure at all.
 
-**The setup step and the rail both draw a plugin's controls, from one declaration.** That is
-`tending_fields`'s existing shape, where the picker, the fork page and the rail render one pair of
-fields from one call, and the trap here is rendering them twice rather than reaching for it.
+**The step and the rail draw different things, and that is the split rather than an inconsistency.**
+The step draws one switch per *declared* plugin, from a name and a path, because nothing has been run
+and there is no card to draw. The rail draws a *card* per running plugin, from what that plugin said
+when it was run. Neither is a rendering of the other, and a change to one is not a change to both.
 
 ## The events
 
@@ -508,7 +576,7 @@ holds both.
 
 **Nothing is a stack, and a claimed name settles nothing.** An operator's `guidance` and the bundled
 `guidance` are two plugins, both on, both listed on [the settings
-step](#starting-a-session-takes-two-steps) with a switch apiece. Installing one is the decision; this
+step](#starting-a-session-takes-three-steps) with a switch apiece. Installing one is the decision; this
 console does not read a second meaning into the name you happened to give it.
 
 Two designs were tried here and both are worse, in the same way and by degrees. **Shadowing** - one
@@ -628,13 +696,19 @@ the model no shell at all. That second one is why it is drawn in the picker rath
 the isolation: the two are near enough to look like one question and are not.
 
 **The exposure is made visible rather than the answer made precise.** That is what the [settings
-step](#starting-a-session-takes-two-steps) is for: it runs after `describe` and before the first
-message, so every session shows what it actually loaded, in the terms above, before anything has
-been said to it.
+step](#starting-a-session-takes-three-steps) is for: it runs *before* `describe` and before the first
+message, so every session shows what it is about to run, in the terms above, before any of it has
+been executed and before anything has been said.
 
-**Which plugins a session runs, and what they registered, is settled on its first pass.** That is
-`turn:0:tree:0`'s own shape and the only other thing here like it: a fact about one session that
-could only be learned by doing the work, recorded once and replayed after. It is also what
+The switch in the picker and the switches on that step are therefore two decisions rather than one
+asked twice. The picker's decides whether the repository's file is even *read*, which has to be asked
+blind because there is no clone yet; the step's decides which of what was read is *run*, by which
+point there is a list to look at. Answering `no` in the picker leaves the step with an empty
+repository tier and nothing was fetched to find that out.
+
+**Which plugins a session runs, and what they registered, is settled when the step is answered.**
+That is `turn:0:tree:0`'s own shape and the only other thing here like it: a fact about one session
+that could only be learned by doing the work, recorded once and replayed after. It is also what
 [registration once per session](#registration) needs in order to be true across a restart.
 
 ### Read once, and never from a tree this console wrote
@@ -642,8 +716,8 @@ could only be learned by doing the work, recorded once and replayed after. It is
 A session's model has `edit` over its worktree, so the file declaring a repository's plugins is a
 file the model can write. Two rules keep that from being a way to run code of the model's choosing.
 
-**It is read once, at turn 0, and recorded.** Every pass after replays the record and reads no file.
-Without this, a model writes a plugin on turn 4 and the console runs it on turn 5.
+**It is read once, on the session's first pass, and recorded.** Every pass after replays the record
+and reads no file. Without this, a model writes a plugin on turn 4 and the console runs it on turn 5.
 
 **It is read from the commit the repository supplied, and never from a tree this console
 snapshotted.** This is the one that is easy to miss, and "read it out of the recorded tree" sounds
@@ -654,10 +728,12 @@ its own worktree would run a plugin the parent's model authored, one fork away f
 files.
 
 **So a fork inherits the repository half of what its parent recorded, and describes it afresh for
-nothing.** What it inherits is the whole of that half of turn 0's record, the tools and the cards
-and not merely the names, because re-running a repository's plugin would be launching a script out
-of a tree the parent's model had been editing. Only a session planted at a commit the *repository*
-provided ever reads that file or runs what is in it.
+nothing.** What it inherits is the whole of that half, the tools and the cards and not merely the
+names, because re-running a repository's plugin would be launching a script out of a tree the
+parent's model had been editing. Both keys come across, the declaration as well as the registration:
+a fork of a session that never got past its settings step has only the first, and re-reading the file
+to draw a switch for it is the same read out of the same tree, one step earlier. Only a session
+planted at a commit the *repository* provided ever reads that file or runs what is in it.
 
 **The user half is a different question and a fork re-describes it**, because those scripts are the
 operator's own and sit outside every worktree, so nothing a model wrote can reach them. That is the

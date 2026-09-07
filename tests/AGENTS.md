@@ -37,10 +37,15 @@ one being answered.
 wants a session with a message in it and should not have to know why that is two steps.
 
 **A test that renders a session's *page* may also want a registration**, which is `registering` in
-`test_browser.py`. A session that has registered no plugins is one whose setup pass has not finished,
-so its page draws the settings step rather than a transcript - which is honest, and not what most of
+`test_browser.py`. A session that has loaded no plugins is one nobody has answered the settings step
+for, so its page draws that step rather than a transcript - which is honest, and not what most of
 these tests are about. It only matters where a page is being looked at: a session with a turn in it
-is past that step whatever it registered.
+is past that step whatever it loaded.
+
+**A test that wants a session's plugins actually running has to press the button**, because nothing
+else runs one: `set_up` in `test_plugins.py` does the pass and the press together, and `loaded` in
+`test_app.py` does it over HTTP. A test that skipped the press and delivered a message would find a
+session refusing to answer, which is the boundary working rather than a fixture to loosen.
 
 **Every response fixture carries a timestamp.** `ModelResponse.timestamp` defaults to the moment it
 was constructed, so a fixture without one is the moment the test ran, and an assertion over a whole

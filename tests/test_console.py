@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from dataclasses import field
 from dataclasses import replace
 from datetime import timedelta
 from html.parser import HTMLParser
+from pathlib import Path
 from re import sub
 
 import pytest
@@ -34,6 +37,8 @@ from mainplate.console import parse_form_prompt
 from mainplate.console import parse_form_send
 from mainplate.console import posted_isolation
 from mainplate.console import posted_workspace
+from mainplate.conversation import DECLARED_KEY
+from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
 from mainplate.conversation import heard_key
@@ -45,10 +50,16 @@ from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import refused_key
+from mainplate.conversation import registered_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import tree_key
 from mainplate.pages import CACHE_ID
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.plugins.asking import Declaring
+from mainplate.plugins.asking import recorded_declaration
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.running import PluginFailed
 from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
@@ -56,6 +67,9 @@ from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
+from mainplate.tending import AGAIN
+from mainplate.tending import SETTLE_FIELD
+from mainplate.tending import SETTLED
 
 
 def delivered_in(recorded: Mapping[str, object]) -> list[object]:
@@ -96,10 +110,14 @@ async def a_session(app: ASGIApp, said: str = "what is a mainplate", title: str 
     """
     A session started the way a browser starts one, with its first message in it.
 
-    **Two posts, because creating one and saying the first thing in it are two steps**: a
-    repository's plugin cannot be described until its worktree is planted, so creation records the
+    **Two posts, because creating one and saying the first thing in it are separate requests**: a
+    repository's plugins cannot be named until its worktree is planted, so creation records the
     choice and the message box is on the session's own page. Written once here rather than at every
     call site, and a test that is about the split posts to `/sessions` itself.
+
+    The settings step in between is skipped, which is safe because this app's service runs no plugins:
+    a console with nothing declared has nothing to confirm. `TestLoadingASessionsPlugins` is where the
+    step itself is driven.
     """
     async with calling(app) as caller:
         answered = await caller.post("/sessions", starting_form(title=title))
@@ -280,7 +298,7 @@ class TestTheConsole:
         assert answered.status == 200
         assert 'class="picker"' in answered.text
         assert 'class="composer"' not in answered.text
-        assert ">Start</button>" in answered.text
+        assert ">Create session</button>" in answered.text
         assert await service.listed() == ()
 
     async def test_the_first_message_creates_a_session_and_redirects_to_it(
@@ -1671,3 +1689,167 @@ class TestOneQuestionAboutFiles:
 
     def test_an_absent_field_is_the_tightest_answer(self) -> None:
         assert posted_workspace({}) == (None, Filesystem.NOTHING)
+
+
+# What a session's first pass would have read out of files, which is what the step draws a switch
+# for. Two of the operator's own, so a test can leave one on and turn the other off and ask which
+# was actually run.
+DECLARES: tuple[Installed, ...] = (
+    Installed(tier=Tier.USER, name="lint", path=Path("/plugins/lint")),
+    Installed(tier=Tier.USER, name="notify", path=Path("/plugins/notify")),
+)
+
+
+@dataclass
+class Answering:
+    """
+    A stand-in for running a plugin, which records who was asked and may turn one of them down.
+
+    A function rather than a process, which is what `Speaking` is injected for: that a plugin really
+    is a file spoken to over a pipe is `test_plugins.py`'s claim, and what these ask is the *order* -
+    declared, then confirmed, then run, and never one of them without the one before it.
+    """
+
+    refusing: str | None = None
+    asked: list[str] = field(default_factory=list)
+
+    async def __call__(self, plugin: Installed, payload: Mapping[str, object]) -> object:
+        self.asked.append(plugin.qualified)
+        if self.refusing == plugin.qualified:
+            raise PluginFailed(f"{plugin.qualified} exited 1: saying nothing")
+        return {"events": ["after_turn"]}
+
+
+class TestLoadingASessionsPlugins:
+    """
+    The settings step, which is the one thing standing between a declaration and a program running.
+
+    Every test here turns on the same claim: nothing spawns until somebody presses the button, and
+    what the press runs is exactly what the switches left on.
+    """
+
+    async def console(self, service: Service, answering: Answering) -> tuple[ASGIApp, Service]:
+        """The console over a service that can run a plugin, which the shared fixture's cannot."""
+        running = replace(service, declaring=Declaring(console=DECLARES, speaking=answering))
+        return build_app(already(running)), running
+
+    async def declared(self, service: Service) -> str:
+        """A session whose first pass has planted and read the files, and done nothing else."""
+        session = await service.start(DEFAULT_CHOICE)
+        await service.checkpointer.supply(session.id, DECLARED_KEY, recorded_declaration(DECLARES))
+        await service.checkpointer.supply(session.id, REPOSITORY_DECLARED_KEY, recorded_declaration(()))
+        return session.id
+
+    async def test_the_step_offers_switches_and_nothing_to_type_into(self, service: Service) -> None:
+        """
+        A session being set up has no transcript, no message box and no rail: every control in those
+        is pointed at a conversation that does not exist, and the rail's own cards are the surface of
+        the plugins this screen exists to decide about.
+        """
+        answering = Answering()
+        app, running = await self.console(service, answering)
+        session = await self.declared(running)
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session}")
+
+        assert page.status == 200
+        # The hidden field beside the box, which is what makes "off" representable at all: an
+        # unchecked checkbox posts no field, so without it a plugin somebody turned off arrives
+        # looking exactly like one this form never carried.
+        assert 'type="hidden" name="on:user:lint" value="off"' in page.text
+        assert 'type="checkbox" name="on:user:lint"' in page.text
+        assert ">Load plugins</button>" in page.text
+        assert 'class="composer"' not in page.text
+        assert 'class="rail"' not in page.text
+        assert answering.asked == [], "and nothing has been run to draw it"
+
+    async def test_the_press_runs_only_what_was_left_on(self, service: Service) -> None:
+        """
+        Which is the whole of the boundary: a plugin somebody switched off is not merely contributing
+        nothing, it was never launched.
+        """
+        answering = Answering()
+        app, running = await self.console(service, answering)
+        session = await self.declared(running)
+        async with calling(app) as caller:
+            pressed = await caller.post(
+                f"/sessions/{session}/setup",
+                {"on:user:lint": "on", "on:user:notify": "off", SETTLE_FIELD: SETTLED},
+            )
+
+        assert pressed.status == 303, "the conversation is where to go next"
+        assert pressed.location.endswith(session)
+        assert answering.asked == ["user:lint"]
+        enrolled = registered_in(await running.checkpointer.load(session))
+        assert enrolled is not None
+        assert [each.qualified for each in enrolled] == ["user:lint"]
+
+    async def test_a_step_with_every_switch_off_runs_none_of_them(self, service: Service) -> None:
+        """
+        The case a form cannot express on its own, and what the hidden field beside each box is for:
+        an unchecked checkbox posts nothing, so without it this post is indistinguishable from a form
+        that carried no switches at all.
+        """
+        answering = Answering()
+        app, running = await self.console(service, answering)
+        session = await self.declared(running)
+        async with calling(app) as caller:
+            pressed = await caller.post(
+                f"/sessions/{session}/setup",
+                {"on:user:lint": "off", "on:user:notify": "off", SETTLE_FIELD: SETTLED},
+            )
+
+        assert pressed.status == 303
+        assert answering.asked == []
+        assert registered_in(await running.checkpointer.load(session)) == ()
+
+    async def test_a_plugin_that_will_not_load_comes_back_to_the_step(self, service: Service) -> None:
+        """
+        Rather than stalling a conversation, because the thing to do about a plugin that will not
+        describe is turn it off - and the switch is on the screen this answers with.
+        """
+        answering = Answering(refusing="user:notify")
+        app, running = await self.console(service, answering)
+        session = await self.declared(running)
+        async with calling(app) as caller:
+            pressed = await caller.post(
+                f"/sessions/{session}/setup",
+                {"on:user:lint": "on", "on:user:notify": "on", SETTLE_FIELD: SETTLED},
+            )
+
+        assert pressed.status == 200
+        assert "user:notify exited 1" in pressed.text
+        assert ">Load plugins</button>" in pressed.text, "with the switches still there to change"
+        recorded = await running.checkpointer.load(session)
+        assert registered_in(recorded) is None, "and nothing was written, so pressing again is a fresh attempt"
+
+    async def test_a_session_that_has_been_asked_something_is_refused(self, service: Service) -> None:
+        """
+        A tool definition leaving the cached prefix invalidates everything under it exactly as one
+        arriving late does, so which plugins run is settled the moment a turn is recorded.
+        """
+        answering = Answering()
+        app, running = await self.console(service, answering)
+        session = await self.declared(running)
+        await running.say(session, "hello")
+        async with calling(app) as caller:
+            pressed = await caller.post(f"/sessions/{session}/setup", {SETTLE_FIELD: SETTLED})
+
+        assert pressed.status == 422
+        assert "fork it instead" in pressed.text
+        assert answering.asked == []
+
+    async def test_try_again_asks_for_another_pass_and_runs_nothing(self, service: Service) -> None:
+        """
+        The other button, and the reason the two are told apart by a field rather than by the shape of
+        the post: a step with every switch off posts the same emptiness a retry does.
+        """
+        answering = Answering()
+        app, running = await self.console(service, answering)
+        session = await running.start(DEFAULT_CHOICE)
+        async with calling(app) as caller:
+            pressed = await caller.post(f"/sessions/{session.id}/setup", {SETTLE_FIELD: AGAIN})
+
+        assert pressed.status == 303
+        assert answering.asked == []
+        assert registered_in(await running.checkpointer.load(session.id)) is None

@@ -451,11 +451,15 @@ async def started(service: Service, said: str, chosen: Choice = DEFAULT_CHOICE, 
     """
     A session on `chosen` with `said` in it, which is what creating one used to be in one call.
 
-    **Creating a session and saying the first thing in it are two steps now**, because a repository's
-    plugin cannot be described until its worktree is planted and the settings step is drawn from what
-    was described. Most tests here are about something else entirely and want a session with a
-    message in it, so the pair is written once rather than at every call site - and a test that is
-    about the split says so by calling `Service.start` itself.
+    **Creating a session and saying the first thing in it are separate calls now**, because a
+    repository's plugins cannot be named until its worktree is planted and none of them is run until
+    the settings step is answered. Most tests here are about something else entirely and want a
+    session with a message in it, so the pair is written once rather than at every call site - and a
+    test that is about the split says so by calling `Service.start` itself.
+
+    It skips the step, which is safe exactly where nothing is declared: a console with no plugins has
+    nothing to confirm. A test that wants plugins actually running presses the button, through
+    `set_up` in `test_plugins.py` or `loaded` in `test_app.py`.
     """
     session = await service.start(chosen, title)
     await service.say(session.id, said)

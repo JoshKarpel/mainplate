@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import assert_never
 from urllib.parse import parse_qs
 
@@ -51,7 +52,6 @@ from mainplate.pages import record_json
 from mainplate.pages import refusal_page
 from mainplate.pages import running_plugins
 from mainplate.pages import session_page
-from mainplate.pages import setup_step
 from mainplate.pages import stalled_by
 from mainplate.pages import start_page
 from mainplate.pages import starting_at
@@ -64,8 +64,10 @@ from mainplate.sessions import TITLE_FIELD
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
 from mainplate.streaming import watching
+from mainplate.tending import AGAIN
 from mainplate.tending import ENABLED_FIELD
 from mainplate.tending import PLUGIN_FIELD
+from mainplate.tending import SETTLE_FIELD
 from mainplate.thinking import DEFAULT_THINKING
 from mainplate.thinking import UnknownThinking
 from mainplate.thinking import thinking_named
@@ -152,15 +154,31 @@ def posted_switches(fields: Mapping[str, list[str]]) -> dict[str, bool]:
     enrolled is the service's answer and a name that is not one of them is a write nothing will read.
     """
     return {
-        name.removeprefix(f"{ENABLED_FIELD}:"): values[0] == "on"
+        name.removeprefix(f"{ENABLED_FIELD}:"): values[-1] == "on"
         for name, values in fields.items()
         if name.startswith(f"{ENABLED_FIELD}:")
     }
 
 
-def parse_form_setup(raw: bytes) -> dict[str, bool]:
-    """The settings step's own post, which carries a switch per plugin and nothing else."""
-    return posted_switches(fields_in(raw))
+@dataclass(frozen=True, slots=True)
+class SettingUp:
+    """
+    What the settings step posted: which plugins to run, and which of its two buttons was pressed.
+
+    The button is a field rather than the shape of the post, because the two answers are not
+    distinguishable by shape: a step with every switch off posts the same emptiness as a step with
+    nothing to switch, and reading that as "try again" would silently discard the one answer somebody
+    took the trouble to give.
+    """
+
+    switches: Mapping[str, bool]
+    again: bool
+
+
+def parse_form_setup(raw: bytes) -> SettingUp:
+    """The settings step's own post, which carries a switch per plugin and the button that was pressed."""
+    fields = fields_in(raw)
+    return SettingUp(switches=posted_switches(fields), again=fields.get(SETTLE_FIELD, [""])[0] == AGAIN)
 
 
 setting_up = body(parse_form_setup, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
@@ -859,10 +877,15 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             assert_never(unreachable)
 
 
-@post(t"/sessions/{session_id}/setup", session_id, setting_up, summary="Say which plugins a session runs")
-async def setup(service: Service, session: str, wanted: Mapping[str, bool]) -> Response:
+@post(t"/sessions/{session_id}/setup", session_id, setting_up, summary="Load the plugins a session runs")
+async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     """
-    Set which of this session's plugins it runs, and answer with the step as it now stands.
+    Answer the settings step: record the switches, run what they left on, and go to the conversation.
+
+    **This is the request that first executes a plugin, and that is what the step is for.** Nothing
+    before it has run one: the pass that planted the worktree read what each tier *declares* out of
+    files, and the switches on this form are drawn from that. So the press is the confirmation, and
+    the load is what it confirms.
 
     **Live before anything has been asked, and refused afterwards.** A tool definition leaving the
     cached prefix invalidates everything under it exactly as one arriving late does, so a session
@@ -870,13 +893,17 @@ async def setup(service: Service, session: str, wanted: Mapping[str, bool]) -> R
     changes its mind. That is refused here rather than in the service because what decides it is
     whether a turn has been recorded, which is a checkpoint question and the service holds no page.
 
-    An empty post is what the retry control sends: a session whose setup pass failed has nothing to
-    switch, and what it wants is another pass. `make_ready` is the whole of that mechanism, and
-    `describe` runs again from scratch with nothing recorded to conflict with.
+    Two buttons and one route, told apart by a field rather than by the shape of the post. `Try
+    again` asks for another *declaring* pass, which is the whole of what retrying a session whose
+    worktree or whose `.mainplate/mainplate.yaml` refused is. Anything else loads.
 
-    Answered with the step rather than with the transcript, which is the one thing separating this
-    from every other write here: nothing about the conversation changed, and what did change is
-    inside the step.
+    Three answers, and each is the page somebody can act on. A load that worked is a `303` to the
+    session, for the reason `start` returns one: what the browser is looking at is a different page
+    afterwards, since a loaded session has a message box and a rail and one on its step has neither,
+    and refreshing then repeats a `GET` rather than the press. A load that failed is the step again
+    with the reason above the switches, because the thing to do about a plugin that will not describe
+    is to turn it off. Nothing is recorded either way but the switches, so pressing again is a fresh
+    attempt.
     """
     found = await service.read(session)
     if found is None:
@@ -885,14 +912,21 @@ async def setup(service: Service, session: str, wanted: Mapping[str, bool]) -> R
         return page_response(
             422, refusal_page(LINKS, 422, f"session {session} has already been asked something; fork it instead")
         )
-    if wanted:
-        await service.switch(session, wanted)
-    else:
+    if wanted.again:
         await service.setup_again(session)
+        return seeing(LINKS.to_session(session))
+    await service.switch(session, wanted.switches)
+    # Read again, because the switches this load is about were written a line ago and `found` was
+    # read before them: which plugins run is exactly what the press just changed.
     asked = await service.read(session)
     if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(setup_step(LINKS, asked)))
+    why = await service.load(session, asked)
+    if why is None:
+        return seeing(LINKS.to_session(session))
+    return page_response(
+        200, session_page(LINKS, await service.listed(), replace(asked, refused_load=why), service.reachable)
+    )
 
 
 @post(t"/sessions/{session_id}/plugins", session_id, pressing, summary="Set one plugin's own settings")

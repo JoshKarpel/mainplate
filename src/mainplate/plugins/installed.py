@@ -252,9 +252,12 @@ def repository_plugins(worktree: Path) -> tuple[Installed, ...]:
     """
     What a repository declares about itself, read from the worktree at the moment it was planted.
 
-    **Read once, at turn 0, and recorded.** Every pass after replays the record and reads no file.
-    Without this a model writes a plugin on turn 4 and the console runs it on turn 5, which is a way
-    to run code of the model's choosing.
+    **Read once, on the session's first pass, and recorded.** Every pass after replays the record and
+    reads no file. Without this a model writes a plugin on turn 4 and the console runs it on turn 5,
+    which is a way to run code of the model's choosing.
+
+    Reading is not running: what this returns is a name and a path apiece, and whether any of it is
+    executed is the settings step's question. See `Service.load`.
 
     A path climbing out of the repository is refused rather than resolved, because a declaration
     naming `../../../bin/sh` is a repository asking to run something the grant was never about. That
@@ -370,9 +373,9 @@ def without_collisions(enrolled: Sequence[Enrolled]) -> tuple[Enrolled, ...]:
     return tuple(kept)
 
 
-def grouped(enrolled: Iterable[Enrolled]) -> tuple[tuple[Tier, tuple[Enrolled, ...]], ...]:
+def grouped(declared: Iterable[Installed]) -> tuple[tuple[Tier, tuple[Installed, ...]], ...]:
     """
-    Every enrolled plugin under the tier that declared it, in the order the settings step draws them.
+    Every declared plugin under the tier that declared it, in the order the settings step draws them.
 
     **By where a plugin came from rather than by what it does**, which is the whole point: the three
     are not equally trusted, and a reader deciding what to leave on is deciding about provenance.
@@ -381,5 +384,5 @@ def grouped(enrolled: Iterable[Enrolled]) -> tuple[tuple[Tier, tuple[Enrolled, .
     the flow can be described, learned and tested as one thing rather than as however many lists a
     repository happens to produce.
     """
-    held = tuple(enrolled)
-    return tuple((tier, tuple(each for each in held if each.installed.tier is tier)) for tier in Tier)
+    held = tuple(declared)
+    return tuple((tier, tuple(each for each in held if each.tier is tier)) for tier in Tier)

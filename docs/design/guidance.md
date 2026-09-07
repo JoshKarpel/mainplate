@@ -57,8 +57,8 @@ exactly there is therefore free.
 
 **What it recomposes is the join and not the guidance**, and that is the one thing the port to a
 plugin took away. A plugin describes once per session, so what it contributed is settled from the
-first pass; a forget composes the stretch's own `instructions:{n}` again and every block in it says
-the same thing. So an edited `AGENTS.md` is picked up by [forking](forking.md) rather than by
+moment its [settings step](plugins.md#starting-a-session-takes-three-steps) was answered; a forget
+composes the stretch's own `instructions:{n}` again and every block in it says the same thing. So an edited `AGENTS.md` is picked up by [forking](forking.md) rather than by
 forgetting, which is the answer this console gives to every other question about a session's terms.
 
 `history_began` asks the same `forgets` predicate `reached` clears history on, so the two cannot

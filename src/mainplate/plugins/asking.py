@@ -111,9 +111,10 @@ class Live:
     Built per pass and per handler rather than held for the process, because everything in it is
     that session's: which plugins it enrolled, what they are set to, and where its files are.
 
-    `enrolled` is what is actually **on**, which is every plugin the session registered unless a
-    switch on the settings step says otherwise. A plugin that is off contributes nothing - no tool in
-    the prefix, no card, no answer in the composer, and no events - so it is simply not here.
+    `enrolled` is what is actually **on**, which under the switches a session was loaded under is
+    every plugin it loaded. A plugin that is off contributes nothing - no tool in the prefix, no card,
+    no answer in the composer, and no events - so it is simply not here, exactly as one that was never
+    loaded is never described.
     """
 
     session: str
@@ -123,15 +124,6 @@ class Live:
     worktree: Path | None = None
     delivering: Delivering = nowhere
     storing: Storing = unstored
-
-    off: tuple[Enrolled, ...] = ()
-    """
-    Everything this session enrolled and is not running, which only the settings step reads.
-
-    Here rather than dropped, because a plugin that is off is still one the page has to draw a switch
-    for: nothing here is off without a control showing it, which is what makes the step a place a
-    reader can act on rather than a report.
-    """
 
     def wanting(self, event: Event) -> tuple[Enrolled, ...]:
         """
@@ -291,6 +283,25 @@ async def describing(
     )
 
 
+def recorded_declaration(installed: Sequence[Installed]) -> dict[str, object]:
+    """
+    What one tier's declaring file named, as the JSON-native value the store's codec will take.
+
+    The counterpart of `recorded_registration` one moment earlier, and the pair is the trust boundary
+    made structural: this is written by reading files and that is written by running programs, so a
+    session sitting on its settings step has one and not the other.
+    """
+    return records.Declared(
+        plugins=tuple(records.Named(name=each.name, tier=each.tier.value, path=str(each.path)) for each in installed)
+    ).recorded()
+
+
+def parse_declaration(recorded: object) -> tuple[Installed, ...]:
+    """What a session recorded about the plugins it may run, back as the values a load runs them from."""
+    held = records.Declared.model_validate(recorded)
+    return tuple(Installed(tier=Tier(each.tier), name=each.name, path=Path(each.path)) for each in held.plugins)
+
+
 def recorded_registration(enrolled: Sequence[Enrolled]) -> dict[str, object]:
     """What one tier's worth of plugins is, as the JSON-native value the store's codec will take."""
     return records.Registered(
@@ -324,20 +335,21 @@ def parse_registration(recorded: object) -> tuple[Enrolled, ...]:
     )
 
 
-def running(enrolled: Sequence[Enrolled], tending: Tending) -> tuple[tuple[Enrolled, ...], tuple[Enrolled, ...]]:
+def running(enrolled: Sequence[Enrolled], tending: Tending) -> tuple[Enrolled, ...]:
     """
-    A session's enrolled plugins split into the ones it runs and the ones it does not.
+    Which of a session's loaded plugins it runs, which under the switches it was loaded under is all
+    of them.
 
-    The switch is the session's own answer where it has one and `ON` where it has not, which is every
-    declared plugin in every tier: installing one is the decision, and nothing here turns something
-    else off out of view.
+    Applied all the same rather than assumed, because the two facts are recorded in two places and
+    only one of them is write-once: the registration is settled for the session's life, and the
+    switches are a column somebody could still have edited by hand. The switch is the session's own
+    answer where it has one and `ON` where it has not.
 
-    **Collisions are not asked here**, which is why this returns both halves rather than a checked
-    set: the settings step draws every enrolled plugin whether or not the running ones can agree
-    about a tool name, and the check belongs where the agent is built. See `without_collisions`.
+    **Collisions are not asked here**, and the check belongs where the agent is built rather than
+    where the set is read: what collides is what is on, and what fixes it is a fork. See
+    `without_collisions`.
     """
-    on = tuple(each for each in enrolled if tending.on(each.qualified, ON))
-    return on, tuple(each for each in enrolled if each not in on)
+    return tuple(each for each in enrolled if tending.on(each.qualified, ON))
 
 
 type Asking = Callable[[str, str, Mapping[str, object]], Awaitable[object]]
