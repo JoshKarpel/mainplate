@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -56,8 +57,8 @@ from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
-from mainplate.plugins.asking import Enrolled
 from mainplate.plugins.asking import recorded_registration
+from mainplate.plugins.installed import Enrolled
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_session
@@ -454,7 +455,7 @@ def app(service: Service) -> ASGIApp:
     return build_app(already(service))
 
 
-async def registered(service: Service, session: str, *enrolled: Enrolled) -> None:
+async def registered(service: Service, session: str, enrolled: Sequence[Enrolled] = ()) -> None:
     """
     What a pass writes when somebody answers a session's settings step.
 
@@ -468,7 +469,7 @@ async def registered(service: Service, session: str, *enrolled: Enrolled) -> Non
     value a key was first given, so calling it after an empty one records nothing and leaves the rail
     empty with no failure to point at.
     """
-    await service.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(enrolled))
+    await service.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(tuple(enrolled)))
     await service.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
 
 
@@ -477,7 +478,8 @@ async def started(
     said: str,
     chosen: Choice = DEFAULT_CHOICE,
     title: str | None = None,
-    *enrolled: Enrolled,
+    *,
+    enrolled: Sequence[Enrolled] = (),
 ) -> Session:
     """
     A session on `chosen` with `said` in it, which is what creating one used to be in one call.
@@ -497,7 +499,7 @@ async def started(
     """
     session = await service.start(chosen, title)
     await service.say(session.id, said)
-    await registered(service, session.id, *enrolled)
+    await registered(service, session.id, enrolled)
     found = await read_session(service.database, session.id)
     return found if found is not None else session
 

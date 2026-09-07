@@ -473,10 +473,11 @@ class Registered(Record):
     would invalidate the whole prefix beneath it and leave the turns already recorded having been
     answered by a harness that session no longer has.
 
-    Two of these per session, under two keys, and that is failure rather than untidiness: nothing is
-    recorded until every plugin in a half has answered, so a repository's plugin that will not set up
-    leaves the operator's half recorded instead of taking it down with it. A fork carries neither and
-    sets both up again.
+    Two of these per session, under two keys, and that is the tiers rather than untidiness: they run
+    behind different isolation, so the set is split where it is already being split to be launched.
+    Both halves answer before either is written, so a tier that failed leaves neither recorded and the
+    whole step is retried; what the two keys buy is a resumed pass re-launching only the half it never
+    got to. A fork carries neither and sets both up again.
     """
 
     kind: Literal["plugins"] = "plugins"

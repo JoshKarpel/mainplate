@@ -39,7 +39,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   press is asked for again rather than inherited - a branch is planted at a tree the model wrote, so
   what licenses running it is the decision to fork plus the confirmation in the branch. The real
   cost: creating a session no longer carries the first message, so you create, wait, confirm, and
-  come back to type, and a fork stops at that screen before it answers anything.
+  come back to type, and a fork stops at that screen before it answers anything - the step standing
+  in the transcript's place, so a branch will not show what its parent said until it is set up.
 - **A plugin sets itself up**, in one event that both gets it ready and asks what it contributes. It
   is the one event with a network and the one with a directory of its own that survives the session,
   which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an

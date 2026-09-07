@@ -21,11 +21,13 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ToolCallPart
 from without_durability.stepwise import Blocked
+from without_durability.stepwise import Completed
 
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import REPOSITORY_DECLARED_KEY
+from mainplate.conversation import Unconfirmed
 from mainplate.conversation import conversing
 from mainplate.conversation import declared_in
 from mainplate.conversation import refusal_in
@@ -1176,11 +1178,13 @@ class TestWhatABranchDoesAboutThem:
         forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE, said="again")
         assert forked is not None
 
-        await passing(service, forked.id, self.body(declaring, service))
+        stopped = await passing(service, forked.id, self.body(declaring, service))
 
         waiting = await service.checkpointer.load(forked.id)
+        assert stopped == Completed(Unconfirmed()), "waiting on a press rather than stalled on a fault"
         assert setups_in(waiting) == 0, "the parent's press is not the branch's"
         assert registered_in(waiting) is None, "so nothing is set up until somebody presses in here"
+        assert refusal_in(waiting) is None, "and nothing is recorded, so the page draws the step"
 
         await replace(service, declaring=declaring).settle(forked.id, {}, 0)
         await passing(service, forked.id, self.body(declaring, service))

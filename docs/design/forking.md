@@ -76,17 +76,14 @@ survive is a plugin set changing under a request already made, and a branch has 
 including the setup script that installs its toolchain - which a branch has to run again anyway,
 since it plants a fresh worktree and an ignored directory does not come across in a recorded tree.
 
-**And the press is asked for again because a branch is planted at a tree a model wrote.** A snapshot
-is `git add -A`, so a `.mainplate/` file written on turn 4 is in the tree recorded for turn 5. What
-makes running what that tree names legitimate is not that the parent was confirmed once: it is that
-somebody chose to fork this conversation and then confirmed the switches here. Starting a session and
-forking one are the same decision about the same code, taken at two moments, and both are asked in
-the same place. The parent's switches come across as the step's defaults, so a plugin turned off is
-drawn turned off in every branch. See
+**And the press is asked for again rather than inherited**, because a branch is planted at a tree a
+model wrote, so what licenses running what it names is the decision to fork plus the confirmation in
+the branch. The parent's switches come across as the step's defaults. Why that is the boundary, and
+what a snapshot has to do with it, is
 [reading it once](plugins.md#read-once-and-never-from-a-tree-this-console-wrote).
 
 The cost, stated: **every fork stops at a screen before it answers anything**, a fork made only to
-re-ask one turn included.
+re-ask one turn included, and its transcript is withheld until it does.
 
 ## There is no rewind
 

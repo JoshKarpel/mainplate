@@ -39,17 +39,18 @@ to be looked at and should not have to know why that is three steps.
 
 **A registration is the whole of what takes a session past the settings step**, and the turn count is
 not read at all. So a suite running without a worker has to write one or every page it renders is
-that step: `conftest.registered` is what writes it, `started` calls it, and `taken` in
-`test_console.py` calls it too, because a pass sets a session's plugins up *before* it opens a turn
-and a turn recorded without one is a checkpoint no pass could produce.
+that step. `conftest.registered` is the one place that writes it, and `started` and `a_session` both
+call it, which is why neither hands back a session drawing the step.
 
 **It is write-once, so it has to be the first registration a session gets.** A card to draw goes to
-`started` as `enrolled`; supplied over the top of an empty set it records nothing and leaves the rail
-empty with no failure to point at.
+`started` as `enrolled=`; supplied over the top of an empty set it records nothing and leaves the
+rail empty with no failure to point at. For the same reason nothing writes a second one: `taken`
+does not, because every session reaching it came through `a_session`.
 
-**A fork needs one of its own**, which is `registering` in `test_browser.py` and
-`landed_on_the_branch` beside it. A branch carries its parent's turns and none of its plugins, so it
-holds a conversation and still draws the step - the console working rather than a fixture to loosen.
+**A fork needs one of its own**, written with the same `registered` and, where a test has navigated
+to the branch, through `landed_on_the_branch` in `test_browser.py`, which parses the id off the url
+and reloads. A branch carries its parent's turns and none of its plugins, so it holds a conversation
+and still draws the step - the console working rather than a fixture to loosen.
 
 **A test that wants a session's plugins actually running has to press the button and then run a
 pass**, because that is now two moments: the press records the switches and asks for a pass, and the

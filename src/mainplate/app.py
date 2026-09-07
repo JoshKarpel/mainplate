@@ -74,6 +74,7 @@ from mainplate.conversation import Ended
 from mainplate.conversation import Noting
 from mainplate.conversation import Progressed
 from mainplate.conversation import Stalled
+from mainplate.conversation import Unconfirmed
 from mainplate.conversation import conversing
 from mainplate.exe import ExeDevGitHub
 from mainplate.forge import Clones
@@ -378,6 +379,11 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
     the worker's own answer for a raised pass - leave the delivery unanswered, redeliver when the
     lease elapses - that is a session retried for ever with only a log line to show for it.
 
+    **`Unconfirmed` asks for the same silence and means the opposite**, so it is logged as the
+    ordinary thing it is: a session on its settings step, waiting for a press that will queue a pass
+    of its own. Every fork's first pass ends here, so warning about it would report a fault at the
+    one moment the console is working as designed.
+
     **`Noting` is the arm that writes rather than schedules**, and it is here for the reason the
     other two are: what a session whose plugins spoke at the turn boundary is owed is a message in
     its own inbox, and putting one there is queueing, which is this function's whole subject.
@@ -398,6 +404,8 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
                 await durable.scheduler.make_ready(run.workflow)
             case Stalled():
                 logger.warning(f"{run.workflow} stalled on a request no pass can make; not waking it again")
+            case Unconfirmed():
+                logger.info(f"{run.workflow} is waiting on its settings step; the press is what wakes it")
             case Noting(notes=notes):
                 for note in notes:
                     logger.info(f"{run.workflow}: {note.plugin} asked for a message to be put to it")

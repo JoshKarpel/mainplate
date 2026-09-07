@@ -111,6 +111,14 @@ would put an identical question to the provider and get an identical answer. `En
 named for the pass rather than `Outcome`, which already means how a tool call went here and what the
 mechanism made of a pass in `without-durability`.
 
+**`Unconfirmed` asks for the same nothing and means the opposite**, which is why it is a fourth arm
+and not a second reading of the third. A pass that reaches a session still on its
+[settings step](plugins.md#setup) stops having recorded nothing at all, so there is no refusal to
+read and nothing is wrong. Somebody has simply not pressed the button yet, and the press is what
+queues the pass that goes on. Told apart because the worker logs what it is handed, and every fork's
+first pass ends here, so folding the two together would report a fault at the one moment the console
+is working as designed.
+
 **The bug it closes is invisible rather than loud.** `without-durability`'s worker leaves a delivery
 unanswered when a pass raises, deliberately, since it cannot tell a workflow's own failure from a
 store that was briefly unreachable, and its own docstring names the cost: a workflow that fails on

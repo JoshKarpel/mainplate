@@ -58,7 +58,11 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   offered from **any** fork rather than only an aside, because what it needs is `Origin.session` and
   every fork has one; gating it on the flag would be a restriction invented to make the flag look
   load-bearing. The destination is read off the row and never posted, so a form cannot put a message
-  in a conversation nobody was looking at.
+  in a conversation nobody was looking at. It is drawn once the branch is past [its own settings
+  step](plugins.md#setup), since this control is in the composer and a settling page has none: an
+  aside is a fork, so the round trip is step aside, confirm, read, send back. That falls out of how
+  forks work rather than being a rule about asides, and it is left that way rather than given a
+  second page shape to keep working.
 - `run` is `Service.run`, and it is the one answer here that is not a message going somewhere. It is
   in the same field all the same, because the question the menu asks is what happens to what you
   typed; a control of its own would spend a slot in the row above the box. It is offered only where

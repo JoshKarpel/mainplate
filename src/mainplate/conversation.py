@@ -181,24 +181,25 @@ PLUGINS_KEY: StepKey = "plugins:console"
 What the bundled plugins and the operator's own declared for this session, recorded on its first pass.
 
 **Not `turn:0:plugins`**, and the fork is what decides it, exactly as it decides `instructions:{n}`:
-`before` copies turn-prefixed keys by shape, so a turn-shaped name would carry both halves of a
-parent's registration into a branch. What a fork must inherit is the repository half alone, so the
-two halves are two session-level keys and `Service.fork` copies the one it may.
+`before` copies turn-prefixed keys by shape, so a turn-shaped name would carry a parent's
+registration into a branch. A fork must inherit neither half, so both are session-level keys and
+`Service.fork` copies neither.
 
-Described afresh by every session, this half, because these scripts are the operator's own and sit
-outside every worktree: nothing a model wrote can reach them, so a fork picking up an edited one is
-the ordinary way a conversation changes its mind about a plugin.
+Described afresh by every session, this half and the other, so a fork picking up an edited plugin is
+the ordinary way a conversation changes its mind about one.
 """
 
 REPOSITORY_PLUGINS_KEY: StepKey = "plugins:repository"
 """
 What the session's repository declared about itself, read once from the tree it was planted at.
 
-**Read from the commit the repository supplied, and never from a tree this console snapshotted.** A
-snapshot is a tree a model wrote - it is captured with `git add -A`, so a `.mainplate/` file the
-model created on turn 4 is *in* the tree recorded for turn 5 - and a fork plants at a recorded tree.
-So a fork inherits this whole rather than reading anything, which is why it is a key of its own: only
-a session planted at a commit the *repository* provided ever reads that file or runs what is in it.
+**A key of its own because this half is read somewhere else and can fail on its own**, so a
+repository that will not be read leaves the console's half recorded rather than taking it down too.
+
+A fork reads it again, out of the tree the branch is planted at, which is a tree a model wrote: a
+snapshot is captured with `git add -A`, so a `.mainplate/` file the model created on turn 4 is *in*
+the tree recorded for turn 5. What makes running what that tree names legitimate is the press in the
+branch rather than the parent's; see `docs/design/plugins.md`.
 
 Empty for a session with no repository, for one whose grant was never given, and for a repository
 carrying no such file, which are three states with one meaning and no need to be told apart.
@@ -2556,19 +2557,41 @@ class Stalled:
     """
     What a pass that hit an unanswerable request comes back with: the session is owed nothing.
 
-    The other way this body returns, and the opposite instruction to `Progressed`. A pass that
-    refuses to go on must not be made ready again, because the next one would ask the identical
-    question of the identical recorded history and be refused identically - which, left to the
-    worker's own redelivery, is a session retried once per lease for ever with nothing saying so.
+    One of the two ways this body declines to go on, and the opposite instruction to `Progressed`. A
+    pass that refuses to go on must not be made ready again, because the next one would ask the
+    identical question of the identical recorded history and be refused identically - which, left to
+    the worker's own redelivery, is a session retried once per lease for ever with nothing saying so.
 
-    The reason is already in the checkpoint by the time this is returned, under
-    `refused_key(turn, at)`, so this carries none: what the page draws it reads for itself, and a
-    value passed back through the worker would be a second copy of it that no restart survives.
+    **This one is a fault, and `Unconfirmed` is the other**, which asks for the same silence over a
+    session that has nothing wrong with it. The reason is already in the checkpoint by the time this
+    is returned, under `refused_key(turn, at)`, so this carries none: what the page draws it reads for
+    itself, and a value passed back through the worker would be a second copy of it that no restart
+    survives. That a refusal *is* recorded is what the two arms are told apart by.
 
     A person can still ask again, and that is the point rather than a gap: writing a message queues
     the session, so a refusal costs one attempt per human action instead of one per lease. What gets
     a conversation *past* a refused turn is `fork` at it, which drops the turn's own requests while
     keeping everything under them - see `before`.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Unconfirmed:
+    """
+    What a pass that reached a session still on its settings step comes back with: wait for the press.
+
+    **`Stalled`'s instruction without `Stalled`'s claim.** Both say do not make this session ready
+    again, and for the same reason: another pass would read the identical recorded history and stop
+    in the identical place. What separates them is what is in the checkpoint. A stalled session has a
+    refusal under `refused_key` saying why nothing can be asked; this one has recorded *nothing at
+    all*, because there is nothing wrong with it - somebody has simply not pressed the button yet.
+
+    Told apart rather than folded together because the worker logs what it is handed, and a fork's
+    first pass ends here: every branch of every session on a console with plugins would otherwise
+    report a fault at the one moment the console is working exactly as designed.
+
+    What makes the session ready again is the press, which `Service.settle` queues a pass for. So the
+    waiting costs one pass, not one per lease.
     """
 
 
@@ -2596,17 +2619,21 @@ class Noting:
     notes: tuple[records.Note, ...]
 
 
-type Ended = Progressed | Stalled | Noting
+type Ended = Progressed | Stalled | Unconfirmed | Noting
 """
 What one pass ends as, and the whole of what the worker owes each.
 
 Arms rather than a boolean, so `readying` reads what happened rather than a flag saying what to do
-about it, and so a fourth answer is a type error at the match rather than a session that quietly
+about it, and so a fifth answer is a type error at the match rather than a session that quietly
 stops being woken.
 
+**Two arms ask for the same thing and are still two.** `Stalled` and `Unconfirmed` both say leave
+this session alone, and the worker does the same nothing with each; what they do not share is what
+the checkpoint holds and therefore what an operator should be told. Folding them together would
+buy one branch and cost the log its only way to tell a dead session from a waiting one.
+
 Named for the pass rather than `Outcome`, which in this module already means how one tool call went
-and in `without-durability` already means what the mechanism made of a pass. Three things, three
-words.
+and in `without-durability` already means what the mechanism made of a pass.
 """
 
 
@@ -2684,9 +2711,9 @@ async def setting_plugins_up(
     so a tier that failed does not leave the other one recorded: the store keeps the value a key was
     first given, and a half-written registration could never be corrected.
 
-    Only under a key nothing has recorded yet, which is the fork: a branch inherits its parent's
-    repository registration whole, because setting one up again would launch a script out of a tree
-    the parent's model had been editing.
+    Only under a key nothing has recorded yet, which is what a resumed pass turns on: the two keys are
+    written one after the other, so a pass that died between them comes back with one recorded, and
+    launching that tier's processes again to throw the answer away is work nobody asked for.
     """
     if setups_in(run.recorded) == 0:
         return None
@@ -2881,7 +2908,7 @@ def conversing(
             # Asked of what was *declared*, so a console with no plugins at all needs no confirmation:
             # what the step confirms is executing somebody's program, and there is none to execute.
             if enrolled is None and declared:
-                return Stalled()
+                return Unconfirmed()
             # Read off the message this pass just parked on rather than by asking the store again,
             # which is the whole reason the boundary rides on the message itself: a pass carries its
             # history forward between turns, so a marker delivered beside the message while it was

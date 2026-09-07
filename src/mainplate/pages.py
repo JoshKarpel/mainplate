@@ -3441,12 +3441,18 @@ def setup_step(links: Links, showing: Conversation) -> Element:
     address would be a page somebody can be sitting on when the thing it is waiting for arrives
     somewhere else.
 
-    **It stands alone on that page rather than above the conversation.** A session being set up has
-    no transcript to read, nothing to type into and nothing to navigate, so a message box and a rail
-    drawn beside this are controls pointed at a conversation that does not exist yet - and the rail
-    draws a card per *running plugin*, which is a plugin's own surface standing on the screen that
-    exists to decide whether to run it. Which shape the page takes is `settling`, and the live
-    connection sends whichever regions that shape has.
+    **It stands alone on that page rather than above the conversation.** A message box drawn beside
+    this is pointed at a harness nobody has chosen yet, and the rail draws a card per *running
+    plugin*, which is a plugin's own surface standing on the screen that exists to decide whether to
+    run it. Which shape the page takes is `settling`, and the live connection sends whichever regions
+    that shape has.
+
+    **A branch is the case where there is something to stand in front of**, since a fork carries its
+    parent's turns and none of its plugins. Its transcript is withheld until the step is answered
+    rather than drawn under it: what a reader can act on there is the press, and every control the
+    conversation would offer - sending, forking, going back to a parent - wants a session whose set
+    of tools is settled. The cost, stated: a fork made only to re-read what its parent said has to be
+    set up before it will show it.
 
     Four states, and each says the one thing a reader can act on. Nothing declared yet is the clone
     and the worktree. A refusal names what could not be read and offers another pass. A press that
@@ -4208,7 +4214,8 @@ def settling(showing: Conversation) -> bool:
 
     Two shapes of one page rather than one page with a banner: settling is the step alone, and loaded
     is the transcript, the message box and the rail. The live connection sends whichever regions the
-    shape it finds has, so this is the one predicate both sides read.
+    shape it finds has, and the route answering the step refuses anything this says is past it, so
+    this is the one predicate all three read.
     """
     return showing.plugins is None
 
@@ -4235,11 +4242,14 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
     One session, in whichever of its two shapes it is in.
 
     **Settling is the step alone**, in the transcript's own place because that is what it stands in
-    for: there is no conversation yet, so a message box would be pointed at nothing and every control
-    in the rail would navigate an empty transcript. Settled is the page this console is otherwise
-    about. `settling` is what decides, and `streaming.watching` reads the same predicate to decide
-    which regions to send, so the page and the connection driving it cannot disagree about which
-    shape is on screen.
+    for: a message box would be pointed at a harness nobody has chosen yet, and every control in the
+    rail belongs to a session whose tools are settled. Settled is the page this console is otherwise
+    about. `settling` is what decides, and `streaming.watching` and the route answering the step read
+    the same predicate, so the page, the connection driving it and the press cannot disagree about
+    which shape is on screen.
+
+    A branch has turns and still takes the first shape, which is the one place these two are not
+    "before the conversation" and "after it" - see `setup_step`.
     """
     if settling(showing):
         return document(

@@ -99,12 +99,9 @@ async def taken(service: Service, session: str) -> int:
     runs without a worker: a test asserting on a turn in flight must not be racing one. Until this
     happens a message is only queued, which is a different state and one these tests are rarely about.
 
-    The registration goes with it because a pass sets a session's plugins up *before* it opens a turn,
-    so a session with a turn taken is one that got past its settings step by definition. Writing the
-    turn without it would be a checkpoint no pass could produce, and a page drawn from it draws the
-    step over a conversation.
+    No registration is written here: a session reaching this came through `a_session`, which answers
+    the settings step as part of starting one, and the key is write-once.
     """
-    await registered(service, session)
     recorded = await service.checkpointer.load(session)
     turn = len([key for key in recorded if key.endswith(":opened")])
     await service.checkpointer.supply(

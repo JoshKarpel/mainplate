@@ -82,10 +82,12 @@ async def watching(service: Service, links: Links, session: str, every: timedelt
             if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
                 return
             # Whichever regions the page's *shape* has, which `settling` decides for both sides: a
-            # session on its settings step has no transcript and no message box, and one past it has
-            # no step. Sending both sets would name a target that is not there on either page, and a
-            # partial with nowhere to go is silently dropped, so the reader would never learn that
-            # the message had nothing to say to them.
+            # page drawing the settings step has no transcript and no message box on it, and one past
+            # the step has no step. That is the shape and not the checkpoint - a branch has turns and
+            # still draws the step - so it is read from the same predicate the page is built with
+            # rather than from what the session holds. Sending both sets would name a target that is
+            # not there on either page, and a partial with nowhere to go is silently dropped, so the
+            # reader would never learn that the message had nothing to say to them.
             #
             # Settled is two regions on one connection, which is what `partial` exists for. The cache
             # note lives in the composer rather than in the transcript, so nothing else replaces it,

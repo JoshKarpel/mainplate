@@ -50,6 +50,7 @@ from mainplate.pages import plugin_card
 from mainplate.pages import record_json
 from mainplate.pages import refusal_page
 from mainplate.pages import session_page
+from mainplate.pages import settling
 from mainplate.pages import stalled_by
 from mainplate.pages import start_page
 from mainplate.pages import starting_at
@@ -891,16 +892,13 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     out of files, and the switches on this form are drawn from that. So the press is the
     confirmation, and the pass that follows is what it confirms.
 
-    **Live until a registration exists, and refused afterwards.** A tool definition leaving the cached
-    prefix invalidates everything under it exactly as one arriving late does, so a session that has
-    been set up is one whose set of plugins is settled, and forking is how a conversation changes its
-    mind. That is refused here rather than in the service because what decides it is what the
-    checkpoint holds, and the service holds no page.
-
-    **The registration and not the turn count**, which is what lets a fork answer this at all: a branch
-    carries its parent's turns and none of its plugins, so it owes an answer to the step while already
-    holding a conversation. Read against turns instead, every fork would be refused here and would have
-    to be handed a press it never gave.
+    **Live while the session is still settling, and refused afterwards.** A tool definition leaving
+    the cached prefix invalidates everything under it exactly as one arriving late does, so a session
+    that has been set up is one whose set of plugins is settled, and forking is how a conversation
+    changes its mind. Asked of `settling`, which is the predicate the page's own shape is drawn from:
+    the step is answerable exactly while it is the thing being drawn. That is refused here rather
+    than in the service because what decides it is what the checkpoint holds, and the service holds
+    no page.
 
     Two buttons and one route, told apart by a field rather than by the shape of the post. `Try
     again` asks for another *declaring* pass, which is the whole of what retrying a session whose
@@ -915,7 +913,7 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    if found.plugins is not None:
+    if not settling(found):
         return page_response(
             422, refusal_page(LINKS, 422, f"session {session} has already loaded its plugins; fork it instead")
         )

@@ -908,8 +908,9 @@ switches come across as the step's defaults, so a plugin turned off in a session
 in every branch of it and nobody has to remember why.
 
 The cost, stated: **every fork stops at a screen before it answers anything**, including a fork made
-only to re-ask one turn. That is one press against a branch silently running whatever its recorded
-tree happened to name.
+only to re-ask one turn, and the step stands in the transcript's place rather than above it, so a
+branch will not show what its parent said until it is set up. That is one press against a branch
+silently running whatever its recorded tree happened to name.
 
 **Where a session says it does not trust the repository nothing is read**, and the recorded set is
 empty for that session's life. Trusting afterwards reaches sessions started after it and none before,
