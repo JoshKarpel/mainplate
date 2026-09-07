@@ -54,6 +54,7 @@ from without_web import handle
 from without_web import http_scope
 from without_web import static_files
 
+from mainplate import records
 from mainplate.agent import Wires
 from mainplate.agent import build_wires
 from mainplate.catalogue import Catalogues
@@ -69,22 +70,23 @@ from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
 from mainplate.console import page_response
 from mainplate.console import recover
-from mainplate.conversation import Crossed
 from mainplate.conversation import Ended
+from mainplate.conversation import Noting
 from mainplate.conversation import Progressed
 from mainplate.conversation import Stalled
 from mainplate.conversation import conversing
-from mainplate.conversation import handing_through
-from mainplate.conversation import recorded_ask
 from mainplate.exe import ExeDevGitHub
 from mainplate.forge import Clones
 from mainplate.forge import Forge
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
-from mainplate.guidance import console_guidance
-from mainplate.guidance import instructing
 from mainplate.pages import refusal_page
+from mainplate.plugins.asking import Declaring
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.installed import bundled
+from mainplate.plugins.installed import installed_by
+from mainplate.plugins.running import Spawned
 from mainplate.reference import Prices
 from mainplate.reference import References
 from mainplate.reference import refreshed
@@ -94,6 +96,7 @@ from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import prepare
 from mainplate.sessions import read_tending
+from mainplate.sessions import set_settings
 from mainplate.settings import DEFAULT_PATIENCE
 from mainplate.settings import DEFAULT_WATCHING
 from mainplate.settings import Settings
@@ -151,6 +154,7 @@ async def open_store(
     references: References | None = None,
     watching: timedelta = DEFAULT_WATCHING,
     patience: timedelta = DEFAULT_PATIENCE,
+    declaring: Declaring | None = None,
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -181,6 +185,10 @@ async def open_store(
                 # not report.
                 references=references if references is not None else References(),
                 watching=watching,
+                # How to run a plugin, for the two events a request handler fires rather than a pass:
+                # a leader somebody typed and a control somebody pressed. Absent is a console with no
+                # plugins, which is what a store opened on its own is.
+                declaring=declaring,
             )
         finally:
             # Inside the store's own `finally`, and the nesting is the point: cancelling a command
@@ -244,13 +252,28 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     except NoSandbox as missing:
         bwrap = None
         logger.warning(f"no sandbox, so sessions get no shell: {missing}")
-    # The operator's own guidance, read once here rather than per pass, and said out loud for the
-    # same reason the sandbox is: guidance that is quietly not being read is the state nobody can
-    # diagnose. Reading it at startup means an edit reaches sessions when this process next starts,
-    # and nothing here notices one sooner - `just serve` watches `src/mainplate`, where this lives
-    # under the config home, so a guidance edit wants the process restarted by hand.
-    standing = instructing(settings.instructions, console_guidance(settings.config_home))
-    logger.info(f"console guidance: {len(standing)} characters from {settings.config_home}")
+    # Every plugin outside a worktree, which is the bundled set and whatever `config.yaml` installs.
+    # Both are files this process cannot see change, so the *set* is fixed at startup; what each one
+    # says is asked per session, on that session's own first pass, so a plugin edited on disk reaches
+    # the next new session without the console being restarted. That matters most while somebody is
+    # writing one.
+    #
+    # Nothing here is a name stack: an operator's `handoff` and the bundled `handoff` are two
+    # plugins, both on, both listed on a session's settings step. See `Config.plugins`.
+    declaring = Declaring(
+        console=(*bundled(), *installed_by(Tier.USER, config.plugins)),
+        speaking=Spawned(
+            bwrap=bwrap,
+            scratch=settings.workspace_root / "scratch",
+            config_home=settings.config_home,
+        ),
+        # A repository's plugin runs behind the namespace `bash` already uses, so a console without
+        # one runs none at all. A refusal rather than a fallback: running somebody else's script
+        # unconfined because the sandbox is missing is the second path this console refuses
+        # everywhere else.
+        confining=bwrap is not None,
+    )
+    logger.info(f"plugins installed: {', '.join(each.qualified for each in declaring.console) or 'none'}")
     async with open_store(
         settings.database,
         settings.lease,
@@ -259,6 +282,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         references,
         settings.watching,
         settings.patience,
+        declaring,
     ) as service:
         answering = work(
             service.durable,
@@ -266,7 +290,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                 service.durable,
                 conversing(
                     endpoints,
-                    standing,
+                    settings.instructions,
                     workspaces,
                     bwrap=bwrap,
                     # The holders rather than what they currently hold, so a turn is priced at the
@@ -276,17 +300,20 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                     # as today.
                     prices=Prices(catalogues=catalogues, references=references),
                     allowance=settings.allowance,
-                    # The whole `Durable` rather than the checkpointer a pass already holds, because
-                    # writing a handoff means *queueing* the session as well as recording it: an
-                    # entry appended mid-pass is invisible to the pass that appended it, so a handoff
-                    # that only appended would leave the session waiting on a message already in its
-                    # own inbox.
-                    handoffs=partial(handing_through, service.durable),
-                    # The database rather than the `Service`, because what a pass needs is one row of
-                    # one table and a `Service` is every question a request handler may ask. Given
-                    # this, a pass can read what the console is doing for a session unasked; given
-                    # nothing, it tends nothing at all.
+                    # The database rather than the `Service`, because what a pass needs is two
+                    # columns of one row and a `Service` is every question a request handler may ask.
+                    # Given these, a pass can read what a session's plugins are set to and write what
+                    # one of them remembers; given neither, every plugin runs on its declared
+                    # defaults and forgets everything between events.
                     tendings=partial(read_tending, service.database),
+                    storings=partial(set_settings, service.database),
+                    declaring=declaring,
+                    # The whole `Durable` rather than the checkpointer a pass already holds, because
+                    # a note put in an inbox *queues* the session as well as being recorded: an entry
+                    # appended mid-pass is invisible to the pass that appended it, so a plugin's
+                    # delivery made that way would leave the session waiting on a message already in
+                    # its own inbox with nothing that will ever wake it.
+                    delivering=delivering(service.durable),
                 ),
             ),
             limit=settings.passes,
@@ -302,6 +329,27 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                     background_task(refreshing_reference(references, config.model_reference, settings.reference_every))
                 )
             yield service
+
+
+def delivering(durable: Durable) -> Callable[[str, records.Note], Awaitable[None]]:
+    """
+    Where a note a plugin asked for goes, which is the session's own inbox.
+
+    **Delivered and not appended**, which is the whole of what the queue is for here. An entry
+    appended mid-pass is invisible to the pass that appended it - `receive` reads the snapshot loaded
+    at the top, which is what makes a drain replayable - and an append queues nothing, so a note
+    written that way leaves the session `Blocked` on a message already sitting in its inbox, with
+    nothing that will ever wake it. Delivering makes the session ready again, and the pass that takes
+    it reads a fresh snapshot with the note in it.
+
+    The cost, stated: a note always crosses a pass boundary. That is the same bargain a steer already
+    takes, one direction along, and it costs a claim rather than a round trip.
+    """
+
+    async def deliver(session: str, note: records.Note) -> None:
+        await durable.deliver(session, note.recorded())
+
+    return deliver
 
 
 def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> Callable[[Run], Awaitable[None]]:
@@ -325,20 +373,20 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
     the worker's own answer for a raised pass - leave the delivery unanswered, redeliver when the
     lease elapses - that is a session retried for ever with only a log line to show for it.
 
-    **`Crossed` is the arm that writes rather than schedules**, and it is here for the reason the
-    other two are: what a session whose reserve is crossed is owed is a message in its own inbox, and
-    putting one there is queueing, which is this function's whole subject. Delivering is the only one
-    of the three that needs no `make_ready` beside it, because `deliver` appends the entry and queues
-    the session in a single commit.
+    **`Noting` is the arm that writes rather than schedules**, and it is here for the reason the
+    other two are: what a session whose plugins spoke at the turn boundary is owed is a message in
+    its own inbox, and putting one there is queueing, which is this function's whole subject.
+    Delivering is the only one of the three that needs no `make_ready` beside it, because `deliver`
+    appends the entry and queues the session in a single commit.
 
-    What it asks for is `recorded_ask`, which is the same composition the button in the rail posts
-    through `Service.hand_off`: two writers, one set of words, so a handoff nobody asked for and one
-    somebody pressed for cannot come to say different things.
+    What each note says is the plugin's, so nothing here composes anything: this console has no
+    words of its own left to put in a conversation.
 
     Here rather than in `conversation.py`, because the body is about answering a session and this is
     about the queue in front of it. That split is what lets one console run the worker beside the
     console and another run it somewhere else entirely.
     """
+    deliver = delivering(durable)
 
     async def answer(run: Run) -> None:
         match await converse(run):
@@ -346,9 +394,10 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
                 await durable.scheduler.make_ready(run.workflow)
             case Stalled():
                 logger.warning(f"{run.workflow} stalled on a request no pass can make; not waking it again")
-            case Crossed():
-                logger.info(f"{run.workflow} reached its reserve; asking it to hand itself off")
-                await durable.deliver(run.workflow, recorded_ask())
+            case Noting(notes=notes):
+                for note in notes:
+                    logger.info(f"{run.workflow}: {note.plugin} asked for a message to be put to it")
+                    await deliver(run.workflow, note)
             case _ as unreachable:
                 assert_never(unreachable)
 

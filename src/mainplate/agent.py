@@ -57,10 +57,15 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.toolsets import AbstractToolset
 
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.durability import StepwiseDurability
+from mainplate.plugins.asking import Live
+from mainplate.plugins.asking import PluginTools
+from mainplate.plugins.asking import asking_through
+from mainplate.plugins.asking import contributions
 from mainplate.roots import environment_named
 from mainplate.sandbox import Confinement
 from mainplate.sandbox import Filesystem
@@ -71,12 +76,10 @@ from mainplate.snapshots import Worktree
 from mainplate.snapshots import branch_named
 from mainplate.tools import Files
 from mainplate.tools import GitTracked
-from mainplate.tools import Handing
 from mainplate.tools import Scratch
 from mainplate.tools import System
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
-from mainplate.tools import handoff_tools
 from mainplate.tools.files.tools import Root
 
 
@@ -184,6 +187,37 @@ class Choice:
     this existed and what a checkpoint written then must keep reading back as.
     """
 
+    trusted: bool = True
+    """
+    Whether this session runs code the repository carries, which today means the plugins it declares.
+
+    **Per session and never per repository**, which is the whole shape of it: a repository changes,
+    so an answer recorded against one covers a branch somebody pushed this morning as readily as the
+    one you reviewed last year. Recorded here it is a decision about *this conversation*, settled
+    before its first message and fixed for its life like everything else on a `Choice`, and changing
+    your mind is `fork`.
+
+    **On by default, and the control is the refusal rather than the permission.** A grant defaulting
+    off makes the common case a click nobody reads, which is the failure the whole control exists to
+    avoid. And the honest reading of what picking a repository already means is that its code runs:
+    a session with a shell runs its build, its tests, its `pre-commit` and whatever those shell out
+    to, every one of them unread. A plugin is one more caller of that, not the escalation.
+
+    **What the switch is actually for is the session where that reading does not hold**, and there
+    are two: a repository somebody is reading rather than working in - a stranger's pull request, a
+    dependency being triaged - and a session on `Filesystem.NOTHING`, which picks a repository and
+    hands the model no shell at all. That second one is why this is drawn in the picker rather than
+    inferred from the isolation: the two are near enough to look like one question and are not.
+
+    The cost, stated: a repository's plugin runs unattended at every turn boundary and puts text into
+    the conversation, which is a delivery channel for prompt injection with a guaranteed slot. That
+    is a real difference from a build script, and it is the sentence the picker prints rather than a
+    warning that something may be unsafe.
+
+    Meaningless without a repository, and `settled` clears it there for the reason it clears the base
+    and the branch: a session with no worktree has nothing a repository could carry.
+    """
+
     thinking: ThinkingLevel | None = None
     """
     How hard to think, or nothing at all to leave the setting off the request.
@@ -220,23 +254,26 @@ class Choice:
         than posting one - so the alternative to settling here is every writer reconciling the same
         three fields and one of them eventually not.
 
-        With no repository there is no worktree, so there is nothing to reach, nothing to check out
-        and no branch to start: all three collapse together because they are answers to one question
-        the picker asks once. The page draws no base and no branch until a repository is picked, so a
-        form cannot express the contradiction in the first place; this is what says the same of every
-        other way in, a fork and `scripts/seed.py` alike.
+        With no repository there is no worktree, so there is nothing to reach, nothing to check out,
+        no branch to start and nothing whose code could be trusted or not: all of them collapse
+        together because they are answers to one question the picker asks once. The page draws no
+        base and no branch until a repository is picked, so a form cannot express the contradiction in
+        the first place; this is what says the same of every other way in, a fork and
+        `scripts/seed.py` alike.
 
         `forked` drops the base and the branch whatever the repository is. A fork plants at the tree
         of the turn it re-asks, so a base would be a second answer to where its files come from, and
         a branch would be a name `git worktree add -b` refuses because the parent already holds it.
+
+        Trust survives a fork and the base does not, and the two are different questions. A fork
+        inherits the repository half of what its parent registered rather than reading any file
+        again, so what this records there is that the branch is running what its parent ran, which is
+        true whether or not it is ever consulted.
         """
-        if forked or self.repository is None:
-            return replace(
-                self,
-                base=None,
-                branch=None,
-                isolation=self.isolation.settled(self.repository),
-            )
+        if self.repository is None:
+            return replace(self, base=None, branch=None, trusted=True, isolation=self.isolation.settled(None))
+        if forked:
+            return replace(self, base=None, branch=None, isolation=self.isolation.settled(self.repository))
         return replace(self, isolation=self.isolation.settled(self.repository))
 
     @property
@@ -758,7 +795,7 @@ def agent_for(
     worktree: Worktree | None = None,
     scratch: Path | None = None,
     bwrap: str | None = None,
-    handing: Handing | None = None,
+    plugins: Live | None = None,
 ) -> Agent[None, str]:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -779,18 +816,22 @@ def agent_for(
     prefix they sit in front of. `reaching` is where the note comes from, and `conversing` composes
     it into what it records.
 
-    **The handoff tool is not conditioned on the isolation**, unlike the two below it, because what
-    it reaches is the conversation rather than the machine: every session has one of those. It is
-    absent only where nowhere has been given to put a handoff, which is a bare agent in a script or a
-    test and never a pass. That it is in every real session's prefix is the point rather than a
-    detail - a tool added later invalidates the whole cached conversation beneath it, since tool
-    definitions sit above the system prompt.
+    **The plugins' tools are not conditioned on the isolation**, unlike the two below them, because
+    what a plugin reaches is decided by the plugin's own tier rather than by what the *model* may
+    touch: a handoff acts on the conversation, and every session has one of those. They are first in
+    the list and settled for the session's life, which is the point rather than a detail - a tool
+    definition sits above the system prompt in the cached prefix, so one arriving late invalidates
+    the whole conversation beneath it.
+
+    A session with no plugins gets no such toolset at all rather than an empty one, which is the
+    same answer `reaching` gives a session with no roots: an empty toolset costs nothing on the wire
+    and everything in what somebody reading this has to hold in their head.
     """
     wire = wires.for_endpoint(chosen.endpoint)
     reach = reaching(chosen.isolation, worktree, scratch, bwrap)
-    tools = []
-    if handing is not None:
-        tools.append(handoff_tools(handing))
+    tools: list[AbstractToolset[None]] = []
+    if plugins is not None and (contributed := contributions(plugins)):
+        tools.append(PluginTools(contributed, asking_through(plugins)))
     if reach.roots:
         tools.append(file_tools(Files(roots=reach.roots)))
     if reach.confinement is not None and bwrap is not None:

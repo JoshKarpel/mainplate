@@ -63,19 +63,23 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
     async with open_console(Settings(database=database), CONFIG, endpoints) as service:
         async with calling(build_app(already(service))) as caller:
             started = await caller.post(
-                "/sessions",
-                {"prompt": "hello", "endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model},
+                "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
             )
             assert started.status == 303
             session = started.location.rsplit("/", 1)[-1]
+            # Creating one no longer says anything in it: the first pass plants and registers, and
+            # the first message is a second post. This is also the one test where the bundled
+            # plugins are actually run, since `open_console` is what installs them.
+            said = await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})
+            assert said.status == 200
             async with asyncio.timeout(PATIENCE):
                 await answered.acquire()
 
             # `next` rather than a plain Send, which now decides for itself: the first turn may not
             # have recorded its messages by the time the model has answered, and a message that
             # steered it would reach the pass already running rather than starting a second one.
-            said = await caller.post(f"/sessions/{session}/messages", {"prompt": "and again", "disposition": "next"})
-            assert said.status == 200
+            again = await caller.post(f"/sessions/{session}/messages", {"prompt": "and again", "disposition": "next"})
+            assert again.status == 200
             async with asyncio.timeout(PATIENCE):
                 await answered.acquire()
 
@@ -111,10 +115,10 @@ async def test_a_turn_of_more_than_one_request_is_carried_on_by_the_pass_after_i
     async with open_console(Settings(database=database), CONFIG, endpoints) as service:
         async with calling(build_app(already(service))) as caller:
             started = await caller.post(
-                "/sessions",
-                {"prompt": "hello", "endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model},
+                "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
             )
             session = started.location.rsplit("/", 1)[-1]
+            assert (await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})).status == 200
             # Twice, which is what a second pass had to happen for: the first request is the tool
             # call, and the second is the one the pass after it made.
             for _ in range(2):

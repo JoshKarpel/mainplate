@@ -64,9 +64,16 @@ level, and defaults to saying nothing about thinking at all.
 
 You pick what a session is answered on when you create it, ordered widest first: its **workspace**,
 which is a repository this console can reach, or no files, or this whole machine; whether its
-commands may reach the **network**; the **endpoint** and **model**; a **thinking level**; and how
-much of the window to keep free for a handoff. All of it is fixed for the session's life except the
-last, and **forking is how it changes**.
+commands may reach the **network**; whether the repository's own **plugins** run; the **endpoint**
+and **model**; and a **thinking level**. All of it is fixed for the session's life, and **forking is
+how it changes**.
+
+Creating one takes you to its page, where it plants its worktree and asks its plugins what they are.
+What they came back with is a step you pass through before typing: every plugin the session
+registered, grouped by where it came from, with a switch apiece. Which plugins a session runs is
+settled from its first message, because a tool definition leaving the cached prefix invalidates the
+whole conversation beneath it. What each plugin is *set to* stays changeable, on its own card in the
+rail.
 
 Pick a repository and two more fields appear: **where in it to start** and **what branch to start
 there**, both optional. Left blank the worktree is checked out at the repository's default branch as
@@ -286,9 +293,12 @@ turn cost is an estimate from published rates rather than a bill, since no gatew
 actually charged; the session's total sits under the message box, and above the box is whether the
 provider still holds this conversation's prefix and what re-sending it costs with none of it cached.
 
-Two panels say what the model was *told* rather than what anyone said: the **system prompt** every
-request in a stretch of context carried, and **guidance**, a repository's own `AGENTS.md` for a
-directory, handed over at the moment a tool reached into it.
+Three panels say what the model was *told* rather than what anyone in the conversation said: the
+**system prompt** every request in a stretch of context carried, **guidance**, a repository's own
+`AGENTS.md` for a directory handed over at the moment a tool reached into it, and a **note**, which
+is a message a plugin asked for. A note carries the word its plugin put on it and the weight of ink
+it asked for, so a pre-commit failure and a handoff document do not read alike halfway down a
+transcript.
 
 Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
 the colour legend, a dock that steps through the transcript, a shelf for text you have written and
@@ -321,10 +331,10 @@ inferred from what you typed, so what you are about to press always says what it
   across if you fork.
 - **Handoff** is the same family one step along. Where `Forget` drops the backlog, this has the
   session write it down first, checking the working tree rather than recalling it, and start again
-  from that document. It also happens without being asked: every session keeps a **reserve** of the
-  window free for writing one, marked on each rule's gauge, so watching the line grow toward it is
-  watching the handoff approach. On by default, which is safe only because a handoff destroys
-  nothing.
+  from that document. It also happens without being asked: a session keeps a **reserve** of the
+  window free for writing one, and hands itself off once the conversation reaches it. On by default,
+  which is safe only because a handoff destroys nothing. All of it is a plugin, so every word of it
+  can be replaced with your own.
 - **Aside** steps out into a side conversation you mean to come back from and **Fork** starts one
   you do not; from either, **Parent** sends what is in the box back into the conversation you left.
   That is a message rather than a merge, which is what makes it honest: the turns you took on the

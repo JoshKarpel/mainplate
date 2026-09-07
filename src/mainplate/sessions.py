@@ -47,6 +47,7 @@ from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import REPOSITORY_FIELD
 from mainplate.tending import Tending
 from mainplate.tending import parse_tending
+from mainplate.tending import written
 
 # Created here rather than in the store's own `migrate`, which owns three tables of its own and
 # knows nothing about sessions. Both run at startup and both are idempotent.
@@ -56,6 +57,16 @@ from mainplate.tending import parse_tending
 # fact about the pair rather than about either, so it lives with the rows that name them. That is
 # also what keeps a fork portable, since each session's checkpoint remains the entire conversation
 # that session had, with nothing to dereference.
+#
+# `enabled` and `settings` are the two columns a plugin's card is behind, and they are text rather
+# than a column apiece because **the columns cannot grow**: a plugin cannot run `ALTER TABLE`, and
+# `ADDED` is already several migrations long. So they hold JSON keyed by qualified plugin name, and
+# the reads below reach into them the same way `SELECTION` already reaches into a session's `choice`.
+#
+# Two costs, both real, and both answered rather than hidden. A whole-blob write clobbers, so `set`
+# is a `json_patch` against one plugin's own sub-object in a single `UPDATE` and two plugins saving
+# at once keep both saves. And `STRICT` stops covering what is in them, so the invariant moves to a
+# parse at the boundary against the schema each plugin's card already declares; see `tending.py`.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,
@@ -64,8 +75,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     forked_from TEXT,
     forked_at   INTEGER,
     forked_aside INTEGER,
-    hands_off   INTEGER,
-    reserve     INTEGER
+    enabled     TEXT,
+    settings    TEXT
 ) STRICT;
 """
 
@@ -76,8 +87,8 @@ ADDED = (
     ("forked_from", "ALTER TABLE sessions ADD COLUMN forked_from TEXT"),
     ("forked_at", "ALTER TABLE sessions ADD COLUMN forked_at INTEGER"),
     ("forked_aside", "ALTER TABLE sessions ADD COLUMN forked_aside INTEGER"),
-    ("hands_off", "ALTER TABLE sessions ADD COLUMN hands_off INTEGER"),
-    ("reserve", "ALTER TABLE sessions ADD COLUMN reserve INTEGER"),
+    ("enabled", "ALTER TABLE sessions ADD COLUMN enabled TEXT"),
+    ("settings", "ALTER TABLE sessions ADD COLUMN settings TEXT"),
 )
 
 # Long enough that an id is not guessable, which matters because a session id *is* its URL: this
@@ -157,13 +168,18 @@ class Session:
 
     tending: Tending = field(default_factory=Tending)
     """
-    What this console is doing for the session unasked, which is the one field here that moves.
+    What this session's plugins are set to, which is the one field here that moves.
 
     A default rather than a demand, because both columns behind it are nullable and `NULL` reads as
-    the constant: a session written before this existed has neither, and reading it as the default is
-    ordinary parsing of an optional rather than a guess. `tend` is the only thing that ever writes
-    them, so a session nobody has told anything is a session on the defaults for as long as it lives,
-    and moving a default moves every such session with it.
+    nobody having said: a session nobody has told anything runs every plugin on the name stack's
+    answer with every control on its own declared default, for as long as it lives, so moving a
+    default moves every such session with it.
+
+    It is not the second copy this table otherwise refuses. A session's own settings have to be
+    mutable to be settings at all, and the two places this console keeps things both refuse them -
+    the checkpoint keeps the value a key was first given, so a setting saved twice would keep its
+    first answer for ever, and `localStorage` is in a browser where the worker that reads this may be
+    another process entirely.
     """
 
 
@@ -211,8 +227,8 @@ SELECT sessions.id,
        sessions.forked_from,
        sessions.forked_at,
        sessions.forked_aside,
-       sessions.hands_off,
-       sessions.reserve,
+       sessions.enabled,
+       sessions.settings,
        json_extract(choice.value, :repository_path)
   FROM sessions
   LEFT JOIN workflow_checkpoint AS choice
@@ -250,6 +266,25 @@ async def enrol(database: Database, session: Session) -> None:
     )
 
 
+async def rename(database: Database, session: str, title: str) -> None:
+    """
+    Name a session after the first thing said in it, which happens once and never again.
+
+    **The one write to this column, and it is still a write of something settled.** A session is
+    named when its first message arrives rather than when it is created, because creating one no
+    longer carries a message; nothing renames it afterwards, so what the index holds is a copy of
+    something that cannot change, which is the whole of why it may hold a title at all.
+
+    Guarded on the column still being empty rather than on a read beside it, so two messages posted
+    at once cannot have the second one win: the statement is the check.
+    """
+    await database.run(
+        lambda connection: connection.execute(
+            "UPDATE sessions SET title = ? WHERE id = ? AND title = ''", (title, session)
+        )
+    )
+
+
 async def read_sessions(database: Database) -> tuple[Session, ...]:
     """Every session, newest first, which is the order a chat console reads in."""
     rows = await selecting(database, f"{SELECTION} ORDER BY sessions.created_at DESC, sessions.id DESC", SCHEME)
@@ -264,49 +299,86 @@ async def read_session(database: Database, session: str) -> Session | None:
 # The two columns on their own, without the join every other read here makes. A pass wants a
 # session's settings and nothing else about it, and what the join fetches is the repository, which
 # the pass already has out of the recorded choice.
-TENDING = "SELECT hands_off, reserve FROM sessions WHERE id = ?"
+TENDING = "SELECT enabled, settings FROM sessions WHERE id = ?"
+
+# One plugin's own sub-object, patched rather than the whole column rewritten. `json_patch` merges
+# the fields given into whatever is there, and `json_set` puts the result back under that plugin's
+# key, so two plugins saving at once each keep their save. `coalesce` is what makes it work on a
+# session nobody has ever set anything on, where both the column and the sub-object are absent.
+PATCH = """
+UPDATE sessions
+   SET settings = json_set(
+           coalesce(settings, '{}'),
+           '$.' || json_quote(:plugin),
+           json_patch(coalesce(json_extract(settings, '$.' || json_quote(:plugin)), '{}'), json(:values))
+       )
+ WHERE id = :session
+"""
+
+# Which plugins a session runs, under the same rule and in the other column. A switch is the
+# console's answer rather than a plugin's, so it is patched apart from the settings beside it.
+SWITCH = """
+UPDATE sessions
+   SET enabled = json_patch(coalesce(enabled, '{}'), json(:values))
+ WHERE id = :session
+"""
 
 
 async def read_tending(database: Database, session: str) -> Tending:
     """
-    What this console is doing for one session unasked, as the pass that answers it reads.
+    What a session's plugins are set to, as the pass that answers it reads.
 
-    A session this console has never heard of reads as the defaults rather than raising. Nothing here
-    can produce one - a session is enrolled before its first message and a message is what queues a
-    pass - so what a raise would buy is a stalled conversation in exchange for a state that cannot
-    arise, and the answer to "nobody has said" is the same answer either way.
+    A session this console has never heard of reads as nobody having said anything rather than
+    raising. Nothing here can produce one - a session is enrolled before its first pass - so what a
+    raise would buy is a stalled conversation in exchange for a state that cannot arise, and the
+    answer to "nobody has said" is the same answer either way.
     """
 
     def query(connection: sqlite3.Connection) -> Tending:
-        for hands_off, reserve in connection.execute(TENDING, (session,)):
+        for enabled, settings in connection.execute(TENDING, (session,)):
             return parse_tending(
-                None if hands_off is None else int(hands_off),
-                None if reserve is None else int(reserve),
+                None if enabled is None else str(enabled),
+                None if settings is None else str(settings),
             )
         return Tending()
 
     return await database.run(query)
 
 
-async def tend(database: Database, session: str, tending: Tending) -> None:
+async def set_settings(database: Database, session: str, plugin: str, values: Mapping[str, object]) -> None:
     """
-    Say what this console should do for a session unasked, which is the one row here ever rewritten.
+    Write one plugin's settings, leaving every other plugin's exactly as they were.
 
-    Both columns in one statement, always, so the pair cannot be half applied: a switch saved without
-    the amount beside it would leave a session running on a reserve nobody had looked at.
-
-    What it writes is the value rather than the difference from the default, so a session somebody has
-    set stops following the constant. That is the point of having said something.
+    **A patch and not a whole-blob write**, which is the cost the column had to answer for: written
+    whole, two plugins saving at once lose one of the saves. Nothing about the values is checked
+    here, because what checks them is the plugin's own card and that is a parse the reader does; see
+    `tending.parse_tending`.
     """
+    if not values:
+        return
     await database.run(
         lambda connection: connection.execute(
-            "UPDATE sessions SET hands_off = ?, reserve = ? WHERE id = ?",
-            (int(tending.hands_off), tending.reserve, session),
+            PATCH, {"session": session, "plugin": plugin, "values": written(dict(values))}
         )
     )
 
 
-type Row = tuple[str, str, str, str | None, int | None, int | None, int | None, int | None, str | None]
+async def switch(database: Database, session: str, enabled: Mapping[str, bool]) -> None:
+    """
+    Say which plugins a session runs, patching the switches given and leaving the rest alone.
+
+    Settled for the session's life once anything has been asked, which this does not enforce and
+    cannot: what decides that is whether a turn has been recorded, and that is a checkpoint question.
+    The route that offers the control is where it is refused.
+    """
+    if not enabled:
+        return
+    await database.run(
+        lambda connection: connection.execute(SWITCH, {"session": session, "values": written(dict(enabled))})
+    )
+
+
+type Row = tuple[str, str, str, str | None, int | None, int | None, str | None, str | None, str | None]
 
 
 async def selecting(database: Database, statement: str, parameters: Mapping[str, str]) -> list[Row]:
@@ -326,8 +398,8 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 None if forked_from is None else str(forked_from),
                 None if forked_at is None else int(forked_at),
                 None if forked_aside is None else int(forked_aside),
-                None if hands_off is None else int(hands_off),
-                None if reserve is None else int(reserve),
+                None if enabled is None else str(enabled),
+                None if settings is None else str(settings),
                 None if repository is None else str(repository),
             )
             for (
@@ -337,8 +409,8 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 forked_from,
                 forked_at,
                 forked_aside,
-                hands_off,
-                reserve,
+                enabled,
+                settings,
                 repository,
             ) in connection.execute(statement, parameters)
         ]
@@ -347,7 +419,7 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
 
 
 def parse_session(row: Row) -> Session:
-    identifier, created_at, title, forked_from, forked_at, forked_aside, hands_off, reserve, repository = row
+    identifier, created_at, title, forked_from, forked_at, forked_aside, enabled, settings, repository = row
     return Session(
         id=identifier,
         created_at=datetime.fromisoformat(created_at),
@@ -357,7 +429,7 @@ def parse_session(row: Row) -> Session:
         # quieter wrong answer; this says so instead.
         forked=parse_origin(identifier, forked_from, forked_at, forked_aside),
         repository=repository,
-        tending=parse_tending(hands_off, reserve),
+        tending=parse_tending(enabled, settings),
     )
 
 

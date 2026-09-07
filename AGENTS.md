@@ -98,9 +98,9 @@ change:
 - [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, and what one
   pass does.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
-  sent, the effects it may ask for, and the trust gate in front of a repository's own plugin. The
-  one page here describing something **not built yet**, so read it as the design being written to
-  rather than as the console as it stands.
+  sent, the effects it may ask for, and the switch in front of a repository's own plugin. **Handoff
+  and what a session is told are both plugins**, so a change to either is a change to a script in
+  `src/mainplate/plugins/bundled/` rather than to the console.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
@@ -112,9 +112,10 @@ The toolchain around the source rather than any part of the console is
 [`docs/maintaining.md`](docs/maintaining.md): the dependency choices, the checks, the documentation
 site, and where the prose in this repository goes.
 
-Five directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
+Six directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
 than having to go and find: `src/mainplate/tools/` and `src/mainplate/tools/files/` for what a
-change to a tool must not break, `src/mainplate/assets/` for what a change to the stylesheet, the
+change to a tool must not break, `src/mainplate/plugins/` for what a change to the protocol or a
+bundled plugin must not break, `src/mainplate/assets/` for what a change to the stylesheet, the
 script or the vendored font must not break, `tests/` for how the suite is driven and what has to be
 a browser, and `scripts/` for the gallery and the seeder.
 

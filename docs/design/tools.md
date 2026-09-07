@@ -12,7 +12,7 @@ Every tool lives under `tools/`, as `tools/{name}/{module}.py`. Only the constru
 harness: `tools/__init__.py` exports the constructors and the values they take and nothing else, so
 `agent.py` asks for the tools a workspace affords without knowing that editing is anchored, that a
 worktree root has to be resolved against, or how a command is confined. A further tool is a new
-package beside `files/`, `bash/` and `handoff/` and one more name in that list, rather than an edit
+package beside `files/` and `bash/` and one more name in that list, rather than an edit
 to anything that already imports them.
 
 Within `files/`, `anchors.py` is pure and `tools.py` is the shell around it, which is the split that

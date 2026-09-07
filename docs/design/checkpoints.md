@@ -14,7 +14,7 @@ The store's space is one key:
 
 | Key | Holds | Written by |
 |---|---|---|
-| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run` and `Service.hand_off` from outside a pass, and the `hand_off` tool from inside one |
+| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
 
 This console's is the rest:
 

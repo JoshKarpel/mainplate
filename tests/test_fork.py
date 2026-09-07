@@ -7,6 +7,7 @@ from conftest import WHEN
 from conftest import Provider
 from conftest import ran_at
 from conftest import said_at
+from conftest import started
 from test_conversation import pass_at
 from without_asgi import ASGIApp
 from without_durability.interfaces import inbox_key
@@ -125,7 +126,7 @@ class TestWhatABranchInherits:
         self, service: Service, provider: Provider
     ) -> None:
         body = provider.body()
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
         await pass_at(service, body, session.id)
         await service.say(session.id, "second")
         await pass_at(service, body, session.id)
@@ -141,7 +142,7 @@ class TestWhatABranchInherits:
 
     async def test_the_parent_is_untouched_by_being_branched(self, service: Service, provider: Provider) -> None:
         body = provider.body()
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
         await pass_at(service, body, session.id)
         was = await service.checkpointer.load(session.id)
 
@@ -152,7 +153,7 @@ class TestWhatABranchInherits:
     async def test_a_branch_may_answer_on_a_different_model(self, service: Service, provider: Provider) -> None:
         """The one moment a choice may differ, which is the whole reason forking exists here."""
         elsewhere = Choice(endpoint="gateway", model="wide/steady", thinking="xhigh")
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
 
         forked = await service.fork(session.id, at=0, chosen=elsewhere)
 
@@ -169,7 +170,7 @@ class TestWhatABranchInherits:
         by the time you have retyped it, it is a different question.
         """
         body = provider.body()
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await pass_at(service, body, session.id)
 
         asked = transcript(await service.checkpointer.load(session.id)).asked_at(0)
@@ -182,7 +183,7 @@ class TestWhatABranchInherits:
 
     async def test_the_message_may_be_edited_on_the_way_across(self, service: Service) -> None:
         """The other reason to fork a turn: not to re-run it, but to rephrase it."""
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
 
         forked = await service.fork(session.id, at=0, chosen=DEFAULT_CHOICE, said="what is an escapement")
 
@@ -194,7 +195,7 @@ class TestWhatABranchInherits:
     ) -> None:
         """Nothing to re-ask, so nothing is queued and no worker will take it."""
         body = provider.body()
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
         await pass_at(service, body, session.id)
 
         forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE, said=None)
@@ -203,7 +204,7 @@ class TestWhatABranchInherits:
         assert not transcript(await service.checkpointer.load(forked.id)).awaiting
 
     async def test_the_form_offers_the_turn_s_own_message_back(self, app: ASGIApp, service: Service) -> None:
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
@@ -211,7 +212,7 @@ class TestWhatABranchInherits:
         assert "what is a mainplate</textarea>" in answered.text
 
     async def test_a_branch_records_where_it_came_from(self, service: Service) -> None:
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
 
         forked = await service.fork(session.id, at=3, chosen=DEFAULT_CHOICE)
 
@@ -228,7 +229,7 @@ class TestWhatABranchInherits:
         a fresh conversation that merely looks like one.
         """
         body = provider.body()
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
         await pass_at(service, body, session.id)
         forked = await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE)
         assert forked is not None
@@ -296,7 +297,7 @@ class TestBranchingThroughTheConsole:
     ) -> None:
         """Continuing on the same model is the common branch, so it is the one needing no change."""
         elsewhere = Choice(endpoint="gateway", model="wide/steady")
-        session = await service.start("first", elsewhere)
+        session = await started(service, "first", elsewhere)
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
@@ -307,7 +308,7 @@ class TestBranchingThroughTheConsole:
     async def test_branching_creates_a_session_and_sends_the_browser_to_it(
         self, app: ASGIApp, service: Service
     ) -> None:
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
             answered = await caller.post(
@@ -325,7 +326,7 @@ class TestBranchingThroughTheConsole:
     async def test_a_pair_nothing_offers_is_refused_exactly_as_starting_one_is(
         self, app: ASGIApp, service: Service
     ) -> None:
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
             answered = await caller.post(
@@ -336,7 +337,7 @@ class TestBranchingThroughTheConsole:
         assert answered.status == 422
 
     async def test_a_turn_the_session_never_reached_is_refused(self, app: ASGIApp, service: Service) -> None:
-        session = await service.start("first", DEFAULT_CHOICE)
+        session = await started(service, "first", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}/forks/new?at=99")

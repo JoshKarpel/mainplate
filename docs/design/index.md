@@ -33,7 +33,8 @@ the cross-cutting rules the pages cite rather than restate.
   and what one pass of a session actually does.
 - **[Plugins](plugins.md)** is how somebody adds to this console without editing it: the protocol a
   plugin speaks, the events it is sent, the effects it may ask for, and what has to be true before a
-  repository's own plugin runs. It is the one page here describing something not yet built.
+  repository's own plugin runs. Handoff and what a session is told are both plugins, which is what
+  makes the pair a test of the protocol rather than two examples of it.
 - **[The console](console.md)** is the page: the live connection, the transcript, panels and rules,
   and the controls around them.
 - **[The stylesheet and the grid](assets.md)** is what draws it: the three shapes, the one value

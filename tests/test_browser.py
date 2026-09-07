@@ -24,6 +24,7 @@ from conftest import answered_with
 from conftest import came_back
 from conftest import recorded_turn
 from conftest import run
+from conftest import started
 from playwright.async_api import Browser
 from playwright.async_api import Locator
 from playwright.async_api import Page
@@ -37,6 +38,8 @@ from mainplate.agent import RETENTION
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
+from mainplate.conversation import PLUGINS_KEY
+from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Result
 from mainplate.conversation import messages_key
@@ -50,6 +53,14 @@ from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
 from mainplate.pages import CACHE_ID
 from mainplate.pages import OPENING
+from mainplate.plugins.asking import Declaring
+from mainplate.plugins.asking import recorded_registration
+from mainplate.plugins.installed import BUNDLED_ROOT
+from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.protocol import Described
+from mainplate.plugins.running import Spawned
 from mainplate.service import Service
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
@@ -156,7 +167,13 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
     turn records, a test records itself, a step at a time - which is also the only way to hold a
     turn half-finished for long enough to look at it.
     """
-    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues) as service:
+    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues) as opened:
+        # A console that can answer a plugin's card without ever running one, which is what these
+        # tests are about: what is under test is the console's own drawing of a declaration and the
+        # writes a press makes, and the plugin behind `CARDED` wants no `action`, so `speaking` is
+        # never reached. It is supplied all the same and would fail loudly if it were, since a
+        # console that quietly did nothing here would pass these tests while doing nothing.
+        service = replace(opened, declaring=Declaring(speaking=Spawned(environ={})))
         async with serving(build_app(already(service)), port=0) as server:
             yield f"http://{server.host}:{server.port}", service
 
@@ -214,6 +231,51 @@ async def taking(service: Service, session: str, turn: int = 0) -> None:
     await service.checkpointer.supply(
         session, opened_key(turn), [key for key in recorded if key.startswith(INBOX)][turn]
     )
+
+
+async def registering(service: Service, session: str, *enrolled: Enrolled) -> None:
+    """
+    What a session's first pass registered, written by hand for the reason `taking` is.
+
+    A session with no registration is one whose setup pass has not finished, so its page draws the
+    settings step rather than a transcript - which is the honest state and not the one most of these
+    tests are about. Both keys, because both are written: the console's own half and the repository's.
+    """
+    await service.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(enrolled))
+    await service.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
+
+
+# A plugin with a card of both kinds of control, which is what the rail draws and what the card tests
+# press. Written out rather than taken from the bundled handoff, because what these assert is the
+# *rendering* of a declaration: a fixture that changed when a bundled plugin's copy changed would be
+# a test that fails for a reason nobody reading it would expect.
+CARDED = Enrolled(
+    # Pointed at the plugin this repository actually ships, because two of the tests below press its
+    # answer in the composer and what has to run then is the real script over a real pipe. The
+    # declaration is written out all the same: what the card tests assert is the console's *rendering*
+    # of a declaration, and a fixture that changed when the bundled plugin's copy changed would be a
+    # test failing for a reason nobody reading it would expect.
+    installed=Installed(tier=Tier.BUNDLED, name="handoff", path=BUNDLED_ROOT / "handoff"),
+    described=Described.model_validate(
+        {
+            "events": ["tool", "after_turn", "compose"],
+            "answers": [
+                {
+                    "leader": "handoff",
+                    "saying": "Have it write down where it has got to and carry on from that",
+                    "demands": False,
+                }
+            ],
+            "card": {
+                "heading": "handoff",
+                "rows": [
+                    {"switch": {"name": "hands_off", "label": "auto at reserve", "default": True}},
+                    {"number": {"name": "reserve", "label": "keep back", "unit": "K", "default": 40, "least": 8}},
+                ],
+            },
+        }
+    ),
+)
 
 
 async def showing_model(page: Page) -> str:
@@ -375,7 +437,9 @@ class TestWhereTheReaderIs:
 # `parse_form_start` refuses a message naming no endpoint and no model, and `parse_form_fork`
 # refuses one naming no turn as well.
 CHOOSING = (
-    ("start.html", frozenset({"prompt", "endpoint", "model", "thinking"})),
+    # No `prompt` on the start page: creating a session and saying the first thing in it are two
+    # steps, so this form decides what a session *is* and the box is on the session's own page.
+    ("start.html", frozenset({"endpoint", "model", "thinking"})),
     ("forking.html", frozenset({"at", "prompt", "endpoint", "model", "thinking"})),
 )
 
@@ -432,7 +496,7 @@ WATCH_SUBMITS = """
 """
 
 # Every page with a box to type a message into, and the form each one belongs to.
-BOXES = (("start.html", "composer"), ("session.html", "composer"), ("forking.html", "forking"))
+BOXES = (("session.html", "composer"), ("forking.html", "forking"))
 
 
 class TestSendingFromTheKeyboard:
@@ -467,8 +531,8 @@ class TestSendingFromTheKeyboard:
     async def test_shift_enter_in_an_empty_box_sends_nothing(self, page: Page, gallery: str) -> None:
         # The composer's box is `required`, and `requestSubmit` honours that where `submit` would
         # not: an empty box refuses from the keyboard exactly as it refuses from the button, rather
-        # than starting a session on a message nobody typed.
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        # than recording a message nobody typed.
+        await page.goto(f"{gallery}/session.html", wait_until="load")
         await page.evaluate(WATCH_SUBMITS)
         await page.press("textarea[name=prompt]", "Shift+Enter")
         assert await page.evaluate("() => window.submitted") == []
@@ -953,7 +1017,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         self, page: Page, console: tuple[str, Service]
     ) -> None:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
@@ -973,7 +1037,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         would otherwise be the one panel a reader could not copy.
         """
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(0)
@@ -1013,7 +1077,7 @@ class TestWatchingATurnArrive:
     async def started(self, console: tuple[str, Service], page: Page) -> Service:
         """A session with a question in it, open in the browser, with nothing answered yet."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
@@ -1198,7 +1262,7 @@ class TestWatchingATurnArrive:
         watch the whole of it flash at them.
         """
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
@@ -1222,7 +1286,7 @@ class TestShuttingAFoldFromItsFrame:
 
     async def a_command_with_output(self, console: tuple[str, Service], page: Page) -> None:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         entry = await service.checkpointer.append(session.id, recorded_command("git status"))
         await service.checkpointer.supply(
@@ -1284,7 +1348,7 @@ class TestShuttingAFoldFromItsFrame:
     async def a_call_a_reader_opened(self, console: tuple[str, Service], page: Page) -> Locator:
         """A finished call, which the server renders shut, opened the way a reader opens one."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await service.checkpointer.supply(session.id, tool_key(0, "call-1"), came_back("the first file"))
@@ -1332,7 +1396,7 @@ class TestFoldingAPanel:
 
     async def a_turn_that_reasoned(self, console: tuple[str, Service], page: Page, said: str) -> Locator:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(
             session.id,
@@ -1426,7 +1490,7 @@ class TestTheLineAShutPanelStandsFor:
 
     async def a_turn_that_reasoned(self, console: tuple[str, Service], page: Page, said: str) -> Locator:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(
             session.id,
@@ -1637,7 +1701,7 @@ class TestOpeningTheRecordBehindARequest:
     async def opened(self, console: tuple[str, Service], page: Page) -> Locator:
         """A conversation with one recorded request in it, as the closed tag on that request's rule."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
@@ -1703,7 +1767,8 @@ class TestOpeningTheRecordBehindARequest:
 async def a_conversation(console: tuple[str, Service], page: Page) -> str:
     """One session with a turn being answered, on the page, as the id to write further steps against."""
     url, service = console
-    session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+    session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+    await registering(service, session.id, CARDED)
     await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
@@ -1777,29 +1842,31 @@ class TestSayingWhetherTheCacheIsStillWarm:
         await expect(page.locator(f"#{CACHE_ID}")).to_be_hidden()
 
 
-class TestSettingWhenASessionHandsItselfOff:
+class TestAPluginsOwnCard:
     """
-    The rail's own card, where the two controls deliberately do not behave the same way.
+    A card the console draws from what a plugin declared, where the two controls deliberately differ.
 
     A browser, twice over: which of them takes effect on the press is htmx's trigger rather than
     anything in the markup, and whether the button says there is something unsaved is a comparison
     against a property no server renders. Both look identical in what is sent either way.
+
+    **A card is declared, not rendered**, so what is under test is the console's own drawing of
+    somebody else's declaration - which is the whole reason a repository may have one.
     """
 
     async def test_the_switch_takes_effect_on_the_press(self, page: Page, console: tuple[str, Service]) -> None:
         """
         A checkbox says the whole of what it means the moment it moves, so waiting for `Set` leaves a
-        console that looks switched off and is not. What proves it landed is the mark on every rule's
-        gauge, which is drawn only where the switch is on.
+        console that looks switched off and is not.
         """
         _, service = console
         session = await a_conversation(console, page)
-        await expect(page.locator(".tending__switch input")).to_be_checked()
+        await expect(page.locator(".plugin__switch input")).to_be_checked()
 
-        await page.uncheck(".tending__switch input")
+        await page.uncheck(".plugin__switch input")
 
-        await expect(page.locator(".rule__reserve")).to_have_count(0)
-        assert not (await read_tending(service.database, session)).hands_off
+        await expect(page.locator(".plugin__switch input")).not_to_be_checked()
+        assert (await read_tending(service.database, session)).of("bundled:handoff")["hands_off"] is False
 
     async def test_the_number_waits_to_be_set_and_says_that_it_is_waiting(
         self, page: Page, console: tuple[str, Service]
@@ -1813,15 +1880,15 @@ class TestSettingWhenASessionHandsItselfOff:
         session = await a_conversation(console, page)
         before = await read_tending(service.database, session)
 
-        await page.fill(".tending__reserve input", "120")
+        await page.fill(".plugin__number input", "120")
 
-        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__settings")).to_have_attribute("data-dirty", "")
         assert await read_tending(service.database, session) == before, "typing records nothing"
 
-        await page.click(".handoff__set")
+        await page.click(".plugin__set")
 
-        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
-        assert (await read_tending(service.database, session)).reserve == 120_000
+        await expect(page.locator(".plugin__settings")).not_to_have_attribute("data-dirty", "")
+        assert (await read_tending(service.database, session)).of("bundled:handoff")["reserve"] == 120
 
     async def test_typing_the_recorded_value_back_leaves_nothing_to_press(
         self, page: Page, console: tuple[str, Service]
@@ -1831,14 +1898,25 @@ class TestSettingWhenASessionHandsItselfOff:
         keystroke, so undoing a change unmarks the button rather than leaving it lit for ever.
         """
         await a_conversation(console, page)
-        box = page.locator(".tending__reserve input")
+        box = page.locator(".plugin__number input")
         recorded = await box.input_value()
 
         await box.fill("120")
-        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__settings")).to_have_attribute("data-dirty", "")
         await box.fill(recorded)
 
-        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__settings")).not_to_have_attribute("data-dirty", "")
+
+    async def test_the_unit_the_plugin_declared_is_drawn_beside_the_box(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        Which is what lets a reserve of forty thousand tokens be two digits rather than six to count
+        the zeroes of. The console does no arithmetic with it: the stored value is whatever the
+        plugin says it is.
+        """
+        await a_conversation(console, page)
+        await expect(page.locator(".plugin__unit")).to_have_text("K")
 
 
 class TestWhereTheComposerSendsTo:
@@ -1923,9 +2001,9 @@ class TestWhereTheComposerSendsTo:
         """
         await a_conversation(console, page)
         await page.click(".sender__caret")
-        await page.click('.sender__option[value="handoff"]')
+        await page.click('.sender__option[value="plugin:handoff"]')
 
-        await expect(page.locator('.panel[data-kind="handoff"]')).to_have_count(1)
+        await expect(page.locator('.panel[data-kind="note"]')).to_have_count(1)
 
     async def test_a_handoff_carries_what_was_typed_as_what_to_dwell_on(
         self, page: Page, console: tuple[str, Service]
@@ -1937,9 +2015,9 @@ class TestWhereTheComposerSendsTo:
         await a_conversation(console, page)
         await page.fill(".composer textarea", "dwell on the parser work")
         await page.click(".sender__caret")
-        await page.click('.sender__option[value="handoff"]')
+        await page.click('.sender__option[value="plugin:handoff"]')
 
-        asked = page.locator('.panel[data-kind="handoff"]')
+        asked = page.locator('.panel[data-kind="note"]')
         await expect(asked).to_contain_text("dwell on the parser work")
         await expect(asked).to_contain_text("Hand this conversation off")
 
@@ -2014,7 +2092,7 @@ async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces
 
 async def a_session_with_files(working: tuple[str, Service], page: Page) -> str:
     url, service = working
-    session = await service.start("what is a mainplate", replace(DEFAULT_CHOICE, repository=FIXTURE))
+    session = await started(service, "what is a mainplate", replace(DEFAULT_CHOICE, repository=FIXTURE))
     await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
@@ -2630,7 +2708,7 @@ class TestTheShelf:
 
     async def opened(self, console: tuple[str, Service], page: Page) -> tuple[str, Service]:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
         return session.id, service
@@ -2701,7 +2779,7 @@ class TestTheShelf:
         url, service = console
         await self.opened(console, page)
         await self.keep(page, "meant for the first one")
-        other = await service.start("a different conversation", DEFAULT_CHOICE)
+        other = await started(service, "a different conversation", DEFAULT_CHOICE)
         await page.goto(f"{url}/sessions/{other.id}", wait_until="load")
 
         await expect(page.locator(".shelf__take")).to_have_count(0)
@@ -2753,7 +2831,7 @@ class TestFollowingTheEnd:
     async def a_long_conversation(self, console: tuple[str, Service], page: Page) -> None:
         """Enough turns that the transcript scrolls, which is the precondition for any of this."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         for turn in range(12):
             # The two records a pass writes for a turn, by hand: which entry it took, and what came
             # of it. The `console` fixture runs no worker, so a test that wants twelve settled turns

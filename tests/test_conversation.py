@@ -23,6 +23,7 @@ from conftest import came_back
 from conftest import read_to
 from conftest import recorded_turn
 from conftest import said_at
+from conftest import started
 from conftest import steered_at
 from pydantic import ValidationError
 from pydantic_ai.exceptions import ModelHTTPError
@@ -121,7 +122,7 @@ def spoken(said: Transcript) -> list[tuple[str, str]]:
     ]
 
 
-async def started(service: Service, said: str, session: str = SESSION) -> None:
+async def waiting(service: Service, said: str, session: str = SESSION) -> None:
     """
     A session recorded on the default choice, with its first message waiting.
 
@@ -223,7 +224,14 @@ def conversation_of(*turns: Turn) -> dict[str, object]:
 # the other whether there is one for every arm.
 EVERY_RECORD: tuple[records.Step, ...] = (
     records.Prompt(said="go", forget=True),
-    records.Handoff(said="where the work got to", forget=True),
+    records.Note(
+        said="where the work got to",
+        plugin="bundled:handoff",
+        forget=True,
+        label="handoff",
+        title="This is where the conversation's context starts again.",
+        tone="strong",
+    ),
     records.Steer(said="be brief"),
     records.Command(said="git status"),
     records.Result(status=1, output="", took=timedelta(seconds=0.08)),
@@ -233,6 +241,17 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.Returned(returned={"lines": [1, 2]}, took=timedelta(seconds=0.25)),
     records.Messages(messages=[]),
     records.Instructions(said="answer as a fixture would"),
+    records.Registered(
+        plugins=(
+            records.Enrolled(
+                name="handoff",
+                tier="bundled",
+                path="/opt/mainplate/plugins/handoff",
+                described={"events": ["after_turn"]},
+            ),
+        )
+    ),
+    records.Injected(said=("`apps/web/AGENTS.md`, guidance for this part of the repository:",)),
 )
 
 
@@ -989,6 +1008,7 @@ class TestTheRecordedChoice:
             "base": "release/2.1",
             "branch": "try-the-other-way",
             "isolation": {"filesystem": "nothing", "network": False},
+            "trusted": True,
             "thinking": "high",
         }
 
@@ -1003,6 +1023,7 @@ class TestTheRecordedChoice:
             "base": None,
             "branch": None,
             "isolation": {"filesystem": "nothing", "network": False},
+            "trusted": True,
             "thinking": None,
         }
 
@@ -1051,7 +1072,7 @@ class TestAnsweringASession:
     async def test_a_message_is_answered_and_the_session_waits_again(
         self, service: Service, provider: Provider
     ) -> None:
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         assert await pass_at(service, provider.body()) == Blocked(listening=frozenset({opened_key(1)}))
         said = transcript(await service.checkpointer.load(SESSION))
         assert spoken(said) == [("prompt", "hello"), ("assistant", "answer 1")]
@@ -1061,7 +1082,7 @@ class TestAnsweringASession:
         self, service: Service, provider: Provider
     ) -> None:
         body = provider.body()
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await pass_at(service, body)
         await pass_at(service, body)
         await pass_at(service, body)
@@ -1071,7 +1092,7 @@ class TestAnsweringASession:
         self, service: Service, provider: Provider
     ) -> None:
         body = provider.body()
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await pass_at(service, body)
         await service.say(SESSION, "again")
         await pass_at(service, body)
@@ -1099,7 +1120,7 @@ class TestAnsweringASession:
         checkpoint from the top and get the boundary right whatever the loop did.
         """
         body = provider.body()
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await service.say(SESSION, "start again", forget=True)
         await pass_at(service, body)
 
@@ -1122,7 +1143,7 @@ class TestAnsweringASession:
         boundary rather than from the start of the conversation.
         """
         body = provider.body()
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await service.say(SESSION, "start again", forget=True)
         await service.say(SESSION, "and then")
         await pass_at(service, body)
@@ -1140,7 +1161,7 @@ class TestAnsweringASession:
         the capability that second run is a second call to the provider, and a paid one.
         """
         agent = provider.agent()
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         holder = await claimed(service.checkpointer, SESSION)
         run = Run(holder=holder, checkpointer=service.checkpointer, recorded=await service.checkpointer.load(SESSION))
         with stepping(run, turn_prefix(0)):
@@ -1157,7 +1178,7 @@ class TestAnsweringASession:
     ) -> None:
         """A second turn must reach the model with the first exchange behind it, or it is a fresh chat."""
         body = provider.body()
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await pass_at(service, body)
         await service.say(SESSION, "again")
         await pass_at(service, body)
@@ -1174,7 +1195,7 @@ class TestAnsweringASession:
         store and not the instant a model is asked. What it proves is the same either way: the queue
         is read at the request rather than when the turn started.
         """
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await service.send(SESSION, "actually, be brief")
         await pass_at(service, provider.body())
 
@@ -1188,7 +1209,7 @@ class TestAnsweringASession:
         `Steering` is its own block for exactly this: a panel's kind is read off its blocks, so a
         steer arriving as `Prose` would be drawn as the model answering itself.
         """
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await service.send(SESSION, "one more thing")
         await pass_at(service, provider.body())
 
@@ -1232,7 +1253,7 @@ class TestAnsweringASession:
         What the queue removed the need to check: the store names each entry, so two writers cannot
         pick one key and lose the loser's message. There is nothing to claim and nothing to re-try.
         """
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await service.send(SESSION, "first")
         await service.send(SESSION, "second")
         await pass_at(service, provider.body())
@@ -1254,7 +1275,7 @@ class TestAnsweringASession:
         message had to be refused and said again somewhere else. In a queue it is simply the next
         thing nobody has read, and the next turn opens on it.
         """
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await pass_at(service, provider.body())
 
         await service.send(SESSION, "actually, be brief")
@@ -1268,7 +1289,7 @@ class TestAnsweringASession:
         self, service: Service, provider: Provider
     ) -> None:
         """The other side of the same fact: nothing was listening yet, so the turn takes it."""
-        await started(service, said="hello")
+        await waiting(service, said="hello")
         await service.send(SESSION, "actually, be brief")
         await pass_at(service, provider.body())
 
@@ -1276,8 +1297,8 @@ class TestAnsweringASession:
 
     async def test_two_sessions_do_not_see_each_other(self, service: Service, provider: Provider) -> None:
         body = provider.body()
-        await started(service, said="first session", session="one")
-        await started(service, said="second session", session="two")
+        await waiting(service, said="first session", session="one")
+        await waiting(service, said="second session", session="two")
         await pass_at(service, body, session="one")
         await pass_at(service, body, session="two")
         assert spoken(transcript(await service.checkpointer.load("one"))) == [
@@ -1312,7 +1333,7 @@ class TestWhatOnePassDoes:
 
     async def test_a_turn_of_two_requests_takes_a_pass_each(self, service: Service, workspaces: Workspaces) -> None:
         planting = replace(service, workspaces=workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         body = conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces, allowance=1)
 
         made = await passes_at(planting, body, session.id)
@@ -1334,7 +1355,7 @@ class TestWhatOnePassDoes:
         conversation whose cached prefix they sit in front of.
         """
         planting = replace(service, workspaces=workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
         await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
 
@@ -1365,7 +1386,7 @@ class TestWhatOnePassDoes:
         knows what it wrote.
         """
         planting = replace(service, workspaces=workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]), ModelResponse(parts=[TextPart("two")])))
         body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1)
         await pass_at(planting, body, session.id)
@@ -1386,31 +1407,42 @@ class TestWhatOnePassDoes:
         The unit is a stretch of context rather than a session, and a forget is what ends one.
 
         Recomposing costs the requests that would have read the prefix from cache, and a forget has
-        just thrown the whole prefix away, so composing again exactly there is free. It is also the
-        one moment a reader might expect a repository's edited guidance to be picked up.
+        just thrown the whole prefix away, so composing again exactly there is free.
+
+        Asked of the *records* rather than of what changed inside them, and that is the shape the
+        plugin protocol left behind: what a session is answered under is now every running plugin's
+        `describe` contribution, which is settled at registration, so the two stretches compose the
+        same string. What is still worth pinning is that there are two of them, keyed by where each
+        stretch begins, since a single record at the top of a session would be one system prompt
+        standing over turns answered under another the day a plugin's contribution can differ.
+
+        The cost of that, stated: **a forget no longer picks up a repository's edited guidance**,
+        because reading it is the bundled `guidance` plugin's and a plugin describes once. Forking is
+        what picks up an edited one, which is the answer this console gives to every other question
+        about a session's terms.
         """
         planting = replace(service, workspaces=workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]), ModelResponse(parts=[TextPart("two")])))
         body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1)
         await pass_at(planting, body, session.id)
 
-        planted = workspaces.root / session.id
-        (planted / "AGENTS.md").write_text("guidance written after the session opened\n", encoding="utf-8")
         await planting.say(session.id, "again", forget=True)
         await pass_at(planting, body, session.id)
 
         recorded = await planting.checkpointer.load(session.id)
+        assert instructions_key(0) in recorded, "the first stretch composed one"
+        assert instructions_key(1) in recorded, "and the forget began a second stretch that composed its own"
         told = [system_prompt_in(parse_messages(recorded[messages_key(turn)])) for turn in (0, 1)]
-        assert "guidance written after the session opened" not in (told[0] or "")
-        assert "guidance written after the session opened" in (told[1] or "")
+        assert told[0] is not None
+        assert told[1] == told[0], "which says the same thing, since nothing under it moved"
 
     async def test_a_request_the_pass_handed_back_is_made_once_by_the_next_one(
         self, service: Service, workspaces: Workspaces
     ) -> None:
         """The unwind must not cost a provider call, which is the one way this could be expensive."""
         planting = replace(service, workspaces=workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         scripted = self.scripted()
 
         await passes_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1), session.id)
@@ -1425,8 +1457,8 @@ class TestWhatOnePassDoes:
         nothing about what the conversation comes to. Two sessions, the same script, cut two ways.
         """
         planting = replace(service, workspaces=workspaces)
-        cut = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
-        whole = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        cut = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        whole = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
 
         await passes_at(
             planting, conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces, allowance=1), cut.id
@@ -1535,8 +1567,8 @@ class TestARequestTheProviderWillNotTake:
         retry loop with extra steps. The control is the same session answered by a provider that
         works, which comes back `Blocked` on the next message.
         """
-        await started(service, "hello")
-        await started(service, "hello", session="answerable")
+        await waiting(service, "hello")
+        await waiting(service, "hello", session="answerable")
 
         stalled = await pass_at(service, Refusing(status=400).body())
         working = await pass_at(service, provider.body(), session="answerable")
@@ -1556,7 +1588,7 @@ class TestARequestTheProviderWillNotTake:
         between `refused_key` and `Stepping.identified("refused", ...)` into a failure here rather
         than a record nothing can find.
         """
-        await started(service, "hello")
+        await waiting(service, "hello")
 
         await pass_at(service, Refusing(status=400).body())
 
@@ -1578,7 +1610,7 @@ class TestARequestTheProviderWillNotTake:
         at all and report the wrong reason for ever.
         """
         planting = replace(service, workspaces=workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         refusing = Refusing(status=400, after=1)
 
         ended = await pass_at(planting, conversing(refusing.endpoints(), INSTRUCTIONS, workspaces), session.id)
@@ -1597,7 +1629,7 @@ class TestARequestTheProviderWillNotTake:
         worker does. What it must not do is put the identical question - same recorded history, same
         recorded message - back to the provider and pay for the identical refusal.
         """
-        await started(service, "hello")
+        await waiting(service, "hello")
         refusing = Refusing(status=400)
 
         first = await pass_at(service, refusing.body())
@@ -1616,7 +1648,7 @@ class TestARequestTheProviderWillNotTake:
         A conversation nobody refused reports nothing, so the sentence is drawn only where there is
         something to say - which is the same bargain the missing-endpoint sentence takes.
         """
-        await started(service, "hello")
+        await waiting(service, "hello")
         assert refusal_in(await service.checkpointer.load(SESSION)) is None, "the control: nothing has stopped"
 
         await pass_at(service, Refusing(status=400).body())

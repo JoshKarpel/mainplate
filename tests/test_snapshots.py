@@ -14,6 +14,7 @@ from conftest import Scripted
 from conftest import already
 from conftest import calls
 from conftest import run
+from conftest import started
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from test_conversation import pass_at
@@ -225,7 +226,7 @@ class TestAWorktreePerSession:
         Somebody is waiting on that request and a clone is a network fetch. The session exists,
         renders, and names its repository; the files arrive when the first pass runs.
         """
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
 
         assert not workspaces.clones.cloned(FIXTURE)
         assert not workspaces.at(session.id).exists()
@@ -234,7 +235,7 @@ class TestAWorktreePerSession:
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
 
         await pass_at(planting, body, session.id)
 
@@ -249,8 +250,8 @@ class TestAWorktreePerSession:
         unattributable, and the person is always one of the two.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        one = await planting.start("first", on_fixture)
-        two = await planting.start("second", on_fixture)
+        one = await started(planting, "first", on_fixture)
+        two = await started(planting, "second", on_fixture)
         await pass_at(planting, body, one.id)
         await pass_at(planting, body, two.id)
 
@@ -262,8 +263,8 @@ class TestAWorktreePerSession:
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        one = await planting.start("first", on_fixture)
-        two = await planting.start("second", on_fixture)
+        one = await started(planting, "first", on_fixture)
+        two = await started(planting, "second", on_fixture)
         await pass_at(planting, body, one.id)
         await pass_at(planting, body, two.id)
 
@@ -274,7 +275,7 @@ class TestAWorktreePerSession:
     ) -> None:
         """Every pass reaches the planting; re-planting would throw away what the session had done."""
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, session.id)
         (workspaces.at(session.id) / "src" / "in-progress.txt").write_text("half done\n")
 
@@ -290,7 +291,7 @@ class TestAWorktreePerSession:
         is the fix. Only a repository that was *never cloned* reaches here.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository="test:long-gone"))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository="test:long-gone"))
 
         with pytest.raises(NoSuchRepository, match="long-gone"):
             await pass_at(planting, body, session.id)
@@ -309,7 +310,7 @@ class TestStartingSomewhereInParticular:
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
 
         await pass_at(planting, body, session.id)
 
@@ -328,7 +329,9 @@ class TestStartingSomewhereInParticular:
         (worktree.root / "src" / "kept.txt").write_text("rewritten\n")
         await run("git", "commit", "-aqm", "second", cwd=worktree.root)
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=FIXTURE, base="before-the-rewrite"))
+        session = await started(
+            planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE, base="before-the-rewrite")
+        )
 
         await pass_at(planting, body, session.id)
 
@@ -364,13 +367,13 @@ class TestStartingSomewhereInParticular:
         Resolving the *default branch by name* through the same path a base takes is what fixes it.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        first = await planting.start("hello", on_fixture)
+        first = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, first.id)
         assert workspaces.clones.cloned(FIXTURE), "the clone is what goes stale, so it has to exist first"
         (worktree.root / "src" / "kept.txt").write_text("moved on\n")
         await run("git", "commit", "-aqm", "second", cwd=worktree.root)
 
-        second = await planting.start("hello", replace(on_fixture, base=base))
+        second = await started(planting, "hello", replace(on_fixture, base=base))
         await pass_at(planting, body, second.id)
 
         assert (workspaces.at(second.id) / "src" / "kept.txt").read_text() == "moved on\n"
@@ -387,7 +390,7 @@ class TestStartingSomewhereInParticular:
         the same words.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, session.id)
         (worktree.root / "src" / "kept.txt").write_text("moved on\n")
         await run("git", "commit", "-aqm", "second", cwd=worktree.root)
@@ -406,7 +409,7 @@ class TestStartingSomewhereInParticular:
         and a dead end the moment somebody runs `git commit` in the box under the conversation.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", replace(on_fixture, branch="try-it-this-way"))
+        session = await started(planting, "hello", replace(on_fixture, branch="try-it-this-way"))
 
         await pass_at(planting, body, session.id)
 
@@ -421,7 +424,7 @@ class TestStartingSomewhereInParticular:
         that nobody should have to know about.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
 
         await pass_at(planting, body, session.id)
 
@@ -436,8 +439,8 @@ class TestStartingSomewhereInParticular:
         mean the second failing to get files at all.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        one = await planting.start("first", on_fixture)
-        two = await planting.start("second", on_fixture)
+        one = await started(planting, "first", on_fixture)
+        two = await started(planting, "second", on_fixture)
 
         await pass_at(planting, body, one.id)
         await pass_at(planting, body, two.id)
@@ -450,7 +453,7 @@ class TestStartingSomewhereInParticular:
     async def test_a_branch_somebody_named_wins_over_the_one_this_console_would_make(
         self, planting: Service, on_fixture: Choice
     ) -> None:
-        session = await planting.start("hello", replace(on_fixture, branch="try-it-this-way"))
+        session = await started(planting, "hello", replace(on_fixture, branch="try-it-this-way"))
 
         chosen = choice_of(await planting.checkpointer.load(session.id))
         assert chosen is not None
@@ -458,7 +461,7 @@ class TestStartingSomewhereInParticular:
 
     async def test_a_session_with_no_repository_is_given_no_branch(self, planting: Service) -> None:
         """There is nothing for one to be a branch *of*, which `Choice.branching` answers first."""
-        session = await planting.start("hello", replace(DEFAULT_CHOICE, repository=None))
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=None))
 
         chosen = choice_of(await planting.checkpointer.load(session.id))
         assert chosen is not None
@@ -470,8 +473,8 @@ class TestStartingSomewhereInParticular:
         base and a branch are answers about a repository, so with none picked there is nothing for
         either to be about and the record says so rather than carrying words nothing will ever read.
         """
-        session = await planting.start(
-            "hello", replace(DEFAULT_CHOICE, repository=None, base="main", branch="somewhere")
+        session = await started(
+            planting, "hello", replace(DEFAULT_CHOICE, repository=None, base="main", branch="somewhere")
         )
 
         chosen = choice_of(await planting.checkpointer.load(session.id))
@@ -489,13 +492,13 @@ class TestStartingSomewhereInParticular:
         fork on a detached `HEAD`, and a fork is exactly where somebody carries on working.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        started = replace(on_fixture, base="main", branch="the-parent-s-branch")
-        session = await planting.start("hello", started)
+        naming = replace(on_fixture, base="main", branch="the-parent-s-branch")
+        session = await started(planting, "hello", naming)
         await pass_at(planting, body, session.id)
 
         # With a message, because planting happens *after* the pass is told what to answer: a fork
         # left waiting never reaches the call this is about.
-        forked = await planting.fork(session.id, at=1, chosen=started, said="try it again")
+        forked = await planting.fork(session.id, at=1, chosen=naming, said="try it again")
         assert forked is not None
         chosen = choice_of(await planting.checkpointer.load(forked.id))
         assert chosen is not None
@@ -537,7 +540,7 @@ class TestReadingARepositorysBranches:
     ) -> None:
         """The other half of asking the remote: the answer cannot be as old as the local copy."""
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, session.id)
         await run("git", "branch", "landed-later", cwd=worktree.root)
 
@@ -572,7 +575,7 @@ class TestForkingTheWorktreeToo:
         question in the same words and nothing in the transcript would say so.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("first", on_fixture)
+        session = await started(planting, "first", on_fixture)
         await pass_at(planting, body, session.id)
 
         # What turn 1 will see, and then a later edit that turn 1 never saw.
@@ -594,7 +597,7 @@ class TestForkingTheWorktreeToo:
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("first", on_fixture)
+        session = await started(planting, "first", on_fixture)
         await pass_at(planting, body, session.id)
         (workspaces.at(session.id) / "src" / "kept.txt").write_text("where the parent is now\n")
 
@@ -612,7 +615,7 @@ class TestForkingTheWorktreeToo:
         there is no earlier state to reproduce and the repository's head is the honest start.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("first", on_fixture)
+        session = await started(planting, "first", on_fixture)
 
         forked = await planting.fork(session.id, at=0, chosen=on_fixture, said="again")
         assert forked is not None
@@ -620,10 +623,10 @@ class TestForkingTheWorktreeToo:
 
         assert (workspaces.at(forked.id) / "src" / "kept.txt").read_text() == "original\n"
 
-    async def forked_into(self, planting: Service, started: Choice, asked: str | None) -> str | None:
-        """The repository a fork ends up in, having started from `started` and asked for `asked`."""
-        session = await planting.start("first", started)
-        forked = await planting.fork(session.id, at=0, chosen=replace(started, repository=asked), said="again")
+    async def forked_into(self, planting: Service, opening: Choice, asked: str | None) -> str | None:
+        """The repository a fork ends up in, having started from `opening` and asked for `asked`."""
+        session = await started(planting, "first", opening)
+        forked = await planting.fork(session.id, at=0, chosen=replace(opening, repository=asked), said="again")
         assert forked is not None
         recorded = choice_of(await planting.checkpointer.load(forked.id))
         assert recorded is not None
@@ -685,8 +688,8 @@ class TestPickingOneThroughTheConsole:
             )
 
         assert answered.status == 303
-        started = answered.location.rsplit("/", 1)[-1]
-        chosen = choice_of(await planting.checkpointer.load(started))
+        forked = answered.location.rsplit("/", 1)[-1]
+        chosen = choice_of(await planting.checkpointer.load(forked))
         assert chosen is not None
         assert chosen.repository == FIXTURE
 
@@ -716,7 +719,7 @@ class TestPickingOneThroughTheConsole:
         self, app: ASGIApp, planting: Service
     ) -> None:
         """Because it inherits that one; offering a choice that cannot be honoured would be a lie."""
-        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "first", replace(DEFAULT_CHOICE, repository=FIXTURE))
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
@@ -726,7 +729,7 @@ class TestPickingOneThroughTheConsole:
 
     async def test_the_fork_page_offers_one_to_a_session_that_has_none(self, app: ASGIApp, planting: Service) -> None:
         """The other half of the rule: a fork may attach a repository where there was none."""
-        session = await planting.start("first", DEFAULT_CHOICE)
+        session = await started(planting, "first", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
@@ -748,7 +751,7 @@ class TestWhatTheSidebarSaysASessionWorksIn:
         return build_app(already(planting))
 
     async def test_a_row_names_the_repository_its_session_works_in(self, app: ASGIApp, planting: Service) -> None:
-        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "first", replace(DEFAULT_CHOICE, repository=FIXTURE))
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}")
@@ -758,7 +761,7 @@ class TestWhatTheSidebarSaysASessionWorksIn:
 
     async def test_a_row_for_a_session_working_in_nothing_says_nothing(self, app: ASGIApp, planting: Service) -> None:
         """Most of a list is one or the other, and the majority does not need labelling."""
-        session = await planting.start("first", DEFAULT_CHOICE)
+        session = await started(planting, "first", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}")
@@ -774,7 +777,7 @@ class TestWhatTheSidebarSaysASessionWorksIn:
         is all anybody knows about the repository now. Saying nothing would be the quieter wrong
         answer, since the session is still working somewhere.
         """
-        session = await planting.start("first", replace(DEFAULT_CHOICE, repository="test:detached"))
+        session = await started(planting, "first", replace(DEFAULT_CHOICE, repository="test:detached"))
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}")
@@ -788,7 +791,7 @@ class TestWhatTheSidebarSaysASessionWorksIn:
         the fourth is reached in the checkpoint the session already records it in. A column here
         would be the second copy of what was said that this console does not keep.
         """
-        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "first", replace(DEFAULT_CHOICE, repository=FIXTURE))
 
         held = await planting.database.run(
             lambda connection: {str(row[1]) for row in connection.execute("PRAGMA table_info(sessions)")}
@@ -799,7 +802,7 @@ class TestWhatTheSidebarSaysASessionWorksIn:
         assert [one.repository for one in listed if one.id == session.id] == [FIXTURE]
 
     async def test_attaching_a_repository_through_the_fork_form_works(self, app: ASGIApp, planting: Service) -> None:
-        session = await planting.start("first", DEFAULT_CHOICE)
+        session = await started(planting, "first", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
             answered = await caller.post(
@@ -820,7 +823,7 @@ class TestWhatTheSidebarSaysASessionWorksIn:
 
     async def test_forking_through_the_console_keeps_the_repository(self, app: ASGIApp, planting: Service) -> None:
         """The bug this class exists for: the form carries no repository, so the service supplies it."""
-        session = await planting.start("first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        session = await started(planting, "first", replace(DEFAULT_CHOICE, repository=FIXTURE))
 
         async with calling(app) as caller:
             answered = await caller.post(
@@ -839,7 +842,7 @@ class TestWhatATurnRecords:
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
 
         await pass_at(planting, body, session.id)
 
@@ -857,7 +860,7 @@ class TestWhatATurnRecords:
         moved since; a recorded step hands back what the first pass saw.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, session.id)
         was = parse_tree((await planting.checkpointer.load(session.id))[opening_tree_key(0)])
 
@@ -870,7 +873,7 @@ class TestWhatATurnRecords:
         self, service: Service, provider: Provider
     ) -> None:
         """Distinguishable from a turn nobody has reached, which has no key at all."""
-        session = await service.start("hello", DEFAULT_CHOICE)
+        session = await started(service, "hello", DEFAULT_CHOICE)
 
         await pass_at(service, conversing(provider.endpoints(), INSTRUCTIONS, None), session.id)
 
@@ -892,7 +895,7 @@ class TestWhatATurnRecords:
                 ModelResponse(parts=[TextPart("made it")]),
             )
         )
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
 
         await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
 
@@ -914,7 +917,7 @@ class TestWhatATurnRecords:
                 ModelResponse(parts=[TextPart("made it")]),
             )
         )
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
 
         await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
 
@@ -938,7 +941,7 @@ class TestWhatATurnRecords:
             )
         )
         body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("hello", on_fixture)
+        session = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, session.id)
         was = await planting.checkpointer.load(session.id)
 
@@ -953,7 +956,7 @@ class TestWhatATurnRecords:
     ) -> None:
         """The other writer besides the tools: a person editing the worktree between two turns."""
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
-        session = await planting.start("first", on_fixture)
+        session = await started(planting, "first", on_fixture)
         await pass_at(planting, body, session.id)
 
         (workspaces.at(session.id) / "src" / "kept.txt").write_text("they edited it\n")

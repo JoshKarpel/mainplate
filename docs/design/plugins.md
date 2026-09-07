@@ -3,50 +3,45 @@
 How somebody adds to this console without editing it: the protocol a plugin speaks, the events it is
 sent, the effects it may ask for, and what has to be true before a repository's own plugin runs.
 
-**None of this is built yet.** Every other page here is the authority on the code as it stands; this
-one is the design the code is being written to, and the line above goes when it is.
-
 ## Handoff is the specification
 
 The protocol was not designed and then tried against something. It was read off [the handoff](
 composer.md#handoff), which is the most demanding thing this console does that a plugin should be
 able to do, and which turns out to need almost everything at once.
 
-`hand_off` alone produces three separate effects from one call:
+`hand_off` alone produced three separate effects from one call: a correctable refusal where the
+document was too short to be one, a message delivered into the inbox carrying a boundary, and a value
+back to the model.
 
-```python
-raise ModelRetry(...)   # a correctable refusal, where the document is too short to be one
-await handing(written)  # a message delivered into the inbox, carrying forget=True
-return "Recorded. …"    # and a value back to the model
-```
+And the tool was the smaller half. The whole of it, and what each part became:
 
-And the tool is the smaller half. The whole of it:
-
-| What handoff does | What the protocol therefore has |
+| What handoff did in the console | What the protocol therefore has |
 |---|---|
 | `hand_off`, its description, `document: str` | a **tool** contribution: name, description, JSON Schema |
-| refuses a document under `LEAST` characters | a **retry** effect, correctable rather than a fault |
-| writes `records.Handoff(forget=True)` to the inbox | a **deliver** effect, with a boundary and attribution |
-| returns `Recorded. …` to the model | a **return** effect |
-| `ASKING` delivered once the reserve is crossed | an **after_turn** event carrying the numbers to decide on |
-| never fires twice running | that payload saying what the turn *opened on* |
-| `hands_off` and `reserve` | **settings**, declared once |
+| refused a document under `LEAST` characters | a **retry** effect, correctable rather than a fault |
+| wrote a message with a boundary to the inbox | a **deliver** effect, with a boundary and attribution |
+| returned `Recorded. …` to the model | a **return** effect |
+| asked once the reserve was crossed | an **after_turn** event carrying the numbers to decide on |
+| never fired twice running | that payload saying what the turn *opened on*, and who asked for it |
+| `hands_off` and `reserve` as columns | **settings**, declared once by the card that draws them |
 | its card in the rail | a **card** contribution, whose controls are those settings |
-| `/handoff`, empty box allowed, note appended to `ASKING` | an **answer** contribution and a **compose** event |
-| `records.Handoff` drawn as its own panel kind | a **label**, **title** and **tone** on the delivery |
-| `reserve_mark` on every turn rule | **nothing. This one does not port.** |
+| `/handoff`, empty box allowed, note appended | an **answer** contribution and a **compose** event |
+| its own panel kind | a **label**, **title** and **tone** on the delivery |
+| a mark on every turn rule | **nothing. This one did not port.** |
 
-**The last row is stated rather than quietly dropped.** `reserve_mark` draws a bar across every rule
-at the fraction the reserve opens at, which is a mark on a control the console owns, in a region
-plugins have no vocabulary for. Stretching the card language into the transcript to reach it would
-be inventing an axis in order to have a cross-product. So the gauge stays the console's, and a
-handoff shipped as a plugin does without it.
+**The last row is stated rather than quietly dropped, and it is the one thing this port actually
+removed.** The console drew a bar across every rule at the fraction the reserve opened at, read
+off two columns the session index no longer has. A reserve is a plugin's own setting now, and the
+console has no vocabulary for a plugin drawing in the transcript region; stretching the card language
+that far to reach it would be inventing an axis in order to have a cross-product. So the gauge stays
+the console's, the *fill* is unaffected since how much of the window a request used is the console's
+own arithmetic, and a handoff shipped as a plugin does without the mark.
 
-One thing gets *better* under the protocol, which is worth noting because it is the opposite of what
-a port usually does. `recorded_ask()` exists today so that the auto path and the `/handoff` button
-cannot come to say different things about what a handoff is. Under the protocol both are events into
-the same script, so that sharing is internal to the plugin rather than a function two callers have
-to remember to reach for.
+One thing got *better* under the protocol, which is worth noting because it is the opposite of what a
+port usually does. The console needed a shared composition so that the auto path and the `/handoff`
+button could not come to say different things about what a handoff is. Both are now events into the
+same script, so that sharing is internal to the plugin rather than a function two callers have to
+remember to reach for.
 
 ## A plugin is one script, spoken to in JSON
 
@@ -54,8 +49,10 @@ to remember to reach for.
 reads a JSON answer naming effects. That is the whole contract.
 
 ```console
-$ echo '{"event":"tool","tool":"hand_off","args":{"document":"…"},"session":"a1b2"}' | ./handoff
-{"return": "Recorded. …", "deliver": [{"said": "…", "forget": true}]}
+$ echo '{"event":"tool","tool":"hand_off","args":{"document":"…"},"session":"a1b2",
+         "plugin":"bundled:handoff"}' | src/mainplate/plugins/bundled/handoff
+{"deliver": [{"said": "…", "forget": true, "label": "handoff", "tone": "strong", …}],
+ "return": "Recorded. This conversation's context starts again from that document, …"}
 ```
 
 One entrypoint rather than a file per hook, because **a plugin is a package and not a pile of
@@ -87,7 +84,7 @@ deferred knowingly rather than overlooked.
 `describe`, including which events it wants:
 
 ```json
-→ {"event": "describe"}
+→ {"event": "describe", "session": "a1b2", "plugin": "bundled:handoff", "worktree": "/…/a1b2"}
 ← {"events": ["after_turn", "compose"],
    "tools": [{"name": "hand_off", "description": "…", "schema": {…}}],
    "answers": [{"leader": "handoff", "saying": "hand off and clear the context", "demands": false}],
@@ -100,7 +97,7 @@ A plugin may also return **`instructions`**, which are composed into what the se
 under. Those are a `describe` contribution rather than an event for the reason tools are: they sit
 in front of the cached prefix, so they have to be settled for the session or every request under
 them is re-priced. It is what lets [the guidance
-system](#both-are-ported-as-part-of-this-work-and-that-is-the-test) be a plugin at all.
+system](#both-are-ported-and-that-is-the-test) be a plugin at all.
 
 **`events` is what stops this being wasteful.** Without it every event goes to every plugin and a
 console with six of them spawns six processes per turn to be told nothing five times. With it, a
@@ -108,12 +105,17 @@ plugin that only wants `after_turn` is never launched for anything else.
 
 **What comes back is settled for a session's life, and the cached prefix is what decides that.**
 Tool definitions sit above the system prompt in the cached prefix, so introducing one
-mid-conversation invalidates the whole prefix beneath it: the same arithmetic that keeps [`hand_off`
-unconditional](composer.md#handoff). So a session's contributions are recorded at turn 0, the way
-everything else settled about a session is, and a plugin edited underneath a running session reaches
-it on no turn at all. *When* the call is made is a different question, and it is once per session on
-that session's own first pass, for both tiers alike: see
-[below](#starting-a-session-takes-two-steps).
+mid-conversation invalidates the whole prefix beneath it. So a session's contributions are recorded
+on its first pass, the way everything else settled about a session is, and a plugin edited underneath
+a running session reaches it on no turn at all.
+
+**Under two session-level keys rather than one, and the fork is what decides it.** `plugins:console`
+holds what the bundled set and the operator's own declared; `plugins:repository` holds what the
+repository did. They are not turn-prefixed, for the reason `instructions:{n}` is not: `before` copies
+turn-shaped keys by shape, so one name would carry both halves of a parent's registration into a
+branch, and a fork must inherit exactly one of them. Both are written even where there is nothing to
+describe, which is what makes an empty registration mean *this session is set up* rather than *nobody
+has looked*.
 
 **Forking is how a conversation picks up an edited plugin**, and that is the existing answer rather
 than a new one: a fork is a session, so it describes the operator's plugins afresh, and the way to
@@ -138,6 +140,12 @@ name, and a plugin needs none of its own: the console supplies the qualified nam
 blob and the tool prefix, and what a reader sees is the card's `heading` and a panel's `label`, both
 of which the plugin already says separately.
 
+**The qualified name is nevertheless in every payload**, under `plugin`, because one thing genuinely
+needs it and cannot work it out: a plugin answering a turn boundary has to be able to tell that the
+turn opened on *its own* delivery, or it fires again for as long as the condition that fired it stays
+true. `opened_on.plugin` and `plugin` are compared, and that is the whole of what stops a handoff
+recursing.
+
 ## Starting a session takes two steps
 
 A plugin's settings are the controls on its card, and its card comes back from `describe`. So
@@ -149,7 +157,8 @@ The old shape cannot absorb that. Creating a session used to record the choice a
 message in one POST, so the first turn would be answered before anything had been read out of the
 repository. So creation splits:
 
-1. **The choices.** Endpoint, model, repository, isolation, and the grant. This records the
+1. **The choices.** Endpoint, model, repository, isolation, and whether the repository's own
+   code runs. This records the
    `Choice`, enrols the session, calls `make_ready`, and redirects to the session's own page.
 2. **The setup pass.** Plants the worktree, `describe`s every plugin, and records what they declared
    at turn 0. Then it reaches `opening_turn`, finds an empty inbox, and comes back `Blocked`.
@@ -173,23 +182,31 @@ could not be described, learned or tested as one thing.
 
 The empty version of that step is not a case worth designing around anyway, because **handoff ships
 as a plugin and is on in every session**: there is no console with no plugins, so the step always
-has at least a heading, a switch and a number in it. The cost this looked like it had, a click
-through a blank page, is not one that can arise.
+has at least a heading and a switch in it. The cost this looked like it had, a click through a blank
+page, is not one that can arise.
 
-**It is drawn in two groups, the operator's and the repository's, with the banner under the
-second.** Grouping by where a plugin came from rather than by what it does is the whole point: those
-two are not equally trusted, and a reader deciding what to leave on is deciding about provenance.
-[What that banner says](#what-the-grant-is-actually-guarding) is the exposure in plain terms rather
-than a warning that something may be unsafe.
+**It is drawn in three groups, one per tier, each with a line saying what that tier is.** Grouping by
+where a plugin came from rather than by what it does is the whole point: the three are not equally
+trusted, and a reader deciding what to leave on is deciding about provenance. [What the repository's
+line says](#what-the-trust-switch-is-actually-guarding) is the exposure in plain terms rather than a
+warning that something may be unsafe. Every tier is drawn, empty ones included, so the step is the
+same shape on every session.
 
-**Each plugin can be turned on or off there, and that is settled for the session.** Some arrive
-already off, because [a name claimed by a more specific tier defaults the one under it
-off](#where-a-plugin-comes-from); the step draws that state rather than hiding it. A plugin that is
-off contributes nothing: no tool in the prefix, no card, no answer in the composer, and no events.
-The switch is live at step 3 because nothing has been asked yet, and frozen afterwards because a
+**Each plugin can be turned on or off there, and that is settled for the session.** **Every declared
+plugin comes on**, in every tier: installing one is the decision, and this console does not
+second-guess it by turning something else off out of view. A plugin that is off contributes nothing:
+no tool in the prefix, no card, no answer in the composer, and no events.
+
+**A tier's heading carries a switch of its own, and it is not a third kind of answer**: it sets every
+switch under it. What a session records is a switch per plugin, so turning a tier off is turning each
+of its plugins off, and a tier that recorded an answer of its own would be a second place the same
+question is answered. It works only with the script present, which is the standing bargain every
+scripted control here takes - without `mainplate.js` each plugin's own switch still works.
+
+The switches are live at step 3 because nothing has been asked yet, and frozen afterwards because a
 tool definition leaving the prefix invalidates everything under it exactly as one arriving late
-does. So the rail draws the state and does not change it, and [forking](forking.md) is how a
-conversation changes its mind, as it is for the model and the repository.
+does. So the rail draws each running plugin's *card* and never these, and [forking](forking.md) is
+how a conversation changes its mind, as it is for the model and the repository.
 
 **A plugin's settings stay live where its being loaded does not**, and the two are different
 questions rather than an inconsistency. A setting is a value the plugin reads when it runs; being
@@ -216,7 +233,7 @@ it would be writing into a slot that ignores it.
 
 **One broken plugin stopping the whole session is the right answer in every tier**, by the question
 [refusing at startup](../philosophy.md#refusing-at-startup-or-promising-not-to-raise) asks: a
-repository plugin is one you granted and a user plugin is one you configured, so either failing
+repository plugin is one you kept trusted and a user plugin is one you configured, so either failing
 silently leaves somebody holding a choice they cannot use. A session that quietly ran without it
 would be answering under a setup nobody asked for.
 
@@ -271,7 +288,7 @@ Each carries its own payload and takes its own effects. They are a short list th
 | `action` | a control on its card was pressed | `control`, `value` | `set`, `deliver` |
 
 **`before_request` is the one inside a turn, and it exists because [guidance is being ported onto
-this protocol](#both-are-ported-as-part-of-this-work-and-that-is-the-test).** Its answer is
+this protocol](#both-are-ported-and-that-is-the-test).** Its answer is
 `inject`, a system-voice message appended to the request about to go out, which costs the cached
 prefix nothing where an edited instruction re-prices everything under it. What it answers is
 recorded, so a resumed pass replays the injection rather than recomputing it from a plugin that may
@@ -284,10 +301,16 @@ recorded context size, the model's window and the plugin's own settings, nothing
 must never fire on a turn that itself opened on a handoff, and the only way a plugin can know that
 is to be told what opened the turn and which plugin, if any, delivered it.
 
-**`after_turn` is asked only where a turn actually ended.** A pass that spent its allowance, hit a
-refusal, or crossed the reserve returns before it, so a plugin is never asked about a turn that
-stopped part-way, which is a turn left unfinished for reasons that are the console's rather than the
-conversation's.
+**`after_turn` is asked only where a turn actually ended.** A pass that spent its allowance or hit a
+refusal returns before it, so a plugin is never asked about a turn that stopped part-way, which is a
+turn left unfinished for reasons that are the console's rather than the conversation's.
+
+**Its deliveries come back as a value the pass returns**, rather than being written from inside the
+loop, which is the split `Crossed` made and `Noting` now makes for every plugin: putting a message in
+an inbox *queues* the session, and that is a fact about the queue in front of a pass rather than
+about answering one. A `tool` answer is the exception and is written where it is asked, because
+`wrap_tool_execute` wraps the whole call in a step - so a resumed pass replays the recorded return
+and writes no second entry.
 
 ## The effects
 
@@ -295,14 +318,14 @@ conversation's.
 which is what keeps a plugin out of the queue it would otherwise be racing: putting a message in an
 inbox *queues* a session, so a plugin writing its own would be writing to the queue from inside the
 pass still holding the claim on it. It is the split
-[`Crossed`](composer.md#handing-off-without-being-asked) already makes, generalised.
+[`Crossed`](composer.md#handing-off-without-being-asked) made, generalised into `Noting`.
 
 | Effect | Means | Where |
 |---|---|---|
 | `return` | hand this value back to the model | `tool` only |
 | `retry` | tell the model to try again, correctably | `tool` only, becomes a `ModelRetry` |
 | `deliver` | put this message in the session's inbox | anywhere |
-| `set` | write these values into my settings | anywhere |
+| `set` | write these values into my own store | anywhere |
 
 `deliver` carries `said`, `forget`, and [how its panel is drawn](#how-a-plugins-panel-is-drawn), and
 is attributed to the plugin that asked for it. Several plugins answering one event is **not** a
@@ -311,7 +334,25 @@ that orders them and opens a turn per message.
 
 **The vocabulary is closed and the console owns it.** A fifth effect is something somebody adds
 deliberately, which is what keeps every plugin speaking one language and keeps the set of things a
-plugin can do to a conversation readable in one table.
+plugin can do to a conversation readable in one table. An answer asking for an effect the event it
+answers has no room for is **refused**, naming the plugin, rather than quietly doing nothing.
+
+### Settings are already a place, so state is a setting with nothing in front of it
+
+A plugin needs to remember things between events - the tree it last looked at, what it has already
+said - and that is one mechanism rather than a second: `set` writes into the session's own column,
+and what separates a **setting** from **state** is whether the card declared the name.
+
+A name the card declares has a control in front of it, a person can answer it, and it comes back
+under `settings` on every later payload. A name the card does not declare is the plugin's own: nothing
+draws it, nobody else writes it, and it comes back under `state`. So a plugin with no card gets pure
+state and has no second mechanism to learn, and a plugin with a card cannot confuse a control's value
+with its own bookkeeping, because the split is made by the console rather than by a naming convention
+somebody has to remember.
+
+A setting's value is a switch's or a number's, because that is what a control can hold; state is
+whatever JSON the plugin likes. Both are settled per session, so a fork starts with none and two
+sessions running one plugin never see each other's.
 
 ### What a delivered message becomes
 
@@ -422,7 +463,7 @@ is a boolean setting and a number box is a number setting, so one declaration is
 draws, what the settings blob holds, and what arrives in every payload that plugin receives. There
 is no second schema language and no way for the card and the settings to disagree.
 
-**The cost, stated: a plugin cannot draw a control the vocabulary has no word for.** `reserve_mark`
+**The cost, stated: a plugin cannot draw a control the vocabulary has no word for.** The reserve mark
 is the worked example of that cost being real.
 
 ## Where a plugin comes from
@@ -433,7 +474,7 @@ run at all.
 | | Where | Trusted |
 |---|---|---|
 | User | `$XDG_CONFIG_HOME/mainplate/config.yaml` | you wrote it |
-| Repository | `.mainplate/mainplate.yaml` at the session's tree | only once granted |
+| Repository | `.mainplate/mainplate.yaml` at the session's tree | unless the session says otherwise |
 
 Either way it is a mapping, and **the key is the plugin's name**:
 
@@ -465,35 +506,24 @@ own](#registration): a rule tying the key to a declared name would make that pai
 together. Two repositories each carrying a `review` were never a collision either, since no session
 holds both.
 
-**Which makes replacing a bundled plugin something the operator opts into by choosing the name.**
-Install yours as `guidance` and the stack below applies; install it as `alice-guidance` and both
-run. The naming *is* the decision, rather than a separate switch meaning the same thing.
+**Nothing is a stack, and a claimed name settles nothing.** An operator's `guidance` and the bundled
+`guidance` are two plugins, both on, both listed on [the settings
+step](#starting-a-session-takes-two-steps) with a switch apiece. Installing one is the decision; this
+console does not read a second meaning into the name you happened to give it.
 
-Shadowing was the first design and is worse in the way silent things are worse: one plugin quietly
-stepping aside for another of the same name is behaviour with no control in front of it.
+Two designs were tried here and both are worse, in the same way and by degrees. **Shadowing** - one
+plugin quietly stepping aside for another of the same name - is behaviour with no control in front of
+it. **A claimed name setting a default off** is that failure made visible, which is better and still
+wrong: it is a rule somebody has to learn in order to predict what their own console will do, bought
+to save one press in a case nobody has met yet. What it was reaching for is genuinely wanted and is
+cheaper elsewhere: if you install your own `guidance` and want ours off, the switch is right there,
+under a heading, on the step you pass through anyway.
 
-**A claimed name still means something, though: it sets a default rather than replacing anything.**
-An operator's plugin called `guidance` comes on and the bundled `guidance` comes **off by default**,
-both drawn on [the settings step](#starting-a-session-takes-two-steps) with their switches in that
-state. Bringing your own then costs no presses in the ordinary case, and running both, or keeping
-ours instead, costs one. Nothing is hidden and nothing is settled out of view, which was the whole
-complaint against shadowing.
-
-**The stack is the operator's over the bundled, and a repository is not in it.** That is a departure
-from the usual most-specific-wins layering, taken on two grounds:
-
-- **A repository would be reaching into the operator's setup.** Defaulting a bundled plugin off by
-  shipping a file named `handoff` is a cloned repository deciding which of *your* plugins are live.
-  Visible and one toggle away is better than silent, and it is still the thing every other rule on
-  this page refuses.
-- **It could not deliver on it anyway.** A repository's tools and leaders are
-  [prefixed](#two-namespaces-stay-shared-and-they-need-an-answer), so its `handoff` cannot claim
-  `/handoff` or the `hand_off` tool name. Defaulting the bundled one off would leave the session
-  with neither, chosen by the repository.
-
-So a repository's plugin comes on by default and turns nothing else off. Where what it contributes
-is nameless, instructions and injections, it simply sits alongside ours and both run, which is the
-coherent reading of two guidance loaders in one session.
+So a repository's plugin comes on and turns nothing else off, exactly as every other tier's does.
+Where what it contributes is nameless, instructions and injections, it simply sits alongside ours and
+both run, which is the coherent reading of two guidance loaders in one session; where it is named, it
+is [prefixed](#two-namespaces-stay-shared-and-they-need-an-answer), so its `handoff` never claims
+`/handoff` or the `hand_off` tool name.
 
 The **settings blob is keyed by the qualified name**, so three plugins called `guidance` hold three
 sets of settings rather than one they take turns overwriting.
@@ -512,12 +542,10 @@ could stop your session starting, which is the thing every other rule here is bu
 Prefixing costs description tokens and a clumsier name in the prefix, and buys a tier that cannot
 interfere with anything.
 
-**Between the operator's own and a bundled one, a collision is asked of what is actually *on*, after
-[the name stack](#where-a-plugin-comes-from) has set the defaults.** So the ordinary case never
-arises: an operator's `guidance` has already defaulted the bundled `guidance` off, and one of the
-two claimants is not running. What is left is two differently-named plugins that both want
-`hand_off`, or same-named ones somebody deliberately switched both on, and those are **refused,
-naming both**.
+**Between the operator's own and a bundled one, a collision is asked of what is actually *on***, so
+it is a question about a set somebody can see and change: two plugins that both want `hand_off` are
+both listed on the settings step with a switch apiece, and turning either off is what fixes it. Such
+a pair is **refused, naming both**.
 
 Refusing is safe here precisely because both are yours and the refusal has somewhere to say so: it
 holds up the first message and not the settings step, so the screen still draws, still lists the two
@@ -530,21 +558,57 @@ collision the operator can already see and fix.
 
 ## Trusting a repository's plugin
 
-A repository's plugin is a program this console executes. The grant in front of that is a real
-boundary rather than a disclosure, because it is a separate process run behind the confinement
-[`bash` already uses](sandbox.md): it reaches the worktree it was handed and nothing else.
+A repository's plugin is a program this console executes. What makes that safe to offer at all is
+that it is a separate process run behind the confinement [`bash` already uses](sandbox.md): it
+reaches the worktree it was handed and nothing else.
 
 **Its confinement is fixed and narrow, and is never the session's own.** A session on
 `Filesystem.EVERYTHING` gets `OverEverything`, so its `bash` reaches `/`; a repository's plugin in
-that session still gets `InAWorktree`. The isolation a session picked is a decision about what the
-**model** may reach, and a plugin is not the model. Inheriting it would mean the one control that
-widens a session quietly widens somebody else's code along with it.
+that session still gets `InAWorktree`, and its network is shut whatever the session chose. The
+isolation a session picked is a decision about what the **model** may reach, and a plugin is not the
+model. Inheriting it would mean the one control that widens a session quietly widens somebody else's
+code along with it.
 
-### What the grant is actually guarding
+**A console with no sandbox runs none of them at all.** That is a refusal rather than a fallback: a
+repository's plugin is safe to run because the process is confined, so a console that cannot confine
+one has nothing to offer in its place.
+
+### The control is the refusal, not the permission
+
+**`Choice.trusted` is on by default**, and the switch in the picker is how you say *no*. An earlier
+draft had it the other way round - a grant defaulting off, recorded per repository - and both halves
+of that were wrong.
+
+**Defaulting off makes the common case a click nobody reads**, which is the failure the whole control
+exists to avoid. And the honest reading of what picking a repository already means is that its code
+runs: a session with a shell runs its build, its tests, its `pre-commit` and whatever those shell out
+to, every one of them unread. A plugin is one more caller of that, not the escalation.
+
+**Recording it per repository was worse still, because repositories change.** An answer given against
+`owner/repo` covers a branch somebody pushed this morning as readily as the one you reviewed last
+year, and no finer unit fixes it. Per directory is the same answer wearing a path. Per content hash
+of the entrypoint looks rigorous and is not: a script that `exec`s a sibling, resolves a dependency,
+or shells out to `make` has a stable hash and changing behaviour, so to make hashing sound you would
+have to hash the transitive closure of everything it can reach, and **that closure is the tree**. Per
+tree is the only sound content unit and is unusable as a prompt, since it re-asks on every commit,
+which trains somebody to answer without reading.
+
+So it is recorded **per session, on the `Choice`**, settled before the first message and fixed for
+its life like everything else there - and changing your mind is [`fork`](forking.md), which is the
+answer this console gives to every other question about a session's terms. A fork inherits it, since
+a fork inherits the repository half of what its parent registered rather than reading any file again.
+
+**Asked blind, in the picker.** [The worker clones and a request handler never
+does](workspace.md#where-a-repository-comes-from), so when somebody picks a repository there is no
+clone and no worktree, and no way to read a file out of it without a network fetch on a POST somebody
+is waiting on. A repository carrying no plugins makes the answer inert, and nothing had to be fetched
+to find that out.
+
+### What the trust switch is actually guarding
 
 Worth stating plainly, because "runs code" is both true and too vague to decide anything with.
 Behind the confinement a repository's plugin can read and write the worktree and run what is in it,
-which is what that session's `bash` could already do. The two things it adds are the ones the grant
+which is what that session's `bash` could already do. The two things it adds are the ones the switch
 is for:
 
 - **It runs unattended**, at every turn boundary, rather than because a model asked for it and a
@@ -553,48 +617,25 @@ is for:
   channel for prompt injection with a guaranteed slot on every turn, and it is the real escalation
   over a shell the model was already offered.
 
-The banner under the repository group says that, in those terms, rather than warning that something
-may be unsafe. A reader's next question is always *what happens*, and "this repository's plugins run
-on every turn without being asked, and what they write is said to the model" answers it.
+The line under the repository group on the settings step says that, in those terms, rather than
+warning that something may be unsafe. A reader's next question is always *what happens*, and "they
+run unattended at every turn boundary, and what they write is said to the model" answers it.
 
-### When the set is known
+**What the switch is genuinely for is the session where the reading above does not hold**, and there
+are two: a repository somebody is *reading* rather than working in - a stranger's pull request, a
+dependency being triaged - and a session on `Filesystem.NOTHING`, which picks a repository and hands
+the model no shell at all. That second one is why it is drawn in the picker rather than inferred from
+the isolation: the two are near enough to look like one question and are not.
 
-[The worker clones and a request handler never does](workspace.md#where-a-repository-comes-from), so
-when somebody picks a repository there is no clone and no worktree, and no way to read a file out of
-it without a network fetch on a POST somebody is waiting on.
+**The exposure is made visible rather than the answer made precise.** That is what the [settings
+step](#starting-a-session-takes-two-steps) is for: it runs after `describe` and before the first
+message, so every session shows what it actually loaded, in the terms above, before anything has
+been said to it.
 
-So **the grant is asked blind, in the picker, defaulting to off**: may plugins carried by this
-repository run. A repository carrying none makes the grant inert, and nothing had to be fetched to
-find that out. It is recorded per repository, keyed by `Repository.id`, in a table beside
-`sessions`: per repository rather than per session, because a question re-asked every session is one
-answered yes without reading it.
-
-**Which plugins a session runs, and what they registered, is settled on its first pass and recorded
-at turn 0.** That is `turn:0:tree:0`'s own shape and the only other thing here like it: a fact about
-one session that could only be learned by doing the work, recorded once and replayed after. It is
-also what [registration once per session](#registration) needs in order to be true across a restart.
-
-### Why the grant is coarse, and what pays for it
-
-A grant per repository is plainly imprecise: it covers a branch somebody pushed this morning as
-readily as the one you reviewed last year. The finer units are worth walking, because two of them
-look better than they are.
-
-- **Per directory**, which is what most harnesses do, is the same grant wearing a path.
-- **Per content hash of the entrypoint** is the one that looks rigorous and is not. A hook that
-  `exec`s a sibling script, or resolves a dependency, or shells out to `make`, has a stable hash and
-  changing behaviour. To make hashing sound you would have to hash the transitive closure of
-  everything the script can reach, and **that closure is the tree**.
-- **Per tree** is therefore the only content unit that is actually sound. Git has already computed
-  it, and this console already records it. It is also unusable as a prompt: it re-asks on every
-  commit, which trains somebody to grant without reading, which is the failure the whole control
-  exists to avoid.
-
-So the grant stays coarse and **the exposure is made visible instead of the grant precise.** That is
-what the [settings step](#starting-a-session-takes-two-steps) is for: it runs after `describe` and
-before the first message, so every session shows what it actually loaded, in the terms above, before
-anything has been said to it. The review moment is per session even though the grant is not, which
-is the part somebody can actually act on.
+**Which plugins a session runs, and what they registered, is settled on its first pass.** That is
+`turn:0:tree:0`'s own shape and the only other thing here like it: a fact about one session that
+could only be learned by doing the work, recorded once and replayed after. It is also what
+[registration once per session](#registration) needs in order to be true across a restart.
 
 ### Read once, and never from a tree this console wrote
 
@@ -621,11 +662,12 @@ provided ever reads that file or runs what is in it.
 **The user half is a different question and a fork re-describes it**, because those scripts are the
 operator's own and sit outside every worktree, so nothing a model wrote can reach them. That is the
 one place the two tiers are still told apart, and the asymmetry is the security one rather than a
-timing one: it turns on who wrote the file, which is the question the grant already asks.
+timing one: it turns on who wrote the file, which is the question the trust switch already asks.
 
-**Without a grant nothing is read**, and the recorded set is empty for that session's life. Granting
-trust afterwards reaches sessions started after it and none before, which is the answer `Choice`
-gives to every other question; [forking](forking.md) is how a session changes its mind.
+**Where a session says it does not trust the repository nothing is read**, and the recorded set is
+empty for that session's life. Trusting afterwards reaches sessions started after it and none before,
+which is the answer `Choice` gives to every other question; [forking](forking.md) is how a session
+changes its mind.
 
 The cost, stated: **editing a repository's plugin has no effect on a session already running.**
 
@@ -635,18 +677,25 @@ Three things get called settings here and they stay apart: **process configurati
 and `config.yaml`, read once at startup; **a session's settled choice** is `Choice`, fixed for life;
 and **a session's mutable state** is what a plugin's `set` writes.
 
-`hands_off` and `reserve` are columns today, and the columns cannot grow: a plugin cannot run `ALTER
-TABLE`, and `ADDED` is five migrations long already. So they become one `settings TEXT` column
-holding a mapping keyed by qualified plugin name, and `SELECTION` reaches into it with
-`json_extract` exactly as it already reaches into a session's `choice`.
+`hands_off` and `reserve` were columns, and the columns cannot grow: a plugin cannot run `ALTER
+TABLE`, and `ADDED` was five migrations long already. So they became a `settings TEXT` column holding
+a mapping keyed by qualified plugin name.
+
+**And an `enabled TEXT` beside it, because the two have two owners.** `settings` is each plugin's own
+- what its card declares and what it remembers - and `enabled` is the console's decision about which
+plugins a session runs at all. Held together they would need a reserved field name no plugin could
+use, which is a rule somebody has to know rather than a shape that cannot be got wrong.
 
 Two costs, both real:
 
-- **A whole-blob write clobbers.** `tend` writes both columns in one statement so the pair cannot be
-  half applied; a blob written whole means two plugins saving at once lose one of the saves. A `set`
-  is therefore `json_set` against one sub-field in a single `UPDATE`.
+- **A whole-blob write clobbers.** A blob written whole means two plugins saving at once lose one of
+  the saves. A `set` is therefore a `json_patch` against that plugin's own sub-object in a single
+  `UPDATE`, so each keeps its save.
 - **`STRICT` stops covering it.** The column is unchecked text, and the invariant moves to a parse
-  at the boundary against the schema the card already declares.
+  at the boundary against the schema the card already declares: a control's own default answers for
+  a field nobody has set, and a stored value of the wrong shape reads as untouched rather than
+  refusing - which is what a hand-edited row deserves, and a better answer than a session that will
+  not run.
 
 ## Which parts of the harness become plugins
 
@@ -663,26 +712,39 @@ One question sorts them: **can you describe mainplate with this absent and still
   repository's `AGENTS.md` and the directory index are instructions contributed at `describe`; the
   nested handover is an injection into a request. It is the half handoff does not exercise.
 
-### Both are ported as part of this work, and that is the test
+### Both are ported, and that is the test
 
-Not afterwards, and not as a demonstration. Between them **handoff and guidance exercise every
+Not afterwards, and not as a demonstration. Between them **handoff and guidance exercise nearly every
 event, every effect and every contribution**, which is what makes the pair a test rather than a pair
 of examples:
 
-- **Events**: `describe`, `tool`, `before_request`, `after_turn`, `compose`, `action`.
-- **Effects**: `return`, `retry`, `deliver`, `set`, `inject`.
+- **Events**: `describe`, `tool`, `before_request`, `after_turn`, `compose`.
+- **Effects**: `return`, `retry`, `deliver`, `inject`.
 - **Contributions**: tools, instructions, an answer in the composer, a card, and a panel's `label`,
   `title` and `tone`.
 
 Handoff reaches all of it but `before_request`, `inject` and `instructions`; guidance is exactly
 those three. A protocol that cannot carry the two is wrong, and finding that out while porting them
-is far cheaper than hearing it from the first plugin somebody else writes.
+was far cheaper than hearing it from the first plugin somebody else writes - it is what turned up
+that `compose` and `action` were being fired at plugins that never asked for them.
 
-**Bundled means default, not fixed.** Somebody who writes their own `guidance` gets it on and ours
-off without touching a control, because [a claimed name sets the
-default](#where-a-plugin-comes-from); somebody who wants both, or wants ours after all, presses one
-switch on the settings step. Either way the two are separate plugins with separate settings, and
-nothing was replaced out of view.
+**Two things the pair leaves unexercised, and they are named rather than assumed.** `action` and
+`set` are what a plugin uses to act at the moment a control is pressed and to remember something
+between events, and neither of these two wants either: a handoff reads its reserve when it runs, and
+guidance holds nothing between requests. What covers them instead is `tests/test_plugins.py`, over
+plugins written for the purpose.
+
+**And a third tier is exercised by a fixture rather than by a bundled plugin.** `tests/plugins/git-status`
+is a **bash** script a test repository carries, ported from a `SessionStart` hook: it is declared by
+`.mainplate/mainplate.yaml`, it runs behind the sandbox, and it contributes the worktree's git status
+as `instructions`. It is there because it is the one plugin in this repository that is none of
+Python, none of ours and none of the console's own tiers, so it proves the three claims that would
+otherwise only be asserted in prose - any language, reaches nothing it was not handed, and a
+repository's own script can contribute to what a session is told.
+
+**Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
+ours and turns ours off with one switch on the settings step. The two are separate plugins with
+separate settings, and nothing is replaced out of view.
 
 That is a stronger claim than an earlier draft made, and it is the one worth making: if ours cannot
 be turned off in favour of somebody else's, the interface is a description of what we happened to
@@ -709,7 +771,7 @@ answers with no effects at all is using this exactly as intended.
 ### What wants an event that is not written yet
 
 Two things that looked speculative when this was first written are not, because [porting
-guidance](#both-are-ported-as-part-of-this-work-and-that-is-the-test) commits to them:
+guidance](#both-are-ported-and-that-is-the-test) commits to them:
 `instructions` as a `describe` contribution, and `before_request` with its `inject`. Both are in the
 tables above.
 
@@ -736,7 +798,7 @@ Keeping the reasons apart matters, because only one of them is negotiable:
   limit against what an in-process plugin in a harness that owns its own frontend can do, and it is
   the price of a plugin being a script.
 
-Also out: drawing in the transcript region, of which `reserve_mark` is the cost made concrete; a
+Also out: drawing in the transcript region, of which the lost reserve mark is the cost made concrete; a
 colour of a plugin's own, since a panel takes a `tone` this console named; and annotating a turn
 after the fact, because the checkpoint is written once.
 

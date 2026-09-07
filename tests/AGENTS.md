@@ -32,6 +32,16 @@ have a helper apiece for that (`taken` and `answered` in `test_console.py`, `tak
 different state: it is queued, and the page draws it as a message waiting for a turn rather than as
 one being answered.
 
+**Creating a session and saying the first thing in it are two calls**, which `started` in
+`conftest.py` does together. A test about the split posts to `/sessions` itself; every other test
+wants a session with a message in it and should not have to know why that is two steps.
+
+**A test that renders a session's *page* may also want a registration**, which is `registering` in
+`test_browser.py`. A session that has registered no plugins is one whose setup pass has not finished,
+so its page draws the settings step rather than a transcript - which is honest, and not what most of
+these tests are about. It only matters where a page is being looked at: a session with a turn in it
+is past that step whatever it registered.
+
 **Every response fixture carries a timestamp.** `ModelResponse.timestamp` defaults to the moment it
 was constructed, so a fixture without one is the moment the test ran, and an assertion over a whole
 `Transcript` becomes a comparison against the wall clock.
@@ -103,6 +113,11 @@ see.** These are the ones that turn on it:
 rather than on a clock: a command is run by a task nobody holds a handle to, so what a test waits
 for is `result:{entry}` appearing. Any fixed sleep there is either racy or wasted, and the record is
 the actual signal.
+
+`test_plugins.py` runs the bundled plugins as real subprocesses over a real pipe, because a plugin
+*is* a file this console runs: a fake answering in-process would exercise everything but the one
+claim that matters. Its repository-tier tests need `bwrap` and fail loudly without it, for
+`test_sandbox.py`'s reason - what they assert is what a mount namespace actually does.
 
 `test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
 fixtures there hand an absolute workspace root and so would never notice a path resolved against the

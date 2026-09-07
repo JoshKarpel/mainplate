@@ -436,6 +436,14 @@
       if (!form) return;
       if (leading) form.dataset.leading = leading;
       else delete form.dataset.leading;
+      // And the pair the mode leaves standing, marked here rather than matched by a stylesheet rule
+      // that names every answer. CSS cannot ask whether a descendant's attribute matches an
+      // ancestor's, so the rule that did this was a written-out list of leaders - which a *plugin's*
+      // answer can never be added to, since which leaders exist is a fact about one session. Marking
+      // them is the same one-attribute move `data-leading` already is, one level down.
+      for (const each of form.querySelectorAll("[data-leader]")) {
+        each.toggleAttribute("data-showing", leading !== null && each.dataset.leader === leading);
+      }
     };
 
     // Into a mode, where the server offered one by that name. The answer is `false` otherwise, so a
@@ -1565,19 +1573,52 @@
     // the incoming markup into the DOM already on screen, and elements this file put there are not
     // in that markup, so leaving them would make the merge reconcile nodes the server has never
     // heard of.
-    // The reserve is the one control here that is typed rather than set, so it does not take effect
-    // on a keystroke and the button beside it has to say there is something to press. `defaultValue`
-    // is exactly the `value` attribute the server rendered, so this compares what is in the box
-    // against what was recorded rather than against anything kept here - which is why a swap needs no
-    // repaint: the box that comes back is a new element carrying the new default and no mark.
+    // A number on a plugin's card is typed rather than set, so it does not take effect on a keystroke
+    // and the button beside it has to say there is something to press. `defaultValue` is exactly the
+    // `value` attribute the server rendered, so this compares what is in the box against what was
+    // recorded rather than against anything kept here - which is why a swap needs no repaint: the box
+    // that comes back is a new element carrying the new default and no mark.
     //
     // Delegated, because that swap replaces the form: a listener wired to the box at load would be
     // pointing at a box that no longer exists after the first press.
-    const wireReserve = () => {
+    const wireNumbers = () => {
       document.addEventListener("input", (event) => {
         const box = event.target;
-        if (!(box instanceof HTMLInputElement) || !box.closest(".tending__reserve")) return;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".plugin__number")) return;
         box.form?.toggleAttribute("data-dirty", box.value !== box.defaultValue);
+      });
+    };
+
+    // A tier's own switch sets every switch under it and posts nothing of its own: what a session
+    // records is a switch per plugin, so turning a tier off is turning each of its plugins off. A
+    // second answer of its own would be a second place the same question is answered.
+    //
+    // Without this file every plugin's own switch still works, which is the standing bargain every
+    // scripted control here takes: this is the convenience, and the switches are the mechanism.
+    const wireTiers = () => {
+      document.addEventListener("change", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".tier__switch")) return;
+        const group = box.closest(".tier");
+        if (!group) return;
+        for (const each of group.querySelectorAll(".plugin__switch input")) {
+          if (each instanceof HTMLInputElement) each.checked = box.checked;
+        }
+        box.indeterminate = false;
+      });
+      // And back the other way, so a heading says what is actually under it rather than what was
+      // last pressed on it: three states, because "some of them" is a real answer and drawing it as
+      // either of the other two would be a control lying about the thing it controls.
+      document.addEventListener("change", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".plugin__switch")) return;
+        const group = box.closest(".tier");
+        const heading = group?.querySelector(".tier__switch input");
+        if (!(heading instanceof HTMLInputElement)) return;
+        const under = [...group.querySelectorAll(".plugin__switch input")];
+        const on = under.filter((each) => each instanceof HTMLInputElement && each.checked).length;
+        heading.checked = on === under.length;
+        heading.indeterminate = on > 0 && on < under.length;
       });
     };
 
@@ -1611,7 +1652,8 @@
     wireClasp();
     wireFolding();
     wireFilter();
-    wireReserve();
+    wireNumbers();
+    wireTiers();
     wireCache();
     wireSend();
     wireCopy();

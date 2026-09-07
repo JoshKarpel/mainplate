@@ -38,7 +38,8 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   where the message goes, and being a `Prompt` is what makes it possible: a boundary between turns
   is the only place one can be, so it must never be folded into a turn already running. See
   [Forget](#forget).
-- `handoff` is `Service.hand_off`, and it is **the one answer whose box may be empty**. What it does
+- `handoff` is the bundled handoff plugin's own leader, and it is **the one answer whose box may be
+  empty**. What it does
   with the text is point the handoff at something rather than send it anywhere, and the ordinary
   handoff has nothing typed into it, so the button carries `formnovalidate` and the boundary allows
   an empty message for this disposition alone. It shares the family `forget` is in, both ending a
@@ -335,10 +336,22 @@ transcript, which is what "before any forget" means.
 
 ## Handoff
 
-**A forget whose message the session wrote itself.** The console asks a session to write down where
-it has got to; the model does that with its own tools, calls `hand_off` with the document, and the
+**A forget whose message the session wrote itself.** A plugin asks a session to write down where it
+has got to; the model does that with its own tools, calls `hand_off` with the document, and the
 document is delivered back as a message carrying a boundary. What the next model is told is the
 document and nothing above it.
+
+**It is a [plugin](plugins.md) rather than part of this console**, in
+`src/mainplate/plugins/bundled/handoff`, and it is the one the protocol was read off: a tool with a
+schema, a correctable refusal, a delivery carrying a boundary and a tone, a value back to the model, a
+turn-boundary condition decided on numbers the payload carries, a card whose two controls are its two
+settings, and an answer in the composer under its own leader. So what follows describes a script this
+console speaks to over a pipe, and everything below is that script's rather than the console's unless
+it says otherwise.
+
+**Which means every word of it can be replaced.** Install your own `handoff` beside the bundled one
+and turn ours off with one switch on the settings step; the two are separate plugins with separate
+settings, and nothing is replaced out of view.
 
 **It happens in the session, not in an aside**, which was the first design and was worse in four
 ways at once:
@@ -361,9 +374,9 @@ ways at once:
 definitions sit above the system prompt in the cached prefix, so adding one invalidates the whole
 conversation beneath it: introduced at handoff time it would cost a full uncached read of the
 window, where a permanent one costs its own description at cache-read prices on every request. Four
-orders of magnitude. `agent_for` therefore adds it unconditionally, and unlike the file tools it is
-not conditioned on the isolation, because what it reaches is the conversation rather than the
-machine.
+orders of magnitude. What a plugin contributes is therefore settled at `describe`, once per session,
+and a plugin's tools are not conditioned on the isolation the way the file tools are, because what
+one reaches is decided by its own tier rather than by what the *model* may touch.
 
 **A tool rather than the turn's prose, because models leak the framing.** Asked for a handoff in
 words, a model writes "Here is the handoff document: ... What would you like next?", and the framing
@@ -381,27 +394,35 @@ rather than recall) and says outright that the shape is the model's.
 
 **A person who wants it pointed somewhere types it in the box**, and it is appended to the standing
 ask rather than replacing it: "dwell on the parser work" on its own is an instruction to summarise a
-summary. Both writers compose through `recorded_ask`, which takes the note where there is one and
-the bare ask where there is not, so a handoff nobody asked for and one somebody typed a paragraph
-into cannot come to say different things about what a handoff *is*.
+summary. The plugin composes both, so a handoff nobody asked for and one somebody typed a paragraph
+into cannot come to say different things about what a handoff *is* - and that sharing is internal to
+the plugin rather than a function two callers have to remember to reach for, which is one thing the
+port made strictly better.
 
 **It is delivered and not appended, and that costs a pass boundary.** An entry appended mid-pass is
 invisible to the pass that appended it, since `receive` reads the snapshot loaded at the top, which
-is what makes a drain replayable, and an append queues nothing. A handoff written that way leaves
-the session `Blocked` on a message already sitting in its own inbox with nothing that will ever wake
-it. `handing_through` therefore takes the whole `Durable` rather than the checkpointer a pass holds.
+is what makes a drain replayable, and an append queues nothing. A note written that way leaves the
+session `Blocked` on a message already sitting in its own inbox with nothing that will ever wake it.
+`app.delivering` therefore takes the whole `Durable` rather than the checkpointer a pass holds.
 
-**`records.Handoff` is an arm of `Delivered` rather than a flag on `Prompt`.** Every other message
-in a conversation was typed by somebody, so a reader has to be able to tell at a glance that this
-one was not; the tag is what the panel's kind is read off, which is the same argument that made
-`Steer` its own record. It behaves exactly as a `Prompt` otherwise, and `records.opens` and
-`records.forgets` are where that "exactly as" is written once rather than as an `isinstance` chain
-at each of the five readers. Both uses are `handoff` because both are the handoff: the ask carries
-no boundary and the document carries one.
+**`records.Note` is an arm of `Delivered` rather than a flag on `Prompt`.** Every other message in a
+conversation was typed by somebody, so a reader has to be able to tell at a glance that this one was
+not; the tag is what the panel's kind is read off, which is the same argument that made `Steer` its
+own record. It behaves exactly as a `Prompt` otherwise, and `records.opens` and `records.forgets` are
+where that "exactly as" is written once rather than as an `isinstance` chain at each of the five
+readers.
+
+**One arm for every plugin, and the ask and the document are both notes of it.** Letting a plugin
+name which record arm to write would hand out the one vocabulary this console has to own, and
+special-casing the bundled one so it kept an arm of its own would break the uniformity the whole
+design is for. What tells the two apart is the boundary: the ask carries none and the document
+carries one.
 
 The panel takes the person's hue, by `command`'s rule: the axis is who produced the text, and what a
-handoff holds was produced by this session rather than by the model about to be handed it. Its
-`TITLES` entry is what says the console composed it, which is the one thing the label leaves out.
+note holds was composed by this console's own machinery with the model as the party about to be told.
+What the *plugin* names is the `label` on the role, the `title` saying what a reader is looking at,
+and the `tone` - which is weight within that side rather than a hue competing with it, so the ask is
+`quiet` and the document is `strong`.
 
 **Asking for one is `/handoff` in the composer**, which is an answer in the sending menu like every
 other. The menu's premise is that its rows are decisions about the text somebody typed, and this one
@@ -426,9 +447,9 @@ where they stand, and what separates them is who writes what the next one opens 
 
 ## Handing off without being asked
 
-The same call as `/handoff`, fired by a number rather than by a person: both go through
-`recorded_ask`, so the words a handoff is asked for in are in one place and cannot come apart. What
-the rail's card holds is the two settings that decide when.
+The same plugin as `/handoff`, fired by a number rather than by a person: both are events into the
+same script, so the words a handoff is asked for in are in one place and cannot come apart. What the
+plugin's card in the rail holds is the two settings that decide when.
 
 **`Tending` is the one thing about a session that changes, and it has nowhere else to live.** A
 session's `Choice` is recorded before the first message and fixed for life; this is what is being
@@ -437,85 +458,78 @@ console otherwise keeps things will take it: `without-durability-sqlite` writes 
 CONFLICT ... DO UPDATE SET value = workflow_checkpoint.value`, so a key keeps the value it was first
 given and a setting saved twice would keep its first answer for ever; and `localStorage` is in a
 browser where the worker that acts on this may be another process. So it is two columns on the
-`sessions` row, arriving through `ADDED` the way `forked_aside` did, and `tend` is the only thing
-that writes them. That is [not the second copy the index otherwise
-refuses](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies), because
-it is recorded nowhere else.
+`sessions` row, arriving through `ADDED` the way `forked_aside` did. That is [not the second copy the
+index otherwise refuses](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies),
+because it is recorded nowhere else.
 
-**`NULL` reads as a module constant rather than a `Settings` field.** A process-wide answer would be
-a second place a session's question is answered, exactly as a process-wide model would be, and
-nobody has asked to set these per console. Moving a constant therefore moves every session nobody
-has told anything, and a session somebody *has* told stops following it, which is the point of
-having said something. `parse_tending` defaults each column on its own, unlike `parse_origin`, which
-demands its pair: half an origin is a row nothing here could have written, where a session told one
-setting and not the other is ordinary.
+**Two columns rather than one, because they have two owners.** `settings` is each plugin's own, keyed
+by qualified name; `enabled` is the console's decision about which plugins a session runs at all.
+Together they would need a reserved field name no plugin could use, which is a rule somebody has to
+know rather than a shape that cannot be got wrong. Neither is `STRICT`-checked, so the invariant
+moves to a parse at the boundary against the schema each plugin's card already declares.
+
+**Absent reads as the plugin's own default rather than as a console constant.** The card *is* the
+settings schema, so a control nobody has touched follows the control's declared default, and moving a
+default in the plugin moves every session nobody has told anything. A process-wide answer would be a
+second place a session's question is answered, exactly as a process-wide model would be.
 
 **Headroom in tokens, never a percentage.** What has to be true is that the handoff run has room to
 do its work: the ask, a few tool calls, the returns they bring back, and the document. That is an
 absolute quantity and the same one on every model, where a fifth of the window is 40k on a 200k
 model and 200k on a 1M one, the same setting re-tuned per model, by somebody who would have to know
-the absolute number anyway in order to pick the fraction.
+the absolute number anyway in order to pick the fraction. The control is denominated in thousands
+because a reserve is only ever chosen in round ones, and the plugin does that arithmetic: the `unit`
+on a declared number is presentation, and the console does none of its own with it.
 
-**A window and not a threshold**, which is `Reserve` in `tending.py`: `opens` is where a handoff
-becomes worth asking for and `shuts` is where there is no longer room to write one. Two bounds
-because a single turn can cross the first and overshoot the second, which one large tool return is
-enough to do. `LEAST_ROOM` is the second bound and is a constant rather than a setting, because it
-is not a preference: below it a handoff is a request nobody should pay for.
+**A window and not a threshold.** `opens` is where a handoff becomes worth asking for and `shuts` is
+where there is no longer room to write one. Two bounds because a single turn can cross the first and
+overshoot the second, which one large tool return is enough to do. The second is a constant in the
+plugin rather than a setting, because it is not a preference: below it a handoff is a request nobody
+should pay for.
 
-**Past the close the console stops offering, and reaches for nothing smaller.** A cheaper
-non-agentic summariser would be a second path that only ever runs when the first is already failing,
-so nothing would exercise it and its bugs would surface during the one moment a conversation is
-least able to absorb them. What is left is the person's, `forget` or `fork`, and both cost nothing.
-There is deliberately no second stall mechanism either: a request that no longer fits is refused by
-the provider, and `turn:{n}:refused:{i}` already says so in the same sentence-instead-of-a-spinner
-shape.
+**Past the close the plugin stops asking, and reaches for nothing smaller.** A cheaper non-agentic
+summariser would be a second path that only ever runs when the first is already failing, so nothing
+would exercise it and its bugs would surface during the one moment a conversation is least able to
+absorb them. What is left is the person's, `forget` or `fork`, and both cost nothing. There is
+deliberately no second stall mechanism either: a request that no longer fits is refused by the
+provider, and `turn:{n}:refused:{i}` already says so in the same sentence-instead-of-a-spinner shape.
 
-**`standing` is asked of the reserve rather than of a whole `Tending`**, because where a
-conversation is and whether the console will act on it are two questions, and the gauge answers only
-the first.
+**Silent where the model has no reference record.** The `after_turn` payload carries `window` of
+`null` for a model the database has never heard of, so there is no fraction and no way to know a
+reserve was crossed.
 
-**Off where the model has no reference record.** `Conversation.window` is `None` for a model the
-database has never heard of, so there is no fraction, no way to know a reserve was crossed, and no
-gauge on any rule either, which is what a session showed before there was one.
+**Where a conversation stands is the fill on every rule, and there is no mark on it.** The gauge says
+how much of the window this request used, which is the console's own arithmetic and unaffected by any
+of this. What is *gone* is the short bar at the fraction the reserve opened at: a reserve is a
+plugin's own setting now, and [the console has no vocabulary for a plugin drawing in the transcript
+region](plugins.md#what-is-structurally-out-for-three-separate-reasons). That is the one thing the
+port removed, and it is stated rather than quietly dropped.
 
-**Where it says so is the gauge on every rule, not a line in the card.** `reserve_mark` puts a short
-bar across the rule at the fraction the reserve opens at, on the same scale `--filled` is drawn
-against, so watching the line lengthen toward the mark is watching the handoff approach. That costs
-no row and no words, on a control a reader is already reading, where a sentence in the rail said the
-same thing once per page in a place nobody is looking. It is drawn only where the switch is on,
-because a mark for something that will not happen is a line to explain.
-
-It is an element rather than a second pseudo, and that is forced: the fill is unconditional and
-draws nothing at 0%, where a mark has no position to fall back on. Keyed off the style attribute it
-would be a selector matching on the text of one, and given a fallback offset it would be a bar
-parked somewhere rather than absent.
-
-**The pass decides and the composition root writes**, which is `Crossed`. Asking for a handoff means
-putting a message in an inbox, and that *queues* the session, so it is a fact about the queue in
-front of a pass rather than about answering one and it belongs where `make_ready` already is. It is
-also what makes the decision testable as a value: a test drives one pass and reads what came back,
-with no store and no scheduler anywhere near the arithmetic.
+**The pass decides and the composition root writes**, which is `Noting`. Delivering a message
+*queues* the session, so it is a fact about the queue in front of a pass rather than about answering
+one and it belongs where `make_ready` already is. It is also what makes the decision testable as a
+value: a test drives one pass and reads what came back, with no store and no scheduler anywhere near
+it. A `tool` answer is the exception and is delivered where it is asked, because `wrap_tool_execute`
+wraps the whole call in a step.
 
 **Fired at the boundary that crosses the reserve, not at the start of the next turn**, because the
 conversation's prefix is warm right then and may not be when somebody comes back and types. The same
 argument that makes a handoff cheap in-session makes it cheap here.
 
-**A turn that opened on a handoff never triggers another**, and that is the whole of what stops this
-recursing. The reserve stays crossed for as long as the context is large, so without it the ask
-turn, whose own context is the conversation it is summarising, would cross it again the instant it
-ended, and so would every turn after that. Asking about the message the turn opened on covers both
-the ask and the document. A model that answers the ask in prose instead of calling the tool is
-therefore not asked again until a person says something, which is a retry per human action rather
-than one per turn: the rule a refusal already follows.
+**A turn the plugin opened itself never triggers another**, and that is the whole of what stops this
+recursing. The reserve stays crossed for as long as the context is large, so without it the ask turn,
+whose own context is the conversation it is summarising, would cross it again the instant it ended,
+and so would every turn after that. The payload says what opened the turn and which plugin asked for
+it, and the plugin's own qualified name is in the payload beside it, so the two are compared rather
+than guessed at - which is also why another plugin's note does not stop it. A model that answers the
+ask in prose instead of calling the tool is therefore not asked again until a person says something,
+which is a retry per human action rather than one per turn: the rule a refusal already follows.
 
-**The settings are snapshotted once at the top of a pass**, injected as `Tendings` the way
-`Handoffs`, `Pricer`, `Draining` and `Guiding` are. Once, because a setting re-read at each turn
-boundary is a place two writers share, so a switch flicked while a turn was in flight would have
-that turn answered under one answer and judged under another. What it costs is that a change takes
-effect on the next pass, which is the next turn. `None` is a console that was never given a way to
-read them, and such a console tends nothing: the same reading `prices` and `handoffs` already take,
-and what keeps the arithmetic inert in every test that does not ask for it by construction rather
-than by the accident of some other value being missing.
+**The settings are snapshotted once at the top of a pass**, injected as `Tendings` the way `Pricer`,
+`Draining` and `Injecting` are. Once, because a setting re-read at each turn boundary is a place two
+writers share, so a switch flicked while a turn was in flight would have that turn answered under one
+answer and judged under another. What it costs is that a change takes effect on the next pass, which
+is the next turn.
 
 **The window is asked for at the boundary rather than at the top of the pass**, because the
 reference under it is reloadable configuration exactly as the rates are. `Prices.facts` is that one
@@ -529,38 +543,37 @@ session cost, it still comes across on a fork, and forking above the boundary ca
 backlog into a session whose context holds all of it. The worst a wrong default costs is one turn
 nobody asked for.
 
-**The pair is asked in three places and rendered once**, which is `tending_fields`: the rail's card
-changes a running session's, and the start page and the fork page decide a new one's before it
-exists. What a card posts and what a picker posts then cannot come apart, because they are the same
-two names from the same call. `form="choosing"` is the only difference, and it is what associates
-the picker's copy with a form it is not nested inside, exactly as every other question there does
-it.
+**The card is drawn from what the plugin declared and never by the plugin.** A render executes
+nothing, and only a press runs the script, which is exactly what lets a card come from a repository:
+rendering is constant and an action is rare, so the one place a spawn is affordable is where it
+lands. It is also what keeps somebody else's card in step with this console's own controls, where a
+card a plugin drew would drift the first time anything was restyled.
 
-**In the picker it is the last question**, by that page's widest-first order taken to its end: the
-workspace decides what a session can touch, the network what it can do with that, the endpoint and
-model who answers, the thinking level how hard, and this how long the conversation gets before the
-console writes it down. It is also the only one of the six measured against the model above it. Not
-a `choosing` group, for `starting_at`'s reason, since a number of tokens has no closed set of
-answers to draw, so it takes the heading that group would have had, because `auto at reserve` alone
-says nothing about what is being automated.
+**The declared card is also the settings schema**, which is one thing rather than three: a switch is
+a boolean setting and a number box is an integer setting, so one declaration is what the rail draws,
+what the column holds, and what arrives in every payload that plugin receives. There is no second
+schema language and no way for the card and the settings to disagree.
 
-**A fork settles it afresh rather than inheriting it**, and the fork page starts the control on the
-parent's so that wanting the same thing needs nothing touched. A reserve is a decision about how
-much room one conversation's context has left, and a branch's context is not that conversation's, so
-carrying the number across by *default* would be carrying an answer to a question the branch has not
-been asked.
+**It is not in the picker at all**, because there is nothing to draw there: what a plugin declares is
+known only once it has been asked, and a repository's cannot be asked until its worktree is planted.
+The [settings step](plugins.md#starting-a-session-takes-two-steps) is where a session's plugins are
+first seen, and each one's card is in the rail from then on.
 
-**Starting on the defaults writes no column at all.** The picker posts this pair on every session,
-so recording it unconditionally would make every column explicit, leave a moved constant reaching
-nothing, and make the defaulting branch a path only a database written before this existed can take,
-which is a path nothing exercises. Somebody who sets exactly the defaults is indistinguishable from
-somebody who left them, and that is the correct reading of both.
+**A fork starts on the declared defaults rather than inheriting what its parent was set to.** A
+reserve is a decision about how much room one conversation's context has left, and a branch's context
+is not that conversation's, so carrying the number across by *default* would be carrying an answer to
+a question the branch has not been asked.
+
+**Touching nothing writes no column at all.** A control nobody has moved follows the plugin's own
+declared default, so somebody who sets exactly the defaults is indistinguishable from somebody who
+left them - and that is the correct reading of both, since moving a default in the plugin should
+move every session nobody has told otherwise.
 
 **The switch takes effect on the press and the number does not**, which is the difference between a
 control you set and one you type into. A checkbox says the whole of what it means the moment it
 moves, so waiting for `Set` leaves a console that looks switched off and is not; a number is
 half-written for as long as somebody is writing it, so a `change` on that box would post whatever
-was in it when they tabbed away. The form's `hx-trigger` is `submit, change from:.tending__switch`
+was in it when they tabbed away. The form's `hx-trigger` is `submit, change from:.plugin__switch`
 for exactly that, and `submit` stays beside it because `Set` is what the number is sent with and
 what the form does with no script at all. Either way the whole form posts, so a number typed and
 then a switch flicked saves both rather than losing the typing.
@@ -573,41 +586,44 @@ than a flag the first keystroke sets. `--mark` is the gold every control here dr
 in, and the border alone rather than a fill, since a filled button reads as pressed.
 
 **No spinner on the box, because no increment is right**: a step of 1 is a hundred presses to move a
-reserve anywhere worth moving it, and any larger one is a number this console would have to invent.
-The type stays `number` for the keypad it asks for on a phone and the `min` it validates against,
-and the arrows go, since they sit inside the box and take the room a fourth digit needs. Four digits
-is the width, which is a bound rather than a guess: the reserve is in thousands and a context window
-past 1000K is not a thing to size a box for today.
+number anywhere worth moving it, and any larger one is a value this console would have to invent on a
+plugin's behalf. The type stays `number` for the keypad it asks for on a phone and the bounds it
+validates against, and the arrows go, since they sit inside the box and take the room a further digit
+needs. Four digits is the width, which is a bound rather than a guess: a control declared in units is
+chosen in round ones, and a box sized for six is one nobody can read at a glance.
 
 **The card answers itself rather than the transcript.** Nothing about the conversation changed, so
 swapping the transcript would replace the whole region in order to show what is already in the rail.
-What comes back is the box holding the value as it was recorded, which is worth doing rather than
-leaving the browser's own state alone precisely because the box is denominated in thousands.
+What comes back is the card holding the values as they were recorded, which is worth doing rather
+than leaving the browser's own state alone precisely because a declared unit means the box and the
+record are not in the same numbers.
 
-**The box is in thousands and the record is in tokens.** A reserve is only ever chosen in round
-thousands and six digits is a number to count the zeroes of, so the control holds `40` with a `K`
-beside it while the value behind it stays in the unit every other figure on the page is in.
-`THOUSAND` is the multiplier, named once, so the boundary and the card cannot disagree about which
-way it goes.
+**The box carries the unit the plugin declared and the value behind it is the plugin's own.** A
+reserve is only ever chosen in round thousands and six digits is a number to count the zeroes of, so
+the control holds `40` with a `K` beside it. What the `K` means is the plugin's business: the console
+draws the unit and stores the number, and the multiplication happens where the arithmetic does.
 
-**An unchecked checkbox posts no field**, so an absent `hands_off` on a *form* means off where an
-absent `hands_off` in the *column* means the default. Those answer two different questions, what
-this form said against what anybody has ever said, and nothing has to reconcile them, because the
-boundary resolves a form to a whole `Tending` and `tend` writes both columns in one statement.
+**The whole card posts and only what moved is announced.** A form submits every control it holds
+whether the trigger was `Set` or a switch changing, so which one moved is not in the post - it is the
+difference between the post and what is stored. That is resolvable rather than ambiguous, because the
+card declares every control it has, so an absent name on a card that was posted is a switch that is
+off. The console writes the card whole and sends an `action` for each control that actually changed,
+which is both the honest reading and what an `action` means.
 
-**An empty reserve box is the default and an unusable one is refused**, which is `posted_ref`'s
-split exactly. A reserve below `LEAST_ROOM` is refused at the boundary rather than stored and left
-to `reserving`, which would answer that the console cannot say where the session stands with nothing
-saying the number was why. A *stored* one is never clamped, for the same reason: correcting a number
-somebody typed into the shape this console prefers is how a setting stops meaning what it says.
+**A bound the plugin declared is said to the browser and re-checked at the boundary.** A `min` on an
+input is a suggestion a browser was given, and a value that reaches the handler outside the declared
+bounds came from something that is not this page. An unreadable one leaves the control as it was
+rather than refusing, which is the stance `parse_tending` takes one layer out: quietly keeping a value
+somebody can see is a better answer than a session that will not render.
 
-**A session nobody can answer may still be tended**, unlike `/handoff`, which such a session
-refuses. One nobody can answer is exactly one somebody might want the console to stop spending on,
-and that is the only useful thing left to do with it.
+**A session nobody can answer may still have its plugins set**, unlike a message, which such a
+session refuses. One nobody can answer is exactly one somebody might want a plugin to stop spending
+on, and that is the only useful thing left to do with it. What *is* settled for a session's life is
+which plugins run, not what they are set to.
 
-**The card sits under the shelf, and the theme sits below it at the foot.** The shelf is the
-boundary in that column: everything above it reads the conversation, and this is the first thing
-that changes how the conversation is run. What `margin-top: auto` pins to the bottom is the theme,
+**The cards sit under the shelf, one per running plugin that declared one, and the theme sits below
+them at the foot.** The shelf is the boundary in that column: everything above it reads the
+conversation, and these are the first things that change how the conversation is run. What `margin-top: auto` pins to the bottom is the theme,
 because it is the one card there that is not about this conversation at all, being the reader's
 across every session, so it is what somebody scanning the rail for something about *this* session
 can skip.

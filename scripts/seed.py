@@ -27,13 +27,17 @@ from mainplate.agent import Choice
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
 from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import PLUGINS_KEY
+from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import recorded_choice
+from mainplate.plugins.asking import recorded_registration
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
 from mainplate.sessions import read_session
 from scripts.gallery import CATALOGUE
 from scripts.gallery import CONVERSATION
+from scripts.gallery import ENROLLED
 from scripts.gallery import LISTED
 from scripts.gallery import TOOL_IN_FLIGHT
 from scripts.gallery import recorded
@@ -89,6 +93,12 @@ async def plant(service: Service, session: Session, chosen: Choice, checkpoint: 
     # `branching` is separate for the reason it is separate there, that it needs the session's id.
     working = replace(chosen, repository=session.repository)
     await service.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(working.settled().branching(session.id)))
+    # What a first pass would have registered, planted directly for the reason everything else here
+    # is: a seeded session has had no pass, and a session with no registration is one whose rail draws
+    # no plugin cards at all. The gallery's own fixture, so the demo console and the stills show the
+    # same card.
+    await service.checkpointer.supply(session.id, PLUGINS_KEY, recorded_registration(ENROLLED))
+    await service.checkpointer.supply(session.id, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
     for key, value in checkpoint.items():
         await service.checkpointer.supply(session.id, key, value)
     return True

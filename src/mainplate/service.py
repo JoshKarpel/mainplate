@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 
 from without_durability_sqlite import Database
@@ -34,20 +36,30 @@ from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
 from mainplate.commands import Slot
 from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import opening_tree_key
-from mainplate.conversation import recorded_ask
+from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import refusal_in
+from mainplate.conversation import registered_in
 from mainplate.conversation import requested_at
 from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
+from mainplate.plugins.asking import Declaring
+from mainplate.plugins.asking import Live
+from mainplate.plugins.asking import acted
+from mainplate.plugins.asking import composed
+from mainplate.plugins.asking import running
+from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.protocol import Setting
+from mainplate.plugins.protocol import Switch
 from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
@@ -60,10 +72,10 @@ from mainplate.sessions import name_from
 from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
-from mainplate.sessions import tend
+from mainplate.sessions import rename
+from mainplate.sessions import set_settings
+from mainplate.sessions import switch
 from mainplate.settings import DEFAULT_WATCHING
-from mainplate.tending import TENDED
-from mainplate.tending import Tending
 
 # How many steps a session has recorded. A count and not a hash of them, because what it is asked
 # for is whether to look again rather than what changed, and the store's own primary key already
@@ -165,6 +177,29 @@ class Conversation:
     keeps it current; see `cache_note`.
     """
 
+    plugins: tuple[Enrolled, ...] | None = None
+    """
+    Everything this session registered, or nothing at all where its setup pass has not finished.
+
+    `None` is the state the settings step is drawn for: the choice is recorded, the worktree is
+    being planted, and what the session's plugins are is not yet known. It is a real state rather
+    than a missing read, because a clone is minutes and a session's page exists from the moment it
+    does.
+
+    What is here is every plugin, running or not, because the step draws a switch for each: nothing
+    is off without a control showing it. Which of them actually run is `Tending`'s answer over this
+    list, and `Service.live` is where the two are put together.
+    """
+
+    refused_plugins: records.Refused | None = None
+    """
+    Why this session's plugins could not be registered, where they could not.
+
+    A third way to be stuck, beside a missing endpoint and a refused request, and it ends in the same
+    place: a sentence in place of a spinner. Read only where `plugins` is absent, since a later pass
+    that succeeded wrote the registration and that is the authoritative answer.
+    """
+
     resending: Resending | None = None
     """
     What putting this conversation to the model again costs, cached and uncached.
@@ -236,6 +271,20 @@ class Service:
     Absent is a console that cannot run one, the way `workspaces` absent is a console with no files.
     """
 
+    declaring: Declaring | None = None
+    """
+    How to run a plugin, for the two events a request handler fires rather than a pass.
+
+    Here because `compose` and `action` are answered by a handler: a leader somebody typed and a
+    control somebody pressed are both requests, and the effects they ask for are writes this object
+    already makes. Everything else a plugin is asked happens inside a pass, which is handed the same
+    value separately - this object answers questions and never runs an agent.
+
+    Absent is a console with no plugins, which is what every test that is not about them wants: a
+    leader that names one is then a request naming nothing, exactly as it is on a session whose
+    plugins do not include it.
+    """
+
     now: Callable[[], datetime] = now_utc
 
     def repository_of(self, chosen: Choice | None) -> str | None:
@@ -282,10 +331,15 @@ class Service:
         # The one subtraction of two clocks in this console, taken here rather than on the page
         # because a page is a pure function of already-answered questions. See `Conversation.since`.
         since = None if said.answered_at is None else self.now() - said.answered_at
+        registered = registered_in(recorded)
         return Conversation(
             session=found,
             said=said,
             chosen=chosen,
+            plugins=registered,
+            # Read only where there is no registration to read instead, which is what makes a
+            # write-once breadcrumb sound: a later pass that succeeded wrote the registration.
+            refused_plugins=None if registered is not None else plugins_refused_in(recorded),
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             refused=refusal_in(recorded),
             repository=self.repository_of(chosen),
@@ -337,33 +391,38 @@ class Service:
             return None
         return requested_at(await self.checkpointer.load(session), turn, at)
 
-    async def start(self, said: str, chosen: Choice, title: str | None = None, tended: Tending = TENDED) -> Session:
+    async def start(self, chosen: Choice, title: str | None = None) -> Session:
         """
-        A new session on `chosen`, named `title` or after the first thing said in it, with that
-        message sent.
+        A new session on `chosen`, ready to be set up, with nothing said in it yet.
 
-        Three writes, and the order is the whole of the choice. The choice is recorded before the
-        message because the message is what *queues* the session: written the other way round, a
-        worker could take the session between the two and find no endpoint to answer on. Enrolment
-        comes first for the reason it always did, that a session in the list with nothing in it is
-        visible where work nobody can find is not.
+        **Creating a session and saying the first thing in it are two steps now**, and the split is
+        forced rather than chosen: a plugin's settings are the controls on its card, its card comes
+        back from `describe`, and a repository's plugin cannot be described until its worktree is
+        planted - which the worker does, on a pass. So creation records the choice, enrols the
+        session, and asks for a pass; that pass plants, registers, and blocks on an empty inbox; and
+        the page swaps in a step showing what was registered. The first message leaves that step.
 
-        A given name goes through `name_from` exactly as the message would, so there is one rule
-        about what a session name is - whitespace collapsed, cut to a length a sidebar can hold -
-        rather than one for a name somebody typed and another for one taken from a message. A name
-        that is only whitespace collapses to nothing and is the same as not having named it, which
-        is what an empty box posts.
+        The cost, stated: **creation stops being fire-and-forget.** Time to a first answer is
+        unchanged, since the clone happens either way, but you now create, wait, and come back to
+        type, where before you could type and walk away. That is bigger than an extra click, and it
+        is taken deliberately: a setup that cannot half-happen is worth more here than the
+        convenience, and the convenience is recoverable later in a way a half-configured session is
+        not.
 
-        Nothing renames a session afterwards, and that is why the index may hold the title at all:
-        it is a copy of something settled rather than of something that changes. Naming it here does
-        not alter that, because this is still the one moment it is decided.
+        `make_ready` rather than a delivery, which is the other half of the same split: what queues a
+        session used to be a message, and there is no message yet. Nothing else about the queue
+        changes, and a session nobody types into holds no lease and no worker slot, because a blocked
+        pass has released its claim.
 
-        `tended` is written **only where it differs from the shipped defaults**, and that is what keeps
-        `NULL` meaning "nobody has said anything". The picker posts this pair on every session, so
-        recording it unconditionally would make every column explicit, leave a moved constant reaching
-        nothing, and make the defaulting branch a path only a database written before this existed can
-        take - which is a path nothing exercises. Somebody who sets exactly the defaults is
-        indistinguishable from somebody who left them, which is the correct reading of both.
+        A given name goes through `name_from` exactly as a message would, so there is one rule about
+        what a session name is - whitespace collapsed, cut to a length a sidebar can hold. A name
+        that is only whitespace collapses to nothing and is the same as not having named it, which is
+        what an empty box posts.
+
+        **A session is `UNTITLED` until its first message lands**, where a name was not given. The
+        name still comes from that message and is still written once, so the claim the session index
+        rests on survives with one word moved: written when the first message arrives rather than at
+        creation.
         """
         named = name_from(title) if title else ""
         # Settled here rather than taken as posted, which is the same stance that stops a form with
@@ -373,7 +432,7 @@ class Service:
         # of, be checked out at a commit, or start a branch. So no reader downstream reconciles
         # anything, and the form cannot record a contradiction. See `Choice.settled`.
         chosen = chosen.settled()
-        session = Session(id=mint_session_id(), created_at=self.now(), title=named or name_from(said))
+        session = Session(id=mint_session_id(), created_at=self.now(), title=named)
         # A branch of its own where nobody named one, which is what stops a session working in a
         # repository landing on a detached `HEAD`. That was the default until `Run` put `git commit`
         # in the box under the conversation, and a commit on a detached `HEAD` is reachable only
@@ -381,13 +440,13 @@ class Service:
         # own id and `settled` is a rule about a choice rather than about a session.
         chosen = chosen.branching(session.id)
         await enrol(self.database, session)
-        if tended != TENDED:
-            await tend(self.database, session.id, tended)
         # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
         # already lives. Until then the session renders, names its repository, and has no files.
         await self.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(chosen))
-        await self.say(session.id, said)
+        # The choice before the queueing, for the reason it always came before the first message: a
+        # worker taking this session between the two would find no endpoint to answer on.
+        await self.durable.scheduler.make_ready(session.id)
         return session
 
     async def fork(
@@ -398,7 +457,6 @@ class Service:
         chosen: Choice,
         said: str | None = None,
         aside: bool = False,
-        tended: Tending = TENDED,
     ) -> Session | None:
         """
         A new session carrying this one's turns before `at`, on `chosen`, and asking `said` next.
@@ -472,11 +530,10 @@ class Service:
         # exactly where somebody carries on working and therefore commits.
         chosen = chosen.branching(forked.id)
         await enrol(self.database, forked)
-        # By `start`'s rule, and a fork settles this afresh rather than inheriting it: a reserve is a
-        # decision about how much room one conversation's context has left, and a branch's context is
-        # not that conversation's.
-        if tended != TENDED:
-            await tend(self.database, forked.id, tended)
+        # A fork's plugin settings start empty rather than being copied, which is `Tending`'s own
+        # shape: what a plugin has stored is about one conversation's context, and a branch's context
+        # is not that conversation's. What a fork *does* inherit is which plugins it runs, and that
+        # is inherited by inheriting the registration rather than by copying a column.
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
         # The tree of the turn being re-asked, carried across on its own even though that turn's
@@ -491,9 +548,31 @@ class Service:
         started_on = recorded.get(opening_tree_key(at))
         if started_on is not None:
             await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
+        # **The repository half of what the parent registered, carried whole**, and the reason is the
+        # one rule the whole plugin design turns on: a fork plants at a *recorded tree*, which is a
+        # tree a model wrote - a snapshot is `git add -A`, so a `.mainplate/` file the model created
+        # on turn 4 is in the tree recorded for turn 5. Re-reading it here would run a plugin the
+        # parent's model authored, one fork away from any session with files.
+        #
+        # The tools and the cards and not merely the names, because "re-describe what it named" is
+        # the same launch by another route. Only a session planted at a commit the *repository*
+        # provided ever reads that file or runs what is in it.
+        #
+        # The console's half is deliberately not carried: those scripts are the operator's own and
+        # sit outside every worktree, so nothing a model wrote can reach them, and a fork describing
+        # them afresh is how a conversation picks up an edited plugin. That is the one place the
+        # tiers are still told apart, and the asymmetry is the security one rather than a timing one.
+        carried_plugins = recorded.get(REPOSITORY_PLUGINS_KEY)
+        if carried_plugins is not None:
+            await self.checkpointer.supply(forked.id, REPOSITORY_PLUGINS_KEY, carried_plugins)
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
         if said:
             await self.say(forked.id, said)
+        else:
+            # A fork with nothing to re-ask is queued all the same, because its first pass is what
+            # plants its worktree and registers its plugins. Without this it would sit un-set-up
+            # until somebody typed, and the settings step would have nothing to draw.
+            await self.durable.scheduler.make_ready(forked.id)
         return forked
 
     async def run(self, session: str, said: str) -> str | None:
@@ -529,60 +608,133 @@ class Service:
         self.commands.start(Slot(session=session, entry=entry.key), said, where)
         return entry.key
 
-    async def hand_off(self, session: str, guiding: str | None = None) -> None:
+    async def live(self, session: str, found: Conversation) -> Live | None:
         """
-        Ask this session to write down where it has got to, and to start its context again from that.
+        One session's running plugins, as a request handler asks them things.
 
-        `guiding` is whatever the person wants the handoff pointed at, appended to the standing ask
-        rather than replacing it. Appended, because the two say different things: the base is what a
-        handoff *is* and has to be there whether or not anybody adds to it, and this is what this one
-        should dwell on. Replacing it would make a note like "focus on the parser" the whole of the
-        instruction, which is a summary of a summary nobody asked for.
+        Built per request rather than held, because everything in it is that session's: what it
+        registered, what its plugins are set to, and where its files are. `None` where the session's
+        setup pass has not finished, which is the one state a handler has to refuse rather than guess
+        at - a plugin nothing has described has no leader to answer to and no control to press.
 
-        Deliberately not a template with a slot in it. What somebody picking up a refactor needs and
-        what somebody picking up an investigation needs are different documents, so the ask says what
-        a handoff is about and leaves the shape to the model that read the conversation.
-
-        A message like any other, which is what makes this cheap: the turn it opens is answered by
-        the same pass, on the same agent, over the prefix already cached, and what comes back is
-        recorded by the same tool machinery as every other call. Nothing here is a second mechanism
-        for summarising a conversation - the summariser is the session itself, with its own tools, so
-        it can check the working tree rather than recalling it.
-
-        **In this session rather than in an aside**, which was the first design and was worse in four
-        ways at once. An aside plants a fresh worktree at a recorded tree, so the agent asked to
-        describe the work would be looking at a directory without any of it in it; its cost would
-        land on a different session's total; it would need its own settings copied and its auto
-        handoff turned off so it could not recurse; and its first request would pay full price,
-        because instructions differ per session and sit in front of the whole cached prefix. Here
-        there is no aside, no copy, and no cold read.
-
-        Delivered rather than appended, because nothing else is going to queue this: `Service.run`
-        appends since a command reaches no model, and this is a message that must be answered.
-
-        No boundary on the ask, and one on what comes back. The context has to survive long enough
-        to be summarised, so it is the *document* that clears it, which the tool records for itself.
-
-        What it says is `recorded_ask`'s rather than this method's, because a pass that finds its own
-        reserve crossed asks for exactly the same thing: two writers of one record, and the words in
-        one place so they cannot come apart.
+        The effects are bound to this session here, so nothing below can reach another one: a
+        delivery goes into this inbox and a write goes into this row.
         """
-        await self.durable.deliver(session, recorded_ask(guiding))
+        if self.declaring is None or found.plugins is None:
+            return None
+        on, off = running(found.plugins, found.session.tending)
+        return Live(
+            session=session,
+            enrolled=on,
+            off=off,
+            tending=found.session.tending,
+            speaking=self.declaring.speaking,
+            worktree=found.worktree,
+            delivering=partial(self.note, session),
+            storing=partial(set_settings, self.database, session),
+        )
 
-    async def tend(self, session: str, tending: Tending) -> None:
+    async def note(self, session: str, note: records.Note) -> None:
         """
-        Say what this console should do for a session unasked, which the next pass reads.
+        Put a note a plugin asked for into a session's inbox, and ask for a look at it.
+
+        Delivered rather than appended, because a note is a message that must be answered: `run`
+        appends since a command reaches no model, and this is not that.
+        """
+        await self.durable.deliver(session, note.recorded())
+
+    async def compose(self, session: str, found: Conversation, leader: str, said: str) -> bool:
+        """
+        Hand one plugin its own answer in the composer, with whatever was in the box.
+
+        `False` where no running plugin answers to that leader, which the route turns into a refusal:
+        a leader is a word somebody typed, so one this session does not have is a request naming
+        nothing rather than a fault.
+
+        The effects are performed here rather than by the plugin, exactly as they are inside a pass,
+        and here there is no step to sit in: a handler is where this console already writes.
+        """
+        live = await self.live(session, found)
+        answering = None if live is None else live.answering(leader)
+        if live is None or answering is None:
+            return False
+        plugin, own = answering
+        for note in await composed(live, plugin, own, said):
+            await self.note(session, note)
+        return True
+
+    async def press(self, session: str, found: Conversation, plugin: str, posted: Mapping[str, str]) -> bool:
+        """
+        Save a plugin's card as it was posted, and tell the plugin about the controls that moved.
+
+        **The whole card is written and only the changes are announced**, which is the difference
+        between what a form can say and what an `action` means. A form posts every control it holds
+        whether the trigger was `Set` or a switch changing, so what moved is not in the post; it is
+        the difference between the post and what is stored, and this holds both.
+
+        A switch that is off posts nothing at all, and that is resolvable rather than ambiguous: the
+        card declares every control it has, so an absent name on a card that was posted is off. That
+        is why this walks the *card* rather than the post.
+
+        The write happens before the plugin is asked, because that is what a control is: a card that
+        told the plugin and left the column alone would draw one answer and hold another.
+
+        `False` where the plugin is not one this session runs, which is a posted value naming nothing
+        rather than a fault.
+        """
+        live = await self.live(session, found)
+        enrolled = None if live is None else live.named(plugin)
+        if live is None or enrolled is None or enrolled.described.card is None:
+            return False
+        was = live.settings(enrolled)
+        wanted: dict[str, Setting] = {}
+        for row in enrolled.described.card.rows:
+            control = row.control
+            if isinstance(control, Switch):
+                wanted[control.name] = control.name in posted
+                continue
+            held = posted.get(control.name)
+            # An unreadable number is left as it was rather than refused, which is `parse_tending`'s
+            # stance one layer out: the box carries the plugin's own bounds, so what reaches here
+            # that is not a number came from something that is not this page, and quietly keeping the
+            # value somebody can see is a better answer than a session that will not render.
+            wanted[control.name] = int(held) if held is not None and held.lstrip("-").isdigit() else was[control.name]
+        await set_settings(self.database, session, plugin, wanted)
+        for name, value in wanted.items():
+            if was.get(name) == value:
+                continue
+            for note in await acted(live, enrolled, name, value):
+                await self.note(session, note)
+        return True
+
+    async def setup_again(self, session: str) -> None:
+        """
+        Ask for another setup pass, which is the whole of what retrying a failed registration is.
+
+        `make_ready` and nothing else: a pass that failed to register wrote no registration, so
+        `describe` runs again from scratch with nothing recorded to conflict with. That is forced
+        rather than chosen - the store keeps the value a key was first given, so a registration
+        written with one plugin missing could never be corrected and a control that rewrote it would
+        be writing into a slot that ignores it.
+        """
+        await self.durable.scheduler.make_ready(session)
+
+    async def switch(self, session: str, enabled: Mapping[str, bool]) -> None:
+        """
+        Say which of a session's plugins it runs, which the next pass reads.
 
         The one write here that is not an append, and the one that has nowhere else to go: a
-        checkpoint keeps the value a key was first given, so a setting saved twice there would keep
+        checkpoint keeps the value a key was first given, so a switch saved twice there would keep
         its first answer for ever, and `localStorage` is in a browser where the worker that acts on
         this may be another process. So it is a column, and this is the only thing that writes one.
 
-        Next pass rather than at once, and that is the value the pass took saying so: a pass snapshots
-        these on its way in, so a switch flicked while a turn is being answered reaches the turn after
-        it. Nothing here waits for that, exactly as nothing here waits for a message to be answered.
+        **Live before anything has been asked, and refused afterwards.** A tool definition leaving
+        the prefix invalidates everything under it exactly as one arriving late does, so a session
+        that has answered a turn is one whose set of plugins is settled; the route is where that is
+        refused, because what decides it is whether a turn has been recorded and this holds no
+        checkpoint.
         """
-        await tend(self.database, session, tending)
+        await switch(self.database, session, enabled)
 
     async def say(self, session: str, said: str, *, forget: bool = False) -> None:
         """
@@ -604,7 +756,24 @@ class Service:
         writes rather than a second entry: one append, so a worker cannot take the message between
         the two and answer it on a history the record was about to contradict.
         """
+        await self.naming(session, said)
         await self.durable.deliver(session, recorded_prompt(said, forget=forget))
+
+    async def naming(self, session: str, said: str) -> None:
+        """
+        Name a session after the first thing said in it, where nobody named it and nothing has been.
+
+        **Written once, when the first message arrives**, which is one word moved from where it used
+        to be rather than a new kind of write: a session is named after its opening line and nothing
+        ever renames it, so the index still holds a copy of something settled rather than of
+        something that changes.
+
+        A session created with a title keeps it, which is `Choice.branching`'s existing rule one
+        field along: a name somebody typed always wins over a generated one.
+        """
+        found = await read_session(self.database, session)
+        if found is not None and not found.title:
+            await rename(self.database, session, name_from(said))
 
     async def send(self, session: str, said: str) -> None:
         """
@@ -623,4 +792,5 @@ class Service:
         has to be re-decided on a failed attempt - which is why this now returns nothing at all,
         where it used to have to say which turn had taken the message.
         """
+        await self.naming(session, said)
         await self.durable.deliver(session, recorded_steer(said))

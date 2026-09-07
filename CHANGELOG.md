@@ -9,6 +9,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Plugins**: somebody adds to this console without editing it. A plugin is a single executable,
+  spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
+  written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
+  reaches nothing it was not handed. It may contribute a tool, instructions, a card of settings, an
+  answer in the composer, and a message put into the conversation; it may be shipped with the
+  console, installed by the operator in `config.yaml`, or carried by the repository a session works
+  in. Handoff and the guidance below are both plugins, which is what makes the pair a test of the
+  protocol rather than two examples of it - and what makes either replaceable.
+- A repository's own plugins, declared in `.mainplate/mainplate.yaml` and run behind the same mount
+  namespace `bash` uses, reaching the worktree they were handed and nothing else. Trusted by default,
+  per session, settled before the first message: choosing to work in a repository is already choosing
+  to run its build, its tests and its hooks, so the control is the *refusal* - a session reading a
+  stranger's pull request says so in the picker and none of that repository's code runs unattended.
+- A step between creating a session and typing into it, showing what it loaded: every plugin it
+  registered, grouped by where it came from, with a switch apiece and one on each group's heading.
+  Which plugins a session runs is settled from its first message, because a tool definition leaving
+  the cached prefix invalidates everything under it exactly as one arriving late does. Creating a
+  session therefore no longer carries the first message, which is the real cost: you create, wait,
+  and come back to type.
 - Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
   `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
   guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.
@@ -83,8 +102,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   documents. `/handoff` in the composer asks for one, and it is the one answer in that menu whose box
   may be empty: what it does with the text is point the handoff at something, appended to the standing
   ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
-  the console writes are drawn as their own `handoff` kind, because every other message in a
-  conversation was typed by somebody.
+  it writes are drawn as their own `note` kind, because every other message in a conversation was
+  typed by somebody. It ships as a **plugin** rather than as part of the console, which is what makes
+  every word of it replaceable: install your own beside it and turn ours off with one switch.
 - **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
   writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
   handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
@@ -93,9 +113,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default, which is safe only here: a handoff is an append, so the whole conversation stays in the
   transcript and a fork above the boundary recovers it, where every other harness's compaction
   defaults on as a bet that its summary is good enough because the original is gone. The switch and
-  the reserve are per session and changeable while it runs, in the rail's own card; where the reserve
-  falls is marked on every rule's gauge, so watching the line grow toward the mark is watching the
-  handoff approach.
+  the reserve are per session and changeable while it runs, on the plugin's own card in the rail.
 - A line above the message box saying whether the provider still holds this conversation's prefix, and
   what re-sending it costs with none of it cached. Meaningless before there was a cache and worth a row
   now that there is one: a conversation picked up after lunch pays full input price for everything said

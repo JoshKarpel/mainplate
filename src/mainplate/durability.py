@@ -131,6 +131,17 @@ def parse_returned(recorded: object) -> records.Returned:
     return records.Returned.model_validate(recorded)
 
 
+def parse_injected(recorded: object) -> tuple[str, ...]:
+    """
+    What was appended to one model request on a plugin's behalf, as the record holding it.
+
+    Read as well as written, which is the whole reason it is recorded: a resumed pass replays this
+    rather than asking the plugin again, so a request that was answered with one sentence in front of
+    it is re-made with the same sentence in front of it.
+    """
+    return records.Injected.model_validate(recorded).said
+
+
 async def as_recorded(record: records.Record) -> object:
     """
     A record already in hand, as the effect `Run.step` takes.
@@ -299,18 +310,23 @@ took is still in the queue, and the next turn opens on it.
 """
 
 
-type Guiding = Callable[[Sequence[ModelMessage]], Sequence[str]]
+type Injecting = Callable[[StepKey, Sequence[ModelMessage]], Awaitable[Sequence[str]]]
 """
-What the repository says about the parts of itself this turn has been reaching into, and has not
-been told yet.
+What a session's plugins want appended to the request about to go out, taken under the key that
+records it.
 
-A function for the reason `Pricer` and `Draining` are: what answers it reads guidance files out of
-a worktree, and injecting the one question keeps this capability ignorant of what a guidance file is
-and of where a session's files are. One instance still serves every session.
+A function for the reason `Pricer` and `Draining` are: what answers it runs somebody else's script,
+and injecting the one question keeps this capability ignorant of what a plugin is and of where a
+session's files are. One instance still serves every session.
 
-It is handed the messages rather than asked about a path, because both halves of the answer are in
-them: which paths the model reached for, and whether it has already been handed what covers them.
-That is what makes the history the ledger, so a `forget` re-delivers and a replay does not.
+It is handed the messages because that is what a plugin decides on: which paths the model reached
+for, and whether it has already been handed what covers them. The history is the ledger, so a
+`forget` re-delivers and a replay does not.
+
+**It takes a key, and that is the difference from what it replaced.** `guiding` was a pure function
+of the history it was handed, so a replay recomputed the same answer and nothing had to be written
+down. A plugin cannot be trusted to be pure, so what was injected is recorded and a resumed pass
+replays it rather than asking again.
 """
 
 type Pricer = Callable[[RequestUsage], Decimal | None]
@@ -358,7 +374,7 @@ class Stepping:
     worktree: Worktree | None = None
     pricer: Pricer | None = None
     draining: Draining | None = None
-    guiding: Guiding | None = None
+    injecting: Injecting | None = None
     allowance: Allowance = field(default_factory=lambda: Allowance(limit=None))
     taken: Counter[str] = field(default_factory=Counter)
     allowed: set[StepKey] = field(default_factory=set)
@@ -481,6 +497,18 @@ class Stepping:
             return ()
         return tuple(await self.draining(self.key("heard")))
 
+    async def injected(self, messages: Sequence[ModelMessage]) -> tuple[str, ...]:
+        """
+        What the session's plugins want appended to this request, under the key that records it.
+
+        `injected:{i}` is one per request, in step with `tree:{i}`, `heard:{i}` and `model:{i}`, and
+        it is a step for the reason the drain is: a plugin is somebody else's program, so asking it
+        again on a resumed pass could put a different sentence in front of a recorded answer.
+        """
+        if self.injecting is None:
+            return ()
+        return tuple(await self.injecting(self.key("injected"), messages))
+
     def price(self, answered: ModelResponse) -> None:
         """
         Fill in what this request cost, **before** it is recorded rather than after.
@@ -541,7 +569,7 @@ def stepping(
     pricer: Pricer | None = None,
     draining: Draining | None = None,
     allowance: Allowance | None = None,
-    guiding: Guiding | None = None,
+    injecting: Injecting | None = None,
 ) -> Iterator[Stepping]:
     """
     Make every model request and tool call in this block a step of `run`, named under `prefix`.
@@ -562,7 +590,7 @@ def stepping(
         worktree=worktree,
         pricer=pricer,
         draining=draining,
-        guiding=guiding,
+        injecting=injecting,
         allowance=allowance if allowance is not None else Allowance(limit=None),
     )
     token = current_stepping.set(scope)
@@ -740,12 +768,12 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         if scope is None:
             return request_context
         scope.allow(scope.coming("model"))
-        # Guidance first, then the steer, which is the order they were produced in: what the
-        # repository says about a directory was true before the person typed anything into the turn.
+        # What a plugin injects first, then the steer, which is the order they were produced in: what
+        # a plugin has to say about the request was true before the person typed anything into it.
         #
         # A `SystemPromptPart` and not a `UserPromptPart`, because nobody typed it: it is the console
-        # speaking, so a reader has to be able to tell it from a message and `interjected` draws the
-        # two apart by which part carried them.
+        # speaking on a plugin's behalf, so a reader has to be able to tell it from a message and
+        # `interjected` draws the two apart by which part carried them.
         #
         # What it costs the cached prefix is nothing, and that is the load-bearing half: appended it
         # is one more entry at the end, where an instruction re-prices every request from the system
@@ -753,9 +781,8 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         # `{"role": "system"}` entry on the OpenAI wire and on the four Anthropic models that honour
         # one, `<system>`-tagged user text everywhere else - so do not write code here that depends on
         # which. See `docs/design/guidance.md`.
-        if scope.guiding is not None:
-            for said in scope.guiding(request_context.messages):
-                request_context.messages.append(ModelRequest(parts=[SystemPromptPart(content=said)]))
+        for said in await scope.injected(request_context.messages):
+            request_context.messages.append(ModelRequest(parts=[SystemPromptPart(content=said)]))
         if scope.draining is None:
             return request_context
         steered = await scope.steering()

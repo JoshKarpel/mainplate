@@ -93,11 +93,20 @@ async def answered(service: Service, session: str, *said: object) -> int:
 
 
 async def a_session(app: ASGIApp, said: str = "what is a mainplate", title: str | None = None) -> str:
-    """A session started the way a browser starts one, named by the path it was redirected to."""
+    """
+    A session started the way a browser starts one, with its first message in it.
+
+    **Two posts, because creating one and saying the first thing in it are two steps**: a
+    repository's plugin cannot be described until its worktree is planted, so creation records the
+    choice and the message box is on the session's own page. Written once here rather than at every
+    call site, and a test that is about the split posts to `/sessions` itself.
+    """
     async with calling(app) as caller:
-        answered = await caller.post("/sessions", starting_form(said, title=title))
+        answered = await caller.post("/sessions", starting_form(title=title))
         assert answered.status == 303
-        return answered.location.rsplit("/", 1)[-1]
+        session = answered.location.rsplit("/", 1)[-1]
+        assert (await caller.post(f"/sessions/{session}/messages", {"prompt": said})).status == 200
+        return session
 
 
 async def watched(app: ASGIApp, session: str) -> str:
@@ -190,14 +199,17 @@ OTHER_CATALOGUE = Catalogue(
 )
 
 
-def starting_form(said: str, chosen: Choice = DEFAULT_CHOICE, title: str | None = None) -> dict[str, str]:
+def starting_form(chosen: Choice = DEFAULT_CHOICE, title: str | None = None) -> dict[str, str]:
     """
-    What the new-session form posts: a message, the pair chosen to answer it, and maybe a name.
+    What the new-session form posts: the pair chosen to answer it, and maybe a name.
+
+    **No message**, which is the change the plugin protocol forced: a session is created and then
+    typed into, so this page decides what a session *is* and nothing about what is said in it.
 
     The name is omitted when it is `None`, which is what a browser sends for a field left empty:
     `parse_qs` drops empty values, so an untouched box never reaches the handler as a field at all.
     """
-    posted = {"prompt": said, "endpoint": chosen.endpoint, "model": chosen.model}
+    posted = {"endpoint": chosen.endpoint, "model": chosen.model}
     return posted if title is None else {**posted, TITLE_FIELD: title}
 
 
@@ -255,11 +267,20 @@ class TestReadingWhereAMessageIsGoing:
 
 
 class TestTheConsole:
-    async def test_the_start_page_offers_a_box_and_creates_nothing(self, app: ASGIApp, service: Service) -> None:
+    async def test_the_start_page_offers_the_choices_and_creates_nothing(self, app: ASGIApp, service: Service) -> None:
+        """
+        **No message box here**, which is the visible half of the two-step creation.
+
+        A plugin's settings are the controls on its card, its card comes back from `describe`, and a
+        repository's plugin cannot be described until its worktree is planted - which a pass does. So
+        this page decides what a session *is* and the box is on the session's own page.
+        """
         async with calling(app) as caller:
             answered = await caller.get("/")
         assert answered.status == 200
-        assert 'class="composer"' in answered.text
+        assert 'class="picker"' in answered.text
+        assert 'class="composer"' not in answered.text
+        assert ">Start</button>" in answered.text
         assert await service.listed() == ()
 
     async def test_the_first_message_creates_a_session_and_redirects_to_it(
@@ -270,8 +291,17 @@ class TestTheConsole:
         assert [(each.id, each.title, each.created_at) for each in listed] == [(session, "what is a mainplate", WHEN)]
 
     async def test_the_first_message_is_waiting_in_the_checkpoint(self, app: ASGIApp, service: Service) -> None:
+        """
+        A `Steer` and not a `Prompt`, because the first message goes through the composer like every
+        other one.
+
+        Nothing about that is a weaker state: Send decides nothing, so what a message *becomes* is
+        the pass's answer, and a steer arriving at a session with nothing running opens the next
+        turn. What changed is only who wrote it - creation used to say the first thing itself, and
+        now there is somebody at a box.
+        """
         session = await a_session(app)
-        assert delivered_in(await service.checkpointer.load(session)) == [recorded_prompt("what is a mainplate")]
+        assert delivered_in(await service.checkpointer.load(session)) == [recorded_steer("what is a mainplate")]
 
     async def test_an_unanswered_session_renders_the_question_and_watches_for_the_answer(self, app: ASGIApp) -> None:
         session = await a_session(app)
@@ -515,8 +545,22 @@ class TestTheConsole:
 
     async def test_an_empty_message_is_refused_rather_than_recorded(self, app: ASGIApp, service: Service) -> None:
         """A client refusal, not a server fault: a request that is not a message did not break anything."""
+        session = await a_session(app)
         async with calling(app) as caller:
-            answered = await caller.post("/sessions", starting_form("   "))
+            answered = await caller.post(f"/sessions/{session}/messages", {"prompt": "   "})
+        assert answered.status == 422
+
+    async def test_creating_one_without_an_endpoint_is_refused_rather_than_recorded(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        What a form that is not a session looks like now that it carries no message.
+
+        The pair is the whole of what creation takes, so a post naming neither is not half a request,
+        it is not a request - which is the same refusal an empty message used to be one field along.
+        """
+        async with calling(app) as caller:
+            answered = await caller.post("/sessions", {"model": DEFAULT_CHOICE.model})
         assert answered.status == 422
         assert await service.listed() == ()
 
@@ -626,7 +670,7 @@ class TestTheConsole:
     async def test_a_session_records_the_pair_it_was_started_on(self, app: ASGIApp, service: Service) -> None:
         chosen = Choice(endpoint="gateway", model="wide/steady")
         async with calling(app) as caller:
-            answered = await caller.post("/sessions", starting_form("hello", chosen))
+            answered = await caller.post("/sessions", starting_form(chosen))
         session = answered.location.rsplit("/", 1)[-1]
         assert (await service.read(session)).chosen == chosen  # type: ignore[union-attr]
 
@@ -635,7 +679,7 @@ class TestTheConsole:
     ) -> None:
         """A select is a suggestion the page made, not a constraint on what somebody can post."""
         async with calling(app) as caller:
-            answered = await caller.post("/sessions", starting_form("hello", Choice(endpoint="here", model="nope")))
+            answered = await caller.post("/sessions", starting_form(Choice(endpoint="here", model="nope")))
         assert answered.status == 422
         assert await service.listed() == ()
 
@@ -845,7 +889,7 @@ class TestForgettingFromTheComposer:
         await self.sent(app, session, "start again")
 
         held = await service.checkpointer.load(session)
-        assert delivered_in(held)[0] == recorded_prompt("what is a mainplate")
+        assert delivered_in(held)[0] == recorded_steer("what is a mainplate")
         assert messages_key(0) in held
 
     async def test_it_opens_a_turn_of_its_own_rather_than_steering_the_one_in_flight(
@@ -926,7 +970,7 @@ class TestBranchingFromTheComposer:
 
         held = await service.checkpointer.load(branch)
         assert delivered_in(held) == [
-            recorded_prompt("what is a mainplate"),
+            recorded_steer("what is a mainplate"),
             recorded_prompt("try that again"),
         ], "the parent's message came across and the new one is behind it"
         assert messages_key(0) in held, "and the parent's turn came across answered"
@@ -1033,7 +1077,7 @@ class TestSteppingOutAndComingBack:
         stepped = headers["hx-redirect"].rsplit("/", 1)[-1]
 
         assert delivered_in(await service.checkpointer.load(stepped)) == [
-            recorded_prompt("what is a mainplate"),
+            recorded_steer("what is a mainplate"),
             recorded_prompt("just checking something"),
         ]
 

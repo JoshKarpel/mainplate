@@ -52,6 +52,8 @@ from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
 from mainplate.service import Service
+from mainplate.sessions import Session
+from mainplate.sessions import read_session
 from mainplate.snapshots import Worktree
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
@@ -443,6 +445,22 @@ def app(service: Service) -> ASGIApp:
     where it can be driven a pass at a time, in `test_conversation`.
     """
     return build_app(already(service))
+
+
+async def started(service: Service, said: str, chosen: Choice = DEFAULT_CHOICE, title: str | None = None) -> Session:
+    """
+    A session on `chosen` with `said` in it, which is what creating one used to be in one call.
+
+    **Creating a session and saying the first thing in it are two steps now**, because a repository's
+    plugin cannot be described until its worktree is planted and the settings step is drawn from what
+    was described. Most tests here are about something else entirely and want a session with a
+    message in it, so the pair is written once rather than at every call site - and a test that is
+    about the split says so by calling `Service.start` itself.
+    """
+    session = await service.start(chosen, title)
+    await service.say(session.id, said)
+    found = await read_session(service.database, session.id)
+    return found if found is not None else session
 
 
 async def run(*arguments: str, cwd: Path) -> str:

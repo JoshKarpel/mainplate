@@ -45,15 +45,26 @@ under the reader's hand, and there would be one per turn.
 - **The base and the branch**, which is `settled(forked=True)`. A fork plants at the tree of the
   turn it re-asks, so a base beside that is a second answer to where its files come from, and `git
   worktree add -b` refuses a branch already in use. See [the workspace](workspace.md#where-in-it-and-on-what-branch).
-- **The auto-handoff settings**, which start on the defaults. A reserve is a decision about how much
-  room one conversation's context has left, and a branch's context is not that conversation's. See
-  [handing off without being asked](composer.md#handing-off-without-being-asked).
+- **What its plugins are set to**, which start on their own declared defaults. A reserve is a
+  decision about how much room one conversation's context has left, and a branch's context is not
+  that conversation's. See [handing off without being
+  asked](composer.md#handing-off-without-being-asked).
+- **What the operator's plugins are**, which a fork asks afresh. Those scripts sit outside every
+  worktree, so nothing a model wrote can reach them, and describing them again is how a conversation
+  picks up an edited one. See [plugins](plugins.md#registration).
 - **A repository it does not have.** A fork may *attach* one and may not *swap* one; see [the
   workspace](workspace.md#a-fork-may-attach-a-repository-and-may-not-swap-one).
 
 What it *does* inherit, besides the turns, is the worktree state: a fork's worktree is checked out
 at the tree the forked turn originally saw, so a branch re-asks its question against the files that
 question was asked about.
+
+And **the repository half of what its parent registered**, whole, which is the one place the plugin
+tiers are told apart. A fork plants at a *recorded tree*, which is a tree a model wrote - a snapshot
+is `git add -A`, so a `.mainplate/` file written on turn 4 is in the tree recorded for turn 5. Re-
+reading it here would run a plugin the parent's model authored, one fork away from any session with
+files, so only a session planted at a commit the repository provided ever reads that file. See
+[reading it once](plugins.md#read-once-and-never-from-a-tree-this-console-wrote).
 
 ## There is no rewind
 
