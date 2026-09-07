@@ -102,14 +102,98 @@ class TestWhereTheCloneIs:
         sandbox = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
         own = Path(await run("git", "rev-parse", "--absolute-git-dir", cwd=worktree.root))
 
-        tree, clone, kept = sandbox.places
+        tree, pointer, clone, kept = sandbox.places
 
         assert clone.path == tmp_path / "clones" / "fixture.git"
         assert clone.path in own.parents, "the worktree's own git directory is under the clone, not beside it"
         assert not clone.writable, "and it goes in read-only, which is what refuses a commit"
         assert tree.path == worktree.root
         assert tree.writable
+        # After the tree and not before it: bwrap applies these in order, so a pointer bound first
+        # would be covered by the writable tree that follows and protect nothing.
+        assert pointer.path == worktree.root / ".git"
+        assert not pointer.writable
         assert kept.path == scratch
+
+
+class TestTheWorktreesPointerCannotBeReplaced:
+    """
+    That a command cannot swap `.git` for a repository of its own.
+
+    The whole vector rests on it: `.git` in a linked worktree is a one-line pointer sitting in the
+    one directory a session may write, and git reads the configuration of whatever it names, where
+    several settings name a program git then runs. The control below runs the same commands in a
+    sandbox built without the extra bind, so what these assert is the bind and not the filesystem.
+    """
+
+    async def unbound(self, worktree: Worktree, scratch: Path, bwrap: str, command: str) -> str:
+        """
+        The same sandbox with the pointer bind taken back out, which is what this had before.
+
+        The scratch is made here because this does not go through `ran`, which is what normally
+        makes it. bwrap refuses to bind a source that does not exist, so without this the control
+        fails to start and its assertion reads as "the bind worked".
+        """
+        scratch.mkdir(parents=True, exist_ok=True)
+        built = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
+        without = Sandbox(places=tuple(each for each in built.places if each.path.name != ".git"))
+        process = await asyncio.create_subprocess_exec(
+            bwrap,
+            *without.argv(at=str(worktree.root), venue=Venue.CONFINED),
+            "/bin/sh",
+            "-c",
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await process.communicate()
+        return out.decode()
+
+    async def test_without_the_bind_a_command_can_plant_a_repository(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        """The control. Without it the four assertions below would hold on any read-only filesystem."""
+        await self.unbound(worktree, scratch, bwrap, "rm -f .git && git init -q . && echo planted")
+
+        assert (worktree.root / ".git").is_dir(), "the control has to actually succeed"
+
+    async def test_the_pointer_cannot_be_removed(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        said = await inside(worktree, scratch, bwrap, "rm -f .git; echo done")
+
+        assert (worktree.root / ".git").is_file()
+        assert "busy" in said.lower() or "read-only" in said.lower()
+
+    async def test_the_pointer_cannot_be_rewritten(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        was = (worktree.root / ".git").read_text()
+
+        await inside(worktree, scratch, bwrap, "echo 'gitdir: /elsewhere' > .git; echo done")
+
+        assert (worktree.root / ".git").read_text() == was
+
+    async def test_the_pointer_cannot_be_moved_aside(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        """`rm` is not the only way to get a directory where a file was."""
+        await inside(worktree, scratch, bwrap, "mv .git .gitold; echo done")
+
+        assert (worktree.root / ".git").is_file()
+        assert not (worktree.root / ".gitold").exists()
+
+    async def test_the_bind_cannot_be_unmounted_from_inside(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        """A namespace the command is inside is not a namespace it may take apart."""
+        said = await inside(worktree, scratch, bwrap, "umount .git 2>&1; echo done")
+
+        assert "superuser" in said.lower() or "permitted" in said.lower() or "denied" in said.lower()
+        assert (worktree.root / ".git").is_file()
+
+    async def test_ordinary_work_is_untouched(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
+        """The cost of the bind, measured: a session still writes files and still asks git about them."""
+        said = await inside(
+            worktree, scratch, bwrap, "echo new > added.txt && git status --porcelain && git log --oneline"
+        )
+
+        assert "?? added.txt" in said
+        assert "first" in said
 
 
 class TestWhatTheVenueDecides:

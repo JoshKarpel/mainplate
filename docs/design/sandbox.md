@@ -21,7 +21,7 @@ only under crash-resume. A fresh namespace costs a couple of milliseconds agains
 hundreds, and leaves no process to supervise, reap, or reconstruct. The tool's own description says
 nothing persists, and `test_sandbox.py` asserts it.
 
-Five things about the policy are decided rather than incidental:
+Six things about the policy are decided rather than incidental:
 
 - **The clone is bound read-only, and that is the load-bearing half.** Every read still works,
   `ls-files`, `status`, `diff`, `log`, `blame`, while `add`, `commit`, `stash` and `checkout` fail
@@ -39,6 +39,13 @@ Five things about the policy are decided rather than incidental:
 - **Both are bound at their own absolute paths**, never remapped to a tidy `/workspace`. That is
   forced by the same pointer being absolute. The alternative is a `GIT_COMMON_DIR` that every
   consumer has to carry and any subprocess is free to unset, bought for a shorter path.
+- **The worktree's `.git` is bound read-only back over the tree.** It is a one-line pointer at the
+  git directory, and it sits in the one place a session may write, so without this a command
+  replaces it with a repository of its own and every later git in that directory reads *that*
+  repository's configuration, which is allowed to name programs git runs. Bound over itself it
+  cannot be written, removed, moved, or unmounted from in there, and reading it still works. Order
+  is load-bearing for the same reason the tmpfs below is: it has to come *after* the tree.
+  `test_sandbox.py` runs the control in a sandbox built without it.
 - **The session binds come after `--tmpfs /tmp`.** bwrap applies arguments in order, so a workspace
   root that happens to live under `/tmp` is covered by the tmpfs and disappears if the binds come
   first, leaving a command that cannot change directory into its own worktree. That is not
@@ -115,6 +122,18 @@ of a round trip. Four things there are decided:
 - **What comes back names the root only where it is not the first.** A bare `notes.md` in a return
   is two different files once a session has two roots; a root named on every line stops being read.
   Same rule as `Reachable.labelled`.
+
+**A root also says what in it is out of reach**, which is `Root.sealed`, a property on each arm
+beside `name`. A `GitTracked` seals `.git`, because that is git's pointer at its own directory and
+rewriting it makes every later git in the tree read a repository the session picked; a `Scratch` and
+a `System` seal nothing, having no pointer to protect. `Files.resolved` refuses a sealed path after
+it has established the path is in reach, so being inside a root is necessary and no longer
+sufficient.
+
+That is the same guard as the read-only bind above, on the other path rather than written twice.
+The bind stops `bash`; these tools write from the parent and pass through no sandbox at all, so
+without both, closing one moves the vector to the other. It is a root's *top level* only: a
+`.gitignore`, a `.github/` and a fixture carrying a nested `.git` are ordinary files.
 
 In the sandbox the name is a `Bind` field, so an environment variable is only ever a name for a path
 that sandbox actually has. The clone gets none deliberately: it is bound so git works, not so

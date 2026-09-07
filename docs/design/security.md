@@ -112,15 +112,58 @@ had to read the tree to work out what to bind. What it costs is a console with n
 console keeps its file tools and is offered no `bash`, so a sandboxed `list` would leave it able to
 read and edit files and unable to find out which ones exist.
 
+## The pointer cannot be replaced at all
+
+Pinning stops the parent from *reading* a planted repository. What stops one being planted is that
+`.git` is out of reach, and this is the part worth getting right, because it removes the attack
+rather than defending against it.
+
+A session has exactly three ways to write its worktree, and closing them is a matter of enumerating
+them:
+
+- **`bash`.** `Sandbox.around` binds the pointer file read-only *over* the writable tree. bwrap
+  applies binds in order, so it goes after the tree; put it before and the tree covers it. From
+  inside, `rm` and `mv` get `Device or resource busy`, a redirect gets `Read-only file system`, and
+  `umount` needs a superuser the namespace does not have. Reading it, and everything else in the
+  tree, is untouched.
+- **`edit`.** The file tools write from the parent and never pass through a sandbox, so the bind
+  does not reach them and closing only `bash` would move the vector one tool over. `GitTracked.sealed`
+  names `.git` and `Files.resolved` refuses it, which also refuses `read` and `create` there. It is
+  the pointer at a root's *top level* and nothing else: a `.gitignore`, a `.github/`, and a fixture
+  carrying a nested `.git` are all ordinary files, and a `Scratch` seals nothing because it is not a
+  worktree.
+- **A repository's plugin.** It runs in the same `InAWorktree` confinement, so the first bullet
+  covers it.
+
+**This is why `Run` needs no defence.** It stays a shell, unsandboxed, in the worktree, with the
+console's environment, and that is what it is for. The problem was never that `Run` is trusted; it
+was that something untrusted could stage a trap in advance and wait for a person to walk into it
+with `git commit`. With the staging closed, whatever a person's command does to their own worktree,
+the model did not arrange it, and the trust boundary is only as wide as the person's own intent.
+
+Two mitigations were considered and are not here, which is worth recording because both read well:
+
+- **`GIT_CONFIG_COUNT`** puts configuration in the environment, where it is inherited by arbitrarily
+  nested git, and it does override a repository's own config. It is defeated by `git -c`, by any
+  script that clears the environment, and by every setting nobody has thought to name yet. A
+  denylist bought with a version floor.
+- **Checking the pointer before running a person's command.** Exact, since the correct content is
+  one derived line, and useless once nothing can change it: it would be handling a state that can no
+  longer occur, and it never closed the race against a turn running concurrently anyway.
+
+`GIT_DIR` in the environment is a third and is worse than either, because it works. A nested git in
+a *different* repository silently reports the session's worktree as its top level, so a command that
+steps into a vendored checkout and commits would commit into the wrong place, with no error.
+
 ## What is deliberately not defended
 
 Naming these is the point of the page. Each is a decision, and each is somewhere the argument above
 does not reach.
 
 **A command the person runs.** [`Run`](composer.md#run) is a shell, in the session's worktree, as
-the service user, with the console's environment, outside the sandbox. That is what it is for. It
-also means a `git` a person types there is subject to everything above, since what a shell discovers
-is not ours to pin. Still open.
+the service user, with the console's environment, outside the sandbox. That is what it is for, and
+what a shell discovers is not ours to pin: a person whose own command replaces `.git` has done that
+to their own worktree. What is not left open is a model arranging it for them.
 
 **A session on `EVERYTHING`.** It binds `/` read-write and can read `config.yaml` and the store. That
 is what choosing it means and the card says so.

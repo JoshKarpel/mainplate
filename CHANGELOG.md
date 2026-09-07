@@ -394,6 +394,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rather than finding one by looking down from the worktree, so the configuration git reads comes out
   of the clone the sandbox binds read-only: settings that name a program git then runs are numerous
   and the list is open-ended, and a session's worktree is the one directory that session may write.
+  A session cannot plant one either: the `.git` pointer at the root of its worktree is bound
+  read-only over the tree, so a command cannot write, remove, move or unmount it, and the file tools
+  refuse it by name because they write from the parent and pass through no sandbox at all.
 - Two isolation settings on a session, picked when it is created and fixed for its life like the
   endpoint and the model, with forking the way to change them. **What files it has** is a repository
   it works in, no files at all, or this whole machine. **Network** is on or off, and off rather than

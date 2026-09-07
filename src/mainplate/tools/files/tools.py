@@ -12,6 +12,12 @@
 # the same answer. `Path.resolve` is what makes the symlink case work, since it is the only check
 # that follows one.
 #
+# **A path can also be in reach and still refused**, which is `Root.sealed`: the `.git` at a
+# worktree's root is git's pointer at its own directory, and rewriting it makes every later git in
+# there read a repository the session chose. The sandbox binds that file read-only, and these tools
+# write from the parent and never pass through a sandbox, so this is the same guard on the other
+# path rather than the same check twice.
+#
 # There are *two* places a session may reach, and they are not symmetric. A relative path is inside
 # the worktree unless a call names another root, because what a conversation is about is the
 # repository; anywhere else is reached by naming it rather than by writing a session id out. `list`
@@ -50,6 +56,7 @@ from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.roots import RootName
+from mainplate.snapshots import POINTER
 from mainplate.snapshots import Worktree
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import EditRefused
@@ -169,6 +176,20 @@ class GitTracked:
         """What a model calls this place, which is what it is rather than where it is."""
         return "worktree"
 
+    @property
+    def sealed(self) -> tuple[str, ...]:
+        """
+        `.git`, because a linked worktree keeps a one-line pointer there rather than a directory,
+        and it is the one file in reach whose *contents decide what git runs*: a session that
+        repoints it at a repository of its own has git reading that repository's configuration, and
+        several settings there name a program.
+
+        The sandbox binds the same file read-only, and this is not that check written twice. These
+        tools write from the parent and never pass through a sandbox at all, so without this the
+        bind guards `bash` and `edit` walks around it.
+        """
+        return (POINTER,)
+
     async def entries(self, here: Path) -> tuple[str, ...]:
         """
         What git says is under `here`, which is everything committed or new but nothing ignored.
@@ -218,6 +239,11 @@ class Scratch:
     def name(self) -> RootName:
         return "scratch"
 
+    @property
+    def sealed(self) -> tuple[str, ...]:
+        """Nothing: this is not a worktree, so there is no pointer here to protect."""
+        return ()
+
 
 @dataclass(frozen=True, slots=True)
 class System:
@@ -234,6 +260,14 @@ class System:
     @property
     def name(self) -> RootName:
         return "machine"
+
+    @property
+    def sealed(self) -> tuple[str, ...]:
+        """
+        Nothing, and that is honest rather than an omission. This root is `/` on a session that
+        chose the whole machine, which has already been told it reaches everything.
+        """
+        return ()
 
 
 type Root = GitTracked | Scratch | System
@@ -333,6 +367,11 @@ class Files:
         here = ((self.against(root) if root else wheres[0]) / path).resolve()
         for found, where in zip(self.roots, wheres, strict=True):
             if here == where or where in here.parents:
+                if any(here == where / name for name in found.sealed):
+                    raise Refused(
+                        f"{path!r} is git's own pointer into this session's repository rather than "
+                        "a file of its own. Nothing here may read or change it."
+                    )
                 return Located(path=here, root=found)
         named = " and ".join(str(each) for each in wheres)
         raise Refused(f"{path!r} is outside this session's workspace. These tools reach {named}")

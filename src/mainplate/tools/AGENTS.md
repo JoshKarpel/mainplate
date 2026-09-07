@@ -54,6 +54,18 @@ to run git safely: named git directory, built environment. Do not build a git su
 `entries` needs beyond the default is `at=` and `Ran.stdout`, and anything else should be one more
 argument there rather than a subprocess of its own.
 
+## These tools do not pass through the sandbox
+
+`read`, `edit` and `create` write from the parent, so **no bind protects anything from them**. The
+sandbox binds the worktree's `.git` read-only and that stops `bash` replacing the pointer; it does
+nothing here, which is why `GitTracked.sealed` names `.git` and `Files.resolved` refuses it. The two
+are one decision in two places because the two paths are genuinely different, not a check written
+twice: remove either and the vector is open again through the other.
+
+`sealed` is a property on each root arm, beside `name`, so a new kind of place brings its own answer
+rather than needing an entry in `resolved`. Keep the refusal to a root's *top level*: a `.gitignore`,
+a `.github/`, and a fixture with a nested `.git` are ordinary files.
+
 ## Two things not to undo
 
 - **`list` asks git, and keeps doing so once `bash` exists.** It is not a listing convenience that

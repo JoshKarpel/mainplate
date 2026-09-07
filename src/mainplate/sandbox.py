@@ -232,6 +232,14 @@ class Sandbox:
         bare clone and its `commondir` points back out at it for objects and refs, so binding the
         common one covers both and binding the other covers neither.
 
+        **The pointer goes back over the worktree read-only, and the order is what makes that work.**
+        `.git` in a linked worktree is a one-line file naming the git directory, and it sits in the
+        one place a session may write, so without this a command replaces it with a repository of its
+        own and every later git in that directory reads *that* repository's configuration - which
+        names programs git runs. Bound over itself after the tree, the file cannot be written,
+        removed, moved, or unmounted from in here, and reading it and everything around it still
+        works. See [what runs, and as whom](../../docs/design/security.md).
+
         All three are **absolute as a precondition**, which is the same one `Clones` and `Worktrees`
         take: `Settings.workspace_root` resolves once where a configured path enters the process, so
         everything derived from it is already absolute and nothing here re-establishes it. A relative
@@ -242,6 +250,7 @@ class Sandbox:
         return cls(
             places=(
                 Bind(path=worktree.root, writable=True, name="worktree"),
+                Bind(path=worktree.pointer, writable=False),
                 Bind(path=Path(common), writable=False),
                 Bind(path=scratch, writable=True, name="scratch"),
             )

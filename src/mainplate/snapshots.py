@@ -49,6 +49,13 @@ IDENTITY: Final[Mapping[str, str]] = {
 # there, so a `PATH` the service happened to be started with cannot decide which `git` runs.
 WHERE_GIT_IS: Final = "/usr/bin:/bin:/usr/local/bin"
 
+# What a *linked* worktree has at its root in place of a git directory: one line naming where the
+# real one is. Two things guard it and they are in different packages - the sandbox binds it
+# read-only, and the file tools refuse it by name because they write from the parent and pass
+# through no sandbox - so the name lives here, beside the worktree whose shape it is, rather than in
+# either of them. Same reasoning as `roots.py`: a name two packages read belongs to neither.
+POINTER: Final = ".git"
+
 
 # What may appear in something a session names a commit by. Every one of these characters is one git
 # itself accepts in a revision expression: a ref name, a tag, an abbreviated hash, and the suffixes
@@ -207,6 +214,15 @@ class Worktree:
     so `Worktrees` derives it and reads nothing out of the tree to do so. `None` is the repository
     itself, where `root` *is* the git directory and there is nothing in between to poison.
     """
+
+    @property
+    def pointer(self) -> Path:
+        """
+        The file at this tree's root naming its git directory, which nothing may be allowed to
+        replace: git reads the configuration of whatever it points at, and that configuration may
+        name programs git runs.
+        """
+        return self.root / POINTER
 
     @property
     def addressed(self) -> tuple[str, ...]:
