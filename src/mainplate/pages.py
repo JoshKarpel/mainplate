@@ -35,6 +35,7 @@ from without_html import DOCTYPE
 from without_html import Attributes
 from without_html import Child
 from without_html import Element
+from without_html import Node
 from without_html import VoidElement
 from without_html import a
 from without_html import aside
@@ -106,7 +107,6 @@ from mainplate.plugins.installed import ON
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
-from mainplate.plugins.installed import dropping_collisions
 from mainplate.plugins.installed import grouped as by_tier
 from mainplate.plugins.protocol import Number
 from mainplate.plugins.protocol import Setting
@@ -3459,88 +3459,73 @@ def setup_step(links: Links, showing: Conversation) -> Element:
     differently shaped page: settling and loaded are the two halves of `settling`'s own condition, so
     answering with a fragment would leave a reader on the half they had just left.
     """
+    # The id and the wrapper once rather than once per arm, because the id is what the live
+    # connection replaces: three spellings of it is three chances for a state to stop being the thing
+    # that gets swapped in, and only one of them would be visible.
+    inside: Node
     if showing.declared is None:
-        return div(
-            cls="setup",
-            attrs={"id": SETUP_ID},
-            children=div(
-                cls="settling",
-                children=[
-                    p(cls="setup__working", children=working()),
-                    p(
-                        cls="setup__says",
-                        children=(
-                            "Setting up: planting this session's worktree and reading what it declares."
-                            if showing.refused_plugins is None
-                            else showing.refused_plugins.why
+        inside = [
+            p(cls="setup__working", children=working()),
+            p(
+                cls="setup__says",
+                children=(
+                    "Setting up: planting this session's worktree and reading what it declares."
+                    if showing.refused_plugins is None
+                    else showing.refused_plugins.why
+                ),
+            ),
+            *(
+                (
+                    form(
+                        cls="setup__again",
+                        attrs={"method": "post", "action": links.to_setup(showing.session.id)},
+                        children=button(
+                            attrs={"type": "submit", "name": SETTLE_FIELD, "value": AGAIN},
+                            children="Try again",
                         ),
                     ),
-                    *(
-                        (
-                            form(
-                                cls="setup__again",
-                                attrs={"method": "post", "action": links.to_setup(showing.session.id)},
-                                children=button(
-                                    attrs={"type": "submit", "name": SETTLE_FIELD, "value": AGAIN},
-                                    children="Try again",
-                                ),
-                            ),
-                        )
-                        if showing.refused_plugins is not None
-                        else ()
-                    ),
-                ],
+                )
+                if showing.refused_plugins is not None
+                else ()
             ),
+        ]
+    elif showing.settling_up and showing.refused_setup is None:
+        inside = [p(cls="setup__working", children=working()), p(cls="setup__says", children=SETUP_WORKING)]
+    else:
+        # Named rather than spelled at both ends: the switches sit outside the form and are bound to
+        # it by this id, so the two coming to differ is every control posting nothing.
+        settling = SETUP_ID + "-form"
+        inside = form(
+            cls="setup__plugins",
+            attrs={
+                "id": settling,
+                "method": "post",
+                "action": links.to_setup(showing.session.id),
+                "aria-label": "Which plugins this session loads",
+            },
+            children=[
+                p(cls="setup__says", children=SETUP_SAYS),
+                # Why the last attempt did not get anywhere, above the switches rather than beside
+                # the plugin it names: what a reader does about a plugin that will not set up is turn
+                # it off, and the switch is one line down. It is recorded against that attempt, so
+                # pressing again is a new one and this sentence goes.
+                *(
+                    ()
+                    if showing.refused_setup is None
+                    else (p(cls="setup__failed", children=showing.refused_setup.why),)
+                ),
+                *(
+                    tier_group(tier, plugins, showing.session.tending, form=settling)
+                    for tier, plugins in by_tier(showing.declared)
+                ),
+                button(
+                    cls="setup__set",
+                    attrs={"type": "submit", "name": SETTLE_FIELD, "value": SETTLED},
+                    children="Load plugins",
+                ),
+            ],
         )
-    if showing.settling_up and showing.refused_setup is None:
-        return div(
-            cls="setup",
-            attrs={"id": SETUP_ID},
-            children=div(
-                cls="settling",
-                children=[
-                    p(cls="setup__working", children=working()),
-                    p(cls="setup__says", children=SETUP_WORKING),
-                ],
-            ),
-        )
-    return div(
-        cls="setup",
-        attrs={"id": SETUP_ID},
-        children=div(
-            cls="settling",
-            children=form(
-                cls="setup__plugins",
-                attrs={
-                    "id": SETUP_ID + "-form",
-                    "method": "post",
-                    "action": links.to_setup(showing.session.id),
-                    "aria-label": "Which plugins this session loads",
-                },
-                children=[
-                    p(cls="setup__says", children=SETUP_SAYS),
-                    # Why the last attempt did not get anywhere, above the switches rather than
-                    # beside the plugin it names: what a reader does about a plugin that will not set
-                    # up is turn it off, and the switch is one line down. It is recorded against that
-                    # attempt, so pressing again is a new one and this sentence goes.
-                    *(
-                        ()
-                        if showing.refused_setup is None
-                        else (p(cls="setup__failed", children=showing.refused_setup.why),)
-                    ),
-                    *(
-                        tier_group(tier, plugins, showing.session.tending, form=SETUP_ID + "-form")
-                        for tier, plugins in by_tier(showing.declared)
-                    ),
-                    button(
-                        cls="setup__set",
-                        attrs={"type": "submit", "name": SETTLE_FIELD, "value": SETTLED},
-                        children="Load plugins",
-                    ),
-                ],
-            ),
-        ),
-    )
+    return div(cls="setup", attrs={"id": SETUP_ID}, children=div(cls="settling", children=inside))
 
 
 def plugin_id(qualified: str) -> str:
@@ -4235,13 +4220,13 @@ def running_plugins(showing: Conversation) -> tuple[Enrolled, ...]:
     nothing here decides what a default is, and a plugin that is off contributes no card for the same
     reason it contributes no tool.
 
-    And thinned the way the pass thins it, because a card is a control over something that runs: a
-    repository contribution dropped for claiming a name already taken reaches no event, so a card for
-    it would be a form whose `Set` changes nothing anybody can see.
+    Thinned by `running` itself, because a card is a control over something that runs: a repository
+    contribution dropped for claiming a name already taken reaches no event, so a card for it would
+    be a form whose `Set` changes nothing anybody can see.
     """
     if showing.plugins is None:
         return ()
-    return dropping_collisions(running(showing.plugins, showing.session.tending))
+    return running(showing.plugins, showing.session.tending)
 
 
 def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation, reachable: Reachable) -> str:
@@ -4264,6 +4249,9 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             forked_from=showing.session.forked.session if showing.session.forked is not None else None,
         )
     stalled = stalled_by(showing)
+    # Once for both readers, so the composer's menu and the rail's cards cannot be built from two
+    # answers to the same question, and the thinning behind it is done once per render.
+    plugins = running_plugins(showing)
     return document(
         links,
         showing.session.title or UNTITLED,
@@ -4299,10 +4287,10 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     # somebody types. Declared once by the plugin and rendered by the console, so a
                     # menu row, the button the box shows in that mode, and the sentence above it
                     # cannot disagree about what is on offer.
-                    plugins=running_plugins(showing),
+                    plugins=plugins,
                 ),
             ],
-            aside_rail=[rail(links, showing.session.id, showing.session.tending, running_plugins(showing))],
+            aside_rail=[rail(links, showing.session.id, showing.session.tending, plugins)],
         ),
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,

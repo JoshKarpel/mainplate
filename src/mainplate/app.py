@@ -391,7 +391,6 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
     about the queue in front of it. That split is what lets one console run the worker beside the
     console and another run it somewhere else entirely.
     """
-    deliver = delivering(durable)
 
     async def answer(run: Run) -> None:
         match await converse(run):
@@ -402,7 +401,7 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
             case Noting(notes=notes):
                 for note in notes:
                     logger.info(f"{run.workflow}: {note.plugin} asked for a message to be put to it")
-                    await deliver(run.workflow, note)
+                    await durable.deliver(run.workflow, note.recorded())
             case _ as unreachable:
                 assert_never(unreachable)
 

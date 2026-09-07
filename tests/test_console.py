@@ -63,6 +63,7 @@ from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import recorded_declaration
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
+from mainplate.plugins.protocol import Payload
 from mainplate.plugins.running import PluginFailed
 from mainplate.reference import Cost
 from mainplate.reference import Facts
@@ -72,6 +73,7 @@ from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import read_tending
+from mainplate.snapshots import Worktree
 from mainplate.tending import AGAIN
 from mainplate.tending import SETTLE_FIELD
 from mainplate.tending import SETTLED
@@ -1718,7 +1720,7 @@ class Answering:
     refusing: str | None = None
     asked: list[str] = field(default_factory=list)
 
-    async def __call__(self, plugin: Installed, payload: Mapping[str, object]) -> object:
+    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> object:
         self.asked.append(plugin.qualified)
         if self.refusing == plugin.qualified:
             raise PluginFailed(f"{plugin.qualified} exited 1: saying nothing")

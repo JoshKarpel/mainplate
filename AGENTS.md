@@ -90,6 +90,9 @@ What must hold when adding to the parent:
   in `snapshots.py`, in a tool, in a page or in a script is the whole vulnerability restored.
 - **Never take a path out of a worktree and act on it in the parent.** Derive it, the way
   `Worktrees.gitdir` does, or receive it from the console's own state.
+- **Never carry a session's worktree as a path and rebuild a `Worktree` from it.** The rebuilt one
+  names no git directory, which is the discovery mode, and nothing about the call site changes to
+  say so. Pass the value.
 - **Prefer the sandbox** where the parent has no reason to be the one running it at all. That is the
   [plugins-as-scripts](docs/design/plugins.md) argument, and it is the same argument.
 

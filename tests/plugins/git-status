@@ -24,14 +24,9 @@ set -euo pipefail
 # console's write from failing on a closed pipe.
 cat >/dev/null
 
-# Anything but `setup` gets an empty answer. The console only sends what `setup` asked for, so
-# this is a belt on a brace rather than a branch that fires - and it costs one line against a plugin
-# that would otherwise print a status into a `tool` call.
-if [[ "${1:-}" != "" ]]; then
-  echo '{}'
-  exit 0
-fi
-
+# There is no event to branch on here, and none is needed: `"events": []` below is what stops
+# anything after `setup` ever reaching this script. A guard on `$1` could not do that job anyway -
+# the console passes no arguments, and the event is in the payload that was just discarded.
 STATUS=$(git status --short --branch 2>/dev/null) || { echo '{}'; exit 0; }
 CURRENT=$(git symbolic-ref --short HEAD 2>/dev/null) || CURRENT=""
 DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's:^origin/::') || DEFAULT=""

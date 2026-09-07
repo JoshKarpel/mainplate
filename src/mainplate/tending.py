@@ -53,9 +53,6 @@ SETTLED: Final = "settled"
 PLUGIN_FIELD: Final = "plugin"
 """Which plugin a posted control belongs to, by qualified name."""
 
-CONTROL_FIELD: Final = "control"
-"""Which of that plugin's controls was pressed, by the name its card declared."""
-
 
 @dataclass(frozen=True, slots=True)
 class Tending:

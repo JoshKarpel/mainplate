@@ -142,9 +142,26 @@ def changed_in(where: Path) -> list[str]:
     return [path for path in found if path]
 
 
+PASSES = "`pre-commit` passes over the files this session has changed."
+
+FIXED = (
+    "`pre-commit` fixed some of the files this session has changed, in place, and everything passes "
+    "now. The working tree has edits you did not write; read them before you carry on."
+)
+
+
+def failing(output: str) -> str:
+    """What the model is told about a run that is still failing after a hook had its chance to fix it."""
+    return (
+        "`pre-commit` is failing on the files this session has changed. Anything a hook could fix has "
+        "been fixed in place already, so what is below needs your judgement rather than another run:"
+        "\n\n```\n" + output + "\n```"
+    )
+
+
 def checking(payload: dict[str, Any]) -> tuple[bool, str]:
     """
-    Run the hooks over what has changed: whether everything passed, and what to show if it did not.
+    Run the hooks over what has changed: whether everything passed, and what to tell the model.
 
     **Twice where the first run fails**, which is what the shell version's autofix loop did and for
     the same reason: most of what `pre-commit` reports is a hook that has already fixed the file, so
@@ -153,41 +170,27 @@ def checking(payload: dict[str, Any]) -> tuple[bool, str]:
 
     A clean tree passes without either run, because there is nothing to pass hooks over and running
     them all against a repository nobody touched is the slow way to say so.
+
+    **The sentence is composed here rather than by a reader of the pair.** Three outcomes and three
+    sentences, and the third - passed, but only because a hook rewrote somebody's files - is not
+    recoverable from a boolean. Carrying it as a token in the output slot meant one word spelled the
+    same way in two functions, sharing a slot with real hook output, and a mistyped copy would have
+    told the model the wrong thing with nothing to report it.
     """
     where = said(payload, "worktree")
     if not where:
-        return True, ""
+        return True, PASSES
     at = Path(where)
     changed = changed_in(at)
     if not changed:
-        return True, ""
+        return True, PASSES
     argv = hooks("run", "--files", *changed)
-    first = ran(argv, at)
-    if first.returncode == 0:
-        return True, ""
+    if ran(argv, at).returncode == 0:
+        return True, PASSES
     again = ran(argv, at)
     if again.returncode == 0:
-        return True, "fixed"
-    return False, again.stdout.decode("utf-8", errors="replace").strip()
-
-
-FIXED = (
-    "`pre-commit` fixed some of the files this session has changed, in place, and everything passes "
-    "now. The working tree has edits you did not write; read them before you carry on."
-)
-
-
-def report(passed: bool, output: str) -> str:
-    """What the model is told about one run, which is a different sentence for each of three answers."""
-    if passed and output == "fixed":
-        return FIXED
-    if passed:
-        return "`pre-commit` passes over the files this session has changed."
-    return (
-        "`pre-commit` is failing on the files this session has changed. Anything a hook could fix has "
-        "been fixed in place already, so what is below needs your judgement rather than another run:"
-        "\n\n```\n" + output + "\n```"
-    )
+        return True, FIXED
+    return False, failing(again.stdout.decode("utf-8", errors="replace").strip())
 
 
 def delivery(said_to_model: str) -> dict[str, Any]:
@@ -283,10 +286,10 @@ def ending(payload: dict[str, Any]) -> dict[str, Any]:
         # a turn, which is the thing being avoided. The count stays where it is, so a person who says
         # something resets it and a person who does not is not billed for this again.
         return {}
-    passed, output = checking(payload)
+    passed, told = checking(payload)
     if passed:
         return {"set": {"chasing": 0}} if chasing else {}
-    return {"deliver": [delivery(report(passed, output))], "set": {"chasing": chasing + 1}}
+    return {"deliver": [delivery(told)], "set": {"chasing": chasing + 1}}
 
 
 def answer(payload: dict[str, Any]) -> dict[str, Any]:
@@ -299,11 +302,11 @@ def answer(payload: dict[str, Any]) -> dict[str, Any]:
     if event == "tool":
         # A value back to the model and no delivery: the model asked, so the answer belongs in the
         # call it made rather than as a message somebody has to read in the transcript.
-        return {"return": report(*checking(payload))}
+        return {"return": checking(payload)[1]}
     if event == "compose":
         # Asked by a person, so it answers whether or not anything is failing, and it clears the
         # count: pressing this is somebody taking an interest, which is exactly the bound's reset.
-        return {"deliver": [delivery(report(*checking(payload)))], "set": {"chasing": 0}}
+        return {"deliver": [delivery(checking(payload)[1])], "set": {"chasing": 0}}
     if event == "action":
         # Turning the switch back on starts the chase again, so a switch flicked off through a long
         # refactor and back on afterwards behaves like a fresh session rather than one already spent.

@@ -28,6 +28,9 @@ from typing import Final
 
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.protocol import SETUP
+from mainplate.plugins.protocol import Event
+from mainplate.plugins.protocol import Payload
+from mainplate.roots import RootName
 from mainplate.roots import environment_named
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Venue
@@ -73,26 +76,30 @@ assumed, so a console started with a config home of its own is one whose plugins
 A repository's plugin never sees it, because a repository's plugin runs behind `--clearenv`.
 """
 
-WORKTREE: Final = "MAINPLATE_WORKTREE"
+WORKTREE: Final = environment_named("worktree")
 """
 Where this session's files are, said in the environment as well as in the payload.
 
 Both, because the two readers are different: the payload is what a plugin parses, and this is what a
 line of shell in a plugin can reach without parsing anything. It costs one variable and makes a
 five-line plugin possible.
+
+Derived rather than spelled, for the reason `roots.py` exists: a place this console names has one
+word for it, and two spellings of that word is two places that answer to different names depending
+on which of them was edited last.
 """
 
-PLUGIN_SCRATCH: Final = environment_named("plugin_scratch")
+SCRATCH_NAMED: Final[RootName] = "plugin_scratch"
 """
-What a confined plugin's own directory is called inside its namespace, derived rather than spelled.
+What a confined plugin's own directory is called inside its namespace.
 
-**Not `MAINPLATE_SCRATCH`**, which is what a model's `bash` finds the *session's* scratch under. They
-are two directories with two owners, and one word for both, told apart by which process happened to
-read it, is exactly what a shared vocabulary of place names exists to stop.
+**Not `scratch`**, which is what a model's `bash` finds the *session's* under. They are two
+directories with two owners, and one word for both, told apart by which process happened to read it,
+is exactly what a shared vocabulary of place names exists to stop.
 
-Named here as well as in `roots.py` because this is the module that decides a plugin's namespace gets
-it; the string itself is derived, so the variable a plugin reads and the variable the sandbox sets
-cannot come to differ.
+Named here because this is the module that decides a plugin's namespace gets one; what the variable
+holding it is called in an environment is `sandbox.py`'s to derive, from this, so the name a plugin
+reads and the name the sandbox sets cannot come to differ.
 """
 
 
@@ -112,7 +119,7 @@ class PluginFailed(RuntimeError):
     """
 
 
-type Speaking = Callable[[Installed, Mapping[str, object]], Awaitable[object]]
+type Speaking = Callable[[Installed, Payload, Worktree | None], Awaitable[object]]
 """
 How this console says one thing to one plugin, injected rather than reached for.
 
@@ -120,6 +127,13 @@ A function for the reason `Pricer`, `Draining` and `Guiding` are: what answers i
 and knows about sandboxes, and injecting the one question keeps everything above it - the pass, the
 service, the routes - ignorant of how a plugin is run. It is also what lets a test drive the whole
 mechanism with a mapping of answers and no subprocess at all.
+
+**The worktree is passed beside the payload rather than read out of it**, and the two are not the
+same thing: the payload's is a string a plugin parses, and this is the tree as this console knows
+it - including the git directory it was told, which is what keeps a confined run from leaving git to
+discover one from a pointer file the session can write. Reconstructing a `Worktree` from the wire
+string is exactly the mistake `Worktree.gitdir` exists to stop. See
+[what runs, and as whom](../../docs/design/security.md).
 """
 
 
@@ -201,10 +215,6 @@ class Spawned:
     config_home: Path | None = None
     environ: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
 
-    def can_confine(self) -> bool:
-        """Whether this console can run a repository's plugin at all, which needs a sandbox."""
-        return self.bwrap is not None and self.scratch is not None
-
     def scratch_for(self, plugin: Installed, session: str) -> Path:
         """
         Where one plugin of one session may keep what it installed, and nobody else may write.
@@ -221,11 +231,11 @@ class Spawned:
             raise PluginFailed(f"{plugin.qualified} has nowhere to write: this console has no scratch")
         return self.scratch / session / plugin.tier.value / plugin.name
 
-    def allowed(self, event: object) -> timedelta:
+    def allowed(self, event: Event) -> timedelta:
         """How long this event has to answer, which for setting up is longer than for anything else."""
         return self.setting_up if event == SETUP else self.patience
 
-    def venue(self, event: object) -> Venue:
+    def venue(self, event: Event) -> Venue:
         """
         Whether this event reaches the network, which one of them does and the rest never do.
 
@@ -247,7 +257,7 @@ class Spawned:
         """
         return Venue.CONNECTED if event == SETUP else Venue.CONFINED
 
-    async def __call__(self, plugin: Installed, payload: Mapping[str, object]) -> object:
+    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> object:
         """
         Say one thing to one plugin and read its answer, or fail naming the plugin.
 
@@ -256,8 +266,8 @@ class Spawned:
         what a plugin prints there is its own diagnostics, and mixing it into the answer would make
         a `print` left in while debugging into a protocol error.
         """
-        sending = await self.invocation(plugin, payload)
-        allowed = self.allowed(payload.get("event"))
+        sending = await self.invocation(plugin, payload, worktree)
+        allowed = self.allowed(payload.event)
         try:
             process = await asyncio.create_subprocess_exec(
                 *sending.argv,
@@ -301,7 +311,7 @@ class Spawned:
         except json.JSONDecodeError as broken:
             raise PluginFailed(f"{plugin.qualified} printed something that is not JSON: {broken}") from broken
 
-    async def invocation(self, plugin: Installed, payload: Mapping[str, object]) -> Invocation:
+    async def invocation(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Invocation:
         """
         What to run, in what environment, where, and with what: the one place the tiers stop being
         alike.
@@ -322,15 +332,13 @@ class Spawned:
         The network is shut for every event but the one that happens before the conversation does,
         and never because of anything the session chose. See `venue`.
         """
-        held = payload.get("worktree")
-        worktree = held if isinstance(held, str) else None
-        session = payload.get("session")
+        where = None if worktree is None else str(worktree.root)
         if not plugin.confined:
             environment = dict(self.environ)
             if self.config_home is not None:
                 environment[CONFIG_HOME] = str(self.config_home)
-            if worktree is not None:
-                environment[WORKTREE] = worktree
+            if where is not None:
+                environment[WORKTREE] = where
             # Started *in* the worktree where there is one on disk, so a plugin reaches its
             # session's files the way a command does and needs no path parsed out of the payload.
             # A worktree named and not yet planted is an ordinary state - the first pass plants one -
@@ -341,26 +349,29 @@ class Spawned:
             return Invocation(
                 argv=(str(plugin.path),),
                 environment=environment,
-                where=await planted_at(worktree),
-                payload=payload,
+                where=await planted_at(where),
+                payload=payload.spoken(),
             )
         if self.bwrap is None or self.scratch is None:
             raise PluginFailed(f"{plugin.qualified} is a repository's, and this console has no sandbox to run it in")
-        if worktree is None or not isinstance(session, str):
+        if worktree is None:
             raise PluginFailed(f"{plugin.qualified} is a repository's, and this session has no worktree")
-        planted = Path(worktree)
-        scratch = self.scratch_for(plugin, session)
+        scratch = self.scratch_for(plugin, payload.session)
         await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
+        # The worktree as this console knows it, git directory and all, rather than one rebuilt from
+        # the path on the payload: an unnamed directory is one git discovers by reading the pointer
+        # file at the tree's root, which is the single thing in there the session can replace.
+        #
         # `plugin_scratch` and not `scratch`, which is the name a model's own `bash` finds the
         # *session's* directory under. One word for two places would have a repository's plugin and
         # the model it is running beside reading the same variable and reaching different disks.
-        confinement = InAWorktree(worktree=Worktree(root=planted), scratch=scratch, scratch_named="plugin_scratch")
+        confinement = InAWorktree(worktree=worktree, scratch=scratch, scratch_named=SCRATCH_NAMED)
         sandbox = await confined_by(confinement)
         argv = (
             self.bwrap,
             *sandbox.argv(
                 at=str(starting_at(confinement)),
-                venue=self.venue(payload.get("event")),
+                venue=self.venue(payload.event),
                 # `$HOME` in the plugin's own scratch rather than on the tmpfs a command gets, which
                 # is what makes a plugin with dependencies possible at all: everything that fetches
                 # keeps what it fetched under `$HOME`, so a `uv run --script` shebang resolves an
@@ -370,4 +381,6 @@ class Spawned:
             ),
             str(plugin.path),
         )
-        return Invocation(argv=argv, environment={}, where=None, payload={**payload, "scratch": str(scratch)})
+        return Invocation(
+            argv=argv, environment={}, where=None, payload=payload.model_copy(update={"scratch": str(scratch)}).spoken()
+        )

@@ -225,6 +225,22 @@ class Worktree:
         return self.root / POINTER
 
     @property
+    def common(self) -> Path | None:
+        """
+        The clone every linked worktree of this one shares, by construction rather than by asking.
+
+        `<clone>/worktrees/<session>` is where `Worktrees` puts a session's git directory, so the
+        clone is two components up and there is nothing to run to find that out. `None` is a tree
+        whose directory was never named, where the answer has to come from git.
+
+        Derived for the reason `gitdir` is named at all: asking a tree for its common directory is
+        asking git to discover its way in from a pointer file the session can write.
+        """
+        if self.gitdir is None:
+            return None
+        return self.gitdir.parent.parent
+
+    @property
     def addressed(self) -> tuple[str, ...]:
         """
         Where git is told to work, or nothing at all where it is left to find out.

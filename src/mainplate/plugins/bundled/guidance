@@ -68,12 +68,28 @@ def readable(path: Path) -> str | None:
         return None
 
 
+def split_frontmatter(text: str) -> tuple[str | None, str]:
+    """
+    A guidance file as its opening block and its prose, with no block where it opens with prose.
+
+    One reading of where a block ends rather than two, because the two callers below ask opposite
+    halves of one question and a pair that answered it separately could come to disagree about which
+    document has one at all.
+
+    Only a block that *opens* the file counts, and only one that closes, so a document whose first
+    line happens to be a rule of dashes is left exactly as it was written.
+    """
+    if not text.startswith("---\n"):
+        return None, text
+    closed = text.find("\n---", 3)
+    if closed == -1:
+        return None, text
+    return text[4:closed], text[closed:].removeprefix("\n---").lstrip("\n")
+
+
 def frontmatter(text: str) -> str | None:
     """The block a guidance file opens with, or nothing where it opens with prose."""
-    if not text.startswith("---\n"):
-        return None
-    closed = text.find("\n---", 3)
-    return None if closed == -1 else text[4:closed]
+    return split_frontmatter(text)[0]
 
 
 def without_frontmatter(text: str) -> str:
@@ -82,15 +98,8 @@ def without_frontmatter(text: str) -> str:
 
     Frontmatter is addressed to whatever loads the file rather than to the model, so passing it on
     spends a context window on a `paths:` list nobody reads and invites the model to answer about it.
-    Only a block that *opens* the file counts, and only one that closes, so a document whose first
-    line happens to be a rule of dashes is left exactly as it was written.
     """
-    if not text.startswith("---\n"):
-        return text
-    closed = text.find("\n---", 3)
-    if closed == -1:
-        return text
-    return text[closed:].removeprefix("\n---").lstrip("\n")
+    return split_frontmatter(text)[1]
 
 
 def described(text: str) -> str | None:
@@ -266,16 +275,21 @@ def touched_in(messages: list[Any]) -> tuple[str, ...]:
     return tuple(found)
 
 
-def delivered_in(messages: list[Any], said: str) -> bool:
+def system_prompts_in(messages: list[Any]) -> tuple[str, ...]:
     """
-    Whether the model has already been handed this, asked of the history it is about to be handed.
+    Every system-voice part the history carries, gathered in one walk of it.
 
     **The history is the ledger**, which is what makes a set kept anywhere else wrong rather than
     merely redundant: one on the session would survive a `forget` and leave the model working without
     guidance it can no longer see, and one on the pass would deliver again on every pass. Asked here,
     every case answers itself - the console delivered it, the model read the file for itself, the
     model wrote the file, a fork carried it across, a forget dropped it.
+
+    Gathered once rather than searched per question, because the questions are one per directory
+    between a reached file and the root and the history grows for the whole conversation: walking it
+    per pair is the same answer recomputed until a long session pays for it on every request.
     """
+    found: list[str] = []
     for message in messages:
         if not isinstance(message, dict) or message.get("kind") != "request":
             continue
@@ -283,30 +297,39 @@ def delivered_in(messages: list[Any], said: str) -> bool:
             if not isinstance(part, dict) or part.get("part_kind") != "system-prompt":
                 continue
             content = part.get("content")
-            if isinstance(content, str) and content.startswith(said):
-                return True
-    return False
+            if isinstance(content, str):
+                found.append(content)
+    return tuple(found)
 
 
-def covering(root: Path, path: str) -> tuple[Path, ...]:
+def delivered_in(prompts: tuple[str, ...], said: str) -> bool:
+    """Whether the model has already been handed this, asked of what it has already been told."""
+    return any(prompt.startswith(said) for prompt in prompts)
+
+
+def covering(settled: Path, here: Path) -> tuple[Path, ...]:
     """
-    The guidance files that apply to one path, from the top down, as paths relative to the root.
+    The guidance files that apply inside one directory, from the top down, relative to the root.
 
     The repository's own root file is left out because it is already in the instructions whole. What
     is left is every directory between there and the file, which is the ecosystem's own reading of
     nested `AGENTS.md` and is why nesting needs no mechanism of this console's: a repository states
     which of its rules are local by where it puts them.
 
-    A path that climbs out of the repository yields nothing rather than raising. It cannot arrive
-    from a tool, which refuses one long before this, but this reads what a model wrote and a value
-    that cannot happen is not one to crash on.
+    **Asked of the directory rather than of the file**, and of a resolved one, which is what makes
+    the answer worth remembering: this is two `is_file` calls per directory up to the root and every
+    file in one has the same answer, so a caller reading fifteen files in a directory walks it once.
+    Resolved, because a symlinked file's guidance is its target's, so two names that look like one
+    directory can be two.
+
+    A directory outside the repository yields nothing rather than raising. It cannot arrive from a
+    tool, which refuses one long before this, but this reads what a model wrote and a value that
+    cannot happen is not one to crash on.
     """
-    here = (root / path).resolve()
-    settled = root.resolve()
-    if settled not in here.parents:
+    if settled != here and settled not in here.parents:
         return ()
     found: list[Path] = []
-    for each in reversed(here.parents):
+    for each in reversed((here, *here.parents)):
         if each == settled:
             continue
         guidance = guidance_at(each)
@@ -323,18 +346,36 @@ def approaching(root: Path, messages: list[Any]) -> tuple[str, ...]:
     results themselves arrive on: there is no earlier moment, since a batch of calls and the reply to
     them are one exchange. So the model has read one file without the local guidance and has not yet
     done the next fifteen things.
+
+    Each question is asked once. The history is walked once for what has been delivered; a path the
+    model reached for twice is considered once, in the order it was first named; the directories above
+    one are walked once per directory; and a file settled here is marked whether or not it produced a
+    block, so a guidance file already delivered is not reconsidered on every later read beneath it.
+    Without that this recomputes an answer it already has, once per tool call, on every request of a
+    conversation that only gets longer.
     """
+    settled = root.resolve()
+    prompts = system_prompts_in(messages)
+    covers: dict[Path, tuple[Path, ...]] = {}
     blocks: list[str] = []
     said: set[Path] = set()
-    for path in touched_in(messages):
-        for found in covering(root, path):
-            if found in said or delivered_in(messages, heading(found)):
-                continue
-            body = readable(root / found)
-            if body is None or not without_frontmatter(body).strip():
+    for path in dict.fromkeys(touched_in(messages)):
+        here = (root / path).resolve().parent
+        if here not in covers:
+            covers[here] = covering(settled, here)
+        for found in covers[here]:
+            if found in said:
                 continue
             said.add(found)
-            blocks.append(f"{heading(found)}\n\n{without_frontmatter(body).strip()}")
+            if delivered_in(prompts, heading(found)):
+                continue
+            body = readable(root / found)
+            if body is None:
+                continue
+            prose = without_frontmatter(body).strip()
+            if not prose:
+                continue
+            blocks.append(f"{heading(found)}\n\n{prose}")
     return tuple(blocks)
 
 

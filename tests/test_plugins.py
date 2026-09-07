@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from typing import Final
 from typing import get_args
 
 import pytest
@@ -43,13 +44,22 @@ from mainplate.plugins.installed import bundled
 from mainplate.plugins.installed import dropping_collisions
 from mainplate.plugins.installed import grouped
 from mainplate.plugins.installed import installed_by
+from mainplate.plugins.installed import refuse_collisions
 from mainplate.plugins.installed import repository_plugins
-from mainplate.plugins.installed import without_collisions
 from mainplate.plugins.protocol import EVENTS
+from mainplate.plugins.protocol import Acting
+from mainplate.plugins.protocol import Calling
+from mainplate.plugins.protocol import Composing
 from mainplate.plugins.protocol import Described
+from mainplate.plugins.protocol import Effect
+from mainplate.plugins.protocol import Ending
 from mainplate.plugins.protocol import Event
 from mainplate.plugins.protocol import Number
+from mainplate.plugins.protocol import Opening
+from mainplate.plugins.protocol import Payload
 from mainplate.plugins.protocol import Refused
+from mainplate.plugins.protocol import Requesting
+from mainplate.plugins.protocol import SettingUp
 from mainplate.plugins.protocol import number_of
 from mainplate.plugins.protocol import parse_answer
 from mainplate.plugins.protocol import parse_described
@@ -63,6 +73,7 @@ from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_tending
+from mainplate.snapshots import Worktree
 from mainplate.tending import TENDED
 
 # Where the fixture plugins live. A directory of real executables rather than strings written into
@@ -71,9 +82,46 @@ from mainplate.tending import TENDED
 FIXTURES = Path(__file__).parent / "plugins"
 
 
-def spoken(**fields: object) -> dict[str, object]:
-    """One event payload, with the envelope every event carries filled in."""
-    return {"session": "a-session", "plugin": "user:probe", **fields}
+# The shape each event's payload actually is, so a test composing one gets the fields that event
+# carries and is told when it invents a field the protocol has no room for. `extra="forbid"` runs in
+# this direction too, which is what makes a payload built here evidence about the real one.
+SHAPES: Final[Mapping[str, type[Payload]]] = {
+    "setup": SettingUp,
+    "tool": Calling,
+    "before_request": Requesting,
+    "after_turn": Ending,
+    "compose": Composing,
+    "action": Acting,
+}
+
+
+def spoken(event: str = "setup", **fields: object) -> Payload:
+    """One event payload of the shape that event carries, with the envelope filled in."""
+    return SHAPES[event](session="a-session", plugin="user:probe", **fields)
+
+
+# The smallest answer that asks for one effect and nothing else, as a plugin would write it. Written
+# as the wire words rather than the field names, since `return` and `set` are the two that differ.
+ASKING: Final[Mapping[str, dict[str, object]]] = {
+    "return": {"return": "recorded"},
+    "retry": {"retry": "have another go"},
+    "inject": {"inject": ["a sentence"]},
+    "deliver": {"deliver": [{"said": "a note"}]},
+    "set": {"set": {"seen": 3}},
+}
+
+# What each event may ask for, written out here rather than read from `protocol.ALLOWED`. The
+# duplication is the point: a test that takes its expectation from the table it is checking cannot
+# tell a wrong table from a right one, because both halves move together. This is the design note's
+# matrix said a second time, so a cell edited in one place has to be defended in the other.
+PERMITS: Final[Mapping[str, frozenset[str]]] = {
+    "setup": frozenset(),
+    "tool": frozenset(("return", "retry", "deliver", "set")),
+    "before_request": frozenset(("inject", "deliver", "set")),
+    "after_turn": frozenset(("deliver", "set")),
+    "compose": frozenset(("deliver", "set")),
+    "action": frozenset(("deliver", "set")),
+}
 
 
 async def still_running(script: Path) -> bool:
@@ -98,15 +146,16 @@ async def still_running(script: Path) -> bool:
     return True
 
 
-async def asked(plugin: Path, payload: Mapping[str, object]) -> Any:
+async def asked(plugin: Path, payload: Payload) -> Any:
     """
     One plugin run for real, over a pipe, as the console runs one.
 
     Unconfined, because these are the console's own tier and confinement is what
-    `TestARepositorysOwnPlugin` is about.
+    `TestARepositorysOwnPlugin` is about - so there is no sandbox to build and no tree to build one
+    around, and the worktree such a plugin reads is the one named on the payload.
     """
     installed = Installed(tier=Tier.USER, name=plugin.name, path=plugin)
-    return await Spawned(environ={})(installed, payload)
+    return await Spawned(environ={})(installed, payload, None)
 
 
 class TestTheVocabulary:
@@ -170,18 +219,29 @@ class TestTheVocabulary:
         assert answered.setting == {"seen": 3}
 
     @pytest.mark.parametrize(
-        ("event", "asking"),
-        [("after_turn", {"return": "no"}), ("compose", {"retry": "no"}), ("tool", {"inject": ["no"]})],
+        ("event", "effect"), [(event, effect) for event in EVENTS for effect in get_args(Effect.__value__)]
     )
-    def test_an_effect_the_event_has_no_room_for_is_refused(self, event: Event, asking: dict[str, object]) -> None:
+    def test_every_cell_of_the_table_is_enforced(self, event: Event, effect: Effect) -> None:
         """
         The table in the design note, enforced in one place rather than wherever a field is read.
 
-        A plugin asking for an effect that goes nowhere would otherwise be quietly doing nothing,
-        which is the failure mode a closed vocabulary exists to make impossible.
+        Over the whole cross product rather than a chosen few, because what `ALLOWED` claims is a
+        *total* mapping: an event that permitted everything, or one refusing what it is meant to
+        carry, is a cell nobody wrote and neither shows up in a sample. A plugin asking for an effect
+        that goes nowhere would otherwise be quietly doing nothing, which is the failure mode a
+        closed vocabulary exists to make impossible.
+
+        **Against `PERMITS` rather than against `ALLOWED`**, and the difference is the whole test: a
+        cell read out of the table under test asserts only that `refusing` agrees with it, so a wrong
+        cell passes twice. This one is the design note's table written out a second time on purpose,
+        which is the one duplication here that earns its keep.
         """
-        with pytest.raises(Refused, match="user:probe"):
-            refusing("user:probe", event, parse_answer("user:probe", asking))
+        answered = parse_answer("user:probe", ASKING[effect])
+        if effect in PERMITS[event]:
+            refusing("user:probe", event, answered)
+            return
+        with pytest.raises(Refused, match=f"user:probe answered a {event} with a {effect}"):
+            refusing("user:probe", event, answered)
 
 
 class TestSettingsAndState:
@@ -352,43 +412,39 @@ class TestWhenTwoPluginsWantOneName:
         rather than the settings step, so the screen still draws with the switch that fixes it.
         """
         with pytest.raises(Collides, match="hand_off"):
-            without_collisions(
+            refuse_collisions(
                 (self.enrolled(Tier.USER, "mine", "hand_off"), self.enrolled(Tier.BUNDLED, "handoff", "hand_off"))
             )
 
     def test_a_repository_cannot_collide_because_its_names_are_prefixed(self) -> None:
-        held = without_collisions(
-            (self.enrolled(Tier.BUNDLED, "handoff", "hand_off"), self.enrolled(Tier.REPOSITORY, "handoff", "hand_off"))
+        both = (
+            self.enrolled(Tier.BUNDLED, "handoff", "hand_off"),
+            self.enrolled(Tier.REPOSITORY, "handoff", "hand_off"),
         )
-        assert len(held) == 2
+        refuse_collisions(both)
+        assert len(dropping_collisions(both)) == 2
 
     def test_a_repository_that_still_collides_is_dropped_rather_than_stopping_the_session(self) -> None:
         """
         The last line of the guarantee, and the reason it is a drop: the alternative is a repository
         deciding whether your session starts.
         """
-        held = without_collisions(
-            (
-                self.enrolled(Tier.USER, "mine", "repo_review_lint"),
-                self.enrolled(Tier.REPOSITORY, "review", "lint"),
-            )
-        )
-        assert [each.qualified for each in held] == ["user:mine"]
+        both = (self.enrolled(Tier.USER, "mine", "repo_review_lint"), self.enrolled(Tier.REPOSITORY, "review", "lint"))
+        refuse_collisions(both)
+        assert [each.qualified for each in dropping_collisions(both)] == ["user:mine"]
 
-    def test_the_drop_is_separable_so_a_request_handler_can_apply_it_without_the_refusal(self) -> None:
+    def test_every_reader_of_the_running_set_gets_the_drop_without_the_refusal(self) -> None:
         """
-        Both halves are what a pass wants, because a set it cannot settle is a turn it must not open.
-        A handler wants only the drop: refusing there would be a page that will not draw over a
-        session whose settings step is the thing that fixes it, and leaving the drop out would put a
-        row in the composer menu and a card in the rail for something no event will ever reach.
+        `running` is the only thing that produces a running set, so the drop belongs in it: a reader
+        that forgot would put a row in the composer menu and a card in the rail for something no
+        event will ever reach. The refusal stays out, because it is a page that will not draw at all
+        over a session whose settings step is the thing that fixes it.
         """
         colliding = (self.enrolled(Tier.USER, "mine", "hand_off"), self.enrolled(Tier.BUNDLED, "handoff", "hand_off"))
-        assert len(dropping_collisions(colliding)) == 2, "a collision between two of yours is not the drop's business"
+        assert len(running(colliding, TENDED)) == 2, "a collision between two of yours is not the drop's business"
 
-        held = dropping_collisions(
-            (self.enrolled(Tier.USER, "mine", "repo_review_lint"), self.enrolled(Tier.REPOSITORY, "review", "lint"))
-        )
-        assert [each.qualified for each in held] == ["user:mine"]
+        both = (self.enrolled(Tier.USER, "mine", "repo_review_lint"), self.enrolled(Tier.REPOSITORY, "review", "lint"))
+        assert [each.qualified for each in running(both, TENDED)] == ["user:mine"]
 
 
 class TestWhatARepositoryMayDeclare:
@@ -432,7 +488,7 @@ class TestRunningOne:
     async def test_a_plugin_that_is_not_there_fails_naming_it(self) -> None:
         installed = Installed(tier=Tier.USER, name="absent", path=Path("/nowhere/at/all"))
         with pytest.raises(PluginFailed, match="user:absent"):
-            await Spawned(environ={})(installed, spoken(event="setup"))
+            await Spawned(environ={})(installed, spoken(event="setup"), None)
 
     async def test_a_plugin_that_exits_non_zero_fails_carrying_what_it_said(self, tmp_path: Path) -> None:
         broken = tmp_path / "broken"
@@ -475,7 +531,7 @@ class TestRunningOne:
         slow.write_text("#!/bin/sh\ncat >/dev/null\nsleep 30\n")
         slow.chmod(0o755)
         installed = Installed(tier=Tier.USER, name="slow", path=slow)
-        asking = asyncio.ensure_future(Spawned(environ={})(installed, spoken(event="setup")))
+        asking = asyncio.ensure_future(Spawned(environ={})(installed, spoken(event="setup"), None))
         # Long enough for the process to be spawned and the payload written, which is the state the
         # leak needs: a shorter wait would cancel before there was anything to leave behind.
         await asyncio.sleep(0.3)
@@ -490,8 +546,9 @@ class TestRunningOne:
         echoing = tmp_path / "echoing"
         echoing.write_text("#!/bin/sh\ncat\n")
         echoing.chmod(0o755)
-        assert await asked(echoing, spoken(event="setup", worktree="/somewhere")) == spoken(
-            event="setup", worktree="/somewhere"
+        assert (
+            await asked(echoing, spoken(event="setup", worktree="/somewhere"))
+            == spoken(event="setup", worktree="/somewhere").spoken()
         )
 
 
@@ -511,8 +568,19 @@ class TestWhereARepositorysPluginRuns:
     def installed(self) -> Installed:
         return Installed(tier=Tier.REPOSITORY, name="checks", path=Path("/tree/.mainplate/checks"))
 
-    async def invocation(self, spawned: Spawned, event: str, worktree: Path) -> tuple[str, ...]:
-        return (await spawned.invocation(self.installed(), spoken(event=event, worktree=str(worktree)))).argv
+    # What each event carries past the envelope, so one of every shape can be composed. The values
+    # are immaterial: what these assert on is the `bwrap` prefix, which is decided by the event and
+    # the plugin and by nothing else in the payload.
+    ENOUGH: Final[Mapping[str, Mapping[str, object]]] = {
+        "tool": {"tool": "check"},
+        "after_turn": {"turn": 0, "opened_on": Opening(kind="prompt")},
+        "compose": {"leader": "checks"},
+        "action": {"control": "strict", "value": True},
+    }
+
+    async def invocation(self, spawned: Spawned, event: str, worktree: Worktree) -> tuple[str, ...]:
+        payload = spoken(event=event, worktree=str(worktree.root), **self.ENOUGH.get(event, {}))
+        return (await spawned.invocation(self.installed(), payload, worktree)).argv
 
     async def test_setting_up_reaches_the_network_and_nothing_else_does(self, spawned: Spawned, worktree: Any) -> None:
         """
@@ -520,9 +588,9 @@ class TestWhereARepositorysPluginRuns:
         fetch one, and `setup` runs before the first message: the worktree holds the commit the
         repository supplied, and nothing the model wrote exists yet.
         """
-        assert "--unshare-net" not in await self.invocation(spawned, "setup", worktree.root)
+        assert "--unshare-net" not in await self.invocation(spawned, "setup", worktree)
         for event in ("tool", "before_request", "after_turn", "compose", "action"):
-            assert "--unshare-net" in await self.invocation(spawned, event, worktree.root), event
+            assert "--unshare-net" in await self.invocation(spawned, event, worktree), event
 
     async def test_home_is_the_plugins_own_scratch_and_not_the_tmpfs_a_command_gets(
         self, spawned: Spawned, worktree: Any, tmp_path: Path
@@ -532,7 +600,7 @@ class TestWhereARepositorysPluginRuns:
         keeps what it fetched under `$HOME`, so on a tmpfs a `uv run --script` shebang would resolve
         an interpreter at setup and find none at the next event, with the network shut.
         """
-        argv = await self.invocation(spawned, "after_turn", worktree.root)
+        argv = await self.invocation(spawned, "after_turn", worktree)
         at = argv.index("HOME")
         assert argv[at + 1] == str(tmp_path / "plugins" / "a-session" / "repository" / "checks")
 
@@ -559,7 +627,8 @@ class TestWhereARepositorysPluginRuns:
         directory is the one that says where it is, so there is no second place computing the path.
         """
         own = str(tmp_path / "plugins" / "a-session" / "repository" / "checks")
-        sending = await spawned.invocation(self.installed(), spoken(event="setup", worktree=str(worktree.root)))
+        payload = spoken(event="setup", worktree=str(worktree.root))
+        sending = await spawned.invocation(self.installed(), payload, worktree)
 
         assert sending.payload["scratch"] == own
         assert sending.argv[sending.argv.index("MAINPLATE_PLUGIN_SCRATCH") + 1] == own
@@ -573,7 +642,8 @@ class TestWhereARepositorysPluginRuns:
         apart only by which process read the variable, which is precisely what a shared vocabulary of
         place names exists to stop.
         """
-        sending = await spawned.invocation(self.installed(), spoken(event="setup", worktree=str(worktree.root)))
+        payload = spoken(event="setup", worktree=str(worktree.root))
+        sending = await spawned.invocation(self.installed(), payload, worktree)
 
         assert "MAINPLATE_SCRATCH" not in sending.argv
 
@@ -585,7 +655,7 @@ class TestWhereARepositorysPluginRuns:
         """
         spawned = Spawned(scratch=tmp_path / "plugins", environ={"HOME": "/home/operator"})
         installed = Installed(tier=Tier.USER, name="notify", path=Path("/opt/notify"))
-        sending = await spawned.invocation(installed, spoken(event="setup"))
+        sending = await spawned.invocation(installed, spoken(event="setup"), None)
 
         assert "scratch" not in sending.payload
         assert sending.environment["HOME"] == "/home/operator"
@@ -943,7 +1013,7 @@ async def set_up(
     body = conversing(Provider().endpoints(), INSTRUCTIONS, workspaces, declaring=declaring)
     await passing(service, session.id, body)
     console = replace(service, declaring=declaring)
-    await console.settle(session.id, {})
+    await console.settle(session.id, {}, 0)
     await passing(service, session.id, body)
     return session
 
@@ -999,7 +1069,7 @@ class TestASessionsPlugins:
         # that column would set every declared plugin up regardless.
         body = conversing(Provider().endpoints(), INSTRUCTIONS, declaring=declaring, tendings=self.tending(service))
         await passing(service, session.id, body)
-        await replace(service, declaring=declaring).settle(session.id, {"bundled:handoff": False})
+        await replace(service, declaring=declaring).settle(session.id, {"bundled:handoff": False}, 0)
         await passing(service, session.id, body)
         enrolled = registered_in(await service.checkpointer.load(session.id))
         assert enrolled is not None
@@ -1060,7 +1130,7 @@ class TestASessionsPlugins:
         declaring_body = conversing(Provider().endpoints(), INSTRUCTIONS, declaring=declaring, tendings=tendings)
         await passing(service, session.id, declaring_body)
         off = {"bundled:handoff": False, "bundled:guidance": False}
-        await replace(service, declaring=declaring).settle(session.id, off)
+        await replace(service, declaring=declaring).settle(session.id, off, 0)
         await passing(service, session.id, declaring_body)
         await service.say(session.id, "hello")
         scripted = Scripted(script=(ModelResponse(parts=[TextPart("done")]),))
@@ -1156,7 +1226,7 @@ class TestWhatABranchDoesAboutThem:
         session = await service.start(DEFAULT_CHOICE)
         body = self.body(declaring, service)
         await passing(service, session.id, body)
-        await replace(service, declaring=declaring).settle(session.id, dict(switches or {}))
+        await replace(service, declaring=declaring).settle(session.id, dict(switches or {}), 0)
         await passing(service, session.id, body)
         await service.say(session.id, "first")
         await passing(service, session.id, body)
@@ -1293,14 +1363,14 @@ class TestThisRepositorysOwnPlugin:
         await run("git", "commit", "-qm", "first", cwd=root)
         return root
 
-    def payload(self, plugin: Path, repository: Path, **fields: object) -> dict[str, object]:
-        return {
-            "session": "a-session",
-            "plugin": "repository:pre-commit",
-            "worktree": str(repository),
-            "scratch": str(repository.parent / "scratch"),
+    def payload(self, plugin: Path, repository: Path, event: str = "setup", **fields: object) -> Payload:
+        return SHAPES[event](
+            session="a-session",
+            plugin="repository:pre-commit",
+            worktree=str(repository),
+            scratch=str(repository.parent / "scratch"),
             **fields,
-        }
+        )
 
     def stubbed(self, repository: Path, *exits: int) -> None:
         """
@@ -1324,12 +1394,16 @@ class TestThisRepositorysOwnPlugin:
             "raise SystemExit(codes[at] if at < len(codes) else codes[-1])\n"
         )
 
-    async def asked(self, plugin: Path, repository: Path, payload: Mapping[str, object]) -> Any:
+    async def asked(self, plugin: Path, repository: Path, payload: Payload) -> Any:
         """
         The plugin, run for real, with its dependency answered by the stub rather than by an install.
 
         `PYTHONPATH` is what puts the stub in front of anything else, and `uv run --script` keeps the
         environment it was given, so the shebang resolves an interpreter and imports this.
+
+        Installed as the console's own tier rather than as a repository's, so it runs unconfined and
+        needs no sandbox: what is under test here is what the script *does*, and where a repository's
+        plugin runs is `TestWhereARepositorysPluginRuns`.
         """
         installed = Installed(tier=Tier.USER, name="pre-commit", path=plugin)
         environ = {
@@ -1337,7 +1411,7 @@ class TestThisRepositorysOwnPlugin:
             "HOME": os.environ["HOME"],
             "PYTHONPATH": str(repository.parent / "stub"),
         }
-        return await Spawned(environ=environ)(installed, payload)
+        return await Spawned(environ=environ)(installed, payload, None)
 
     async def test_a_repository_with_no_config_gets_a_plugin_that_contributes_nothing(
         self, plugin: Path, repository: Path

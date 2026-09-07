@@ -238,9 +238,11 @@ class Sandbox:
         """
         A worktree, its clone read-only, and a scratch directory: what a `WORKTREE` session reaches.
 
-        `--git-common-dir` and not `--absolute-git-dir`: the per-worktree directory sits *inside* the
-        bare clone and its `commondir` points back out at it for objects and refs, so binding the
-        common one covers both and binding the other covers neither.
+        The clone and not the per-worktree directory: the latter sits *inside* the former and its
+        `commondir` points back out at it for objects and refs, so binding the common one covers both
+        and binding the other covers neither. Taken from `Worktree.common` where the tree's directory
+        was named, which is every session's, and asked of git only for a tree that named none - so
+        the ordinary path runs no subprocess and reads nothing out of the tree to decide what to bind.
 
         **The pointer goes back over the worktree read-only, and the order is what makes that work.**
         `.git` in a linked worktree is a one-line file naming the git directory, and it sits in the
@@ -256,12 +258,14 @@ class Sandbox:
         path would be resolved against whatever directory bwrap happened to start in, which is not a
         thing to guess at per call.
         """
-        common = await worktree.demand("rev-parse", "--path-format=absolute", "--git-common-dir")
+        common = worktree.common or Path(
+            await worktree.demand("rev-parse", "--path-format=absolute", "--git-common-dir")
+        )
         return cls(
             places=(
                 Bind(path=worktree.root, writable=True, name="worktree"),
                 Bind(path=worktree.pointer, writable=False),
-                Bind(path=Path(common), writable=False),
+                Bind(path=common, writable=False),
                 Bind(path=scratch, writable=True, name=scratch_named),
             )
         )

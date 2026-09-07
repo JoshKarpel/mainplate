@@ -64,7 +64,6 @@ from mainplate.plugins.asking import composed
 from mainplate.plugins.asking import running
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
-from mainplate.plugins.installed import dropping_collisions
 from mainplate.plugins.protocol import Setting
 from mainplate.plugins.protocol import Switch
 from mainplate.plugins.protocol import number_of
@@ -222,6 +221,16 @@ class Conversation:
     happened in a pass with nobody waiting on it, so it had to be written down.
     """
 
+    attempts: int = 0
+    """
+    How many times somebody has answered this session's settings step.
+
+    Carried rather than counted again, because the next press has to be numbered against it and the
+    count is a reading of the whole checkpoint: `Service.token`'s own note applies, since loading one
+    decodes every step's JSON and for a long conversation that is megabytes. The read that produced
+    this page already did it.
+    """
+
     settling_up: bool = False
     """
     Whether a pass is out setting this session's plugins up, which is a press with no answer yet.
@@ -375,6 +384,7 @@ class Service:
         since = None if said.answered_at is None else self.now() - said.answered_at
         registered = registered_in(recorded)
         declared = declared_in(recorded)
+        attempted = setups_in(recorded)
         return Conversation(
             session=found,
             said=said,
@@ -391,7 +401,8 @@ class Service:
             # answered and nothing recorded against it yet. Two facts rather than one, because the
             # third state is the one worth drawing: pressed and still working, pressed and stopped
             # with a reason, or never pressed at all.
-            settling_up=registered is None and setups_in(recorded) > 0,
+            attempts=attempted,
+            settling_up=registered is None and attempted > 0,
             # Read only where there is no registration to read instead, exactly as the declaration's
             # own breadcrumb is: an attempt that failed before one that worked is history, and what
             # this field means is why the session is *still* on its step.
@@ -713,10 +724,17 @@ class Service:
             return None
         return Live(
             session=session,
-            enrolled=dropping_collisions(running(found.plugins, found.session.tending)),
+            enrolled=running(found.plugins, found.session.tending),
             tending=found.session.tending,
             speaking=self.declaring.speaking,
-            worktree=found.worktree,
+            # The tree as a value rather than the path the page prints, because what runs a confined
+            # plugin builds a sandbox around it and needs the git directory it was told. See
+            # `Speaking`.
+            worktree=(
+                None
+                if self.workspaces is None or found.repository is None or found.worktree is None
+                else self.workspaces.worktree(session, found.repository)
+            ),
             delivering=partial(self.note, session),
             storing=partial(set_settings, self.database, session),
         )
@@ -730,27 +748,32 @@ class Service:
         """
         await self.durable.deliver(session, note.recorded())
 
-    async def compose(self, session: str, found: Conversation, leader: str, said: str) -> bool:
+    async def compose(self, session: str, found: Conversation, leader: str, said: str) -> int | None:
         """
         Hand one plugin its own answer in the composer, with whatever was in the box.
 
-        `False` where no running plugin answers to that leader, which the route turns into a refusal:
+        `None` where no running plugin answers to that leader, which the route turns into a refusal:
         a leader is a word somebody typed, so one this session does not have is a request naming
-        nothing rather than a fault.
+        nothing rather than a fault. Otherwise **how many notes were delivered**, which is what tells
+        the route whether the checkpoint moved: an answer asking only for a `set`, or for nothing at
+        all, leaves the conversation byte for byte as the route already has it.
 
         The effects are performed here rather than by the plugin, exactly as they are inside a pass,
         and here there is no step to sit in: a handler is where this console already writes.
         """
         live = await self.live(session, found)
-        answering = None if live is None else live.answering(leader)
-        if live is None or answering is None:
-            return False
+        if live is None:
+            return None
+        answering = live.answering(leader)
+        if answering is None:
+            return None
         plugin, own = answering
-        for note in await composed(live, plugin, own, said):
+        notes = await composed(live, plugin, own, said)
+        for note in notes:
             await self.note(session, note)
-        return True
+        return len(notes)
 
-    async def press(self, session: str, found: Conversation, plugin: str, posted: Mapping[str, str]) -> bool:
+    async def press(self, session: str, found: Conversation, plugin: str, posted: Mapping[str, str]) -> Enrolled | None:
         """
         Save a plugin's card as it was posted, and tell the plugin about the controls that moved.
 
@@ -766,13 +789,17 @@ class Service:
         The write happens before the plugin is asked, because that is what a control is: a card that
         told the plugin and left the column alone would draw one answer and hold another.
 
-        `False` where the plugin is not one this session runs, which is a posted value naming nothing
-        rather than a fault.
+        **The plugin is handed back rather than a yes**, because the route's next move is to redraw
+        that plugin's card and finding it again is the same lookup made twice, in two modules, over
+        two different resolutions of what this session runs. `None` where the plugin is not one it
+        runs, which is a posted value naming nothing rather than a fault.
         """
         live = await self.live(session, found)
-        enrolled = None if live is None else live.named(plugin)
-        if live is None or enrolled is None or enrolled.described.card is None:
-            return False
+        if live is None:
+            return None
+        enrolled = live.named(plugin)
+        if enrolled is None or enrolled.described.card is None:
+            return None
         was = live.settings(enrolled)
         wanted: dict[str, Setting] = {}
         for row in enrolled.described.card.rows:
@@ -790,7 +817,7 @@ class Service:
                 continue
             for note in await acted(live, enrolled, name, value):
                 await self.note(session, note)
-        return True
+        return enrolled
 
     async def setup_again(self, session: str) -> None:
         """
@@ -804,24 +831,7 @@ class Service:
         """
         await self.durable.scheduler.make_ready(session)
 
-    async def switch(self, session: str, enabled: Mapping[str, bool]) -> None:
-        """
-        Say which of a session's plugins it runs, which the next pass reads.
-
-        The one write here that is not an append, and the one that has nowhere else to go: a
-        checkpoint keeps the value a key was first given, so a switch saved twice there would keep
-        its first answer for ever, and `localStorage` is in a browser where the worker that acts on
-        this may be another process. So it is a column, and this is the only thing that writes one.
-
-        **Live before anything has been asked, and refused afterwards.** A tool definition leaving
-        the prefix invalidates everything under it exactly as one arriving late does, so a session
-        that has answered a turn is one whose set of plugins is settled; the route is where that is
-        refused, because what decides it is whether a turn has been recorded and this holds no
-        checkpoint.
-        """
-        await switch(self.database, session, enabled)
-
-    async def settle(self, session: str, enabled: Mapping[str, bool]) -> None:
+    async def settle(self, session: str, enabled: Mapping[str, bool], attempt: int) -> None:
         """
         Answer the settings step: record the switches, say that somebody pressed, and ask for a pass.
 
@@ -836,11 +846,14 @@ class Service:
 
         Three writes and no wait: the column, the key, and the queue. The key is numbered, so pressing
         again after a setup that would not finish is a new attempt rather than a slot that keeps its
-        first answer.
+        first answer, and the number is `Conversation.attempts` - the route read the conversation to
+        draw the step, so counting the attempts again here would be a second full decode to learn an
+        integer that read already had. A number that has moved under the press writes into a key
+        something else holds, and the store keeps the value a key was first given, so the losing press
+        changes nothing rather than corrupting anything.
         """
         await switch(self.database, session, enabled)
-        recorded = await self.checkpointer.load(session)
-        await self.checkpointer.supply(session, setup_key(setups_in(recorded)), records.Confirmed().recorded())
+        await self.checkpointer.supply(session, setup_key(attempt), records.Confirmed().recorded())
         await self.durable.scheduler.make_ready(session)
 
     async def say(self, session: str, said: str, *, forget: bool = False) -> None:
@@ -877,10 +890,13 @@ class Service:
 
         A session created with a title keeps it, which is `Choice.branching`'s existing rule one
         field along: a name somebody typed always wins over a generated one.
+
+        The statement is the check, so there is nothing to read first: `rename` matches on the title
+        still being empty, and a session created without one is written `''` rather than `NULL`. A
+        `SELECT` in front of it would be the same condition asked twice, once of a row and once of a
+        join, with a window between them.
         """
-        found = await read_session(self.database, session)
-        if found is not None and not found.title:
-            await rename(self.database, session, name_from(said))
+        await rename(self.database, session, name_from(said))
 
     async def send(self, session: str, said: str) -> None:
         """

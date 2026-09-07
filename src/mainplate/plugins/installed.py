@@ -364,19 +364,6 @@ def refuse_collisions(enrolled: Sequence[Enrolled]) -> None:
                 claimed[named] = plugin.qualified
 
 
-def without_collisions(enrolled: Sequence[Enrolled]) -> tuple[Enrolled, ...]:
-    """
-    The running set, refused where two of yours collide and thinned where a repository's still does.
-
-    Both halves, which is what a pass wants: it is about to build an agent, so a set it cannot settle
-    is a turn it must not open. A request handler wants only the second half, because a refusal there
-    is a page that will not draw over a session whose settings step is the thing that fixes it. See
-    `dropping_collisions`.
-    """
-    refuse_collisions(enrolled)
-    return dropping_collisions(enrolled)
-
-
 def dropping_collisions(enrolled: Sequence[Enrolled]) -> tuple[Enrolled, ...]:
     """
     The running set with any repository contribution that still collides taken out of it.
@@ -388,11 +375,11 @@ def dropping_collisions(enrolled: Sequence[Enrolled]) -> tuple[Enrolled, ...]:
     Dropped and logged rather than refused, since the alternative is a repository deciding whether
     your session starts.
 
-    **Every reader of the running set applies this, not only the pass**, and it is separate from
-    `refuse_collisions` so that they can. `Live.answering` resolves a leader by first match, so a
-    dropped plugin left in the set is a row in the composer menu, and a card in the rail, for
-    something no event will ever reach: two answers to one word, of which the one drawn second does
-    nothing.
+    **Applied by `running`, so every reader of the running set gets it and none has to remember.**
+    It stays separate from `refuse_collisions` because only one of the two belongs to every reader:
+    `Live.answering` resolves a leader by first match, so a dropped plugin left in the set is a row
+    in the composer menu, and a card in the rail, for something no event will ever reach - where a
+    *refusal* is a page that will not draw at all, which only a pass about to open a turn should take.
     """
     unprefixed = [plugin for plugin in enrolled if plugin.installed.tier is not Tier.REPOSITORY]
     claimed = {named for plugin in unprefixed for named in tool_names(plugin)}

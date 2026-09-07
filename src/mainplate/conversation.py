@@ -87,7 +87,6 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
-from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
@@ -158,8 +157,8 @@ from mainplate.plugins.installed import BadDeclaration
 from mainplate.plugins.installed import Collides
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import refuse_collisions
 from mainplate.plugins.installed import repository_plugins
-from mainplate.plugins.installed import without_collisions
 from mainplate.plugins.protocol import PLAIN
 from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Tone
@@ -2696,8 +2695,8 @@ async def setting_plugins_up(
         # A console with no way to run a plugin loads none and says so by recording two empty sets,
         # which is what takes such a session past the step exactly as a full setup does.
         return (
-            *await run.step(PLUGINS_KEY, empty_registration, parse_registration),
-            *await run.step(REPOSITORY_PLUGINS_KEY, empty_registration, parse_registration),
+            *await run.step(PLUGINS_KEY, partial(recorded_plugins, ()), parse_registration),
+            *await run.step(REPOSITORY_PLUGINS_KEY, partial(recorded_plugins, ()), parse_registration),
         )
     on = [each for each in declared if tended.on(each.qualified, ON)]
     asking = [
@@ -2705,26 +2704,17 @@ async def setting_plugins_up(
         for key, confined in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
     ]
     unrecorded = [(key, asked) for key, asked in asking if key not in run.recorded]
-    said = await asyncio.gather(
-        *(
-            setting_up(asked, speaking, run.workflow, None if worktree is None else worktree.root)
-            for _, asked in unrecorded
-        )
-    )
+    said = await asyncio.gather(*(setting_up(asked, speaking, run.workflow, worktree) for _, asked in unrecorded))
     ready = dict(zip((key for key, _ in unrecorded), said, strict=True))
-
-    async def recording(enrolled: Sequence[Enrolled]) -> object:
-        return recorded_registration(enrolled)
-
     settled: list[Enrolled] = []
     for key, _ in asking:
-        settled.extend(await run.step(key, partial(recording, ready.get(key, ())), parse_registration))
+        settled.extend(await run.step(key, partial(recorded_plugins, ready.get(key, ())), parse_registration))
     return tuple(settled)
 
 
-async def empty_registration() -> object:
-    """No plugins at all, as the value both registration keys take on a console that can run none."""
-    return recorded_registration(())
+async def recorded_plugins(enrolled: Sequence[Enrolled]) -> object:
+    """One tier's set, as the value its registration key takes - the empty set included."""
+    return recorded_registration(enrolled)
 
 
 def conversing(
@@ -2830,8 +2820,11 @@ def conversing(
         # the worktree is planted by a pass. So the first pass of a session plants, reads what is
         # declared, and then blocks with an empty inbox.
         await planting(workspaces, run, chosen, at.turn)
+        # Settled once, so the three readers below cannot come to differ over what a console given no
+        # `Declaring` runs: no scripts, no way to speak to one, and nothing a repository may add.
+        sourcing = declaring or Declaring()
         try:
-            declared = await declaring_plugins(run, declaring or Declaring(), chosen, worktree)
+            declared = await declaring_plugins(run, sourcing, chosen, worktree)
         except (Refused, BadDeclaration) as raised:
             # **A failure ends the pass with nothing declared**, and the reason is written where the
             # page can say which file and why. `Stalled` rather than a raise, because the next pass
@@ -2848,7 +2841,7 @@ def conversing(
         enrolled = registered_in(run.recorded)
         if enrolled is None:
             try:
-                enrolled = await setting_plugins_up(run, declaring or Declaring(), declared, tended, worktree)
+                enrolled = await setting_plugins_up(run, sourcing, declared, tended, worktree)
             except (PluginFailed, Refused, BadDeclaration) as raised:
                 # **Recorded against the attempt it belongs to**, which is what makes the step
                 # somebody can act on: turning the plugin off and pressing again opens a new attempt
@@ -2864,8 +2857,8 @@ def conversing(
             session=run.workflow,
             enrolled=on,
             tending=tended,
-            speaking=declaring.speaking if declaring is not None else None,
-            worktree=None if worktree is None else worktree.root,
+            speaking=sourcing.speaking,
+            worktree=worktree,
             delivering=(lambda note: delivering(run.workflow, note)) if delivering is not None else nowhere,
             storing=(
                 (lambda plugin, values: storings(run.workflow, plugin, values)) if storings is not None else unstored
@@ -2898,7 +2891,7 @@ def conversing(
             # message rather than at the step, so the screen still draws, still lists the two plugins,
             # and still has the switch that fixes it.
             try:
-                live = replace(live, enrolled=without_collisions(live.enrolled))
+                refuse_collisions(live.enrolled)
             except Collides as raised:
                 clashed = records.Refused(why=str(raised))
                 await run.step(refused_key(at.turn, 0), partial(as_recorded, clashed), parse_refused)

@@ -33,9 +33,12 @@ Six things about the policy are decided rather than incidental:
   careful is now one no tool can break, including tools that do not exist yet.
 - **The *common* directory is what is bound, not the worktree's own.** A linked worktree's `.git` is
   a file holding an absolute pointer into the clone, and the per-worktree directory sits inside the
-  clone with a `commondir` pointing back out at it for objects and refs. So `--git-common-dir`
-  reaches both and `--absolute-git-dir` reaches neither: bind the wrong one and there is no git in
-  the sandbox at all, which silently takes `list` with it.
+  clone with a `commondir` pointing back out at it for objects and refs. So the clone reaches both
+  and the per-worktree directory reaches neither: bind the wrong one and there is no git in the
+  sandbox at all, which silently takes `list` with it. `Worktree.common` derives the clone from the
+  git directory rather than asking git which it is, so the ordinary path runs no subprocess and reads
+  nothing out of the tree to decide what to bind; a tree that named no git directory is a bare clone,
+  and that one is asked.
 - **Both are bound at their own absolute paths**, never remapped to a tidy `/workspace`. That is
   forced by the same pointer being absolute. The alternative is a `GIT_COMMON_DIR` that every
   consumer has to carry and any subprocess is free to unset, bought for a shorter path.

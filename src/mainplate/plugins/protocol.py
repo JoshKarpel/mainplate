@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from collections.abc import Sequence
 from typing import Final
 from typing import Literal
 
@@ -70,6 +69,33 @@ runtime reading of a static thing and this is six words. `test_plugins.py` is wh
 against each other.
 """
 
+type Effect = Literal["return", "retry", "inject", "deliver", "set"]
+"""Every thing a plugin may ask the console to do, which the console does and the plugin never does."""
+
+ALLOWED: Final[Mapping[Event, frozenset[Effect]]] = {
+    "setup": frozenset(),
+    "tool": frozenset(("return", "retry", "deliver", "set")),
+    "before_request": frozenset(("inject", "deliver", "set")),
+    "after_turn": frozenset(("deliver", "set")),
+    "compose": frozenset(("deliver", "set")),
+    "action": frozenset(("deliver", "set")),
+}
+"""
+Which effects each event has room for, as the value `refusing` is enforced from.
+
+**A table rather than a pair of exclusions**, so the matrix the design note draws is a thing in the
+code rather than a claim about it: a seventh event added to `Event` fails this mapping's own
+exhaustiveness rather than arriving with nothing refused for it.
+
+`return` and `retry` are a tool call's alone, because they are answers *to* a call and nothing else
+has one to answer. `inject` belongs to the one event that has a request to append to. `deliver` and
+`set` are everybody's, since a note and a write make sense wherever a plugin is asked anything.
+
+**`setup` is empty because no answer to it is an `Answered` at all**: what a plugin returns there is
+`Described`, parsed by `setting_up`, which never reaches here. The row is written out rather than
+left out so the table stays total over `Event`.
+"""
+
 type Setting = bool | int
 """
 What one control on a plugin's card holds, which is a switch's answer or a number's.
@@ -95,8 +121,6 @@ colour of its own.
 Three, and settled before the first plugin ships rather than grown one name at a time, because a
 tone goes in the record and the record is the conversation.
 """
-
-TONES: Final[frozenset[str]] = frozenset(("plain", "quiet", "strong"))
 
 PLAIN: Final[Tone] = "plain"
 
@@ -331,9 +355,8 @@ class Answered(Speech):
     message in an inbox *queues* a session, so a plugin writing its own would be writing to the
     queue from inside the pass still holding the claim on it.
 
-    Where each effect is allowed is not decided here. `tool` alone may `return` or `retry`, only
-    `before_request` may `inject`, and `setup` may ask for nothing but `set`; the caller that sent
-    the event is the one that knows which it sent, so it is the one that refuses. See `refusing`.
+    Where each effect is allowed is not decided here: the caller that sent the event is the one that
+    knows which it sent, so it is the one that refuses. See `ALLOWED` and `refusing`.
     """
 
     returned: object | None = Field(default=None, alias="return")
@@ -379,36 +402,40 @@ class Payload(Speech):
 
     event: Event
     session: str
+
     plugin: str
-    settings: Mapping[str, Setting] = Field(default_factory=dict)
-    worktree: str | None = None
-    scratch: str | None = None
-
     """
-    What every event carries, before the fields the event itself adds.
+    This plugin's own qualified name, which it cannot work out for itself.
 
-    `plugin` is this plugin's own qualified name, which it cannot work out for itself: a plugin
-    declares no name, so what it is called is the key somebody installed it under and the tier that
-    key is in. It is here because one thing genuinely needs it - a plugin answering a turn boundary
-    has to be able to tell that the turn opened on *its own* delivery, or it fires again for as long
-    as the condition that fired it stays true.
+    A plugin declares no name, so what it is called is the key somebody installed it under and the
+    tier that key is in. It is here because one thing genuinely needs it: a plugin answering a turn
+    boundary has to be able to tell that the turn opened on *its own* delivery, or it fires again for
+    as long as the condition that fired it stays true.
+    """
 
-    `settings` is this plugin's own, filled from its card's defaults, so a plugin reads a value
-    rather than deciding what absent means. `worktree` is where this session's files are, or nothing
-    for a session with none.
+    settings: Mapping[str, Setting] = Field(default_factory=dict)
+    """This plugin's own, filled from its card's defaults, so it reads a value rather than deciding
+    what absent means."""
 
-    **`worktree` is on every payload rather than only the two events that act inside a turn**, which
-    is a departure worth stating: `setup` needs it because a plugin composing instructions out of
-    the repository's own files reads them at setup time or not at all. A session with no
-    repository is handed nothing, which is what it has.
+    worktree: str | None = None
+    """
+    Where this session's files are, or nothing for a session with none.
 
-    `scratch` is a directory of this plugin's own, which is where anything it installs at `setup`
-    lives and where every later event finds it again. **Its own rather than the session's**, because
-    the session's scratch is a place the model writes: a plugin that kept an executable there would
-    be running, unattended and at every turn boundary, whatever the model last put at that path. It is
-    also `$HOME` inside the namespace, and `$MAINPLATE_PLUGIN_SCRATCH` for a plugin that is a line of
-    shell and parses none of this - not `$MAINPLATE_SCRATCH`, which is what a model's own commands
-    find the *session's* scratch under.
+    **On every payload rather than only the two events that act inside a turn**, which is a departure
+    worth stating: `setup` needs it because a plugin composing instructions out of the repository's
+    own files reads them at setup time or not at all.
+    """
+
+    scratch: str | None = None
+    """
+    A directory of this plugin's own, where anything it installs at `setup` lives and where every
+    later event finds it again.
+
+    **Its own rather than the session's**, because the session's scratch is a place the model writes:
+    a plugin that kept an executable there would be running, unattended and at every turn boundary,
+    whatever the model last put at that path. It is also `$HOME` inside the namespace, and
+    `$MAINPLATE_PLUGIN_SCRATCH` for a plugin that is a line of shell and parses none of this - not
+    `$MAINPLATE_SCRATCH`, which is what a model's own commands find the *session's* scratch under.
 
     Nothing for a plugin that runs unconfined, which has the operator's own environment and a `$HOME`
     and needs nothing from this console to find somewhere to write. What a scratch answers is having
@@ -557,22 +584,30 @@ def parse_described(plugin: str, said: object) -> Described:
         raise Refused(f"{plugin} described itself in a way this console cannot read: {broken}") from broken
 
 
+def asked_for(answered: Answered) -> frozenset[Effect]:
+    """Which effects one answer actually asks for, which is every field of it that holds something."""
+    return frozenset(
+        {
+            *(("return",) if answered.returned is not None else ()),
+            *(("retry",) if answered.retry is not None else ()),
+            *(("inject",) if answered.inject else ()),
+            *(("deliver",) if answered.deliver else ()),
+            *(("set",) if answered.setting else ()),
+        }
+    )
+
+
 def refusing(plugin: str, event: Event, answered: Answered) -> None:
     """
     Refuse an answer asking for an effect the event it answers does not allow.
 
     Checked here rather than left to whichever caller happens to read a field, so that the table in
-    the design note is enforced in one place: `return` and `retry` are a tool's alone, and `inject`
-    belongs to the one event that has a request to append to. Anything else asking for one is a
-    plugin that would otherwise be quietly doing nothing.
+    the design note is enforced in one place. Against `ALLOWED` rather than against a pair of
+    exclusions, so a seventh event is a cell somebody has to fill rather than a row that quietly
+    permits everything.
     """
-    if event != "tool":
-        if answered.returned is not None:
-            raise Refused(f"{plugin} answered a {event} with a return, which only a tool call may ask for")
-        if answered.retry is not None:
-            raise Refused(f"{plugin} answered a {event} with a retry, which only a tool call may ask for")
-    if event != "before_request" and answered.inject:
-        raise Refused(f"{plugin} answered a {event} with an injection, which only before_request may ask for")
+    for effect in sorted(asked_for(answered) - ALLOWED[event]):
+        raise Refused(f"{plugin} answered a {event} with a {effect}, which that event may not ask for")
 
 
 def settings_of(described: Described, held: Mapping[str, object]) -> dict[str, Setting]:
@@ -611,27 +646,6 @@ def state_of(described: Described, held: Mapping[str, object]) -> dict[str, obje
     return {name: value for name, value in held.items() if name not in declared}
 
 
-def setting_of(described: Described, control: str, held: object) -> Setting | None:
-    """
-    One posted control's value as the setting its card declares, or nothing where it declares none.
-
-    What an `action` needs: a control name arrived from a browser, and what it is worth depends on
-    which kind of control the plugin declared. A name the card does not carry is `None`, which the
-    route reads as a request naming nothing.
-    """
-    if described.card is None:
-        return None
-    for row in described.card.rows:
-        if row.control.name != control:
-            continue
-        if isinstance(row.control, Switch):
-            return bool(held)
-        if isinstance(held, bool) or not isinstance(held, int):
-            return None
-        return held
-    return None
-
-
 def number_of(control: Number, posted: str | None, was: Setting) -> int:
     """
     One posted number as the setting its control declares, held to the bounds the control declared.
@@ -659,8 +673,3 @@ def number_of(control: Number, posted: str | None, was: Setting) -> int:
     if control.most is not None:
         held = min(held, control.most)
     return held
-
-
-def carried(said: Sequence[object]) -> tuple[object, ...]:
-    """A message history as the payload holds it, which is whatever the dump already produced."""
-    return tuple(said)

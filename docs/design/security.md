@@ -101,6 +101,21 @@ The cost, stated: a `Worktree` naming a session's tree now needs to know which c
 `Workspaces.worktree` takes a repository. That is one more argument at three call sites, all of
 which had it.
 
+**A tree flattened to a path is the way this decays**, and it is worth naming because it does not
+look like a git question at all. Anything that carries a session's worktree as a `Path` or a string
+and rebuilds a `Worktree` at the far end has rebuilt it without a git directory, and the default is
+the discovery mode: the value looks the same, the calls still work, and what changed is which
+repository's configuration git reads. So the plugin runner is handed the session's own `Worktree`
+rather than the path on the payload it is about to send, and `Live.worktree` holds the value for the
+same reason. The payload still carries a string, because that is what a plugin parses; the two are
+not the same thing and the wire format is not the place to learn what to bind from.
+
+`Sandbox.around` is where that mattered most, since building a confinement was the last thing out
+here still *asking* git anything about a session's tree. `Worktree.common` derives the clone from
+the git directory, two components up, so the ordinary path binds what it binds with no subprocess
+and no reading of the tree at all. Git is asked only for a `Worktree` that named no directory, which
+is a bare clone, where `root` *is* the git directory and there is nothing in between to poison.
+
 `test_snapshots.py::TestNamingGitsOwnDirectory` pins both callers, and pins each from both ends. The
 control fires the same payload through a `Worktree` that looks for its git directory, because an
 assertion that nothing ran is worth nothing unless something *would* have.

@@ -36,10 +36,12 @@ from mainplate.plugins.installed import ON
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
+from mainplate.plugins.installed import dropping_collisions
 from mainplate.plugins.protocol import Acting
 from mainplate.plugins.protocol import Answered
 from mainplate.plugins.protocol import Calling
 from mainplate.plugins.protocol import Composing
+from mainplate.plugins.protocol import Declared
 from mainplate.plugins.protocol import Delivery
 from mainplate.plugins.protocol import Ending
 from mainplate.plugins.protocol import Event
@@ -54,6 +56,7 @@ from mainplate.plugins.protocol import refusing
 from mainplate.plugins.protocol import settings_of
 from mainplate.plugins.protocol import state_of
 from mainplate.plugins.running import Speaking
+from mainplate.snapshots import Worktree
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
 
@@ -121,7 +124,15 @@ class Live:
     enrolled: tuple[Enrolled, ...] = ()
     tending: Tending = TENDED
     speaking: Speaking | None = None
-    worktree: Path | None = None
+    worktree: Worktree | None = None
+    """
+    This session's tree as this console knows it, git directory and all, rather than as a path.
+
+    The value and not `root`, because what runs a confined plugin builds a sandbox around it and a
+    tree whose directory was never named is one git discovers from a pointer file the session can
+    write. See `Speaking`.
+    """
+
     delivering: Delivering = nowhere
     storing: Storing = unstored
 
@@ -158,15 +169,18 @@ class Live:
         """
         return tuple(each.described.instructions for each in self.enrolled if each.described.instructions is not None)
 
-    def tools(self) -> tuple[tuple[str, Enrolled, str], ...]:
+    def tools(self) -> tuple[tuple[str, Enrolled, Declared], ...]:
         """
         Every tool this session's plugins contribute, as the model's name for it and who to ask.
 
         Three values rather than a mapping, because two of them are the address: which plugin, and
-        what that plugin calls its own tool. A repository's are prefixed, so what the model sees and
-        what the plugin declared are not the same string.
+        what that plugin declared. A repository's are prefixed, so what the model sees and what the
+        plugin called it are not the same string.
+
+        The whole declaration rather than its name, because the one caller wants the description and
+        the schema too and finding them again would be two scans of this plugin's tools per tool.
         """
-        return tuple((named, plugin, declared.name) for plugin in self.enrolled for named, declared in plugin.tools())
+        return tuple((named, plugin, declared) for plugin in self.enrolled for named, declared in plugin.tools())
 
     def answers(self) -> tuple[tuple[str, Enrolled, str], ...]:
         """The same for the composer's leaders, under the word somebody actually types."""
@@ -187,7 +201,7 @@ class Live:
         """
         if self.speaking is None:  # pragma: no cover - a `Live` with plugins always has one
             raise RuntimeError("this console was given no way to run a plugin")
-        answered = parse_answer(plugin.qualified, await self.speaking(plugin.installed, payload.spoken()))
+        answered = parse_answer(plugin.qualified, await self.speaking(plugin.installed, payload, self.worktree))
         refusing(plugin.qualified, payload.event, answered)
         return answered
 
@@ -207,7 +221,7 @@ class Live:
             "plugin": plugin.qualified,
             "settings": self.settings(plugin),
             "state": self.state(plugin),
-            "worktree": None if self.worktree is None else str(self.worktree),
+            "worktree": None if self.worktree is None else str(self.worktree.root),
         }
 
     async def perform(self, plugin: Enrolled, answered: Answered) -> tuple[records.Note, ...]:
@@ -256,7 +270,7 @@ def opening_of(said: records.Delivered) -> Opening:
 
 
 async def setting_up(
-    installed: Sequence[Installed], speaking: Speaking, session: str, worktree: Path | None
+    installed: Sequence[Installed], speaking: Speaking, session: str, worktree: Worktree | None
 ) -> tuple[Enrolled, ...]:
     """
     Set every declared plugin up, all at once, and fail naming whichever one will not answer.
@@ -276,10 +290,10 @@ async def setting_up(
     next attempt sets all of them up again. Recording each separately would still leave a session
     half set up, and being run twice is what an install is already built to survive.
     """
-    where = None if worktree is None else str(worktree)
+    where = None if worktree is None else str(worktree.root)
     said = await asyncio.gather(
         *(
-            speaking(each, SettingUp(session=session, plugin=each.qualified, worktree=where).spoken())
+            speaking(each, SettingUp(session=session, plugin=each.qualified, worktree=where), worktree)
             for each in installed
         )
     )
@@ -344,18 +358,25 @@ def parse_registration(recorded: object) -> tuple[Enrolled, ...]:
 def running(enrolled: Sequence[Enrolled], tending: Tending) -> tuple[Enrolled, ...]:
     """
     Which of a session's loaded plugins it runs, which under the switches it was loaded under is all
-    of them.
+    of them, less any repository contribution that collides with one of yours.
 
-    Applied all the same rather than assumed, because the two facts are recorded in two places and
-    only one of them is write-once: the registration is settled for the session's life, and the
+    The switches are applied rather than assumed, because the two facts are recorded in two places
+    and only one of them is write-once: the registration is settled for the session's life, and the
     switches are a column somebody could still have edited by hand. The switch is the session's own
     answer where it has one and `ON` where it has not.
 
-    **Collisions are not asked here**, and the check belongs where the agent is built rather than
-    where the set is read: what collides is what is on, and what fixes it is a fork. See
+    **The drop is here rather than at each reader**, because this is the only thing that produces a
+    running set and a reader that forgot got a row in the composer menu, and a card in the rail, for
+    something no event will ever reach. See `dropping_collisions` for why a repository's is dropped
+    rather than refused.
+
+    **Refusing a collision between two of yours is not here**, and that is the half that stays at the
+    caller: what a pass is about to do with the set is open a turn, so a set it cannot settle is a
+    turn it must not open, where a handler is about to draw a menu and a refusal there is a page that
+    will not render over a session whose settings step is the thing that fixes it. See
     `without_collisions`.
     """
-    return tuple(each for each in enrolled if tending.on(each.qualified, ON))
+    return dropping_collisions(tuple(each for each in enrolled if tending.on(each.qualified, ON)))
 
 
 type Asking = Callable[[str, str, Mapping[str, object]], Awaitable[object]]
@@ -435,16 +456,14 @@ def contributions(live: Live) -> tuple[Contributed, ...]:
         Contributed(
             named=named,
             plugin=plugin.qualified,
-            declared=own,
+            declared=declared.name,
             definition=ToolDefinition(
                 name=named,
-                description=next(each.description for each in plugin.described.tools if each.name == own),
-                parameters_json_schema=object_schema(
-                    next(each.schema_ for each in plugin.described.tools if each.name == own)
-                ),
+                description=declared.description,
+                parameters_json_schema=object_schema(declared.schema_),
             ),
         )
-        for named, plugin, own in live.tools()
+        for named, plugin, declared in live.tools()
     )
 
 
@@ -499,10 +518,20 @@ async def injections(live: Live, messages: Sequence[object]) -> tuple[str, ...]:
     A system-voice message appended to the request, which costs the cached prefix nothing where an
     edited instruction re-prices everything under it. What it answers is recorded by the caller, so a
     resumed pass replays the injection rather than recomputing it from a plugin that may not be pure.
+
+    **Asked concurrently and performed in order**, which is `setting_up`'s bargain on a smaller
+    scale: each ask is a process spawned and waited on, so asking one at a time makes a request stall
+    for the sum of their round trips where nothing orders them. What a plugin is handed is the
+    `Tending` this pass captured once at the top, so none can observe another's `set` within one
+    event. The effects and the order they are appended in are sequential all the same, because
+    enrolment order is what the record is read back in.
     """
+    wanting = live.wanting("before_request")
+    answers = await asyncio.gather(
+        *(live.ask(plugin, Requesting(messages=tuple(messages), **live.payload(plugin))) for plugin in wanting)
+    )
     said: list[str] = []
-    for plugin in live.wanting("before_request"):
-        answered = await live.ask(plugin, Requesting(messages=tuple(messages), **live.payload(plugin)))
+    for plugin, answered in zip(wanting, answers, strict=True):
         await live.perform(plugin, answered)
         said.extend(answered.inject)
     return tuple(said)
@@ -521,13 +550,23 @@ async def ending(
 
     Several plugins answering one event is not a conflict needing a tiebreak: each delivery is one
     inbox entry, and the inbox is already a queue that orders them and opens a turn per message.
+
+    **Asked concurrently and performed in order**, for `injections`' reason: the plugins are
+    independent processes and a turn boundary should cost the slowest of them rather than all of
+    them added up, while the notes still reach the inbox in enrolment order.
     """
-    notes: list[records.Note] = []
-    for plugin in live.wanting("after_turn"):
-        answered = await live.ask(
-            plugin,
-            Ending(turn=turn, opened_on=opened_on, context=context, window=window, **live.payload(plugin)),
+    wanting = live.wanting("after_turn")
+    answers = await asyncio.gather(
+        *(
+            live.ask(
+                plugin,
+                Ending(turn=turn, opened_on=opened_on, context=context, window=window, **live.payload(plugin)),
+            )
+            for plugin in wanting
         )
+    )
+    notes: list[records.Note] = []
+    for plugin, answered in zip(wanting, answers, strict=True):
         notes.extend(await live.perform(plugin, answered))
     return tuple(notes)
 

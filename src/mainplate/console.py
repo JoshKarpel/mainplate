@@ -49,7 +49,6 @@ from mainplate.pages import model_cards
 from mainplate.pages import plugin_card
 from mainplate.pages import record_json
 from mainplate.pages import refusal_page
-from mainplate.pages import running_plugins
 from mainplate.pages import session_page
 from mainplate.pages import stalled_by
 from mainplate.pages import start_page
@@ -60,6 +59,7 @@ from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
+from mainplate.sessions import read_tending
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
 from mainplate.streaming import watching
@@ -550,6 +550,20 @@ def navigating(where: str) -> Response:
     return Response(status=200, headers=((b"hx-redirect", where.encode()),))
 
 
+async def redrawn(service: Service, session: str) -> Response:
+    """
+    The transcript as it now stands, which is what every arm that changed one answers with.
+
+    A message, a command and a plugin's delivery all end the same way, because the page is a function
+    of the checkpoint and the only thing they did was move it: there is nothing for an arm to say
+    about its own write that reading again does not already show.
+    """
+    asked = await service.read(session)
+    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return page_response(200, fragment(transcript_region(LINKS, asked)))
+
+
 @get("/", summary="Start a session")
 async def start_here(service: Service) -> Response:
     return page_response(
@@ -800,14 +814,17 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
     if isinstance(sending.where, ToPlugin):
         if stalled_by(found) is not None:
             return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
-        if not await service.compose(session, found, sending.where.leader, sending.said):
+        delivered = await service.compose(session, found, sending.where.leader, sending.said)
+        if delivered is None:
             return page_response(
                 422, refusal_page(LINKS, 422, f"no plugin of session {session} answers to /{sending.where.leader}")
             )
-        asked = await service.read(session)
-        if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-            return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-        return page_response(200, fragment(transcript_region(LINKS, asked)))
+        # Read again only where something was actually put in the inbox. A plugin that asked for a
+        # `set` and nothing else left the checkpoint exactly as it is above, and the conversation is
+        # what a full decode of it costs.
+        if not delivered:
+            return page_response(200, fragment(transcript_region(LINKS, found)))
+        return await redrawn(service, session)
     match sending.where:
         case Disposition.HERE:
             # Nobody here decides between a steer and a turn of its own, and that is the point: the
@@ -815,21 +832,13 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             # thing reading at the moment the answer is true. The page this was posted from was
             # rendered from a state that has since moved, and so was any read this could make.
             await service.send(session, sending.said)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, asked)
-            return page_response(200, fragment(drawn))
+            return await redrawn(service, session)
         case Disposition.NEXT | Disposition.FORGET:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
             # next free turn and differ only in what that turn opens on. A forget never reaches
             # `send`, because a boundary between turns is the only place one can be.
             await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, asked)
-            return page_response(200, fragment(drawn))
+            return await redrawn(service, session)
         case Disposition.FORK | Disposition.ASIDE:
             # The parent's own choice, not a posted one: a fork from the composer offers no picker,
             # and `Service.fork` is what decides the repository either way. Forking the *end* carries
@@ -856,11 +865,7 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
                     422, refusal_page(LINKS, 422, f"session {session} has no files to run a command in")
                 )
             await service.run(session, sending.said)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, asked)
-            return page_response(200, fragment(drawn))
+            return await redrawn(service, session)
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot
@@ -911,8 +916,8 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
         )
     if wanted.again:
         await service.setup_again(session)
-        return seeing(LINKS.to_session(session))
-    await service.settle(session, wanted.switches)
+    else:
+        await service.settle(session, wanted.switches, found.attempts)
     return seeing(LINKS.to_session(session))
 
 
@@ -933,24 +938,16 @@ async def press(service: Service, session: str, pressed: Pressed) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    if not await service.press(session, found, pressed.plugin, pressed.posted):
+    enrolled = await service.press(session, found, pressed.plugin, pressed.posted)
+    if enrolled is None:
         return page_response(422, refusal_page(LINKS, 422, f"session {session} runs no plugin {pressed.plugin!r}"))
-    asked = await service.read(session)
-    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    drawn = next(
-        (
-            plugin_card(
-                LINKS, session, plugin, settings_of(plugin.described, asked.session.tending.of(plugin.qualified))
-            )
-            for plugin in running_plugins(asked)
-            if plugin.qualified == pressed.plugin
-        ),
-        None,
-    )
-    if drawn is None:  # pragma: no cover - `press` answered, so the plugin is one this session runs
-        return page_response(404, refusal_page(LINKS, 404, f"no plugin {pressed.plugin!r}"))
-    return page_response(200, fragment(drawn))
+    # The two columns rather than the conversation, because that is what the press wrote and what
+    # the card draws: reading the checkpoint again would decode every recorded step of a session to
+    # answer a question about one row. It is read rather than assumed because a plugin's `action`
+    # handler may have written through `storing` while this was running.
+    tended = await read_tending(service.database, session)
+    settings = settings_of(enrolled.described, tended.of(enrolled.qualified))
+    return page_response(200, fragment(plugin_card(LINKS, session, enrolled, settings)))
 
 
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (

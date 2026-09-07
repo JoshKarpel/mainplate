@@ -423,10 +423,19 @@ Each carries its own payload and takes its own effects. They are a short list th
 |---|---|---|---|
 | `setup` | once per session, before its first turn | nothing | the contributions above |
 | `tool` | the model called one of its tools | `tool`, `args` | `return`, `retry`, `deliver`, `set` |
-| `before_request` | a model request is about to be sent | `messages` | `inject` |
+| `before_request` | a model request is about to be sent | `messages` | `inject`, `deliver`, `set` |
 | `after_turn` | a turn was recorded | `turn`, `opened_on`, `context`, `window` | `deliver`, `set` |
 | `compose` | its answer was submitted | `said` | `deliver`, `set` |
-| `action` | a control on its card was pressed | `control`, `value` | `set`, `deliver` |
+| `action` | a control on its card was pressed | `control`, `value` | `deliver`, `set` |
+
+**This table is a value rather than a description of one.** `protocol.ALLOWED` is the last column,
+and `refusing` is a set difference against it, so a seventh event is a row somebody has to fill
+rather than one that arrives permitting everything. `deliver` and `set` are on every event that
+carries an answer at all, since a note and a write make sense wherever a plugin is asked something;
+what is narrow is `return` and `retry`, which answer a call and so belong to the event that is one,
+and `inject`, which needs a request to append to. `setup` takes no effects because its answer is a
+`Described` rather than an `Answered`: what a plugin wants remembered from it is a `set` on the first
+event that carries one.
 
 Every payload also carries `worktree` and, for a confined plugin, `scratch`: where this session's
 files are and where this plugin alone may write. `worktree` is on all of them rather than only the
