@@ -84,6 +84,8 @@ from mainplate.plugins.protocol import state_of
 from mainplate.plugins.protocol import toned
 from mainplate.plugins.running import PluginFailed
 from mainplate.plugins.running import Spawned
+from mainplate.preparing import SCRIPT
+from mainplate.preparing import has_setup
 from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
@@ -1716,6 +1718,16 @@ class TestARepositorysSetupScript:
         refused = setup_refused_in(recorded)
         assert refused is not None
         assert "the toolchain is not there" in refused.why
+
+    def test_this_repositorys_own_is_one_a_session_can_actually_run(self) -> None:
+        """
+        A worktree is planted from the clone, so the file has exactly the mode git recorded: a script
+        committed without its executable bit is one every session's `bwrap` refuses with a permission
+        error, and nothing here would have said so before a session did.
+        """
+        here = Path(__file__).parent.parent
+        assert has_setup(here)
+        assert os.access(here / SCRIPT, os.X_OK), "and a script that is not executable is one nothing can run"
 
 
 class TestThisRepositorysOwnPlugin:
