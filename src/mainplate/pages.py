@@ -151,6 +151,21 @@ SWAP: Final = "outerMorph"
 # rather than over a conversation somebody is reading.
 STREAM_ID: Final = "stream"
 
+# The one named event the stream sends, which says the page's shape is no longer the checkpoint's:
+# a page drawing the settings step whose session has since loaded its plugins. It is named rather
+# than a partial because there is nothing to swap - the page it is sent to has none of the regions
+# the new shape has - so what a reader needs is the page again, and a named event is what htmx hands
+# to a script rather than to a target. The stream element closes on it, and `mainplate.js` reloads.
+# Three readers of one word: here, the stream, and the script, which spells it as a literal. It is
+# the word `settling`'s other half already uses for the shape past the step.
+LOADED: Final = "loaded"
+
+# The query parameter a page states its shape on when it opens the stream, and the one value it
+# takes. Only the step names itself; a page showing the conversation sends nothing, since that is
+# the shape a page has unless it says otherwise.
+SHAPE_FIELD: Final = "shape"
+SETTLING: Final = "settling"
+
 # What a send does, which is the same merge plus a scroll: a message just typed is the one thing a
 # reader definitely wants to be looking at, and unlike an update arriving on its own this cannot
 # fight somebody reading further up, because they were typing. What the stream sends carries no
@@ -386,15 +401,24 @@ class Links:
     def to_say(self, session: str) -> str:
         return url_for(self.say, {"session": session})
 
-    def to_stream(self, session: str) -> str:
+    def to_stream(self, session: str, settling: bool = False) -> str:
         """
-        The connection a page holds open, told which conversation it is showing.
+        The connection a page holds open, told which conversation it is showing and in which shape.
 
         A query parameter for the reason `to_endpoint_models` uses one: it narrows what a single
         connection reports on rather than picking a resource out. The stream is the page's, and the
         session is what the page happens to be looking at.
+
+        **The shape rides along because the page is the only thing that knows it.** The stream sends
+        whichever regions the page's shape has, and a page still drawing the settings step has no
+        transcript for a message to land in: the moment the checkpoint's shape stops matching the
+        page's, the stream says so once and the page reloads, which is `LOADED`. Sent by the page
+        rather than remembered by the stream, so a connection re-opened after the change is told the
+        page is still on the step and answers it the same way. Only the step names itself, since the
+        conversation is the shape a page has unless it says otherwise.
         """
-        return f"{url_for(self.stream)}?session={session}"
+        shape = f"&{SHAPE_FIELD}={SETTLING}" if settling else ""
+        return f"{url_for(self.stream)}?session={session}{shape}"
 
     def to_endpoint_models(self) -> str:
         """
@@ -462,9 +486,14 @@ class Links:
 EXTENSIONS: Final = "sse"
 
 
-def stream_element(links: Links, session: str) -> Element:
+def stream_element(links: Links, session: str, settling: bool = False) -> Element:
     """
     The page's one live connection, and the sink a message that named no region would land in.
+
+    It says which shape the page was drawn in, and closes on the one event that says that shape is
+    over: a settings step whose session has loaded is a page with nothing for a message to land in,
+    so the connection ends and the script reloads the page rather than a partial being dropped on the
+    floor. See `Links.to_stream`.
 
     Outside everything that swaps, which is what makes it the page's rather than a region's: the
     transcript is morphed whenever the session moves, and a connection held by the element being
@@ -483,7 +512,8 @@ def stream_element(links: Links, session: str) -> Element:
         attrs={
             "id": STREAM_ID,
             "hidden": True,
-            "hx-sse:connect": links.to_stream(session),
+            "hx-sse:connect": links.to_stream(session, settling),
+            "hx-sse:close": LOADED,
             "hx-target": "this",
             "hx-swap": "innerHTML",
         }
@@ -491,10 +521,18 @@ def stream_element(links: Links, session: str) -> Element:
 
 
 def document(
-    links: Links, heading: str, children: Element, session: str | None = None, forked_from: str | None = None
+    links: Links,
+    heading: str,
+    children: Element,
+    session: str | None = None,
+    forked_from: str | None = None,
+    settling: bool = False,
 ) -> str:
     """
     The whole document, which every page is this with something different in the middle.
+
+    `settling` is which shape the session page was drawn in, and it goes on the stream element so
+    the connection can say when that shape is over; see `Links.to_stream`.
 
     `session` is on the body because what the reader has decided about a conversation, which is
     which kinds they set aside and what they have kept unsent, belongs to that conversation and
@@ -550,7 +588,7 @@ def document(
                     ),
                     body(
                         attrs={"data-session": session, "data-forked-from": forked_from},
-                        children=[*((stream_element(links, session),) if session else ()), children],
+                        children=[*((stream_element(links, session, settling),) if session else ()), children],
                     ),
                 ],
             ),
@@ -4258,8 +4296,8 @@ def settling(showing: Conversation) -> bool:
 
     Two shapes of one page rather than one page with a banner: settling is the step alone, and loaded
     is the transcript, the message box and the rail. The live connection sends whichever regions the
-    shape it finds has, and the route answering the step refuses anything this says is past it, so
-    this is the one predicate all three read.
+    page's shape has and says so when the checkpoint's stops matching it, and the route answering the
+    step refuses anything this says is past it, so this is the one predicate all three read.
     """
     return showing.plugins is None
 
@@ -4302,6 +4340,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             shell(links, listed, showing=showing.session.id, reachable=reachable, pane=[setup_step(links, showing)]),
             session=showing.session.id,
             forked_from=showing.session.forked.session if showing.session.forked is not None else None,
+            settling=True,
         )
     stalled = stalled_by(showing)
     # Once for both readers, so the composer's menu and the rail's cards cannot be built from two

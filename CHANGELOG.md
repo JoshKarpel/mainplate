@@ -40,7 +40,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what licenses running it is the decision to fork plus the confirmation in the branch. The real
   cost: creating a session no longer carries the first message, so you create, wait, confirm, and
   come back to type, and a fork stops at that screen before it answers anything - the step standing
-  in the transcript's place, so a branch will not show what its parent said until it is set up.
+  in the transcript's place, so a branch will not show what its parent said until it is set up. The
+  step is watched over the same connection the conversation is, and becomes the conversation the
+  moment the session has loaded, without a reload by hand.
 - **A plugin sets itself up**, in one event that both gets it ready and asks what it contributes. It
   is the one event with a network and the one with a directory of its own that survives the session,
   which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an
@@ -66,13 +68,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   back to the step with the last lines the script printed. This repository carries one, which installs
   mise, the tools `mise.toml` pins, and `just dependencies` - the half of `just setup` a session can
   run, split out because the other half installs a git hook into a clone bound read-only.
+- **A plugin may stand in front of a turn ending.** A plugin that asks for `before_turn_end` is told each
+  time the model has answered and would stop, and an `inject` from it keeps the turn going: what it
+  said is put to the model in the console's voice and the model is asked again inside the same turn,
+  until it tries to stop and nothing sends it back. That is what a Claude Code `Stop` hook is, and it
+  is the event a check the model has to satisfy wants, where a delivery after the turn would open a
+  new one to say the same thing late. The payload carries `attempt`, how many times the turn has already
+  been sent back, so a plugin can bound itself; what was said is recorded per attempt and drawn
+  above the answer it shaped. The cost: every time the model is sent back is a model request, on the
+  largest context the turn has had, and the console sets no bound of its own.
 - **This repository carries a plugin of its own**, in `.mainplate/`, so a mainplate session working on
-  mainplate runs the project's own `pre-commit` hooks over what it has changed at every turn boundary
-  and is told what is still failing. Ported from a Claude Code `Stop` hook, and different from it in
-  the three ways a console is different from a terminal: it stages nothing, because the clone is
-  read-only and `--files` needs no index; it installs itself at setup, because the namespace has
-  nothing of the machine in it; and it stops chasing one failure after a set number of turns, because
-  every message it delivers is a model request somebody pays for.
+  mainplate runs the project's own `pre-commit` hooks over what it has changed whenever the model
+  tries to stop, and sends it back with what is still failing. Ported from a Claude Code `Stop` hook,
+  keeping its shape, and different from it in the three ways a console is different from a terminal:
+  it stages nothing, because the clone is read-only and `--files` needs no index; it installs itself
+  at setup, because the namespace has nothing of the machine in it; and it lets the model stop after
+  a set number of attempts in one turn, because every time it sends the model back is a model
+  request somebody pays for.
 - **A plugin may refuse a tool call.** A plugin that asks for `before_tool` is told every call the
   model makes, of any toolset, before it runs, and may answer `refuse` with a reason; the call then
   does not run and the model is handed the reason in its place, naming the plugin, so that what a

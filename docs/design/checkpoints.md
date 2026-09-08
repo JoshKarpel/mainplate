@@ -29,6 +29,7 @@ This console's is the rest:
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `StepwiseDurability` |
 | `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `StepwiseDurability` |
 | `turn:{n}:tool:{id}` | What one tool call returned and how long it ran | `StepwiseDurability` |
+| `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
 | `turn:{n}:messages` | What the agent run produced | The conversation body |
 
 **Nothing allocates a number by trying any more, and no key is contended.** A message used to name
@@ -65,7 +66,9 @@ written by a handler reading a page that may have moved on.
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model requests
 happen in a fixed order, so counting them names a step the same way on every pass, and the tree
 captured before each one and the cursor recorded for it ride the same counter, so `tree:{i}`,
-`heard:{i}` and `model:{i}` are three parts of one request. A *batch* of tool calls runs
+`heard:{i}` and `model:{i}` are three parts of one request. `end:{j}` counts something else, which
+is how many times the turn has tried to end, and carries the response count it was asked at so the
+page knows which request it went in front of. A *batch* of tool calls runs
 concurrently, so counting those would name a record by whichever won a race and hand a later pass
 somebody else's result. A call already carries an id, and that id is part of the model response the
 conversation recorded, so a replay is handed the same one for free. `Stepping.key` is the positional

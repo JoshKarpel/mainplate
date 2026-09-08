@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+# A plugin that will not let the model stop until it has been asked enough times.
+#
+# It is here as a **test fixture**, and it is the one that exercises `before_turn_end` and an `inject` at
+# it: what it proves is that an injection there keeps the turn going inside the same turn, that what
+# was said is recorded and drawn above the response it shaped, that `attempt` counts on the payload,
+# and that a resumed pass replays the turn being sent back rather than asking again.
+#
+# What it insists on is deliberately dumb - it keeps the turn going until `attempt` reaches the number
+# in `STICKLER_UNTIL`, once by default - so that a test decides how many times the model is sent back
+# by setting one variable and nothing else. A real check would run something over the worktree; this
+# one is about the mechanism and not the judgement.
+#
+# It appends the `attempt` it was handed to the file named in `STICKLER_ASKED` each time it is asked,
+# where that variable is set, which is how a test tells a replay from a second asking.
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+
+def answer(payload: dict[str, Any]) -> dict[str, Any]:
+    event = payload.get("event")
+    if event == "setup":
+        return {"events": ["before_turn_end"]}
+    if event != "before_turn_end":
+        return {}
+    attempt = int(payload.get("attempt") or 0)
+    asked = os.environ.get("STICKLER_ASKED")
+    if asked:
+        with Path(asked).open("a", encoding="utf-8") as log:
+            log.write(f"{attempt}\n")
+    if attempt < int(os.environ.get("STICKLER_UNTIL") or 1):
+        return {"inject": [f"not yet: this is push {attempt}"]}
+    return {}
+
+
+def main() -> int:
+    json.dump(answer(json.load(sys.stdin)), sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

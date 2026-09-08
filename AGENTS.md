@@ -163,9 +163,10 @@ and its reasoning on the page, rather than either in both.
 ## This repository runs a plugin of its own
 
 `.mainplate/mainplate.yaml` declares `.mainplate/pre-commit`, so **a mainplate session working on
-mainplate runs this project's own hooks at every turn boundary** and is told what is still failing.
-It is a repository-tier plugin like anybody else's: it runs behind the sandbox, with a network only
-at `setup`, out of a scratch directory nothing else can write.
+mainplate runs this project's own hooks whenever the model tries to stop** and is sent back with
+what is still failing, inside the same turn, up to a number of times its card says. It is a
+repository-tier plugin like anybody else's: it runs behind the sandbox, with a network only at
+`setup`, out of a scratch directory nothing else can write.
 
 Two things follow for anybody changing it:
 

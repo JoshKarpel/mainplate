@@ -70,6 +70,7 @@ type StepKind = Literal[
     "named",
     "confirmed",
     "injected",
+    "end",
     "environment",
 ]
 """
@@ -529,6 +530,28 @@ class Injected(Record):
     said: tuple[str, ...] = ()
 
 
+class End(Record):
+    """
+    One end of a turn: what the session's plugins said when it tried to end, recorded so a replay
+    says it again.
+
+    A turn that was sent back has several ends and only the last is real, so there is one of these
+    per attempt, `turn:{n}:end:{j}`, written whether or not anything was said: an empty `said` is the
+    record of the plugins letting the turn go, and a resumed pass reads that rather than asking
+    scripts that may answer differently the second time. It is `Injected`'s shape for `Injected`'s
+    reason - what was put to the model is one list in enrolment order - under its own kind, because
+    the word a key is built from is the word the record under it carries.
+
+    `at` is how many model responses the turn had made when it was asked, which is where the page
+    draws what was said: above the response it shaped, exactly as a steer is, and at the end while
+    that response is still out.
+    """
+
+    kind: Literal["end"] = "end"
+    said: tuple[str, ...] = ()
+    at: int = 0
+
+
 class Environment(Record):
     """
     What a repository's `.mainplate/setup` asked to have set for the session's own commands.
@@ -599,7 +622,8 @@ type Step = Annotated[
     | Declared
     | Registered
     | Confirmed
-    | Injected,
+    | Injected
+    | End,
     Field(discriminator="kind"),
 ]
 """

@@ -145,7 +145,7 @@ DESCRIBED: dict[str, Any] = {
             # as the model having decided to wrap up. Nothing decides anything: a recorded number is
             # crossed and a message is delivered, and naming the trigger is also the more useful half.
             {"switch": {"name": "hands_off", "label": "auto at reserve", "default": True}},
-            {"number": {"name": "reserve", "label": "keep back", "unit": "K", "default": RESERVE, "least": LEAST_ROOM}},
+            {"number": {"name": "reserve", "label": "reserve", "unit": "K", "default": RESERVE, "least": LEAST_ROOM}},
         ],
     },
 }

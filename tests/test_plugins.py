@@ -27,15 +27,22 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import REPOSITORY_DECLARED_KEY
+from mainplate.conversation import Guidance
+from mainplate.conversation import Prose
+from mainplate.conversation import Steering
+from mainplate.conversation import Transcript
 from mainplate.conversation import Unconfirmed
 from mainplate.conversation import conversing
 from mainplate.conversation import declared_in
+from mainplate.conversation import end_key
 from mainplate.conversation import environment_in
+from mainplate.conversation import parse_end
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import tool_key
+from mainplate.conversation import transcript
 from mainplate.durability import parse_returned
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
@@ -67,6 +74,7 @@ from mainplate.plugins.protocol import Payload
 from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Requesting
 from mainplate.plugins.protocol import SettingUp
+from mainplate.plugins.protocol import Stopping
 from mainplate.plugins.protocol import number_of
 from mainplate.plugins.protocol import parse_answer
 from mainplate.plugins.protocol import parse_described
@@ -98,6 +106,7 @@ SHAPES: Final[Mapping[str, type[Payload]]] = {
     "tool": Calling,
     "before_tool": Gating,
     "before_request": Requesting,
+    "before_turn_end": Stopping,
     "after_turn": Ending,
     "compose": Composing,
     "action": Acting,
@@ -129,6 +138,7 @@ PERMITS: Final[Mapping[str, frozenset[str]]] = {
     "tool": frozenset(("return", "retry", "deliver", "set")),
     "before_tool": frozenset(("refuse", "deliver", "set")),
     "before_request": frozenset(("inject", "deliver", "set")),
+    "before_turn_end": frozenset(("inject", "deliver", "set")),
     "after_turn": frozenset(("deliver", "set")),
     "compose": frozenset(("deliver", "set")),
     "action": frozenset(("deliver", "set")),
@@ -155,6 +165,16 @@ async def still_running(script: Path) -> bool:
             return False
         await asyncio.sleep(0.02)
     return True
+
+
+def said_in(said: Transcript) -> list[tuple[str, str]]:
+    """A transcript as who said what, in order, which is what a test about a turn's shape reads."""
+    return [
+        (panel.kind, block.text)
+        for panel in said.panels
+        for block in panel.blocks
+        if isinstance(block, Prose | Guidance | Steering)
+    ]
 
 
 async def asked(plugin: Path, payload: Payload) -> Any:
@@ -309,7 +329,7 @@ class TestReadingAPostedNumber:
     and what arrives is whatever was posted.
     """
 
-    CONTROL = Number(name="reserve", label="keep back", default=40, least=10, most=90)
+    CONTROL = Number(name="reserve", label="reserve", default=40, least=10, most=90)
 
     @pytest.mark.parametrize(
         ("posted", "reads"),
@@ -334,7 +354,7 @@ class TestReadingAPostedNumber:
 
     def test_a_control_declaring_no_bounds_takes_what_it_is_given(self) -> None:
         """Most numbers have no floor worth stating, which is why both are optional."""
-        assert number_of(Number(name="reserve", label="keep back"), "-4000", 22) == -4000
+        assert number_of(Number(name="reserve", label="reserve"), "-4000", 22) == -4000
 
 
 class TestWhereAPluginComesFrom:
@@ -585,6 +605,7 @@ class TestWhereARepositorysPluginRuns:
     ENOUGH: Final[Mapping[str, Mapping[str, object]]] = {
         "tool": {"tool": "check"},
         "before_tool": {"tool": "bash"},
+        "before_turn_end": {"turn": 0, "opened_on": Opening(kind="prompt")},
         "after_turn": {"turn": 0, "opened_on": Opening(kind="prompt")},
         "compose": {"leader": "checks"},
         "action": {"control": "strict", "value": True},
@@ -601,7 +622,7 @@ class TestWhereARepositorysPluginRuns:
         repository supplied, and nothing the model wrote exists yet.
         """
         assert "--unshare-net" not in await self.invocation(spawned, "setup", worktree)
-        for event in ("tool", "before_tool", "before_request", "after_turn", "compose", "action"):
+        for event in ("tool", "before_tool", "before_request", "before_turn_end", "after_turn", "compose", "action"):
             assert "--unshare-net" in await self.invocation(spawned, event, worktree), event
 
     async def test_home_is_the_plugins_own_scratch_and_not_the_tmpfs_a_command_gets(
@@ -1250,6 +1271,118 @@ class TestRefusingACall:
         assert isinstance(await passing(service, session.id, body), Blocked), "the turn is answered"
 
 
+class TestKeepingATurnGoing:
+    """
+    A plugin standing in front of the turn ending, which is what a Claude Code `Stop` hook is.
+
+    **An injection there is what keeps the turn going**: the model has answered and would stop, what
+    the plugin said is put to it in the console's voice, and it is asked again inside the same turn.
+    The turn's record is every run and the requests between them, what was said is recorded per
+    attempt so a resumed pass replays it, and a plugin that wants nothing of this leaves the keys
+    exactly as they were.
+    """
+
+    def declaring(self, until: int = 1, asked: Path | None = None) -> Declaring:
+        stickler = Installed(tier=Tier.USER, name="stickler", path=FIXTURES / "stickler")
+        environ = {"STICKLER_UNTIL": str(until)} | ({} if asked is None else {"STICKLER_ASKED": str(asked)})
+        return Declaring(console=(*bundled(), stickler), speaking=Spawned(environ=environ))
+
+    async def test_an_injection_sends_the_model_back_inside_the_same_turn(self, service: Service) -> None:
+        declaring = self.declaring()
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        provider = Provider()
+        await passing(service, session.id, conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring))
+
+        recorded = await service.checkpointer.load(session.id)
+        assert provider.asked == 2, "the first answer was sent back, the second was let through"
+        said = transcript(recorded)
+        assert said.turns == 1, "one turn, not a turn and a delivery that opened another"
+        assert said_in(said) == [
+            ("prompt", "hello"),
+            ("assistant", "answer 1"),
+            ("guidance", "not yet: this is push 0"),
+            ("assistant", "answer 2"),
+        ], "and what kept it going is drawn between the two answers, in the console's voice"
+        assert parse_end(recorded[end_key(0, 0)]) == records.End(said=("not yet: this is push 0",), at=1)
+        assert parse_end(recorded[end_key(0, 1)]) == records.End(said=(), at=2), "the turn being let go"
+        assert provider.carried == [1, 3], "the second request carried the first answer and the push"
+
+    async def test_attempt_counts_how_many_times_the_turn_has_been_sent_back(self, service: Service) -> None:
+        """
+        Which is the one thing a plugin bounding itself needs and cannot work out, since a `set`
+        reaches the next pass and no event of this one.
+        """
+        declaring = self.declaring(until=2)
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        provider = Provider()
+        await passing(service, session.id, conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring))
+
+        assert provider.asked == 3
+        recorded = await service.checkpointer.load(session.id)
+        assert [parse_end(recorded[end_key(0, at)]).said for at in range(3)] == [
+            ("not yet: this is push 0",),
+            ("not yet: this is push 1",),
+            (),
+        ]
+
+    async def test_a_resumed_pass_replays_the_turn_being_sent_back_rather_than_asking_again(
+        self, service: Service, tmp_path: Path
+    ) -> None:
+        """
+        Recorded per attempt, so the record is the whole of what a replay needs. Observed through
+        what the plugin wrote down when it was asked, for the gatekeeper's reason.
+        """
+        asked = tmp_path / "asked"
+        declaring = self.declaring(asked=asked)
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        provider = Provider()
+        # One request per pass: the first pass asks the model, asks the plugin, records the push and
+        # stops at the second request; the second pass replays all three and makes it.
+        body = conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring, allowance=1)
+        await passing(service, session.id, body)
+        assert asked.read_text() == "0\n"
+        await passing(service, session.id, body)
+
+        assert asked.read_text() == "0\n1\n", "the second pass asked once, about the second attempt"
+        assert provider.asked == 2
+        assert isinstance(await passing(service, session.id, body), Blocked), "the turn is answered"
+        assert asked.read_text() == "0\n1\n", "and a pass that replays a whole turn asks nothing"
+
+    async def test_a_session_whose_plugins_want_nothing_of_it_records_nothing(self, service: Service) -> None:
+        """So its keys are exactly what they were before the event existed."""
+        declaring = Declaring(console=bundled(), speaking=Spawned(environ={}))
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        provider = Provider()
+        await passing(service, session.id, conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring))
+
+        assert provider.asked == 1
+        assert not any(":end:" in key for key in await service.checkpointer.load(session.id))
+
+    async def test_what_was_said_is_drawn_while_the_next_answer_is_still_out(self, service: Service) -> None:
+        """
+        A reader watching the turn sees what the model was sent back with at the moment it was sent,
+        at the end of the turn so far, and it moves above the answer when that lands.
+        """
+        declaring = self.declaring()
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        provider = Provider()
+        body = conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring, allowance=1)
+        await passing(service, session.id, body)
+
+        said = transcript(await service.checkpointer.load(session.id))
+        assert said.awaiting, "the turn is still being answered"
+        assert said_in(said) == [
+            ("prompt", "hello"),
+            ("assistant", "answer 1"),
+            ("guidance", "not yet: this is push 0"),
+        ]
+
+
 class TestWhatABranchDoesAboutThem:
     """
     A fork carries turns and nothing about its parent's plugins, so it holds a conversation and still
@@ -1689,7 +1822,7 @@ class TestThisRepositorysOwnPlugin:
         said = await self.asked(plugin, repository, self.payload(plugin, repository, event="setup"))
         described = parse_described("repository:pre-commit", said)
 
-        assert set(described.events) == {"tool", "after_turn", "compose", "action"}
+        assert set(described.events) == {"tool", "before_turn_end", "compose"}
         assert [each.name for each in described.tools] == ["run"]
         assert [each.leader for each in described.answers] == ["run"]
         assert described.settings == {"checks": True, "most": 3}
@@ -1707,82 +1840,60 @@ class TestThisRepositorysOwnPlugin:
         with pytest.raises(PluginFailed, match="exited 1"):
             await self.asked(plugin, repository, self.payload(plugin, repository, event="setup"))
 
-    async def test_a_turn_that_changed_nothing_runs_no_hooks_at_all(self, plugin: Path, repository: Path) -> None:
-        """A clean tree has nothing to pass hooks over, and running them to say so is the slow way."""
-        self.stubbed(repository, 1, 1)
-        said = await self.asked(
+    async def stopping(
+        self, plugin: Path, repository: Path, attempt: int = 0, checks: bool = True, most: int = 3
+    ) -> Any:
+        """The model trying to stop, as this plugin is told about it."""
+        return await self.asked(
             plugin,
             repository,
             self.payload(
                 plugin,
                 repository,
-                event="after_turn",
+                event="before_turn_end",
                 turn=1,
                 opened_on={"kind": "prompt"},
-                settings={"checks": True, "most": 3},
+                attempt=attempt,
+                settings={"checks": checks, "most": most},
                 state={},
             ),
         )
-        assert said == {}, "which is also the stub never having been reached"
 
-    async def test_a_failing_hook_is_delivered_with_what_the_second_run_still_says(
+    async def test_a_turn_that_changed_nothing_runs_no_hooks_at_all(self, plugin: Path, repository: Path) -> None:
+        """A clean tree has nothing to pass hooks over, and running them to say so is the slow way."""
+        self.stubbed(repository, 1, 1)
+        assert await self.stopping(plugin, repository) == {}, "which is also the stub never having been reached"
+
+    async def test_a_failing_hook_sends_the_model_back_with_what_the_second_run_still_says(
         self, plugin: Path, repository: Path
     ) -> None:
         """
         Twice where the first fails, which is the autofix loop the shell hook had: most of what
         `pre-commit` reports is a hook that has already fixed the file, and the second run is what
         separates that from what a person has to decide about.
+
+        **An `inject` and not a `deliver`**, which is the whole of the shape: what is still failing is
+        put to the model inside the turn it is trying to end, so it goes on fixing it, rather than
+        being a message that opens the next turn after this one has stopped.
         """
         self.stubbed(repository, 1, 1)
         (repository / "written.py").write_text("x = 1\n")
-        said = parse_answer(
-            "repository:pre-commit",
-            await self.asked(
-                plugin,
-                repository,
-                self.payload(
-                    plugin,
-                    repository,
-                    event="after_turn",
-                    turn=1,
-                    opened_on={"kind": "prompt"},
-                    settings={"checks": True, "most": 3},
-                    state={},
-                ),
-            ),
-        )
-        assert len(said.deliver) == 1
-        assert "run 1: run --files written.py" in said.deliver[0].said, "the second run's output, not the first's"
-        assert said.deliver[0].tone == "quiet"
-        assert said.setting == {"chasing": 1}
+        said = parse_answer("repository:pre-commit", await self.stopping(plugin, repository))
+        assert said.deliver == ()
+        assert len(said.inject) == 1
+        assert "run 1: run --files written.py" in said.inject[0], "the second run's output, not the first's"
+        assert "you are not finished yet" in said.inject[0]
+        assert said.setting == {}, "and nothing is remembered, since the count arrives on the payload"
 
-    async def test_a_run_that_only_fixed_things_says_nothing_at_a_turn_boundary(
-        self, plugin: Path, repository: Path
-    ) -> None:
+    async def test_a_run_that_only_fixed_things_lets_the_model_stop(self, plugin: Path, repository: Path) -> None:
         """
-        Delivering opens a turn, so announcing work that is already done costs a model request to say
+        Sending the model back is a request, so announcing work that is already done costs one to say
         "carry on" - and a model that goes on to edit a file the hooks rewrote finds out anyway,
         because `edit` is anchored on what was read.
         """
         self.stubbed(repository, 1, 0)
         (repository / "written.py").write_text("x = 1\n")
-        said = parse_answer(
-            "repository:pre-commit",
-            await self.asked(
-                plugin,
-                repository,
-                self.payload(
-                    plugin,
-                    repository,
-                    event="after_turn",
-                    turn=1,
-                    opened_on={"kind": "prompt"},
-                    settings={"checks": True, "most": 3},
-                    state={},
-                ),
-            ),
-        )
-        assert said.deliver == ()
+        assert await self.stopping(plugin, repository) == {}
 
     async def test_somebody_asking_is_answered_whether_or_not_anything_is_failing(
         self, plugin: Path, repository: Path
@@ -1802,63 +1913,31 @@ class TestThisRepositorysOwnPlugin:
         )
         assert len(said.deliver) == 1
         assert "fixed some of the files" in said.deliver[0].said
-        assert said.setting == {"chasing": 0}, "and asking is somebody taking an interest, which resets the bound"
 
-    async def test_the_switch_being_off_runs_nothing(self, plugin: Path, repository: Path) -> None:
+    async def test_the_switch_being_off_lets_the_model_stop_without_running_anything(
+        self, plugin: Path, repository: Path
+    ) -> None:
         self.stubbed(repository, 1, 1)
         (repository / "written.py").write_text("x = 1\n")
-        said = await self.asked(
-            plugin,
-            repository,
-            self.payload(
-                plugin,
-                repository,
-                event="after_turn",
-                turn=1,
-                opened_on={"kind": "prompt"},
-                settings={"checks": False, "most": 3},
-                state={},
-            ),
-        )
-        assert said == {}
+        assert await self.stopping(plugin, repository, checks=False) == {}
 
-    async def test_it_stops_chasing_one_failure_after_the_bound_and_starts_again_when_somebody_speaks(
+    async def test_it_lets_the_model_stop_once_it_has_been_sent_back_enough_times(
         self, plugin: Path, repository: Path
     ) -> None:
         """
         **The number that is here because a console is not a terminal.** The hook this came from
-        re-fired on every stop for free, since the thing it interrupted was a person; here each
-        delivery opens a turn, so a hook the model cannot satisfy would bill for itself until somebody
-        noticed.
+        blocked every stop for free, since the thing it interrupted was a person; here every time the
+        model is sent back is a request, so a hook the model cannot satisfy would bill for itself
+        until somebody noticed.
+
+        Read off `attempt` rather than remembered, because a plugin's own write reaches the next pass
+        and not the turn it was made in.
         """
         self.stubbed(repository, 1, 1)
         (repository / "written.py").write_text("x = 1\n")
 
-        async def ending(opened_on: Mapping[str, object], chasing: int) -> Any:
-            return await self.asked(
-                plugin,
-                repository,
-                self.payload(
-                    plugin,
-                    repository,
-                    event="after_turn",
-                    turn=4,
-                    opened_on=opened_on,
-                    settings={"checks": True, "most": 2},
-                    state={"chasing": chasing},
-                ),
-            )
-
-        mine = {"kind": "note", "plugin": "repository:pre-commit"}
-        assert await ending(mine, 2) == {}, "the bound is reached, so it goes quiet rather than billing again"
-        assert await ending({"kind": "prompt"}, 2) != {}, "and a person saying anything starts it over"
-
-    async def test_turning_the_switch_back_on_starts_the_chase_again(self, plugin: Path, repository: Path) -> None:
-        """A switch flicked off through a long refactor and back on behaves like a fresh session."""
-        said = await self.asked(
-            plugin, repository, self.payload(plugin, repository, event="action", control="checks", value=True)
-        )
-        assert said == {"set": {"chasing": 0}}
+        assert await self.stopping(plugin, repository, attempt=1, most=2) != {}, "one short of the bound"
+        assert await self.stopping(plugin, repository, attempt=2, most=2) == {}, "at it, the model is let go"
 
     async def test_this_repository_declares_it_at_the_path_it_is_actually_at(self) -> None:
         """

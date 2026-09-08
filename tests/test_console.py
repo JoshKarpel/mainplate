@@ -59,6 +59,7 @@ from mainplate.conversation import registered_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import tree_key
 from mainplate.pages import CACHE_ID
+from mainplate.pages import SETUP_ID
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import recorded_declaration
@@ -458,6 +459,63 @@ class TestTheConsole:
             first = await anext(events)
         assert first.data.startswith("<hx-partial")
         assert first.type == "message", "unnamed, so htmx swaps it rather than firing an event"
+
+    async def test_a_page_on_the_step_says_so_when_it_connects_and_closes_on_being_told_it_is_over(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The page is the only thing that knows which shape it was drawn in, so it says: a stream that
+        remembered would answer a connection re-opened after the change as though nothing had.
+        """
+        session = await service.start(DEFAULT_CHOICE)
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session.id}")
+            loaded = await caller.get(f"/sessions/{await a_session(app, service)}")
+        assert f'hx-sse:connect="/fragments/stream?session={session.id}&amp;shape=settling"' in page.text
+        assert 'hx-sse:close="loaded"' in page.text
+        assert "shape=settling" not in loaded.text, "the conversation is the shape a page has unless it says otherwise"
+
+    async def test_a_stream_for_a_page_on_the_step_says_once_when_the_session_has_loaded(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        A page drawing the step has no transcript for a message to land in, and a partial with
+        nowhere to go is silently dropped: this is what used to leave the spinner up until somebody
+        reloaded by hand. Now the stream says so, once, and ends.
+        """
+        session = await service.start(DEFAULT_CHOICE)
+        async with (
+            calling(app) as caller,
+            caller.watching(f"/fragments/stream?session={session.id}&shape=settling") as events,
+        ):
+            first = await anext(events)
+            await registered(service, session.id)
+            second = await anext(events)
+            ended = await anext(events, None)
+        assert f'hx-target="#{SETUP_ID}"' in first.data, "the step, while the session is on it"
+        assert second.type == "loaded"
+        assert ended is None, "and nothing after it, since the page it was talking to is gone"
+
+    async def test_a_page_on_the_step_reconnecting_after_the_change_is_told_at_once(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The reconnect case, and the reason the shape is the page's to state rather than the stream's
+        to remember.
+        """
+        session = await a_session(app, service)
+        async with (
+            calling(app) as caller,
+            caller.watching(f"/fragments/stream?session={session}&shape=settling") as events,
+        ):
+            first = await anext(events)
+        assert first.type == "loaded"
+
+    async def test_a_shape_this_console_does_not_draw_is_refused(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service)
+        async with calling(app) as caller:
+            answered = await caller.get(f"/fragments/stream?session={session}&shape=sideways")
+        assert answered.status == 400
 
     async def test_a_stream_for_a_session_nobody_started_is_refused_rather_than_opened(self, app: ASGIApp) -> None:
         """

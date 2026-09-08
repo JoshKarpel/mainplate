@@ -52,7 +52,7 @@ leaves `/usr/bin` off breaks its own session's commands, and the fork is where t
 
 **It reaches the session's commands and nothing else.** A plugin's own namespace gets none of it,
 and that is the constraint rather than an omission: a repository's script setting `PATH` for every
-plugin would redirect what its own `.mainplate/pre-commit` executes at every turn boundary, which is
+plugin would redirect what its own `.mainplate/pre-commit` executes whenever the model tries to stop, which is
 the hazard [a plugin's private scratch](plugins.md#a-scratch-of-its-own-which-is-not-the-sessions)
 exists to close, arriving through a new door.
 
@@ -107,7 +107,7 @@ repository asks this console to run is a plugin; what was kept is that everythin
 this console to run is confined, switched, and recorded.
 
 **The line between this and a plugin is who executes.** A plugin is spoken to and answers; this is
-run and leaves a file. A repository that wants a program run at every turn boundary writes a plugin.
+run and leaves a file. A repository that wants a program run during the conversation writes a plugin.
 A repository that wants its dependencies fetched once writes a script, and it is the more common
 want by far.
 

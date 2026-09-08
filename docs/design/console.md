@@ -48,6 +48,16 @@ region there is. One predicate, `settling`, decides both which shape the page is
 partials the stream sends, so the two cannot disagree - and they must not, because a partial naming a
 target that is not there is dropped in silence, which is a spinner that never resolves.
 
+**The page states its shape when it connects, and the stream says once when that shape is over.** A
+page drawn as the step whose session has since loaded is exactly the case above: the checkpoint's
+shape is the conversation and the page has nowhere to put one. So the step's stream URL carries
+`shape=settling`, the stream compares that against the checkpoint on every tick, and the moment they
+differ it sends one *named* event, `loaded`, and ends. htmx hands a named event to the element holding
+the connection rather than to a target, the element closes on it, and the script reloads the page,
+which opens a connection of its own in the new shape. The page states it rather than the stream
+remembering it, because a connection re-opened after the change has to be answered the same way. The
+cost, stated: one full reload at the step's end, over a page with nothing on it worth keeping.
+
 Three things about that connection are decided rather than incidental:
 
 - **It lives outside everything that swaps**, directly under `body`. Held by the transcript it would

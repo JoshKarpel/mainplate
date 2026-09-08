@@ -100,6 +100,7 @@ from typing import Literal
 from typing import assert_never
 from typing import cast
 
+from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -111,7 +112,6 @@ from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
-from pydantic_ai.run import AgentRunResult
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_core import to_json
 from without_durability.interfaces import INBOX
@@ -153,6 +153,7 @@ from mainplate.plugins.asking import recorded_declaration
 from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.asking import running
 from mainplate.plugins.asking import setting_up
+from mainplate.plugins.asking import stopping
 from mainplate.plugins.asking import unstored
 from mainplate.plugins.installed import ON
 from mainplate.plugins.installed import BadDeclaration
@@ -163,6 +164,7 @@ from mainplate.plugins.installed import Tier
 from mainplate.plugins.installed import refuse_collisions
 from mainplate.plugins.installed import repository_plugins
 from mainplate.plugins.protocol import PLAIN
+from mainplate.plugins.protocol import Opening
 from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Tone
 from mainplate.plugins.protocol import toned
@@ -707,6 +709,22 @@ def model_key(turn: int, at: int) -> StepKey:
     return f"{turn_prefix(turn)}:model:{at}"
 
 
+def end_key(turn: int, at: int) -> StepKey:
+    """
+    The `at`-th end of this turn: what the session's plugins said when it tried to end, and whether
+    it went on.
+
+    Numbered by how many times the turn has tried to end rather than by request, because that is
+    what it counts: a turn of five requests that was sent back once has `end:0` and `end:1`, the
+    second of which is empty and is the record of the plugins letting it go. Read by the page as well
+    as replayed by a pass, since what a plugin put to the model is worth seeing above the response it
+    shaped, as a steer is.
+
+    Built here and by `Stepping.key("end")` there, with the hazard `tree_key` names.
+    """
+    return f"{turn_prefix(turn)}:end:{at}"
+
+
 def refused_key(turn: int, at: int) -> StepKey:
     """
     Why the `at`-th model request of this turn will never be accepted, where one never was.
@@ -789,6 +807,22 @@ def recorded_messages(said: Sequence[ModelMessage]) -> dict[str, object]:
 
 def parse_messages(recorded: object) -> tuple[ModelMessage, ...]:
     return tuple(ModelMessagesTypeAdapter.validate_python(records.Messages.model_validate(recorded).messages))
+
+
+def parse_end(recorded: object) -> records.End:
+    """One end of a turn, read back as the record holding what the plugins said there."""
+    return records.End.model_validate(recorded)
+
+
+def ends_in(recorded: Mapping[str, object], turn: int) -> tuple[records.End, ...]:
+    """
+    Every time this turn tried to end and what the plugins said each time, in the order it happened.
+
+    One walk of the checkpoint in record order rather than lookups by number, for `drains_in`'s
+    reason: the order is the property being used and the store already guarantees it.
+    """
+    ending = f"{turn_prefix(turn)}:end:"
+    return tuple(parse_end(value) for key, value in recorded.items() if key.startswith(ending))
 
 
 def parse_thinking(recorded: object) -> ThinkingLevel | None:
@@ -2232,6 +2266,11 @@ def blocks_from(
     the one a redirect took at the end of a run. That is its right place while it is pending, since
     nothing has been said since; a redirected one moves above its answer when that answer lands,
     which is the one reorder this reading performs.
+
+    What a plugin said to keep the turn going is drawn the same way, by the response count the record
+    carries: above the response it shaped once that has landed, and at the end while it is still
+    out. It goes in the console's voice, because that is what carried it, and the settled reading
+    draws the same part the same way.
     """
     # One walk of the recorded calls, read twice: what each came back with and how long it took. Two
     # walks would eventually disagree about which calls a turn has heard from.
@@ -2239,11 +2278,14 @@ def blocks_from(
     returned = {call: returned_step(said) for call, said in called.items()}
     took = {call: said.took for call, said in called.items() if said.took is not None}
     told = told_in(recorded, held, turn)
+    ends = ends_in(recorded, turn)
     taking, _ = unread_in(recorded, held, turn, listening=True)
     blocks: list[Sourced] = []
     for at, response in enumerate(responses):
+        blocks.extend((Guidance(text=text), None) for each in ends if each.at == at for text in each.said)
         blocks.extend((Steering(text=text), None) for text in (told[at] if at < len(told) else ()))
         blocks.extend((block, at) for block in blocks_in(response, returned, took))
+    blocks.extend((Guidance(text=text), None) for each in ends if each.at == len(responses) for text in each.said)
     blocks.extend((Steering(text=text), None) for text in taking)
     return tuple(blocks)
 
@@ -2435,19 +2477,88 @@ def requested_at(recorded: Mapping[str, object], turn: int, at: int) -> object |
     return recorded.get(model_key(turn, at))
 
 
-def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
+def recording(said: Sequence[ModelMessage]) -> Callable[[], Awaitable[object]]:
     """
     What a finished turn writes into the checkpoint, as the effect `Run.step` takes.
 
-    A function of the result rather than a closure written at the call site, so the value it
+    A function of the messages rather than a closure written at the call site, so the value it
     reads is the one passed in: a closure built inside the conversation's loop would capture the
     loop's variable and read whatever it holds when the step gets around to calling it.
     """
 
     async def record() -> object:
-        return recorded_messages(answered.new_messages())
+        return recorded_messages(said)
 
     return record
+
+
+type Keeping = Callable[[int, int], Awaitable[Sequence[str]]]
+"""
+What the session's plugins say when the turn tries to end, by which attempt at ending this is and
+how many responses the turn has made, taken under the key that records it.
+
+A function for `Injecting`'s reason: what answers it runs somebody else's script, and injecting the
+one question keeps the loop that carries a turn ignorant of what a plugin is.
+"""
+
+
+def keeping_through(run: Run, live: Live, turn: int, opened_on: Opening) -> Keeping | None:
+    """
+    What a session's plugins want put to the model when it tries to stop, recorded per attempt.
+
+    A step, for `injecting_through`'s reason: a plugin is somebody else's program and cannot be
+    trusted to answer the same way twice, so what it said is recorded and a resumed pass replays it
+    rather than asking again. Written whether or not anything was said, because an empty answer is
+    the record of the turn being let go: a replay that found no record would have to ask.
+
+    `None` where no plugin asked, so a session whose plugins want nothing of this records nothing
+    and its keys are exactly what they were before the event existed.
+    """
+    if not live.wanting("before_turn_end"):
+        return None
+
+    async def keep(attempt: int, at: int) -> Sequence[str]:
+        async def asking() -> object:
+            return records.End(said=await stopping(live, turn, opened_on, attempt), at=at).recorded()
+
+        return (await run.step(end_key(turn, attempt), asking, parse_end)).said
+
+    return keep
+
+
+async def answering_turn(
+    agent: Agent[None, str], asked: str, history: Sequence[ModelMessage], keeping: Keeping | None
+) -> tuple[ModelMessage, ...]:
+    """
+    One turn's worth of messages: the run, and every run after it that a plugin kept going.
+
+    **The gate in front of the turn ending, which is what a Claude Code `Stop` hook is.** The model has
+    answered and would stop; the session's plugins are asked; what any of them injected is put to the
+    model in the console's voice and the model is asked again, in the same turn, until it tries to
+    stop and nothing keeps it. Each run after the first carries no prompt of its own, because what
+    it carries is the request the injection made, appended to the history it continues from.
+
+    A `SystemPromptPart` and not a `UserPromptPart`, for `before_model_request`'s reason: nobody typed
+    it, and `interjected` draws the two apart by which part carried them. One request rather than
+    one per plugin, so what several plugins said arrives as one thing to answer.
+
+    The messages are composed here rather than read off the last result, because a run's
+    `new_messages` are the ones it made and the request that kept it going was made by this: a
+    turn's record is every run's messages with the requests between them, in the order the model
+    saw them.
+
+    `keeping` absent is a session none of whose plugins asked, and it runs exactly as it did before
+    the event existed: one run, and no record of it having been let go.
+    """
+    said: list[ModelMessage] = list((await agent.run(asked, message_history=list(history))).new_messages())
+    if keeping is None:
+        return tuple(said)
+    attempt = 0
+    while injected := await keeping(attempt, sum(1 for each in said if isinstance(each, ModelResponse))):
+        attempt += 1
+        said.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
+        said.extend((await agent.run(None, message_history=[*history, *said])).new_messages())
+    return tuple(said)
 
 
 class NoSuchRepository(LookupError):
@@ -3083,9 +3194,12 @@ def conversing(
             # Whether each tool call may run, asked inside the step that records the call, so the
             # refusal is in the same record the return would have been.
             gating = gating_through(live)
+            # What the plugins say each time the model tries to stop, recorded per attempt under this
+            # turn, so a resumed pass replays the turn being kept going rather than asking again.
+            keeping = keeping_through(run, live, at.turn, opening_of(asked))
             with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating):
                 try:
-                    answered = await agent.run(asked.said, message_history=list(at.history))
+                    answered = await answering_turn(agent, asked.said, at.history, keeping)
                 except AllowanceSpent:
                     # Caught out here rather than anywhere inside the agent, because what it ends is
                     # the pass and not the request: every step this turn has taken is recorded, so

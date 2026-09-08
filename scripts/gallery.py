@@ -629,7 +629,7 @@ ENROLLED: tuple[Enrolled, ...] = (
                         {
                             "number": {
                                 "name": "reserve",
-                                "label": "keep back",
+                                "label": "reserve",
                                 "unit": "K",
                                 "default": 40,
                                 "least": 8,

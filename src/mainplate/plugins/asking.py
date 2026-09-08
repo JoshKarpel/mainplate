@@ -7,8 +7,9 @@
 #
 # Where an effect is performed differs by where the event was fired, and the split is the durability
 # layer's rather than a preference. A `tool` answer is performed inside the step that records the
-# call, so a resumed pass replays the return and writes no second entry. An `after_turn` answer has
-# no step to sit in, so its deliveries come back as a value the pass returns and the composition root
+# call, so a resumed pass replays the return and writes no second entry. A `before_turn_end` answer is a
+# step of its own, so it is performed inside it for the same reason. An `after_turn` answer has no
+# step to sit in, so its deliveries come back as a value the pass returns and the composition root
 # performs - which is the split `Crossed` already made, generalised. A `compose` or an `action` is
 # fired from a request handler, which is where this console already writes.
 
@@ -51,6 +52,7 @@ from mainplate.plugins.protocol import Payload
 from mainplate.plugins.protocol import Requesting
 from mainplate.plugins.protocol import Setting
 from mainplate.plugins.protocol import SettingUp
+from mainplate.plugins.protocol import Stopping
 from mainplate.plugins.protocol import parse_answer
 from mainplate.plugins.protocol import parse_described
 from mainplate.plugins.protocol import refusing
@@ -590,6 +592,35 @@ async def injections(live: Live, messages: Sequence[object]) -> tuple[str, ...]:
     said: list[str] = []
     for plugin, answered in zip(wanting, answers, strict=True):
         await live.perform(plugin, answered)
+        said.extend(answered.inject)
+    return tuple(said)
+
+
+async def stopping(live: Live, turn: int, opened_on: Opening, attempt: int) -> tuple[str, ...]:
+    """
+    Tell every plugin that the model has tried to stop, and collect whatever keeps the turn going.
+
+    What comes back is what to put to the model, in enrolment order, and an empty answer is the
+    plugins letting the turn end. It is the gate a Claude Code `Stop` hook is: a plugin with a check
+    the model has to satisfy answers `inject` with what is still failing, and the turn goes on to
+    carry it rather than ending and having a delivery open the next one.
+
+    **Asked and performed inside the step that records the answer**, the way `gating` is, so a
+    delivery asked for here is made where it is asked and a resumed pass replays the recorded answer
+    without spawning anything. Concurrent across plugins and performed in enrolment order, for
+    `injections`' reason.
+    """
+    wanting = live.wanting("before_turn_end")
+    answers = await asyncio.gather(
+        *(
+            live.ask(plugin, Stopping(turn=turn, opened_on=opened_on, attempt=attempt, **live.payload(plugin)))
+            for plugin in wanting
+        )
+    )
+    said: list[str] = []
+    for plugin, answered in zip(wanting, answers, strict=True):
+        for note in await live.perform(plugin, answered):
+            await live.delivering(note)
         said.extend(answered.inject)
     return tuple(said)
 

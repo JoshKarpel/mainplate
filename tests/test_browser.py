@@ -258,7 +258,7 @@ CARDED = Enrolled(
                 "heading": "handoff",
                 "rows": [
                     {"switch": {"name": "hands_off", "label": "auto at reserve", "default": True}},
-                    {"number": {"name": "reserve", "label": "keep back", "unit": "K", "default": 40, "least": 8}},
+                    {"number": {"name": "reserve", "label": "reserve", "unit": "K", "default": 40, "least": 8}},
                 ],
             },
         }
@@ -1243,6 +1243,25 @@ class TestWatchingATurnArrive:
         # Each back where the console put it, which for these two is not the same answer.
         await expect(call).not_to_have_attribute("open", "")
         await expect(reply).to_have_attribute("open", "")
+
+    async def test_the_settings_step_becomes_the_conversation_when_the_session_loads(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The step and the conversation are two shapes of one page, and a page drawing the first has
+        no region the second's messages could land in. So what the stream says when the shape is
+        over is a named event rather than a partial, and the script's answer is the page again. This
+        is the one that used to need a reload by hand.
+        """
+        url, service = console
+        session = await service.start(DEFAULT_CHOICE)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator("#setup")).to_be_visible()
+        await expect(page.locator("#transcript")).to_have_count(0)
+        await service.say(session.id, "what is a mainplate")
+        await registered(service, session.id)
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+        await expect(page.locator("#setup")).to_have_count(0)
 
     async def test_a_message_leaves_the_connection_and_its_sink_alone(
         self, page: Page, console: tuple[str, Service]

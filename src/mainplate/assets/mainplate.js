@@ -1644,6 +1644,17 @@
       document.addEventListener("htmx:after:swap", () => repaint());
     };
 
+    const wireShapes = () => {
+      // The one thing the stream says that is not a region: the page was drawn as the settings step
+      // and the session has since loaded, so there is nothing on this page for the conversation to
+      // land in. htmx hands a named event to the element holding the connection rather than to a
+      // target, and what a reader needs is the page again. The word is the server's `LOADED`.
+      document.addEventListener("loaded", (event) => {
+        if (!(event.target instanceof Element) || event.target.id !== "stream") return;
+        location.reload();
+      });
+    };
+
     wireKey();
     wireShelf();
     wireSender();
@@ -1665,6 +1676,7 @@
     wireCopy();
     wireFresh();
     wireSwaps();
+    wireShapes();
     wireHash();
 
     toCurrentSession();

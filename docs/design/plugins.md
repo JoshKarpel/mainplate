@@ -113,7 +113,7 @@ including which events it wants:
    "answers": [{"leader": "handoff", "saying": "hand off and clear the context", "demands": false}],
    "card": {"heading": "handoff", "rows": [
      {"switch": {"name": "hands_off", "label": "auto at reserve", "default": true}},
-     {"number": {"name": "reserve", "label": "keep back", "unit": "K", "default": 40}}]}}
+     {"number": {"name": "reserve", "label": "reserve", "unit": "K", "default": 40}}]}}
 ```
 
 A plugin may also return **`instructions`**, which are composed into what the session is answered
@@ -433,6 +433,7 @@ Each carries its own payload and takes its own effects. They are a short list th
 | `tool` | the model called one of its tools | `tool`, `args` | `return`, `retry`, `deliver`, `set` |
 | `before_tool` | the model called any tool, and it has not run yet | `tool`, `args` | `refuse`, `deliver`, `set` |
 | `before_request` | a model request is about to be sent | `messages` | `inject`, `deliver`, `set` |
+| `before_turn_end` | the model has answered and the turn would end | `turn`, `opened_on`, `attempt` | `inject`, `deliver`, `set` |
 | `after_turn` | a turn was recorded | `turn`, `opened_on`, `context`, `window` | `deliver`, `set` |
 | `compose` | its answer was submitted | `said` | `deliver`, `set` |
 | `action` | a control on its card was pressed | `control`, `value` | `deliver`, `set` |
@@ -443,7 +444,8 @@ rather than one that arrives permitting everything. `deliver` and `set` are on e
 carries an answer at all, since a note and a write make sense wherever a plugin is asked something;
 what is narrow is `return` and `retry`, which answer a call and so belong to the event that is one,
 `refuse`, which decides whether a call happens and so belongs to the event that stands in front of
-one, and `inject`, which needs a request to append to. `setup` takes no effects because its answer is
+one, and `inject`, which needs a request to append to: `before_request` has the one about to go out,
+and at `before_turn_end` an injection is what *makes* one. `setup` takes no effects because its answer is
 a `Described` rather than an `Answered`: what a plugin wants remembered from it is a `set` on the
 first event that carries one.
 
@@ -475,6 +477,34 @@ recorded context size, the model's window and the plugin's own settings, nothing
 must never fire on a turn that itself opened on a handoff, and the only way a plugin can know that
 is to be told what opened the turn and which plugin, if any, delivered it.
 
+**`before_turn_end` is the gate in front of the turn ending, which is what a Claude Code `Stop` hook
+is.** The model has answered and would stop; every plugin that asked is told; and an `inject` from any of
+them is what keeps the turn going. What was injected is put to the model in the console's voice, as a
+`SystemPromptPart` in a request of its own, the model is asked again inside the same turn, and this
+is asked again when it next tries to stop. An empty answer lets the turn end. It is the event a
+check the model has to satisfy before it may stop wants - hooks, a test run, a linter - where an
+`after_turn` delivery would open a *new* turn to say the same thing after the fact, with a person's
+panel between the mistake and the fix and a turn boundary the cached prefix has to cross.
+
+`attempt` is which attempt at ending this is, counting from zero: how many times this turn has
+already been sent back, by any plugin. It is there
+because it is the one thing a plugin bounding itself needs and cannot work out: a `set` reaches the
+next pass and no event of this one, so a plugin counting its own pushes would count nothing. It is
+what `stop_hook_active` is to the hook this ports, and a number rather than a flag because a bound
+is a number. **The bound is the plugin's and the console sets none**, which is the same trust every
+other event runs on: a plugin that sends the model back for ever is a plugin that would deliver on
+every turn, and the switch on the settings step is what answers both. What it costs, stated: every
+time the model is sent back is a model request, on a turn whose context is already the largest it
+has been, so a plugin answering this should want to knowing that.
+
+What was said is recorded per attempt under `turn:{n}:end:{j}`, the empty answer included, so a
+resumed pass replays the turn being sent back and the turn being let go alike rather than asking
+scripts that may answer differently the second time. The page draws it from the same record, above
+the response it shaped once that has landed and at the end while it is still out, exactly as a steer
+is; the settled reading finds the same part in `turn:{n}:messages` and draws it the same way. A
+session none of whose plugins asked records nothing here, and its keys are exactly what they were
+before the event existed.
+
 **`after_turn` is asked only where a turn actually ended.** A pass that spent its allowance or hit a
 refusal returns before it, so a plugin is never asked about a turn that stopped part-way, which is a
 turn left unfinished for reasons that are the console's rather than the conversation's.
@@ -484,7 +514,8 @@ loop, which is the split `Crossed` made and `Noting` now makes for every plugin:
 an inbox *queues* the session, and that is a fact about the queue in front of a pass rather than
 about answering one. A `tool` answer is the exception and is written where it is asked, because
 `wrap_tool_execute` wraps the whole call in a step - so a resumed pass replays the recorded return
-and writes no second entry.
+and writes no second entry. A `before_turn_end` answer is a step of its own and is performed inside it
+for the same reason.
 
 ## The effects
 
@@ -1129,7 +1160,11 @@ What neither reaches is `before_tool` and `refuse`, which no bundled plugin has 
 `tests/plugins/gatekeeper` is the fixture that exercises them: a plugin that turns away any call whose
 arguments say `forbidden`, run for real through the whole pass, so that the refusal being recorded in
 the call's place and replayed without a second asking are claims the suite makes rather than this
-page.
+page. Nor `before_turn_end`, which `tests/plugins/stickler` exercises the same way: a plugin that sends the
+model back until `attempt` reaches a number it is told, so that the turn going on inside itself, the
+count on the payload, and a replay asking nothing are the suite's claims too. [This repository's
+own plugin](#and-this-repository-carries-one-which-is-the-rest-of-the-proof) is the one that wants
+it for real.
 
 Neither of them installs anything, which is the ordinary case and worth saying: a plugin whose
 `setup` is one `return` of a constant is a plugin that had nothing to fetch, not one that skipped a
@@ -1145,11 +1180,11 @@ told.
 
 ### And this repository carries one, which is the rest of the proof
 
-`.mainplate/pre-commit` runs this project's own hooks over what a session has changed, at every turn
-boundary, and tells the model what is still failing. It is a port of a Claude Code `Stop` hook, and
-**it is what turned the two unexercised corners of the protocol into used ones**: `action` and `set`
-were covered by test plugins written for the purpose, and they are now covered by a plugin somebody
-actually wants.
+`.mainplate/pre-commit` runs this project's own hooks over what a session has changed whenever the
+model tries to stop, and sends it back with what is still failing. It is a port of a Claude Code
+`Stop` hook that keeps the hook's shape, and **it is what put `before_turn_end` into the protocol**: an
+`after_turn` delivery said the same thing one turn late, with a note nobody typed standing between
+the mistake and the fix, and the port was not honest until the check stood where the hook had.
 
 It is also the only thing here that exercises what a repository plugin is *for*, end to end and on
 real work:
@@ -1160,15 +1195,17 @@ real work:
 - **It runs confined for the rest of the session**, with the network shut, out of a scratch nothing
   else can write. That is why it contributes a `tool`: it holds the only `pre-commit` a session can
   reach, so the model cannot run one from `bash` and has to ask.
-- **It bounds itself.** Each delivery opens a turn and a turn is a model request, so a hook the model
+- **It bounds itself.** Every time the model is sent back is a model request, so a hook the model
   cannot satisfy would bill for itself until somebody noticed. `most` is a number on its card saying
-  how many turns in a row it will chase one failure, and any message from a person resets it. The
-  hook it came from needed no such thing, because the thing it interrupted was a person.
+  how many times in one turn it will do that before letting the model stop, read against the `attempt`
+  on the payload. The hook it came from needed no such thing, because the thing it interrupted was a
+  person.
 
 Three things it does *not* do, each because the console already answers them: it never stages, since
 `--files` needs no index and the clone is read-only anyway; it never announces a run that only fixed
-things, since `edit` is anchored on what was read and a stale anchor is refused; and it says nothing
-about which turn it is on, since `opened_on` carries that.
+things, since `edit` is anchored on what was read and a stale anchor is refused; and it remembers
+nothing between attempts, since `attempt` carries the count and a `set` would not reach the turn it was
+made in anyway.
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
 ours and turns ours off with one switch on the settings step. The two are separate plugins with
@@ -1189,8 +1226,8 @@ honest map.
 
 ### What the protocol already holds
 
-A gate at a turn boundary (a linter, a test run, `pre-commit`). A tool. Conditional context
-injection, of which handoff is one instance. A policy with a card and a switch behind it. A composer
+A gate in front of the turn ending (a linter, a test run, `pre-commit`), and a notice at a turn
+boundary after it. A tool. Conditional context injection, of which handoff is one instance. A policy with a card and a switch behind it. A composer
 command under its own leader. And a **notifier**, which is worth naming because the rule reads as
 though it forbids one: *a plugin answers rather than acts* governs the **console's** state, the
 queue and the store. A plugin doing its own I/O is ordinary, and a plugin that posts to a chat and

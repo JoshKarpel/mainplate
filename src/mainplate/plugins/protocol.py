@@ -31,7 +31,9 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError
 from pydantic import model_validator
 
-type Event = Literal["setup", "tool", "before_tool", "before_request", "after_turn", "compose", "action"]
+type Event = Literal[
+    "setup", "tool", "before_tool", "before_request", "before_turn_end", "after_turn", "compose", "action"
+]
 """
 Every moment a plugin can be asked about, which is a short list this console owns.
 
@@ -60,12 +62,21 @@ sends it. Written once here for the reason `roots.py` exists: two spellings of o
 of disagreement nothing reports.
 """
 
-EVENTS: Final[tuple[Event, ...]] = ("setup", "tool", "before_tool", "before_request", "after_turn", "compose", "action")
+EVENTS: Final[tuple[Event, ...]] = (
+    "setup",
+    "tool",
+    "before_tool",
+    "before_request",
+    "before_turn_end",
+    "after_turn",
+    "compose",
+    "action",
+)
 """
 The same list as a value, for the places that enumerate it rather than match on it.
 
 Written out rather than derived from the type, because `typing.get_args` over a `type` alias is a
-runtime reading of a static thing and this is six words. `test_plugins.py` is what holds the two
+runtime reading of a static thing and this is eight words. `test_plugins.py` is what holds the two
 against each other.
 """
 
@@ -77,6 +88,7 @@ ALLOWED: Final[Mapping[Event, frozenset[Effect]]] = {
     "tool": frozenset(("return", "retry", "deliver", "set")),
     "before_tool": frozenset(("refuse", "deliver", "set")),
     "before_request": frozenset(("inject", "deliver", "set")),
+    "before_turn_end": frozenset(("inject", "deliver", "set")),
     "after_turn": frozenset(("deliver", "set")),
     "compose": frozenset(("deliver", "set")),
     "action": frozenset(("deliver", "set")),
@@ -85,14 +97,15 @@ ALLOWED: Final[Mapping[Event, frozenset[Effect]]] = {
 Which effects each event has room for, as the value `refusing` is enforced from.
 
 **A table rather than a pair of exclusions**, so the matrix the design note draws is a thing in the
-code rather than a claim about it: a seventh event added to `Event` fails this mapping's own
+code rather than a claim about it: a ninth event added to `Event` fails this mapping's own
 exhaustiveness rather than arriving with nothing refused for it.
 
 `return` and `retry` are a tool call's alone, because they are answers *to* a call and nothing else
 has one to answer. `refuse` belongs to the one event that stands in front of a call, since what it
-answers is whether the call happens at all. `inject` belongs to the one event that has a request to
-append to. `deliver` and `set` are everybody's, since a note and a write make sense wherever a
-plugin is asked anything.
+answers is whether the call happens at all. `inject` belongs to the two events that have a request to
+append to: `before_request` has the one about to go out, and at `before_turn_end` an injection is what
+*makes* one, since the turn goes on to carry it rather than ending. `deliver` and `set` are
+everybody's, since a note and a write make sense wherever a plugin is asked anything.
 
 **`setup` is empty because no answer to it is an `Answered` at all**: what a plugin returns there is
 `Described`, parsed by `setting_up`, which never reaches here. The row is written out rather than
@@ -541,6 +554,33 @@ class Opening(Speech):
 
     kind: str
     plugin: str | None = None
+
+
+class Stopping(Payload):
+    """
+    The model has answered and is about to stop, unless a plugin says otherwise.
+
+    **The gate in front of the model stopping, which is what a Claude Code `Stop` hook is.** A plugin that
+    answers with an `inject` keeps the turn going: what it injected is put to the model in the
+    console's voice and the model is asked again, inside the same turn, and this is asked again when
+    it next tries to stop. A plugin that answers with nothing lets the turn end. So a check that the
+    model has to satisfy before it may stop - hooks, tests, a linter - is a plugin answering this,
+    where an `after_turn` delivery would open a new turn to say the same thing after the fact.
+
+    `attempt` is which attempt at ending this is, counting from zero: how many times this turn has
+    already been sent back, by any plugin. It is here because it is the one thing a plugin bounding
+    itself needs and cannot work out: a `set` reaches the next pass and no event of this one, so a
+    plugin counting its own pushes would count nothing. It is what `stop_hook_active` is to the hook
+    this ports, and a number rather than a flag because a bound is a number.
+
+    `opened_on` is here for `Ending`'s reason: a plugin may want to say nothing about a turn that
+    opened on its own delivery.
+    """
+
+    event: Literal["before_turn_end"] = "before_turn_end"
+    turn: int
+    opened_on: Opening
+    attempt: int = 0
 
 
 class Ending(Payload):

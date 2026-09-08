@@ -30,6 +30,7 @@ from without_html import element
 from without_html import render
 
 from mainplate.pages import CACHE_ID
+from mainplate.pages import LOADED
 from mainplate.pages import SETUP_ID
 from mainplate.pages import SWAP
 from mainplate.pages import TRANSCRIPT_ID
@@ -54,9 +55,18 @@ def partial(target: str, swap: str, children: Node) -> Element:
     return element("hx-partial", attrs={"hx-target": f"#{target}", "hx-swap": swap}, children=children)
 
 
-async def watching(service: Service, links: Links, session: str, every: timedelta) -> AsyncIterator[ServerSentEvent]:
+async def watching(
+    service: Service, links: Links, session: str, every: timedelta, on_step: bool = False
+) -> AsyncIterator[ServerSentEvent]:
     """
     One session's conversation, sent whenever it has recorded anything new.
+
+    `on_step` is the shape the page was drawn in, which the page states when it connects: whether it
+    is the settings step or the conversation. The regions sent are that shape's, and the moment the
+    checkpoint's shape stops being the page's the stream says `LOADED` once and ends, because
+    nothing it could send would land anywhere on the page it is talking to. A page on the step whose
+    session has loaded is the case; the other direction cannot happen, since a registration is
+    written once.
 
     The token is what makes this cheap enough to ask often: it counts a session's steps and decodes
     none of them, so a quiet conversation costs one indexed count per tick and no render, no markup
@@ -81,13 +91,19 @@ async def watching(service: Service, links: Links, session: str, every: timedelt
             showing = await service.read(session)
             if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
                 return
+            # The page's shape against the checkpoint's, before anything is rendered: a partial with
+            # nowhere to go is silently dropped, so a page on the step being sent the conversation's
+            # regions would sit under its spinner for ever with nothing saying why. Once, and then
+            # out, because a page told this reloads and the reload opens a connection of its own.
+            if on_step != settling(showing):
+                yield Event(data="", type=LOADED, id=str(now))
+                return
             # Whichever regions the page's *shape* has, which `settling` decides for both sides: a
             # page drawing the settings step has no transcript and no message box on it, and one past
             # the step has no step. That is the shape and not the checkpoint - a branch has turns and
             # still draws the step - so it is read from the same predicate the page is built with
             # rather than from what the session holds. Sending both sets would name a target that is
-            # not there on either page, and a partial with nowhere to go is silently dropped, so the
-            # reader would never learn that the message had nothing to say to them.
+            # not there on either page, which is the case the check above exists for.
             #
             # Settled is two regions on one connection, which is what `partial` exists for. The cache
             # note lives in the composer rather than in the transcript, so nothing else replaces it,

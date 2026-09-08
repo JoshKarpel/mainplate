@@ -254,6 +254,7 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     ),
     records.Confirmed(),
     records.Injected(said=("`apps/web/AGENTS.md`, guidance for this part of the repository:",)),
+    records.End(said=("`pre-commit` is failing on the files this session has changed:",), at=2),
 )
 
 
