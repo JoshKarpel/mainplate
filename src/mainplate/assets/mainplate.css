@@ -235,15 +235,34 @@ body {
 .sessions {
     display: flex;
     flex-direction: column;
-    gap: var(--gap);
+    /* A grid item's floor is its content, and this one holds a list longer than the window, so
+       without this the column is as tall as the list and the sheet inside has nothing to scroll. */
+    min-height: 0;
     padding: var(--gap);
     border-right: 1px solid var(--edge);
+}
+
+/* The sheet is what the list is on: wide, the column's own contents, and on a phone the one box
+   that slides out from under the clasp and takes a finger between two rows. It is the scroller at
+   every width, so `toCurrentSession` in the script moves one box wherever it runs. */
+.sessions__sheet {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    gap: var(--gap);
+    min-height: 0;
     overflow-y: auto;
 }
 
 /* Drawn only where the list lies off the edge of the page, which is the phone block at the end of
    this file. Everywhere wider the list is a column of the shell and there is nothing to unclasp. */
 .sessions__clasp {
+    display: none;
+}
+
+/* The console's name, drawn on a phone alone, where it stands in the row the two clasps clear
+   across the top of the page; see the phone block. A wide window has no such row and no banner. */
+.bar {
     display: none;
 }
 
@@ -2579,16 +2598,30 @@ pre > .copy {
 .rail {
     display: flex;
     flex-direction: column;
-    align-items: stretch;
     gap: var(--space-3);
+    /* The session list's reason: the column's floor is otherwise the cards, and the sheet inside
+       would have nothing to scroll. */
+    min-height: 0;
     padding: var(--gap) var(--gap) var(--gap) 0;
+}
+
+/* The sheet the cards are on, and the box that scrolls them at every width. Wide it is the whole
+   of the column; below the width the rail can stand beside the conversation it is the one thing
+   that slides out from under the clasp, with a ground of its own, so a finger between two cards
+   lands on it rather than on the conversation under it. */
+.rail__sheet {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    flex: 1;
+    gap: var(--space-3);
+    min-height: 0;
     overflow-y: auto;
 }
 
-/* What is put in the rail is a card by being put there, so each rule below carries only its own
+/* What is put on the sheet is a card by being put there, so each rule below carries only its own
    layout. */
-.rail > * {
-    pointer-events: auto;
+.rail__sheet > * {
     flex: none;
     padding: 0.35rem 0.5rem;
     border: 1px solid var(--edge);
@@ -2602,19 +2635,32 @@ pre > .copy {
 /* Held shut on a window too narrow to stand the rail beside the conversation, since a reading
    control lying over the text it navigates is the one place it must never be. The threshold is
    the stylesheet's alone to know, so nothing in the script measures the window and the two
-   cannot disagree about where the rail fits. */
+   cannot disagree about where the rail fits.
+
+   Two faces, one drawn at a time: the glyph where it floats over a corner of the conversation, the
+   word on a phone, where it stands in a row the page clears for it and a glyph says less than a
+   word for the same room. */
 .rail__clasp {
     display: none;
     place-items: center;
     align-self: flex-end;
+    flex: none;
     width: 2.4rem;
     height: 2.4rem;
     padding: 0;
+    border: 1px solid var(--edge);
     border-radius: 50%;
+    background: var(--raised);
+    box-shadow: var(--lift);
     color: var(--ink-soft);
+    font-family: var(--mono);
     font-size: 1rem;
     line-height: 1;
     cursor: pointer;
+}
+
+.clasp__word {
+    display: none;
 }
 
 .rail__clasp[aria-expanded="true"] {
@@ -2624,7 +2670,7 @@ pre > .copy {
 
 /* Below the width at which the rail can stand beside the conversation, giving it a column of its
    own would take that width from the reading measure instead. So the rail lies over the page and
-   is drawn shut: the cards slide off and the clasp is left where their head was. The column it
+   is drawn shut: the sheet slides off and the clasp is left where its head was. The column it
    gives up goes with the shell's other widths, at the top of this file. */
 @media (max-width: 78rem) {
     .rail {
@@ -2635,15 +2681,15 @@ pre > .copy {
         z-index: 10;
         width: var(--rail);
         padding: 0;
-        /* `clip` on the inline axis, and `visible` still on the block axis, because the cards are
+        /* `clip` on the inline axis, and `visible` still on the block axis, because the sheet is
            parked off the right-hand edge by a transform when the rail is shut. Off-screen by
-           design, but a transform still contributes scrollable overflow, so those parked cards
-           were scrolling the document sideways on every session page - the one thing every page
+           design, but a transform still contributes scrollable overflow, so the parked sheet
+           would scroll the document sideways on every session page - the one thing every page
            here must never do. Clipping says what was already meant: past this box, nothing.
            `clip` rather than `hidden` because `hidden` would make this a scroll container. */
         overflow-x: clip;
         overflow-y: visible;
-        /* The cards are what a reader presses; the column between and around them is nothing, and
+        /* The clasp and the sheet are what a reader presses; the box around them is nothing, and
            a fixed box with no background still swallows every click over it. */
         pointer-events: none;
     }
@@ -2652,22 +2698,8 @@ pre > .copy {
         pointer-events: auto;
     }
 
-    /* Out, the rail is taller than a short window once a session has a few plugins' cards, and a
-       fixed box is scrolled by nothing else, so it scrolls itself. Only while it is out: parked
-       cards keep their height, and a window with classic scrollbars would draw one beside the clasp
-       for cards that are off the edge. `auto` on this axis turns the `clip` on the other into
-       `hidden`, which is the same promise about what is past the box. */
-    .rail[data-open] {
-        overflow-y: auto;
-    }
-
-    /* Pinned to the head of the box while the cards scroll under it, so the press that shuts the
-       rail is never the one that scrolled away. */
     .rail__clasp {
         display: grid;
-        position: sticky;
-        top: 0;
-        z-index: 1;
     }
 
     /* The clasp lies over the top-right corner of whatever is under it, which costs a panel nothing
@@ -2679,7 +2711,19 @@ pre > .copy {
         padding-inline-end: 3.2rem;
     }
 
-    .rail > :not(.rail__clasp) {
+    /* One sheet rather than loose cards, and the difference is what is *between* them: cards over
+       a bare box left the conversation showing through the gaps and taking every touch that landed
+       in one, so a thumb scrolling the rail scrolled the transcript under it instead. On the page's
+       own ground, so the cards stand off it exactly as they stand off the column on a wide window,
+       and lifted, since it lies over the page rather than beside it. Scrolling itself, because a
+       fixed box is scrolled by nothing else and a session with a few plugins' cards is taller than a
+       short window. */
+    .rail__sheet {
+        padding: var(--space-3);
+        border: 1px solid var(--edge);
+        border-radius: 0.75rem;
+        background: var(--ground);
+        box-shadow: var(--lift);
         visibility: hidden;
         transform: translateX(calc(100% + 1.6rem));
         transition:
@@ -2687,7 +2731,7 @@ pre > .copy {
             visibility 0.2s;
     }
 
-    .rail[data-open] > :not(.rail__clasp) {
+    .rail[data-open] > .rail__sheet {
         visibility: visible;
         transform: none;
     }
@@ -3720,9 +3764,9 @@ main:has(> .forking) {
            be hit rather than pointed at. What sets it is the key and the theme, which are words
            laid out in columns and cannot give way; the dock's three arrows fit well inside that. */
         --rail: 12.5rem;
-        /* A clasp on a phone is pressed rather than pointed at, so it is about 44px square. Named
-           once, because the band `main` clears at the top of the page is this tall for the two
-           clasps standing in it, and the three cannot be allowed to disagree. */
+        /* A clasp on a phone is pressed rather than pointed at, so it is about 44px tall. Named
+           once, because the row across the top of the page is this tall for the two clasps
+           standing in it, and the three cannot be allowed to disagree. */
         --clasp: 2.8rem;
     }
 
@@ -3738,15 +3782,38 @@ main:has(> .forking) {
        column a wide window draws, facts and all, and a swipe down it reads the way every other
        list on a phone does.
 
-       The cost, stated: the two clasps stand in a band at the top of the page that everything
-       else starts under, which is about the height the strip took. Floating them over the corners
+       The cost, stated: the two clasps stand in a row at the top of the page that everything else
+       starts under, which is about the height the strip took. Floating them over the corners
        instead, as the rail's floats between 48rem and 78rem, would put this one over the picker's
        first legend and the role of whichever panel scrolled under it - text, where the corner the
-       rail's covers is a copy button. */
+       rail's covers is a copy button. Since the row is spent either way, the clasps say their words
+       rather than a glyph apiece, and the console's name stands between them. */
     .shell,
     .shell:has(> .rail) {
         grid-template-columns: 1fr;
-        grid-template-rows: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    /* The row itself, laid out rather than reserved: `main` starts under it because it is a track
+       of the shell, and the clasps, which are fixed to the viewport, are placed to stand in it. Its
+       content box is exactly the clasps' own height at the clasps' own inset, which is what keeps
+       the three on one line without any of them measuring the others. */
+    .bar {
+        display: grid;
+        place-items: center;
+        padding: var(--space-5) 0 var(--space-3);
+    }
+
+    .brand {
+        display: grid;
+        place-items: center;
+        height: var(--clasp);
+        color: var(--ink-faint);
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-decoration: none;
     }
 
     .sessions {
@@ -3765,7 +3832,7 @@ main:has(> .forking) {
            scrollable overflow, and `clip` says past this box there is nothing. */
         overflow-x: clip;
         overflow-y: visible;
-        /* The button and the cards are what a reader presses; the box around them is nothing, and
+        /* The clasp and the sheet are what a reader presses; the box around them is nothing, and
            a fixed box with no background still swallows every press over it. */
         pointer-events: none;
     }
@@ -3774,49 +3841,63 @@ main:has(> .forking) {
         pointer-events: auto;
     }
 
-    /* The rail's clasp, drawn from the other corner. The rail's takes its card look from being in
-       the rail; this one carries its own, since what else is in the list is not a card. */
-    .sessions__clasp {
+    /* Both clasps, as one kind of thing: a word in a pill about 44px tall, which is a thumb's
+       target. The rail's is a glyph in a circle everywhere else and takes its card look from
+       being in the rail; here both carry the same look, since what stands beside them is not a
+       card. */
+    .sessions__clasp,
+    .rail__clasp {
         display: grid;
         place-items: center;
-        align-self: flex-start;
-        width: var(--clasp);
+        width: auto;
         height: var(--clasp);
-        padding: 0;
+        padding: 0 var(--space-5);
         border: 1px solid var(--edge);
-        border-radius: 50%;
+        border-radius: 999px;
         background: var(--raised);
         box-shadow: var(--lift);
         color: var(--ink-soft);
-        font-family: var(--mono);
-        font-size: 1.2rem;
+        font: inherit;
+        font-size: 0.85rem;
+        font-weight: 600;
         line-height: 1;
         cursor: pointer;
     }
 
-    .sessions__clasp[aria-expanded="true"] {
+    .sessions__clasp {
+        align-self: flex-start;
+    }
+
+    .sessions__clasp[aria-expanded="true"],
+    .rail__clasp[aria-expanded="true"] {
         background: var(--sunk);
         color: var(--mark);
+    }
+
+    .clasp__glyph {
+        display: none;
+    }
+
+    .clasp__word {
+        display: inline;
     }
 
     .sessions .start {
         padding: var(--space-3) var(--space-5);
     }
 
-    /* The list is one card that scrolls inside itself, on the page's own ground rather than raised,
-       so a row looks exactly as it does in the wide column: the current one is the raised row, and
-       raised on raised would be no row at all. */
-    .sessions ul {
-        min-height: 0;
+    /* The sheet, on the page's own ground rather than raised, so a row looks exactly as it does in
+       the wide column: the current one is the raised row, and raised on raised would be no row at
+       all. Lifted, since it lies over the page rather than beside it. It scrolls, and the box
+       around it does not, so a thumb anywhere on it - a row, the gap between two rows, the margin
+       down the side - moves the list and never the conversation under it. */
+    .sessions__sheet {
+        gap: var(--space-3);
         padding: var(--space-3);
         border: 1px solid var(--edge);
         border-radius: 0.75rem;
         background: var(--ground);
         box-shadow: var(--lift);
-        overflow-y: auto;
-    }
-
-    .sessions > :not(.sessions__clasp) {
         visibility: hidden;
         transform: translateX(calc(-100% - 1.6rem));
         transition:
@@ -3824,7 +3905,7 @@ main:has(> .forking) {
             visibility 0.2s;
     }
 
-    .sessions[data-open] > :not(.sessions__clasp) {
+    .sessions[data-open] > .sessions__sheet {
         visibility: visible;
         transform: none;
     }
@@ -3837,12 +3918,10 @@ main:has(> .forking) {
 
     /* --- The conversation --- */
 
-    /* The band the two clasps stand in, and then the room a wide window leaves above the first
-       panel. With no banner over the pane this is the whole of what is between the top of the
-       screen and the conversation, and the clasps are fixed to the viewport rather than laid out
-       in it, so this is the one place that knows they are there. */
+    /* Under the row, which is a track of the shell, so the only room above the first panel is the
+       transcript's own. */
     main {
-        padding: calc(var(--space-5) + var(--clasp) + var(--space-3)) var(--space-4) 0;
+        padding: 0 var(--space-4);
     }
 
     /* The setup step's sentence keeps clear of the rail's clasp only while the clasp floats over
@@ -3946,23 +4025,16 @@ main:has(> .forking) {
     /* --- The rail --- */
 
     /* Where the rail hangs is the same corner as on a window between 48rem and 78rem; what changes
-       is that it stands in the band `main` clears for it, beside the session list's clasp in the
-       other corner, rather than over the first panel. Bottom-anchoring it would put the clasp under
-       a thumb, which is the better place for it on a phone and is taken: that corner is the Send
-       button's. */
+       is that its clasp stands in the row across the top of the page, opposite the session list's,
+       rather than over the first panel. Bottom-anchoring it would put the clasp under a thumb,
+       which is the better place for it on a phone and is taken: that corner is the Send button's.
+       What the clasp looks like here is above, with the session list's. */
 
     /* Everything in here is pressed rather than read, so it is sized for a thumb: the cards keep
        their proportions and the targets in them grow. */
-    .rail > * {
+    .rail__sheet > * {
         padding: var(--space-3) var(--space-4);
         font-size: 0.78rem;
-    }
-
-    .rail__clasp {
-        width: var(--clasp);
-        height: var(--clasp);
-        padding: 0;
-        font-size: 1.2rem;
     }
 
     .dock__nav {

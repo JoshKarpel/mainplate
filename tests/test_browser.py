@@ -776,13 +776,69 @@ class TestTheSessionListOnAPhone:
         await phone.locator(".rail__clasp").click()
         await expect(phone.locator(".search")).to_be_visible()
         scrolled = await phone.evaluate(
-            "() => { const rail = document.querySelector('.rail'); rail.scrollTop = 10000; return rail.scrollTop; }"
+            "() => { const sheet = document.querySelector('.rail__sheet'); sheet.scrollTop = 10000; return sheet.scrollTop; }"
         )
         assert scrolled > 0
+
+    @pytest.mark.parametrize(
+        ("clasp", "above", "below"),
+        [(".sessions__clasp", ".sessions .start", ".sessions ul"), (".rail__clasp", ".search", ".key")],
+        ids=["sessions", "rail"],
+    )
+    async def test_a_scroll_over_the_gap_between_two_cards_leaves_the_conversation_put(
+        self, phone: Page, gallery: str, clasp: str, above: str, below: str
+    ) -> None:
+        # What slides out is one sheet, and the sheet takes the touch. It used to be loose cards
+        # over a box that took none, so a thumb between two of them scrolled the conversation
+        # showing through the gap. A wheel rather than a touch, since it lands on whatever is under
+        # the pointer the same way, and the browser's own scrolling is what either ends up driving.
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await phone.locator(clasp).click()
+        await expect(phone.locator(below)).to_be_in_viewport()
+        first = await phone.locator(above).bounding_box()
+        second = await phone.locator(below).bounding_box()
+        assert first is not None
+        assert second is not None
+        x = first["x"] + first["width"] / 2
+        y = (first["y"] + first["height"] + second["y"]) / 2
+        # The control first: with the sheet parked, the same point is the conversation, and the
+        # wheel must reach it, or a conversation that stays put below proves nothing.
+        await phone.keyboard.press("Escape")
+        await expect(phone.locator(below)).to_be_hidden()
+        await phone.mouse.move(x, y)
+        await phone.mouse.wheel(0, 200)
+        await phone.wait_for_function("() => document.querySelector('.transcript').scrollTop > 0")
+        await phone.evaluate("() => { document.querySelector('.transcript').scrollTop = 0; }")
+        await phone.locator(clasp).click()
+        await expect(phone.locator(below)).to_be_in_viewport()
+        await phone.mouse.move(x, y)
+        await phone.mouse.wheel(0, 200)
+        # The browser scrolls after the event rather than in it, so two frames let whatever the
+        # wheel moved settle before asking what it moved.
+        await phone.evaluate("() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))")
+        assert await phone.evaluate("() => document.querySelector('.transcript').scrollTop") == 0
+
+    async def test_the_name_stands_in_the_row_between_the_clasps(self, phone: Page, gallery: str) -> None:
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        brand = phone.locator(".brand")
+        await expect(brand).to_be_visible()
+        row = await brand.bounding_box()
+        left = await phone.locator(".sessions__clasp").bounding_box()
+        right = await phone.locator(".rail__clasp").bounding_box()
+        assert row is not None
+        assert left is not None
+        assert right is not None
+        # On one line, by their centres: the row is laid out and the clasps are fixed over it, so
+        # nothing but the stylesheet's arithmetic keeps the three level.
+        middle = row["y"] + row["height"] / 2
+        assert abs(middle - (left["y"] + left["height"] / 2)) < 1
+        assert abs(middle - (right["y"] + right["height"] / 2)) < 1
+        assert left["x"] + left["width"] < row["x"] < row["x"] + row["width"] < right["x"]
 
     async def test_a_wide_window_draws_no_clasp(self, page: Page, gallery: str) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
         await expect(page.locator(".sessions__clasp")).to_be_hidden()
+        await expect(page.locator(".brand")).to_be_hidden()
         await expect(page.locator(".sessions .start")).to_be_visible()
 
 

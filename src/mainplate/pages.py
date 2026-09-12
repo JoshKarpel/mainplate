@@ -53,6 +53,7 @@ from without_html import form
 from without_html import h1
 from without_html import h2
 from without_html import head
+from without_html import header
 from without_html import html
 from without_html import input_
 from without_html import label
@@ -675,8 +676,14 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
     control that would do it again is a control that does nothing.
 
     The clasp comes first for the rail's reason: on a phone the list lies off the left edge of the
-    page and this is left where its head was, so the rest can slide out from under it. Which width
-    that is stays the stylesheet's to say, and everywhere wider it is not drawn at all.
+    page and this is left where its head was, so the sheet can slide out from under it. Which width
+    that is stays the stylesheet's to say, and everywhere wider it is not drawn at all. It says its
+    word rather than a glyph, because it stands in a row the page clears for it anyway.
+
+    Everything but the clasp is in one sheet, which is the thing that slides: one box with a ground
+    of its own, so that on a phone a finger between two rows lands on the list and scrolls it rather
+    than falling through to the conversation underneath. On a wide window the sheet is simply the
+    column, and it is the column that scrolls at every width.
     """
     return aside(
         cls="sessions",
@@ -684,21 +691,26 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
         children=[
             button(
                 cls="sessions__clasp",
-                attrs={"type": "button", "aria-expanded": "false", "aria-label": "Sessions"},
-                children="\N{IDENTICAL TO}",
+                attrs={"type": "button", "aria-expanded": "false"},
+                children="Sessions",
             ),
-            a(cls="start", attrs={"href": links.to_home()}, children=NEW_SESSION),
-            ul(
+            div(
+                cls="sessions__sheet",
                 children=[
-                    li(
-                        attrs={"data-depth": str(depth)},
+                    a(cls="start", attrs={"href": links.to_home()}, children=NEW_SESSION),
+                    ul(
                         children=[
-                            session_row(links, session, showing, depth, reachable),
-                            *((archive_action(links, session.id),) if session.archived is None else ()),
-                        ],
-                    )
-                    for session, depth in arrange(listed)
-                ]
+                            li(
+                                attrs={"data-depth": str(depth)},
+                                children=[
+                                    session_row(links, session, showing, depth, reachable),
+                                    *((archive_action(links, session.id),) if session.archived is None else ()),
+                                ],
+                            )
+                            for session, depth in arrange(listed)
+                        ]
+                    ),
+                ],
             ),
         ],
     )
@@ -3864,7 +3876,13 @@ def rail(
 
     The clasp comes first so that on a window too narrow to stand the rail beside the conversation
     it is left where the cards' head was, and the cards slide off. Which width that is stays the
-    stylesheet's to say.
+    stylesheet's to say, and so is which of the clasp's two faces is drawn: the glyph where it floats
+    over a corner of the conversation and a word would cover the text there, the word on a phone,
+    where it stands in a row the page clears for it.
+
+    The cards are in one sheet, and the sheet is what slides, for the session list's reason: a
+    finger between two cards lands on the sheet and scrolls it, rather than falling through to the
+    conversation under it. Wide, the sheet is the column and scrolls at every width.
 
     **What it holds is conversation controls, which is wider than navigating and always was**: the
     `aria-label` has said so since there was a rail, and a plugin's card is about a session rather
@@ -3904,20 +3922,28 @@ def rail(
             button(
                 cls="rail__clasp",
                 attrs={"type": "button", "aria-expanded": "false", "aria-label": "Conversation controls"},
-                children="\N{EQUALS SIGN}",
+                children=[
+                    span(cls="clasp__glyph", attrs={"aria-hidden": "true"}, children="\N{EQUALS SIGN}"),
+                    span(cls="clasp__word", children="Controls"),
+                ],
             ),
-            search_card(),
-            key_card(),
-            dock_card(),
-            shelf_card(),
-            *(
-                plugin_card(links, session, plugin, settings_of(plugin.described, tended.of(plugin.qualified)))
-                for plugin in plugins
-                if plugin.described.card is not None
+            div(
+                cls="rail__sheet",
+                children=[
+                    search_card(),
+                    key_card(),
+                    dock_card(),
+                    shelf_card(),
+                    *(
+                        plugin_card(links, session, plugin, settings_of(plugin.described, tended.of(plugin.qualified)))
+                        for plugin in plugins
+                        if plugin.described.card is not None
+                    ),
+                    about,
+                    archive_card(links, session, archived),
+                    theme_card(),
+                ],
             ),
-            about,
-            archive_card(links, session, archived),
-            theme_card(),
         ],
     )
 
@@ -4431,10 +4457,14 @@ def shell(
         cls="shell",
         children=[
             sidebar(links, listed, showing, reachable),
-            # No banner over the pane, and that is room rather than an omission: the console's own
-            # name was a row on every page saying nothing the tab title does not, and on a phone it
-            # was a twentieth of the screen spent on it. What names the page is `<title>`, and what
-            # gets somebody back to the start is the session list, which is always on screen.
+            # No banner over the pane on a wide window, and that is room rather than an omission:
+            # the console's own name was a row on every page saying nothing the tab title does not.
+            # What names the page is `<title>`, and what gets somebody back to the start is the
+            # session list, which is always on screen there. A phone is the exception, and only
+            # because the row is already spent: the two clasps stand in a band across the top of
+            # the page that everything else starts under, so the name stands between them at no
+            # cost. The stylesheet draws this nowhere else.
+            header(cls="bar", children=[a(cls="brand", attrs={"href": links.to_home()}, children="mainplate")]),
             main(children=[*pane]),
             *aside_rail,
         ],

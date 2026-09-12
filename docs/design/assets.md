@@ -37,12 +37,26 @@ else parked off the edge by a transform until the clasp is pressed. One script w
 opening either shuts the other, since a phone has room for one of them across it at a time. Slid
 out, the list is the column a wide window draws, with the date, the repository and the tree's
 indentation that a strip of chips across the top had to give up; the strip was tried first and was
-one more scroller, sideways, to learn. The cost, stated: the two clasps stand in a band at the top
-of the page that `main` clears for them, about the height the strip took, because floating them
-over the corners as the rail's clasp floats between 48rem and 78rem would put the left one over the
-picker's first legend and the role of whichever panel scrolled under it. `toCurrentSession` brings
-the session being read into the list whether it is parked or out, since a hidden box keeps its
-layout and still scrolls.
+one more scroller, sideways, to learn.
+
+**What slides is one sheet, and the sheet is what a finger lands on.** Everything but the clasp is
+in a box of its own with the page's ground, a border and a lift, and that box is the scroller at
+every width, wide included, where it is simply the column. Loose cards over a bare box were tried
+first and read the same in a screenshot; what they cost was every touch that landed between two of
+them, which fell through to the conversation showing in the gap and scrolled that instead. The
+sheet takes the touch and scrolls itself, so a thumb anywhere on it moves the list and never the
+conversation. The rail is the same shape at both widths its overlay applies at.
+
+The cost, stated: the two clasps stand in a row at the top of the page that everything else starts
+under, about the height the strip took, because floating them over the corners as the rail's clasp
+floats between 48rem and 78rem would put the left one over the picker's first legend and the role
+of whichever panel scrolled under it. The row is a track of the shell rather than padding `main`
+clears, and since it is spent either way the clasps say their words rather than a glyph apiece and
+the console's name stands between them, which is the one place the name is drawn: a wide window
+has no banner, for the reason in `shell`. The rail's clasp carries both faces and the stylesheet
+picks, since between 48rem and 78rem it floats over a corner of the conversation where a word would
+cover text. `toCurrentSession` brings the session being read into the list whether it is parked or
+out, since a hidden box keeps its layout and still scrolls.
 
 Two more things change on a phone, and both follow from it having one column of room. **Nested
 same-axis scrollers go away**: the wide picker has the models scrolling inside a block that scrolls

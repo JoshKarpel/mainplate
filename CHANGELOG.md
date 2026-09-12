@@ -271,8 +271,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - On a phone the session list folds away off the left edge behind a clasp, the way the rail folds
   away off the right, and opening either shuts the other. Slid out it is the column a wide window
   draws, dates, repositories and the tree's indentation included; it used to be a strip of chips
-  across the top that scrolled sideways and had given those up to fit. The two clasps stand in a
-  band at the top of the page rather than over the corners of what is under them.
+  across the top that scrolled sideways and had given those up to fit. What slides out is one sheet
+  that scrolls itself, so a thumb between two rows or two cards moves the list and not the
+  conversation under it. The two clasps stand in a row at the top of the page rather than over the
+  corners of what is under them, say `Sessions` and `Controls` rather than a glyph apiece, and the
+  console's name stands between them.
 - The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
   this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
   rather than multiplied, since the pitches on either side of the answer are a pixel apart.
