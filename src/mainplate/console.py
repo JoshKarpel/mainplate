@@ -974,10 +974,12 @@ async def archive(service: Service, session: str) -> Response:
     """
     Close the session, and go back to it as the archived thing it now is.
 
-    An ordinary form post answered with a `303`, because what changes is not one region: the composer
-    refuses, the rail's card says when, the transcript says why, and the row in the sidebar is muted.
+    An ordinary form post answered with a `303`, because what changes is not one region: the box
+    goes, the rail's card says when, the transcript says why, and the row in the sidebar is muted.
     The live connection carries only the transcript, so a fragment would leave three of those as they
-    were until a reload, and a reload is what the redirect is.
+    were until a reload, and a reload is what the redirect is. It is also why the press on a sidebar
+    row lands on the session it closed rather than back where the row was: the page that opens is
+    the one saying what just happened.
 
     A `303` to the same page is also what makes pressing it twice harmless: the key is write-once, so
     the second press is the first one again, and the page it lands on is the same page.

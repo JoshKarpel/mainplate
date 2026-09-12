@@ -806,6 +806,10 @@ class TestTheConsole:
         The connection stays open, and that is not the same question. It is the page's rather than
         the turn's, so it is held whether or not anything is expected down it; what a stalled
         session must not do is claim something is coming.
+
+        The box stays, disabled, where an archived session has none at all: a configuration put
+        back is what enables this one, so a control that refuses is honest here and a promise
+        nothing could keep there.
         """
         session = await a_session(app, service)
         narrowed = replace(service, catalogues=Catalogues(current=OTHER_CATALOGUE))
@@ -814,6 +818,7 @@ class TestTheConsole:
         assert DEFAULT_CHOICE.endpoint in answered.text
         assert "no longer declares" in answered.text
         assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
+        assert 'name="prompt" rows="3" required disabled' in answered.text
 
     async def test_a_session_the_provider_refused_says_so_and_points_at_the_fork(
         self, app: ASGIApp, service: Service
@@ -1290,6 +1295,41 @@ class TestSayingWhetherTheCacheIsStillWarm:
 
         assert f'hx-target="#{TRANSCRIPT_ID}"' in region
         assert f'hx-target="#{CACHE_ID}"' in region
+
+
+class TestWhatASessionIsOn:
+    """
+    The facts a session cannot change - its endpoint, its model, how hard it thinks - and where they
+    stand, which is the rail and never the box.
+    """
+
+    async def test_the_card_in_the_rail_names_the_choice_and_nothing_under_the_box_does(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        Beside the box they read as being about the act of sending, and none of them is: what the
+        box keeps above it is what the next press depends on, and what the session *is* is a card
+        among the cards about the session as a whole.
+        """
+        session = await a_session(app, service)
+
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session}")
+
+        card = page.text[page.text.index('<div class="about"') : page.text.index('class="archive"')]
+        assert f'<li class="about__model">{DEFAULT_CHOICE.endpoint} \N{MIDDLE DOT} {DEFAULT_CHOICE.model}</li>' in card
+        assert 'class="about__thinking"' not in card, "a session that never raised the question has no level to name"
+        composer = page.text[page.text.index('<form class="composer"') : page.text.index("</form>")]
+        assert DEFAULT_CHOICE.model not in composer
+
+    async def test_a_thinking_level_is_named_only_where_one_was_chosen(self, app: ASGIApp, service: Service) -> None:
+        session = await service.start(replace(DEFAULT_CHOICE, thinking="high"), None)
+        await registered(service, session.id)
+
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session.id}")
+
+        assert '<li class="about__thinking">thinking high</li>' in page.text
 
 
 class TestWhatARuleSays:

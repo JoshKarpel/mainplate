@@ -186,7 +186,7 @@ class TestSweeping:
 
 class TestWhatAPageSaysASessionTakes:
     """
-    The figure on a row and on the note under the message box, read out of the holder rather than
+    The figure on a row and on the session's card in the rail, read out of the holder rather than
     walked, which is what lets these run over a store with no directories at all.
     """
 
@@ -194,7 +194,7 @@ class TestWhatAPageSaysASessionTakes:
     def app(self, service: Service) -> ASGIApp:
         return build_app(already(service))
 
-    async def test_a_row_and_the_note_draw_the_figure_with_the_sentence_behind_it(
+    async def test_a_row_and_the_card_draw_the_figure_with_the_sentence_behind_it(
         self, app: ASGIApp, service: Service
     ) -> None:
         session = await started(service, "first", DEFAULT_CHOICE)
@@ -206,7 +206,7 @@ class TestWhatAPageSaysASessionTakes:
         assert answered.status == 200
         note = "44 MiB on disk across this session&#39;s worktree, scratch and plugins, measured at 15:09"
         assert f'<span class="footprint" title="{note}">44 MiB</span>' in answered.text
-        assert f'<span class="footprint" title="{note}">\N{MIDDLE DOT} 44 MiB on disk</span>' in answered.text
+        assert f'<li class="footprint" title="{note}">44 MiB on disk</li>' in answered.text
 
     async def test_a_session_measured_at_nothing_draws_no_figure(self, app: ASGIApp, service: Service) -> None:
         """A zero is a claim, and a session that has not worked yet is not worth one."""

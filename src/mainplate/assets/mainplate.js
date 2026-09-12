@@ -87,6 +87,14 @@
     return Math.min(Math.max(current + direction, 0), tops.length - 1);
   };
 
+  // What a phone's keyboard leaves of the window, in pixels, or nothing where no keyboard is up. A
+  // visual viewport shorter than the window at scale one is a keyboard laid over the page and
+  // nothing else; at any other scale it is a pinch zoom, which must not shrink the page to the part
+  // being looked at. The pixel of slack is for a fractional height, which is a rounding and not a
+  // keyboard.
+  const keyboardLeaves = (windowHeight, visualHeight, scale) =>
+    scale === 1 && visualHeight < windowHeight - 1 ? Math.round(visualHeight) : null;
+
   // --- Storage -----------------------------------------------------------
   //
   // A privilege the page can be opened without, so every read answers with nothing rather than
@@ -1692,6 +1700,37 @@
       document.addEventListener("htmx:after:swap", () => repaint());
     };
 
+    // --- The keyboard on a phone -----------------------------------------
+    //
+    // A phone lays its keyboard over the page: the *visual* viewport shrinks to what is left, and
+    // the layout viewport, which `100dvh` and so the shell are sized by, does not. The viewport meta
+    // asks for the layout viewport to shrink too (`interactive-widget=resizes-content`), and Chrome
+    // and Firefox do, after which the box sits on the keyboard with nothing for this to do. Safari
+    // does not, in any shipped version, and scrolls the page instead so that the box being typed
+    // into is in view - the box, and not the row under it, which is where the one control a phone
+    // can send with is. So where the visual viewport is shorter than the window, the shell is sized
+    // to what can be seen and the page is put back at its top, and the composer is on the keys.
+    //
+    // On the resize and never the scroll of the visual viewport: the shell is then exactly what can
+    // be seen, so there is nothing to scroll, and following the visual viewport as a reader drags it
+    // is what makes the layout jitter under a thumb. It cannot be driven from here or from the
+    // suite, since neither can raise a keyboard, so it is written against what the two viewports are
+    // documented to do and against nothing measured.
+    const wireKeyboard = () => {
+      const viewport = window.visualViewport;
+      if (!viewport) return;
+      const fit = () => {
+        const left = keyboardLeaves(window.innerHeight, viewport.height, viewport.scale);
+        if (left === null) {
+          document.documentElement.style.removeProperty("--visible-height");
+          return;
+        }
+        document.documentElement.style.setProperty("--visible-height", `${left}px`);
+        window.scrollTo(0, 0);
+      };
+      viewport.addEventListener("resize", fit);
+    };
+
     const wireShapes = () => {
       // The one thing the stream says that is not a region: the page was drawn as the settings step
       // and the session has since loaded, so there is nothing on this page for the conversation to
@@ -1726,6 +1765,7 @@
     wireFresh();
     wireSwaps();
     wireShapes();
+    wireKeyboard();
     wireHash();
 
     toCurrentSession();

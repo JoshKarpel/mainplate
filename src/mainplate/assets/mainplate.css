@@ -194,7 +194,12 @@ body {
 .shell {
     display: grid;
     grid-template-columns: var(--sidebar) 1fr;
-    height: 100dvh;
+    /* The window, less a phone's keyboard. `dvh` is the window less the browser's own bars and
+       nothing else: a keyboard laid over the page leaves it as it was, and the shell would run on
+       under the keys with the message box at the bottom of it. `--visible-height` is what the script
+       sets, from the visual viewport, on the one browser whose keyboard does not shrink the layout
+       viewport when the viewport meta asks; everywhere else it is never set and this is `100dvh`. */
+    height: var(--visible-height, 100dvh);
 }
 
 /* The rail is a column of the page rather than something laid over it, which it can be because
@@ -318,10 +323,22 @@ main > * {
 }
 
 .transcript {
+    display: flex;
+    flex-direction: column;
+    /* The room between one thing in the conversation and the next is the column's gap, and nothing
+       carries a block margin of its own: a gap stands only *between* children, so the last panel
+       ends where the box begins, where a margin under every panel put one more under the last and
+       left a strip of nothing at the foot of every scroll to the end, a tenth of a phone's screen.
+       It is one value, because it was already one value: the rules' smaller margins were being
+       swallowed by the panels' larger ones on both sides, so every boundary here was this far apart
+       and the "more air above a turn" a rule asked for was never drawn.
+
+       The room above the first thing is padding, since a gap has nothing to stand between there. */
+    gap: 1.4rem;
     width: 100%;
     max-width: var(--measure);
     margin: 0 auto;
-    padding-bottom: var(--gap);
+    padding-top: var(--space-5);
     /* The scroll is this element's, not the document's, so the composer stays put while the
        conversation moves under it. Everything that navigates measures against this box. */
     overflow-y: auto;
@@ -342,7 +359,6 @@ main > * {
    speaker is the edge, and everything the model did stands in one column at one measure. */
 .panel {
     position: relative;
-    margin: 1.4rem 0;
     /* The right padding is carried by every panel rather than added when one is landed on, so
        being the target changes only colour. Added on arrival it widened the box past its
        container, which scrolled the whole document sideways and shifted the text under the
@@ -1337,11 +1353,19 @@ pre > .copy {
     }
 }
 
-/* htmx supplies the `.htmx-indicator` / `.htmx-request` rules that show and hide this; what is
-   here is only what it looks like once shown. */
+/* Shown by `display` and not by the opacity htmx's own indicator rules toggle, for the reason the
+   branch dots are: an element hidden by opacity still holds its row, and this one stands above the
+   box, where a row held open for a word shown for a second is a strip of nothing between the
+   conversation and the box. Hidden by `display` it costs the layout nothing until the post leaves,
+   and what its appearing moves is the composer's top edge, never the box. */
 .sending {
+    display: none;
     color: var(--ink-faint);
     font-size: 0.75rem;
+}
+
+.sending.htmx-request {
+    display: block;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1355,7 +1379,7 @@ pre > .copy {
 /* A session whose endpoint is no longer configured: readable, and honest about being stuck. */
 .stalled {
     max-width: 40rem;
-    margin: var(--gap) auto 0;
+    margin: 0 auto;
     padding: 0.55rem 0.85rem;
     border: 1px solid var(--error-edge);
     border-radius: var(--radius);
@@ -1374,7 +1398,7 @@ pre > .copy {
    so both halves follow the theme the tokens already switch. */
 .attention {
     max-width: 40rem;
-    margin: var(--gap) auto 0;
+    margin: 0 auto;
     padding: 0.55rem 0.85rem;
     border: 1px dashed var(--error-edge);
     border-radius: var(--radius);
@@ -1422,30 +1446,82 @@ pre > .copy {
     width: 100%;
     max-width: var(--measure);
     margin: 0 auto;
-    padding: var(--gap) 0;
+    /* The transcript's column ends flush with its last child, so this is the whole of the room
+       between the conversation and the box: less than the gap between two panels, since the box is
+       not a panel, and enough that the two do not touch. */
+    padding: var(--space-4) 0 var(--gap);
 }
 
-.composer .row {
+/* One card: the text, and under it the row of what to do with it. The edge and the ground are the
+   card's rather than the textarea's, so Send and its menu read as the box's own tools rather than as
+   a button beside a field, and a phone and a wide window draw the same shape: the row used to be a
+   phone rule that wrapped the buttons under a box they no longer fitted beside, and buttons that
+   wrapped read as buttons that fell off. It is also the shape every chat composer a reader already
+   knows takes, a box with its controls along the bottom, so nothing has to be learned.
+
+   The person's own hue for the edge, which is the edge every panel of theirs is drawn down and the
+   ground Send is painted in. The palette runs on one axis - cool is what reached the model - so the
+   box a message is written in belongs on the same side of it as the message itself, rather than
+   reading as one more field in the neutral edge every other input takes.
+
+   The focus ring is the card's too, drawn while anything in it has the focus, because a ring around
+   the textarea alone would cut the card in two at the moment it is being used; the textarea's own
+   ring is switched off below for that reason and no other. */
+.composer__box {
+    /* The room above and below a line of text in the box, named once because the tools row is
+       sized from it: one line of the box, and the row under it, are the same height. */
+    --inset: 0.55rem;
+
     display: flex;
-    gap: var(--gap);
-    align-items: flex-end;
-}
-
-.composer textarea {
-    flex: 1;
-    /* `flex: 1` sets the basis to zero but not the minimum, which stays at the textarea's intrinsic
-       `cols` width. This is what lets the box actually shrink with the window. */
-    min-width: 0;
-    padding: 0.55rem 0.7rem;
-    /* The person's own hue, which is the edge every panel of theirs is drawn down and the ground the
-       Send button is painted in. The palette runs on one axis - cool is what reached the model - so
-       the box a message is written in belongs on the same side of it as the message itself, rather
-       than reading as one more field in the neutral edge every other input takes. */
+    flex-direction: column;
     border: 1px solid var(--person-edge);
     border-radius: var(--radius);
     background: var(--raised);
+}
+
+.composer__box:focus-within {
+    outline: 2px solid var(--mark);
+    outline-offset: 1px;
+}
+
+.composer textarea {
+    /* A textarea's minimum is its intrinsic `cols` width; without this it cannot shrink with the
+       card, and the card is what shrinks with the window. */
+    min-width: 0;
+    padding: var(--inset) 0.7rem;
+    border: 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: transparent;
     color: inherit;
     font: inherit;
+}
+
+.composer textarea:focus-visible {
+    outline: none;
+}
+
+/* Send at the right, where a thumb and a pointer both already are, and room to its left for whatever
+   else a message may one day be sent with. No line between it and the text and no ground of its
+   own: the card's edge is what holds the two together, and a rule across the card would make the
+   row a second box under the first.
+
+   Exactly as tall as one line of the box, so a box at rest is two equal rows: `1lh` here is the
+   same line the textarea draws, since both inherit one font, and the inset is the textarea's own.
+   The buttons stretch to the row rather than sizing the row, which is what makes the row's height a
+   decision rather than a sum; what they keep is a hair of room above and below, so Send does not
+   touch the card's edge. On a phone that row is about forty-five pixels, a thumb's target, which is
+   why the composer's buttons are not on the phone block's minimum-height list. */
+.composer__tools {
+    display: flex;
+    box-sizing: border-box;
+    height: calc(1lh + 2 * var(--inset));
+    justify-content: flex-end;
+    align-items: stretch;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-2);
+    /* The row is the box's label, so its empty part puts the cursor in the box; the cursor says so
+       before the press does. */
+    cursor: text;
 }
 
 /* A box you write a message in starts at one line, grows with what is typed, and scrolls inside
@@ -1473,7 +1549,7 @@ pre > .copy {
 }
 
 .composer button {
-    padding: var(--space-4) var(--space-6);
+    padding: 0 var(--space-5);
     border: 1px solid transparent;
     border-radius: var(--radius);
     background: var(--person-edge);
@@ -1580,8 +1656,11 @@ pre > .copy {
 /* `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the
    box takes the terminal's monospace and a heavier edge. A command is a shell line, so setting it in
    the face the output will come back in is the box telling the truth about what it holds. */
-.composer[data-leading="run"] textarea {
+.composer[data-leading="run"] .composer__box {
     border-width: 2px;
+}
+
+.composer[data-leading="run"] textarea {
     font-family: var(--mono);
     font-size: var(--mono-size);
     line-height: var(--mono-line);
@@ -1705,24 +1784,6 @@ pre > .copy {
 .composer textarea:disabled {
     opacity: 0.5;
     cursor: progress;
-}
-
-/* What a session already under way is answered on, stated as a fact under the box because it
-   cannot be changed. One line of faint text, deliberately not sharing a rule with the picker: the
-   two say related things and are no longer the same kind of object. */
-.chosen {
-    display: flex;
-    /* Wrapping, because an endpoint, a model, a thinking level and a repository do not fit a narrow
-       window on one line, and a row that overflows scrolls the whole page sideways rather than the
-       row. Nothing here has to stay beside anything else. */
-    flex-wrap: wrap;
-    gap: var(--space-2) var(--space-3);
-    align-items: baseline;
-    min-height: var(--space-7);
-    min-width: 0;
-    color: var(--ink-faint);
-    font-size: 0.8rem;
-    overflow-wrap: anywhere;
 }
 
 /* On the page where the picker is, the box takes the picker's measure rather than the reading one.
@@ -2783,6 +2844,35 @@ mark.hit.current {
     color: var(--mark);
 }
 
+/* What this session is: which model, where its files are, what it holds on disk. Facts and never
+   controls, in the faint ink every figure on this page takes, and in the rail rather than under the
+   message box, where they were read as being about the act of sending and took a row on every
+   window and three on a phone. A plugin card's shape, since it sits among them. */
+.about {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.about__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.about__facts {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ink-soft);
+    /* A model id is one unbreakable word longer than this column, so it breaks where it must
+       rather than pushing the card's edge out past the rail's. */
+    overflow-wrap: anywhere;
+}
+
 /* The card that closes a session, and the fact that somebody did. A plugin card's shape, since it
    sits among them; a disclosure rather than a bare button, so the press is under a sentence saying
    what it takes off the disk. */
@@ -2826,12 +2916,6 @@ mark.hit.current {
 .setup + .archive {
     max-width: var(--wide);
     margin: var(--gap) auto 0;
-}
-
-/* The rule under the last turn, carrying the fork from the end. More air above it than a request
-   rule, as a turn's has, because it is a boundary of the larger kind: where the next turn would open. */
-.rule--end {
-    margin-top: var(--space-5);
 }
 
 /* The step between creating a session and typing into it: which of the plugins it declares to run.
@@ -3205,13 +3289,14 @@ mark.hit.current {
    to cross the whole column and run under the transcript's scrollbar, which on a browser that draws
    one over the content is a rule ending in a grey band, and now that the line is also a gauge that is
    a gauge whose last few percent are behind something. Ending where the figures do costs nothing:
-   what a rule separates is panels whose own text stops at the same place. */
+   what a rule separates is panels whose own text stops at the same place. No block margin, because
+   the room above and below is the transcript's gap. */
 .rule {
     position: relative;
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
-    margin: var(--space-4) var(--space-6) var(--space-3) 0;
+    margin: 0 var(--space-6) 0 0;
     padding-top: var(--space-2);
     border-top: 1px solid var(--edge);
     font-family: var(--mono);
@@ -3254,12 +3339,6 @@ mark.hit.current {
     block-size: 1px;
     background-image: linear-gradient(to right, var(--gauge-from), var(--vermilion));
     clip-path: inset(0 calc(100% - var(--filled, 0%)) 0 0);
-}
-
-/* More air above a turn than above a request within one, because the two are boundaries of
-   different sizes and a run of evenly spaced hairlines says they are the same. */
-.rule--turn {
-    margin-top: var(--space-5);
 }
 
 /* Where the model's history starts again. Drawn in a stronger ink rather than a hue of its own,
@@ -3393,13 +3472,6 @@ main:has(> .forking) {
     font: inherit;
 }
 
-/* Which worktree this console snapshots against. On the settled note rather than in the rail,
-   because it belongs with the other things a session cannot change about itself. */
-.chosen .workspace {
-    color: var(--ink-faint);
-    font-family: var(--mono);
-}
-
 .forking__kept {
     margin: 0;
     color: var(--ink-soft);
@@ -3515,6 +3587,64 @@ main:has(> .forking) {
    reader scanning the tree wants to pick out is where the conversation actually went. */
 .session .from--aside {
     color: var(--ink-faint);
+}
+
+/* Archiving, from the row. The summary lies over the row's top-right corner and is invisible until
+   the pointer is on the row or the focus is in it, so a list of sessions is not a list of buttons
+   and nothing under the pointer moves as it passes down the list: a control that took a line of its
+   own would shift every row beneath it on every hover. It covers the tail of a long name while it
+   shows, which is the corner every row action lives in and the name is in the title anyway.
+
+   Opened, it is the rail's own card drawn under the row - the sentence, then the press - and the
+   row grows to hold it, which is a change somebody asked for. `visibility` rather than `display`
+   so the summary keeps its box and the row's `:focus-within` can reach it from the keyboard. */
+.sessions li {
+    position: relative;
+}
+
+.session__archive {
+    visibility: hidden;
+}
+
+.sessions li:hover > .session__archive,
+.sessions li:focus-within > .session__archive,
+.session__archive[open] {
+    visibility: visible;
+}
+
+.session__archive-head {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--raised);
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    list-style: none;
+}
+
+.session__archive-head::-webkit-details-marker {
+    display: none;
+}
+
+.session__archive-head:hover,
+.session__archive-head:focus-visible {
+    color: var(--mark);
+}
+
+.session__archive[open] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) 0.6rem var(--space-3);
+    font-size: 0.7rem;
+    font-family: var(--mono);
 }
 
 /* --- A page nothing could answer --------------------------------------- */
@@ -3647,6 +3777,12 @@ main:has(> .forking) {
         display: none;
     }
 
+    /* A chip has no corner to lay an action over and nothing hovers on a phone; a session is
+       opened and closed from its rail. */
+    .session__archive {
+        display: none;
+    }
+
     /* --- The conversation --- */
 
     /* A little room at the top, which with no banner over the pane is the only thing between the
@@ -3657,8 +3793,11 @@ main:has(> .forking) {
         padding: var(--space-5) var(--space-4) 0;
     }
 
+    .transcript {
+        gap: var(--space-6);
+    }
+
     .panel {
-        margin: var(--space-6) 0;
         padding: var(--space-1) var(--space-4);
     }
 
@@ -3677,24 +3816,16 @@ main:has(> .forking) {
         font-size: 16px;
     }
 
+    /* The tools row is one line of the box tall, measured in its own font, so it takes the box's
+       size here too or the two rows come apart by the difference. */
+    .composer__tools {
+        font-size: 16px;
+    }
+
     .composer {
-        padding: var(--space-4) 0;
+        padding: var(--space-3) 0 var(--space-4);
     }
 
-    /* Two destinations beside the box leave it about a hundred and seventy pixels wide, which is not
-       a box you can write a paragraph in, and writing a paragraph is what Shift-Enter exists for. So
-       the box takes the width and the buttons drop under it, right-aligned where a thumb already is.
-       One row of buttons costs less than a box nobody can compose in. */
-    .composer .row {
-        flex-wrap: wrap;
-        justify-content: flex-end;
-    }
-
-    .composer textarea {
-        flex: 1 0 100%;
-    }
-
-    .composer button,
     .forking__act button,
     .starting button,
     .setup__set,

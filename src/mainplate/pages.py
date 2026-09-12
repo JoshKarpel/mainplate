@@ -218,6 +218,10 @@ BASIS_LOADING_ID: Final = "basis-loading"
 
 SENDING_ID: Final = "sending"
 
+# The box you type in, named so the row of tools under it can be its label: a press on the row where
+# no tool is then puts the cursor in the box, with no script, and a press on a tool is the tool's.
+MESSAGE_ID: Final = "message"
+
 # Whether the provider still holds this conversation's prefix, and what the next request pays if it
 # does not. A region of its own with an id, because it sits in the composer and the composer is not
 # what the stream replaces: what it says goes stale on every turn, since the context it prices grows
@@ -586,7 +590,17 @@ def document(
                     head(
                         children=[
                             meta(attrs={"charset": "utf-8"}),
-                            meta(attrs={"name": "viewport", "content": "width=device-width, initial-scale=1"}),
+                            # `interactive-widget=resizes-content` asks a phone to shrink the layout
+                            # viewport under its keyboard rather than lay the keyboard over the page,
+                            # so the shell's `100dvh` ends where the keyboard begins and the box sits on
+                            # it. Chrome and Firefox honour it; Safari does not, and `wireKeyboard` in
+                            # the script is what covers that. See the assets note.
+                            meta(
+                                attrs={
+                                    "name": "viewport",
+                                    "content": "width=device-width, initial-scale=1, interactive-widget=resizes-content",
+                                }
+                            ),
                             title(children=heading),
                             link(attrs={"rel": "icon", "href": "data:,"}),
                             link(attrs={"rel": "stylesheet", "href": links.to_asset("mainplate.css")}),
@@ -655,6 +669,10 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
     than one. `reachable` is what turns the recorded id into the name somebody recognises, and a
     session working in nothing says nothing rather than saying so - most of a list is one or the
     other, and the majority does not need labelling.
+
+    Every row of a session still open carries `archive_action`, so a list that has grown can be
+    closed down from the list. An archived row carries nothing: the press is write-once, and a
+    control that would do it again is a control that does nothing.
     """
     return aside(
         cls="sessions",
@@ -664,101 +682,109 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
                 children=[
                     li(
                         attrs={"data-depth": str(depth)},
-                        children=a(
-                            cls=(
-                                "session",
-                                "current" if session.id == showing else None,
-                                "forked" if depth else None,
-                                "archived" if session.archived is not None else None,
-                            ),
-                            attrs={"href": links.to_session(session.id)},
-                            children=[
-                                span(cls="name", children=session.title or UNTITLED),
-                                span(
-                                    cls="meta",
-                                    children=[
-                                        time(
-                                            cls="when",
-                                            attrs={"datetime": session.created_at.isoformat()},
-                                            children=session.created_at.strftime("%b %d, %H:%M"),
-                                        ),
-                                        # Said in a word as well as by muting the name, because a
-                                        # muted row on its own reads as a styling accident, and the
-                                        # word is what a reader scanning for a closed session looks
-                                        # for.
-                                        *(
-                                            (
-                                                span(
-                                                    cls="archived",
-                                                    attrs={"title": f"Archived {archived_on(session.archived)}"},
-                                                    children="archived",
-                                                ),
-                                            )
-                                            if session.archived is not None
-                                            else ()
-                                        ),
-                                        # Where it left its parent, and whether it left meaning to
-                                        # come back. The glyph carries it rather than a word: a row
-                                        # this narrow has no room for one, and the two marks differ
-                                        # at a glance where "aside" and nothing would not.
-                                        *(
-                                            (
-                                                span(
-                                                    cls=("from", "from--aside" if session.forked.aside else None),
-                                                    attrs={
-                                                        "title": (
-                                                            f"An aside from turn {session.forked.turn}"
-                                                            if session.forked.aside
-                                                            else f"Forked at turn {session.forked.turn}"
-                                                        )
-                                                    },
-                                                    children=(
-                                                        f"\N{LEFTWARDS ARROW WITH HOOK}{session.forked.turn}"
-                                                        if session.forked.aside
-                                                        else f"\N{RIGHTWARDS ARROW}{session.forked.turn}"
-                                                    ),
-                                                ),
-                                            )
-                                            if session.forked
-                                            else ()
-                                        ),
-                                        # What it takes on disk, drawn only once something has been
-                                        # measured and something is there: a session that has not
-                                        # worked yet holds nothing, and nothing is not worth a
-                                        # figure, for the reason a session in no repository says
-                                        # nothing about where it works.
-                                        *(
-                                            (
-                                                span(
-                                                    cls="footprint",
-                                                    attrs={"title": footprint_note(session.footprint)},
-                                                    children=sized(session.footprint.allocated),
-                                                ),
-                                            )
-                                            if session.footprint is not None and session.footprint.allocated
-                                            else ()
-                                        ),
-                                        *(
-                                            (
-                                                span(
-                                                    cls="where",
-                                                    # Titled as well as drawn, because a row this
-                                                    # narrow cuts a name that two sessions may
-                                                    # differ only in the tail of.
-                                                    attrs={"title": reachable.readable(session.repository)},
-                                                    children=reachable.readable(session.repository),
-                                                ),
-                                            )
-                                            if session.repository is not None
-                                            else ()
-                                        ),
-                                    ],
-                                ),
-                            ],
-                        ),
+                        children=[
+                            session_row(links, session, showing, depth, reachable),
+                            *((archive_action(links, session.id),) if session.archived is None else ()),
+                        ],
                     )
                     for session, depth in arrange(listed)
                 ]
+            ),
+        ],
+    )
+
+
+def session_row(links: Links, session: Session, showing: str | None, depth: int, reachable: Reachable) -> Element:
+    """One session as the link to it, which is the row apart from the action laid over it."""
+    return a(
+        cls=(
+            "session",
+            "current" if session.id == showing else None,
+            "forked" if depth else None,
+            "archived" if session.archived is not None else None,
+        ),
+        attrs={"href": links.to_session(session.id)},
+        children=[
+            span(cls="name", children=session.title or UNTITLED),
+            span(
+                cls="meta",
+                children=[
+                    time(
+                        cls="when",
+                        attrs={"datetime": session.created_at.isoformat()},
+                        children=session.created_at.strftime("%b %d, %H:%M"),
+                    ),
+                    # Said in a word as well as by muting the name, because a
+                    # muted row on its own reads as a styling accident, and the
+                    # word is what a reader scanning for a closed session looks
+                    # for.
+                    *(
+                        (
+                            span(
+                                cls="archived",
+                                attrs={"title": f"Archived {archived_on(session.archived)}"},
+                                children="archived",
+                            ),
+                        )
+                        if session.archived is not None
+                        else ()
+                    ),
+                    # Where it left its parent, and whether it left meaning to
+                    # come back. The glyph carries it rather than a word: a row
+                    # this narrow has no room for one, and the two marks differ
+                    # at a glance where "aside" and nothing would not.
+                    *(
+                        (
+                            span(
+                                cls=("from", "from--aside" if session.forked.aside else None),
+                                attrs={
+                                    "title": (
+                                        f"An aside from turn {session.forked.turn}"
+                                        if session.forked.aside
+                                        else f"Forked at turn {session.forked.turn}"
+                                    )
+                                },
+                                children=(
+                                    f"\N{LEFTWARDS ARROW WITH HOOK}{session.forked.turn}"
+                                    if session.forked.aside
+                                    else f"\N{RIGHTWARDS ARROW}{session.forked.turn}"
+                                ),
+                            ),
+                        )
+                        if session.forked
+                        else ()
+                    ),
+                    # What it takes on disk, drawn only once something has been
+                    # measured and something is there: a session that has not
+                    # worked yet holds nothing, and nothing is not worth a
+                    # figure, for the reason a session in no repository says
+                    # nothing about where it works.
+                    *(
+                        (
+                            span(
+                                cls="footprint",
+                                attrs={"title": footprint_note(session.footprint)},
+                                children=sized(session.footprint.allocated),
+                            ),
+                        )
+                        if session.footprint is not None and session.footprint.allocated
+                        else ()
+                    ),
+                    *(
+                        (
+                            span(
+                                cls="where",
+                                # Titled as well as drawn, because a row this
+                                # narrow cuts a name that two sessions may
+                                # differ only in the tail of.
+                                attrs={"title": reachable.readable(session.repository)},
+                                children=reachable.readable(session.repository),
+                            ),
+                        )
+                        if session.repository is not None
+                        else ()
+                    ),
+                ],
             ),
         ],
     )
@@ -805,8 +831,8 @@ def footprint_note(footprint: Footprint) -> str:
     """
     What the figure on a row is a figure of, and when it was true, as the sentence behind it.
 
-    One sentence for both places the figure is drawn, so the sidebar and the note under the message
-    box cannot describe the same directories two ways. It says *when* because the number is as old
+    One sentence for both places the figure is drawn, so the sidebar and the session's card in the
+    rail cannot describe the same directories two ways. It says *when* because the number is as old
     as the last sweep, and a size with no time beside it reads as current.
     """
     return (
@@ -1915,38 +1941,43 @@ def picker(
     )
 
 
-def session_spend(spent: Spent) -> str:
+def where_it_works(repository: str, branch: str | None) -> str:
     """
-    What a whole session has come to, as the sentence behind the figure under the message box.
+    Where a session's files are, as a person reads it: the repository, and the branch where one is recorded.
 
-    The time is named only where every turn in the session was timed, which is the rule the money
-    follows: a total quietly missing a turn reads as the whole and understates it.
+    The branch, because that is what somebody about to run `git push` needs to know and the one part
+    they cannot work out from the repository's name - a generated one especially, since it is named
+    after the session rather than after anything they typed. Where the session *began* is settled
+    and on the first turn's own rule; this is where it is now. Conditional for the sessions recorded
+    before every one had a branch.
 
-    `asked` here and `context` on a rule, deliberately, and they are different numbers: this is what
-    the session has been *charged* for, which is every request's input added up, where a rule says how
-    much of the window one exchange left in use. Both are true and neither substitutes for the other,
-    so this is not the place to make them agree.
+    One function for the card in the rail and the sentence over a command box, so the two cannot
+    spell the same place two ways.
     """
-    said = f"{spent.asked:,} tokens in and {spent.answered:,} out over this session"
-    if spent.took is not None:
-        said = f"{said}, {elapsed(spent.took)} waiting on the model"
-    return f"{said}, estimated from published rates rather than billed"
+    return f"{repository} @ {branch}" if branch is not None else repository
 
 
-def chosen_note(
+def about_card(
     chosen: Choice | None,
     repository: str | None = None,
     worktree: Path | None = None,
-    spent: Spent | None = None,
     footprint: Footprint | None = None,
-) -> Element:
+) -> Element | None:
     """
-    What an existing session is on, as a fact rather than a control: it cannot be changed.
+    What an existing session is on and where it works, as facts rather than controls: none can change.
 
-    Its own class rather than the picker's, and that is not tidying. The two used to look alike
-    enough to share one, and once the picker became a page-filling block of cards they stopped
-    being the same kind of thing at all: this is one line of faint text under a message box, and
-    sharing a rule with a grid gave every session page a layout meant for the start page.
+    **A card in the rail rather than a line under the message box**, and the move is a grouping
+    rather than a saving. Whatever sits against the box is read as being about the act of sending,
+    and nothing here is: the model and the repository were settled when the session was made, and
+    the disk moves on a timer. Beside the box they took a row on every window and three on a phone,
+    saying the same thing every turn; the rail is where the things that are about this session as a
+    whole already stand, and on a phone it is behind the clasp, which is right for facts that never
+    change. What the box keeps above it is what the next press actually depends on.
+
+    The session's total is not here, because it is already on the page: the running total on the
+    last rule is the same figure, and that one moves with the transcript where a card in the rail
+    would sit stale until a reload. Nor is anything the sidebar's row already says, save the disk,
+    which is the one figure here a person can act on.
 
     The thinking level is named only when there is one to name. A session that said nothing about
     thinking is not a session set to some level called "default"; it is one that never raised the
@@ -1954,75 +1985,59 @@ def chosen_note(
     named on the same terms, and its absence means the same thing: no snapshots are being kept, so
     there is nothing a later fork could put back on disk.
 
-    The session's total is here rather than on a rule because it is a fact about the whole
-    conversation and the rules each speak for one turn. It is drawn only once something has been
-    priced: a session whose models nobody publishes a price for says nothing about money, which is
-    the same silence its cards keep, where `free` would be a claim nobody made.
+    Nothing at all for a session with no choice recorded, which is the window between its row and
+    its first message: a card with a head and no facts would be a heading over nothing.
     """
     if chosen is None:
-        return span(cls="chosen")
-    said = f"{chosen.endpoint} \N{MIDDLE DOT} {chosen.model}"
-    if chosen.thinking is not None:
-        said = f"{said} \N{MIDDLE DOT} thinking {name_of_thinking(chosen.thinking)}"
-    return span(
-        cls="chosen",
+        return None
+    return div(
+        cls="about",
+        attrs={"aria-label": "About this session"},
         children=[
-            span(children=said),
-            *(
-                (
-                    span(
-                        cls="worktree",
-                        # The repository is what a reader recognises and the worktree is where to
-                        # point an editor, so one is shown and the other is there to be read. No
-                        # worktree yet is an ordinary state rather than a missing one: the first
-                        # pass makes it, so a session says where it works before it has worked.
-                        attrs={
-                            "title": f"This session's worktree: {worktree}"
-                            if worktree is not None
-                            else "This session works here once its first turn runs"
-                        },
-                        # The branch, because that is what somebody about to run `git push` in the box
-                        # below needs to know and the one part of this line they cannot work out from
-                        # the repository's name - a generated one especially, since it is named after
-                        # the session rather than after anything they typed. Where the session
-                        # *began* is settled and on the first turn's own rule; this is where it is
-                        # now. Conditional for the sessions recorded before every one had a branch.
-                        children=f"\N{MIDDLE DOT} {repository}"
-                        + (f" @ {chosen.branch}" if chosen.branch is not None else ""),
+            div(cls="about__head", children="about"),
+            ul(
+                cls="about__facts",
+                children=[
+                    li(cls="about__model", children=f"{chosen.endpoint} \N{MIDDLE DOT} {chosen.model}"),
+                    *(
+                        (li(cls="about__thinking", children=f"thinking {name_of_thinking(chosen.thinking)}"),)
+                        if chosen.thinking is not None
+                        else ()
                     ),
-                )
-                if repository is not None
-                else ()
-            ),
-            *(
-                (
-                    span(
-                        cls="spent",
-                        # The time joins the counts in the title rather than the money on the line.
-                        # This is one line of faint text under a message box and the figure a
-                        # session is asked for is what it cost; how long it has spent waiting is
-                        # worth having and not worth a fourth thing to read past.
-                        attrs={"title": session_spend(spent)},
-                        children=f"\N{MIDDLE DOT} {charged(spent.cost)}",
+                    *(
+                        (
+                            li(
+                                cls="worktree",
+                                # The repository is what a reader recognises and the worktree is where
+                                # to point an editor, so one is shown and the other is there to be
+                                # read. No worktree yet is an ordinary state rather than a missing
+                                # one: the first pass makes it, so a session says where it works
+                                # before it has worked.
+                                attrs={
+                                    "title": f"This session's worktree: {worktree}"
+                                    if worktree is not None
+                                    else "This session works here once its first turn runs"
+                                },
+                                children=where_it_works(repository, chosen.branch),
+                            ),
+                        )
+                        if repository is not None
+                        else ()
                     ),
-                )
-                if spent is not None and spent.cost is not None
-                else ()
-            ),
-            *(
-                (
-                    span(
-                        cls="footprint",
-                        # Last, after what the session cost, because it is the other thing a session
-                        # is spending and the one this line can do something about: the money is
-                        # gone and the disk comes back. On the same terms as the sidebar's figure,
-                        # which is the same sentence behind it, so a row and its page agree.
-                        attrs={"title": footprint_note(footprint)},
-                        children=f"\N{MIDDLE DOT} {sized(footprint.allocated)} on disk",
+                    *(
+                        (
+                            li(
+                                cls="footprint",
+                                # On the same terms as the sidebar's figure, which is the same
+                                # sentence behind it, so a row and its page agree.
+                                attrs={"title": footprint_note(footprint)},
+                                children=f"{sized(footprint.allocated)} on disk",
+                            ),
+                        )
+                        if footprint is not None and footprint.allocated
+                        else ()
                     ),
-                )
-                if footprint is not None and footprint.allocated
-                else ()
+                ],
             ),
         ],
     )
@@ -3739,6 +3754,9 @@ def archive_card(links: Links, session: str, archived: datetime | None) -> Eleme
 
     Once pressed, the card is the fact: when, and what became of the files. The way back is the fork
     on the rule under the last turn, which is where every fork lives, so it is not repeated here.
+
+    The same control stands on every live row of the session list, as `archive_action`, so a session
+    can be closed without being opened first; the two share `archive_press`, which is the one form.
     """
     if archived is not None:
         return div(
@@ -3758,18 +3776,61 @@ def archive_card(links: Links, session: str, archived: datetime | None) -> Eleme
         cls="archive",
         children=[
             summary(cls="archive__head", children="Archive"),
-            p(
-                cls="archive__says",
-                children=(
-                    "Takes this session's worktree, scratch and plugins off the disk and stops anything more "
-                    "being said in it. The conversation stays, and a fork of it carries on."
-                ),
+            p(cls="archive__says", children=ARCHIVING_TAKES),
+            archive_press(links, session),
+        ],
+    )
+
+
+ARCHIVING_TAKES: Final = (
+    "Takes its worktree, scratch and plugins off the disk and stops anything more being said in it. "
+    "The conversation stays, and a fork of it carries on."
+)
+"""What the press does, said once for the card in the rail and the action on a row."""
+
+
+def archive_press(links: Links, session: str) -> Element:
+    """The one form that closes a session, wherever the disclosure holding it is drawn."""
+    return form(
+        cls="archive__press",
+        attrs={"method": "post", "action": links.to_archive(session)},
+        children=button(cls="archive__set", attrs={"type": "submit"}, children="Archive"),
+    )
+
+
+def archive_action(links: Links, session: str) -> Element:
+    """
+    Archiving, on a row of the session list, for closing a session without opening it first.
+
+    **Revealed on hover and on focus, and laid over the row rather than added to it.** A row action
+    that took a line of its own would move every row beneath it as the pointer passed down the list,
+    so the summary sits over the row's corner and costs the list nothing until it is opened; opened,
+    the disclosure grows under the row, which is a layout change somebody asked for. Hidden by
+    visibility rather than left visible and faint, because a control on every row of a list is a
+    list of controls, and what the list is for is telling sessions apart.
+
+    A sibling of the row's link rather than inside it, because a form inside an anchor is not markup
+    a browser will keep together, and the summary is what the keyboard reaches: the row is in
+    `:focus-within` while it is, so a reader tabbing through the list meets the action on each row.
+
+    The same disclosure as the rail's card, behind the same sentence, posting the same form: the
+    press takes a worktree off the disk, and a bare button in a list is exactly the mis-press that
+    disclosure exists to make impossible. The redirect lands on the archived session, which is the
+    page saying what just happened; a list that stayed put would say nothing.
+
+    Not drawn on the strip a phone folds the list into, since a chip has no corner to lay it over
+    and nothing hovers there; a session is opened and closed from its rail instead.
+    """
+    return details(
+        cls="session__archive",
+        children=[
+            summary(
+                cls="session__archive-head",
+                attrs={"title": "Archive this session", "aria-label": "Archive this session"},
+                children="archive",
             ),
-            form(
-                cls="archive__press",
-                attrs={"method": "post", "action": links.to_archive(session)},
-                children=button(cls="archive__set", attrs={"type": "submit"}, children="Archive"),
-            ),
+            p(cls="archive__says", children=ARCHIVING_TAKES),
+            archive_press(links, session),
         ],
     )
 
@@ -3780,6 +3841,7 @@ def rail(
     tended: Tending,
     plugins: Sequence[Enrolled] = (),
     *,
+    about: Placed = None,
     archived: datetime | None = None,
 ) -> Element:
     """
@@ -3812,9 +3874,14 @@ def rail(
     inconsistency: a setting is a value the plugin reads when it runs, and being loaded decides what
     is in the prefix.
 
-    **Archiving is the last card about this session**, under the plugins' cards, because it is the
-    one control here that ends the conversation rather than steering it: everything above it is
-    something to do while the session runs, and this is what to do when it is over.
+    **What the session is, and then archiving it, are the last two cards about this session**, under
+    the plugins' cards. `about` is the one card here that is read rather than pressed - which model,
+    where its files are, what it holds on disk - and it stands with the control that ends the
+    conversation rather than at the top, because a reader opens the rail to search, fold and move,
+    and a card of facts ahead of those would push every control down for the sake of things that
+    never change. Archiving is the one control here that ends the conversation rather than steering
+    it: everything above it is something to do while the session runs, and this is what to do when
+    it is over.
 
     **The theme goes last, pinned to the bottom by the stylesheet**, because it is the one card here
     that is not about this conversation at all - it is the reader's, across every session - so it is
@@ -3838,6 +3905,7 @@ def rail(
                 for plugin in plugins
                 if plugin.described.card is not None
             ),
+            about,
             archive_card(links, session, archived),
             theme_card(),
         ],
@@ -3985,9 +4053,13 @@ def plugin_answers(plugins: Sequence[Enrolled]) -> tuple[Answer, ...]:
     )
 
 
-def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[Answer, ...]:
+def sending_answers(returning: bool, answering: bool, runs_in: str | None) -> tuple[Answer, ...]:
     """
     Everything that can happen to what you typed, other than the thing Send already does.
+
+    `runs_in` is where a command would run, said in the sentence over the box because the box is the
+    one place the branch has to be legible: a `git push` typed there lands on it. Nothing where the
+    session has nowhere to run one, which is also what leaves `Run` out of the menu.
 
     **Declared once and rendered three times**: as a row in the menu, as the button the box shows
     once it is in that answer's mode, and as the sentence above the box saying what will happen. The
@@ -4034,14 +4106,14 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
             (
                 dispatched(
                     Disposition.RUN,
-                    "Run it in this session's worktree, as you rather than as the agent, without telling the model",
+                    f"Run it in {runs_in}, as you rather than as the agent, without telling the model",
                     # The one answer the box stays in, because a command is rarely the only one: a
                     # session that reaches for `Run` reaches for it again a line later, where every
                     # other answer here is a thing somebody meant once.
                     staying=True,
                 ),
             )
-            if running
+            if runs_in is not None
             else ()
         ),
         Answer(
@@ -4118,7 +4190,7 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
     aside unsent are answers to "what do I do with this", and answering one question in two places is
     what this console removes wherever it finds it - which is exactly what a `Keep` button standing
     beside `Send` had become. It is also the only shape that stays affordable: each further answer
-    costs a line in a menu nobody has to open, where each further button costs a slot in the row above
+    costs a line in a menu nobody has to open, where each further button costs a slot in the row under
     the message box, which is the row a phone has least of.
 
     **`Send` does not say whether it steers, because it cannot know and neither can the reader.** This
@@ -4192,30 +4264,25 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
 
 def composer(
     action: str,
-    beneath: Placed,
     *,
     live: bool,
     refusing: bool = False,
     continuing: bool = False,
     returning: bool = False,
     answering: bool = False,
-    running: bool = False,
+    runs_in: str | None = None,
     above: Placed = None,
     identified: str | None = None,
     plugins: Sequence[Enrolled] = (),
 ) -> Element:
     """
-    The box you type in, which posts to `action`, with `beneath` under it.
+    The box you type in, which posts to `action`.
 
     `live` is what differs between the two pages, and it is not styling: sending into a session
     that already exists swaps the transcript and leaves the address bar alone, while sending the
     first message *creates* a session and has to end up at that session's own URL. htmx cannot do
     the second one, because a redirect's headers never reach it, so the first message is an
     ordinary form post and the browser follows the `303` itself.
-
-    `beneath` is the picker on one page and a note saying what a session is already on for the
-    other, because a session's choice is fixed for its life and offering a control that could not
-    change it would be a lie about what the page does.
 
     `refusing` disables the whole thing, for a session nothing can answer. The disabling is real
     rather than styling: a box that still submitted would record a message into a session whose
@@ -4239,17 +4306,25 @@ def composer(
     because they mean different things - `live` is whether the answer swaps or navigates - so tying
     them together would be one of the two silently deciding the other.
 
-    `running` says this session has files a command could run in, which is what puts `Run` among the
-    answers. Nothing else is needed to gate the mode: the script can only put the box into a mode the
-    server drew a button for, so a page for a session with no repository has no run mode to enter and
-    the two cannot drift.
+    `runs_in` names where a command the person types would run, and is what puts `Run` among the
+    answers: nothing where this session has nowhere to run one. The name is in the argument rather
+    than looked up by the mode, because the sentence over a command box is where somebody about to
+    type `git push` reads which branch it lands on, now that nothing under the box says. Nothing else
+    is needed to gate the mode: the script can only put the box into a mode the server drew a button
+    for, so a page for a session with no repository has no run mode to enter and the two cannot
+    drift.
 
-    **The sentence saying what the box will do sits above it.** The composer is the bottom of the
-    page, so a row appearing anywhere in its column pushes everything above that row upward - and
-    with the sentence under the box, entering a mode moved the box itself out from under the cursor.
-    Above it, what grows is the composer's top edge and the box stays exactly where it was.
+    **Everything that is not the box sits above it, and nothing sits under it.** The composer is the
+    bottom of the page, so a row appearing anywhere in its column pushes everything above that row
+    upward - and with the mode's sentence under the box, entering a mode moved the box itself out
+    from under the cursor. Above it, what grows is the composer's top edge and the box stays exactly
+    where it was. The same holds for `sending`, which appears for the length of a round trip, and it
+    is why the box is the last thing on the page at all: on a phone the keyboard comes up under
+    whatever is focused, and a row under the box is a row the keyboard covers or the browser has to
+    scroll past. What is above it is only what the next press depends on - what re-sending costs,
+    and what the press will do - and what the session *is* stands in the rail; see `about_card`.
     """
-    answers = (*sending_answers(returning, answering, running), *plugin_answers(plugins)) if continuing else ()
+    answers = (*sending_answers(returning, answering, runs_in), *plugin_answers(plugins)) if continuing else ()
     driving = (
         {
             "hx-post": action,
@@ -4272,6 +4347,13 @@ def composer(
         attrs={"method": "post", "action": action, "id": identified, **driving},
         children=[
             above,
+            # Shown by `display` rather than by the opacity htmx's own indicator rules toggle, so
+            # it holds no row while nothing is in flight; see `.sending` in the stylesheet.
+            span(
+                cls=("sending", "htmx-indicator"),
+                attrs={"id": SENDING_ID, "role": "status"},
+                children="sending\N{HORIZONTAL ELLIPSIS}",
+            ),
             # What the box will do with what is in it, said in words and only while that is not what
             # the box normally does. One per answer, drawn by the stylesheet off the form's own
             # `data-leading`, so the words live here and the script sets one attribute; a `title`
@@ -4289,14 +4371,19 @@ def composer(
                 )
                 for answer in answers
             ),
+            # One card: the text, and under it a row of what to do with it. The edge is the card's
+            # rather than the textarea's, so the row reads as the box's own tools and not as buttons
+            # that fell off the end of it, on a phone and a wide window alike; see `.composer__box`
+            # in the stylesheet.
             div(
-                cls="row",
+                cls="composer__box",
                 children=[
                     # `rows` is the floor only where `field-sizing` is not supported: the box sizes
                     # itself from what is typed, and a browser that can do that ignores `rows`
                     # entirely. See the growth rule in `mainplate.css`.
                     textarea(
                         attrs={
+                            "id": MESSAGE_ID,
                             "name": "prompt",
                             "rows": 3,
                             "required": True,
@@ -4306,17 +4393,15 @@ def composer(
                             "aria-label": "Message",
                         }
                     ),
-                    sending_control(refusing, answers),
-                ],
-            ),
-            div(
-                cls="row",
-                children=[
-                    beneath,
-                    span(
-                        cls=("sending", "htmx-indicator"),
-                        attrs={"id": SENDING_ID, "role": "status"},
-                        children="sending\N{HORIZONTAL ELLIPSIS}",
+                    # A label and not a div, so the empty part of the row focuses the box: a label
+                    # hands a click to the control it names unless the click landed on something
+                    # interactive inside it, which is exactly the split wanted, and it is the
+                    # browser's own rule rather than a listener. The `aria-label` above outranks a
+                    # label's text in naming the box, so Send does not become the box's name.
+                    label(
+                        cls="composer__tools",
+                        attrs={"for": MESSAGE_ID},
+                        children=[sending_control(refusing, answers)],
                     ),
                 ],
             ),
@@ -4666,38 +4751,47 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             reachable=reachable,
             pane=[
                 transcript_region(links, showing),
-                composer(
-                    links.to_say(showing.session.id),
-                    chosen_note(
-                        showing.chosen,
-                        showing.repository,
-                        showing.worktree,
-                        showing.said.total,
-                        showing.session.footprint,
-                    ),
-                    live=True,
-                    refusing=stalled is not None,
-                    # Only where there is something to act on. Forking an empty conversation makes a
-                    # session identical to starting one, so the offer would be a second way to do
-                    # what the sidebar's own button already does.
-                    continuing=showing.said.turns > 0,
-                    # Any fork can send back to what it came out of; an aside is the case it is for.
-                    returning=showing.session.forked is not None,
-                    # Only while something is actually being answered: a steer into a turn nobody is
-                    # running would sit in the store unread, which is a message on the floor.
-                    answering=showing.said.answering is not None,
-                    # Only where there are files to run in. A session with no repository has no
-                    # worktree, so `Run` would be an offer with nowhere to honour it.
-                    running=showing.runnable,
-                    # Above the box, where the mode sentence already is, and above that sentence: this
-                    # is a standing fact about the conversation and that is what the next press does,
-                    # so the transient one sits closest to the thing it describes.
-                    above=cache_note(showing),
-                    # What this session's own plugins offer in the composer, each under the leader
-                    # somebody types. Declared once by the plugin and rendered by the console, so a
-                    # menu row, the button the box shows in that mode, and the sentence above it
-                    # cannot disagree about what is on offer.
-                    plugins=plugins,
+                # No box at all on an archived session, rather than one that refuses. A disabled
+                # control is honest only where something on the page could enable it, and nothing
+                # un-archives a session: the box would be a promise the page cannot keep, and the
+                # cache note over it would price a request nobody can make. What the transcript ends
+                # in says why, and the rule under the last turn is the way on. A session stalled on a
+                # missing endpoint keeps its refusing box, because a configuration put back *does*
+                # enable it, and that is the difference between the two.
+                *(
+                    (
+                        composer(
+                            links.to_say(showing.session.id),
+                            live=True,
+                            refusing=stalled is not None,
+                            # Only where there is something to act on. Forking an empty conversation
+                            # makes a session identical to starting one, so the offer would be a
+                            # second way to do what the sidebar's own button already does.
+                            continuing=showing.said.turns > 0,
+                            # Any fork can send back to what it came out of; an aside is the case it
+                            # is for.
+                            returning=showing.session.forked is not None,
+                            # Only while something is actually being answered: a steer into a turn
+                            # nobody is running would sit in the store unread, which is a message on
+                            # the floor.
+                            answering=showing.said.answering is not None,
+                            # Only where there are files to run in. A session with no repository has
+                            # no worktree, so `Run` would be an offer with nowhere to honour it.
+                            runs_in=runs_in(showing),
+                            # Above the box, where the mode sentence already is, and above that
+                            # sentence: this is a standing fact about the conversation and that is
+                            # what the next press does, so the transient one sits closest to the
+                            # thing it describes.
+                            above=cache_note(showing),
+                            # What this session's own plugins offer in the composer, each under the
+                            # leader somebody types. Declared once by the plugin and rendered by the
+                            # console, so a menu row, the button the box shows in that mode, and the
+                            # sentence above it cannot disagree about what is on offer.
+                            plugins=plugins,
+                        ),
+                    )
+                    if showing.session.archived is None
+                    else ()
                 ),
             ],
             aside_rail=[
@@ -4706,6 +4800,12 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     showing.session.id,
                     showing.session.tending,
                     plugins,
+                    about=about_card(
+                        showing.chosen,
+                        showing.repository,
+                        showing.worktree,
+                        showing.session.footprint,
+                    ),
                     archived=showing.session.archived,
                 )
             ],
@@ -4713,6 +4813,22 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,
     )
+
+
+def runs_in(showing: Conversation) -> str | None:
+    """
+    Where a command typed into this session's box would run, as a person reads it, or nothing at all.
+
+    Nothing where the session cannot run one, which is `runnable`'s question and not this function's:
+    a session with files in a console built without `Commands` has somewhere and no way, and the
+    offer goes with the way. The repository is named where a forge still reaches it and the recorded
+    id where none does, which is what `Conversation.repository` already holds.
+    """
+    if not showing.runnable:
+        return None
+    if showing.repository is None:
+        return "this session's worktree"
+    return where_it_works(showing.repository, showing.chosen.branch if showing.chosen is not None else None)
 
 
 def attachable(showing: Conversation, reachable: Reachable) -> Reachable | None:

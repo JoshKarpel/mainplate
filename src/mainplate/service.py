@@ -511,7 +511,7 @@ class Service:
 
         The repository a *forge* currently reaches when there is one, so a page shows `owner/repo`
         rather than the id, and the recorded id itself when no forge reaches it any more. The rule
-        is `Reachable.readable`'s, so the note under a message box and a row in the sidebar cannot
+        is `Reachable.readable`'s, so the session's card in the rail and a row in the sidebar cannot
         come to call one repository two different things.
         """
         if chosen is None or chosen.repository is None:
@@ -893,7 +893,7 @@ class Service:
 
         **The press records a fact and the reconciler acts on it**, which is the split every slow
         thing in this console takes. What this writes is one key, so the page it redirects to is
-        already the archived one: the composer refuses, the rail says so, the row is muted. Taking the
+        already the archived one: the box is gone, the rail says so, the row is muted. Taking the
         worktree and the scratch off the disk is minutes on a big scratch and has to wait for any pass
         still holding the session, so it is a background loop's, once a minute, reading the same key.
 

@@ -70,7 +70,7 @@ drawn as the step-outs they were, because a recorded value is not the console's 
   what becomes of a `here` message that a pass finds while it is working.
 
 **Send and everywhere else are one split control**, because a destination per button spends a slot
-in the row above the message box, which is the row a phone has least of. `sending_control` is Send
+in the row under the message box, which is the row a phone has least of. `sending_control` is Send
 plus a caret opening a `<details>` whose items are submit buttons, so the whole thing needs no
 script: the fold is how everything else here folds, and a named button has always posted its own
 pair.
@@ -568,7 +568,10 @@ the markup either way.
 
 `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the box
 takes the terminal's monospace and a heavier edge on top of the button and the sentence every mode
-gets.
+gets. That sentence names the repository and the branch the command runs in, because a `git push`
+typed there lands on that branch and a generated branch name is not one anybody can work out from
+the repository's; it is the one fact about the session the box still has to carry now that [what
+the session is stands in the rail](console.md#the-message-box).
 
 The mode is entered from the box and left from the box, both by a key pressed while it has the
 focus, and it is deliberately *not* stored: it is a mode within a visit, like following the end,

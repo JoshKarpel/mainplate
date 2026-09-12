@@ -37,6 +37,7 @@ from mainplate.durability import parse_tree
 from mainplate.footprint import Footprints
 from mainplate.footprint import Places
 from mainplate.forge import Workspaces
+from mainplate.pages import CACHE_ID
 from mainplate.service import Service
 from mainplate.sessions import Footprint
 from mainplate.sessions import read_session
@@ -258,9 +259,13 @@ class TestWhatThePageDoesWithAnArchivedSession:
     def app(self, service: Service) -> ASGIApp:
         return build_app(already(service))
 
-    async def test_the_composer_refuses_the_transcript_says_why_and_the_rail_says_when(
+    async def test_there_is_no_box_the_transcript_says_why_and_the_rail_says_when(
         self, app: ASGIApp, service: Service
     ) -> None:
+        """
+        No box at all rather than one that refuses: nothing on the page can enable it, since nothing
+        un-archives a session, and the cache note over it would price a request nobody can make.
+        """
         session = await started(service, "first", DEFAULT_CHOICE)
         await answered(service, session.id)
         await service.archive(session.id)
@@ -269,8 +274,9 @@ class TestWhatThePageDoesWithAnArchivedSession:
             answered_with = await caller.get(f"/sessions/{session.id}")
 
         assert answered_with.status == 200
-        assert 'name="prompt" rows="3" required autofocus' not in answered_with.text
-        assert "disabled" in answered_with.text
+        assert 'class="composer"' not in answered_with.text
+        assert 'name="prompt"' not in answered_with.text
+        assert f'id="{CACHE_ID}"' not in answered_with.text
         assert '<p class="stalled">Archived Mar 14,' in answered_with.text
         assert '<div class="archive"><div class="archive__head">Archived</div>' in answered_with.text
         assert f'href="/sessions/{session.id}/forks/new?at=1"' in answered_with.text
@@ -296,6 +302,26 @@ class TestWhatThePageDoesWithAnArchivedSession:
         assert '<details class="archive"><summary class="archive__head">Archive</summary>' in page.text
         assert f'action="/sessions/{session.id}/archive"' in page.text
         assert 'class="session current"' in page.text
+
+    async def test_a_live_row_carries_the_same_press_and_an_archived_row_does_not(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The list is where a console that has been used for a while gets closed down from, so the
+        disclosure and the form are the rail card's own, drawn beside the row's link rather than in
+        it. An archived row carries nothing: the key is write-once, so a second press would do
+        nothing.
+        """
+        live = await started(service, "first", DEFAULT_CHOICE)
+        closed = await started(service, "second", DEFAULT_CHOICE)
+        await service.archive(closed.id)
+
+        async with calling(app) as caller:
+            page = await caller.get("/")
+
+        assert '<details class="session__archive"><summary class="session__archive-head"' in page.text
+        assert f'action="/sessions/{live.id}/archive"' in page.text
+        assert f'action="/sessions/{closed.id}/archive"' not in page.text
 
     async def test_a_message_to_an_archived_session_is_refused(self, app: ASGIApp, service: Service) -> None:
         session = await started(service, "first", DEFAULT_CHOICE)

@@ -311,8 +311,11 @@ while: every session ever started holds a worktree and a scratch, and the one th
 session needs from the disk is nothing.
 
 **The press records a fact and a reconciler acts on it.** `Service.archive` writes one key,
-`archived`, and redirects; from that moment the composer refuses, the transcript says why, the rail's
-card says when, the row is muted, and the routes that would write to the session answer `422`. Taking
+`archived`, and redirects; from that moment [the page has no message box](console.md#the-message-box),
+the transcript says why, the rail's card says when, the row is muted, and the routes that would
+write to the session answer `422`. The press is offered in three places, the rail's card, under the
+settings step, and [on the session's row in the list](console.md#the-session-list), and all three
+are one disclosure over one form. Taking
 the directories away is `archive.py`'s, on a timer: each round reads the key off every row, finds the
 sessions still holding something on disk, and takes it off. A reconciler rather than a job the press
 queues, because what it does is diff a desired state against an actual one and converge, so a

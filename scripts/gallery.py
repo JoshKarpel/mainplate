@@ -135,7 +135,7 @@ CATALOGUE = Catalogue(
         # Both settled here for the reason `Service.start` settles them: a fixture naming a
         # repository while recording that it reaches no files, or that it is on no branch, would draw
         # a page no real session can produce. Every session working in a repository is on a branch
-        # named after it, so the line under the message box says one and a screenshot has to show it.
+        # named after it, so the card in the rail says one and a screenshot has to show it.
         isolation=Isolation(filesystem=Filesystem.WORKTREE),
         branch=branch_named(PARENT_ID),
         thinking="high",
@@ -247,8 +247,8 @@ LISTED = (
     ),
 )
 
-# The archived row above, as the page it opens on: the composer refuses, the transcript says why,
-# the rail's card says when, and the fork from the end is the one control left.
+# The archived row above, as the page it opens on: there is no box, the transcript says why, the
+# rail's card says when, and the fork from the end is the one control left.
 ARCHIVED = LISTED[-1]
 
 # One turn per kind of thing a panel can hold, so a styling change can be seen against all of them

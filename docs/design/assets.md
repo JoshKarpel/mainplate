@@ -78,6 +78,36 @@ under them: on the fork page, seventeen pixels of list and then nothing with fiv
 bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on into
 the block around it, which is what a reader who kept flicking asked for.
 
+**A phone's keyboard is the one thing `100dvh` does not know about.** `dvh` is the window less the
+browser's own bars; a keyboard is laid *over* the page, so the visual viewport shrinks to what is
+left and the layout viewport, which `dvh` and so the shell are sized by, stays where it was. The
+shell then runs on under the keys with the message box at the bottom of it, and what a browser does
+about that is scroll the page so that the *focused* element is in view: the textarea, and not the
+row under it holding Send, which on a phone is the one control a message can be sent with, since
+Shift-Enter does not exist there. Two things cover it, and they are one mechanism each side of a
+browser split:
+
+- **The viewport meta asks for the layout viewport to shrink too**, with
+  `interactive-widget=resizes-content`. Chrome and Firefox honour it, and there the shell's `100dvh`
+  ends where the keyboard begins and nothing else is needed. Safari does not honour it in any shipped
+  release, though WebKit carries the implementation.
+- **`wireKeyboard` covers Safari**, from the visual viewport: where it is shorter than the window at
+  scale one, which is a keyboard and nothing else, the script sets `--visible-height` to what is
+  left, the shell is that tall, and the page is put back at its top, since Safari will already have
+  scrolled it to show the textarea. On the resize of the visual viewport and never its scroll: the
+  shell is then exactly what can be seen, so there is nothing to scroll, and following the visual
+  viewport as a thumb drags it is what makes a layout jitter. At any other scale the visual viewport
+  is a pinch zoom, and shrinking the page to the part being looked at would be wrong, so
+  `keyboardLeaves` answers nothing and the property is taken off. On a browser that honoured the
+  meta both viewports shrank together, so the same test answers nothing there and the two cannot
+  fight.
+
+The cost, stated: **this is written against what the two viewports are documented to do and against
+nothing measured**, because neither Playwright nor the suite can raise a keyboard, and no device it
+was tried on is a claim this page can make. What it must not do it cannot do: with the script
+absent the property is never set and the shell is `100dvh` as before, and on a browser that resizes
+its content the test never fires.
+
 ## One value scales the whole page
 
 **And it is `html { font-size }`.** Everything except the monospace grid is sized in `rem`, the

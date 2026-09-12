@@ -308,8 +308,10 @@ conversation, that is the state itself rather than a debug view of it. The rule'
 **gauge** of how much of the model's context window the request carried, filled from the left and
 shading toward red, so scrolling down a long conversation shows the line lengthen and warm. What a
 turn cost is an estimate from published rates rather than a bill, since no gateway reports what it
-actually charged; the session's total sits under the message box, and above the box is whether the
-provider still holds this conversation's prefix and what re-sending it costs with none of it cached.
+actually charged; the last rule carries the session's total, and above the message box is whether
+the provider still holds this conversation's prefix and what re-sending it costs with none of it
+cached. What the session is on, its model, its repository and branch, and what it takes on disk,
+stands on a card in the rail.
 
 Three panels say what the model was *told* rather than what anyone in the conversation said: the
 **system prompt** every request in a stretch of context carried, **guidance**, a repository's own
