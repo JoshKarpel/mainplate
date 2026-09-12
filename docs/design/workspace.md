@@ -262,3 +262,42 @@ trusting what the form posted, which is what stops a form with no repository fie
 branch out of its repository, the bug that shape of trust actually produced.
 
 [There is no rewind](forking.md#there-is-no-rewind), and that is settled rather than pending.
+
+## What a session takes on disk
+
+**Every directory that is one session's is named in one place, `Places.of`**, and derived from the
+session id and the roots the console started with rather than found by looking. The worktree and
+git's own directory for it inside the clone, where the session works in a repository; the scratch
+and [the plugins' scratches](sandbox.md#the-scratch-directory) either way. Not the clone, which every
+session on that repository shares, and not the snapshots, which are objects in the clone's store
+under a ref of their own. That last exclusion is what the list is for: what is on it is what taking
+a session off the disk removes, and what is not on it is what keeps the checkpoint forkable
+afterwards.
+
+It is the one object handed both the workspaces and the plugins root, which the sandbox keeps apart
+so a plugin's `$HOME` can never sit under a directory the model writes. Seeing both is not the
+confusion that separation prevents: what decides where each namespace's `$HOME` is, is which root it
+is *bound*, and this binds nothing. It reads what the others made, and the cost is one more object
+that has to be handed the roots at startup rather than deriving them.
+
+**The figure on a row is measured on a timer, not walked when the page is drawn.** A warm walk over
+a toolchain came out at about a hundred milliseconds per thirty thousand files on this machine (a
+`.venv` of this repository is twenty-eight thousand; a mise directory with a few tools in it is
+sixteen thousand), and a session that ran `just setup` into its scratch holds both. The sidebar draws
+every session on every page, so a walk per row would put seconds on the request path of a console
+with a few working sessions. `footprint.py` walks every session the index knows, in a thread, once
+per `measure_every`, and rebinds a holder the page reads by id, the way the catalogue is read. The
+cost is that the figure is as old as the interval, and the row says when it was measured rather than
+letting a size read as current.
+
+It counts what `du` counts: blocks allocated rather than apparent size, a file linked twice counted
+once across the whole set (`uv` links a worktree's venv to the cache in the scratch, and both are
+the session's), and a symbolic link counted as itself and never followed, so a link out to the
+machine cannot make a session look like the machine. A directory that is not there is nothing, which
+is every one of them for a session that has not worked yet, and the page draws nothing for nothing
+rather than a zero.
+
+**It is not a column**, and the argument is the [catalogue's](../philosophy.md) rather than the
+index's: a reading of the disk that changes under a reader, refreshed by a task that answers no
+requests, and not a word of anything said. A column would be a copy of that reading kept in step by
+hand, which is the second copy this console is built to refuse, one level down from the checkpoint.

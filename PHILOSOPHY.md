@@ -47,6 +47,12 @@ in it is anything anybody said. It is configuration that happens to live behind 
 rather than on disk, so it is handled the way reloadable configuration is. The test for a change
 there is the same one: does it keep a second copy of what was *said*?
 
+What a session takes on disk is the same kind and passes the same test. `footprint.py` walks every
+session's directories on a timer and holds the figures the way the catalogue holds the models: a
+reading of an environment that changes under a reader, refreshed off the request path, and never a
+word of the conversation. What it is *not* is a column beside the title, since a column would be
+that reading copied and kept in step by hand.
+
 ### `localStorage` holds what a reader decided
 
 The theme, which kinds are muted, and what they have written and not sent. Never a word of the

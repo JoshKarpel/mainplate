@@ -135,6 +135,24 @@ class Origin:
 
 
 @dataclass(frozen=True, slots=True)
+class Footprint:
+    """
+    What one session takes on disk, as of the sweep that measured it.
+
+    `allocated` is bytes on disk rather than the apparent size, which is what `du` prints and what
+    deleting the directories would free: the two differ on a sparse file and on every file smaller
+    than a block, and the question this answers is how much of the disk a session is holding.
+
+    `measured_at` is here because the figure is as old as the last sweep, and a page saying a number
+    without saying when it was true would be read as current. See `footprint.py` for why it is a
+    sweep rather than a walk at render time.
+    """
+
+    allocated: int
+    measured_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class Session:
     """A session's identity, its name, and where it branched from. What was said lives in its checkpoint."""
 
@@ -180,6 +198,20 @@ class Session:
     the checkpoint keeps the value a key was first given, so a setting saved twice would keep its
     first answer for ever, and `localStorage` is in a browser where the worker that reads this may be
     another process entirely.
+    """
+
+    footprint: Footprint | None = None
+    """
+    What this session takes on disk, as the last sweep measured it, or nothing where none has.
+
+    Not a column and not read here: `parse_session` leaves it empty and `Service` fills it from the
+    holder the sweep writes, which is a dictionary lookup per row. A reading of the filesystem
+    rather than of anything said, so it is the catalogue's kind of exception and not a copy of what
+    is in the checkpoint; see `footprint.py`.
+
+    `None` is a session nothing has measured yet, which every session is between the console
+    starting and its first sweep finishing, and every session is for ever on a console keeping no
+    workspaces. A page draws nothing for it rather than a zero, since a zero is a claim.
     """
 
 

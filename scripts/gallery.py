@@ -81,6 +81,7 @@ from mainplate.service import Claimed
 from mainplate.service import Conversation
 from mainplate.service import Delayed
 from mainplate.service import Idle
+from mainplate.sessions import Footprint
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.snapshots import branch_named
@@ -185,12 +186,27 @@ WORKING_IN = "exe-github:mainplate"
 # the second one still reads as a repository is not a thing a markup assertion can answer.
 DETACHED = "exe-github:archived"
 
-PARENT = Session(id=PARENT_ID, created_at=WHEN, title="Why does the poll stop after one answer", repository=WORKING_IN)
+# When the sweep last measured the sessions below, a little after everything else happened, so the
+# time in the figure's title is a fixed one and two renders agree.
+MEASURED = WHEN + timedelta(minutes=12)
+
+PARENT = Session(
+    id=PARENT_ID,
+    created_at=WHEN,
+    title="Why does the poll stop after one answer",
+    repository=WORKING_IN,
+    # Large, because that is what a session that fetched a toolchain into its scratch looks like and
+    # the figure exists to be noticed on that one.
+    footprint=Footprint(allocated=1_290_000_000, measured_at=MEASURED),
+)
 
 # A branch, and a branch of that branch, so the sidebar's nesting is drawn at more than one depth
 # and the turn each left at is visible on the row. A fork inherits its parent's repository, so the
 # three of them read the same, and the two below are the other states a row can be in: one working
 # in nothing, one working in something nothing reaches.
+#
+# Every unit the figure can be drawn in is on one row or another, and the two states that draw no
+# figure at all are too: a session measured at nothing, and one nothing has measured.
 LISTED = (
     PARENT,
     Session(
@@ -199,6 +215,7 @@ LISTED = (
         title=PARENT.title,
         forked=Origin(session=PARENT.id, turn=1),
         repository=WORKING_IN,
+        footprint=Footprint(allocated=46_400_000, measured_at=MEASURED),
     ),
     Session(
         id="cc" * 16,
@@ -208,8 +225,14 @@ LISTED = (
         # styling change can be seen against the pair rather than against one of them.
         forked=Origin(session="bb" * 16, turn=2, aside=True),
         repository=WORKING_IN,
+        footprint=Footprint(allocated=812_000, measured_at=MEASURED),
     ),
-    Session(id="dd" * 16, created_at=WHEN, title="Add a thinking control to the picker"),
+    Session(
+        id="dd" * 16,
+        created_at=WHEN,
+        title="Add a thinking control to the picker",
+        footprint=Footprint(allocated=0, measured_at=MEASURED),
+    ),
     Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
 )
 

@@ -118,7 +118,8 @@ change:
 - [`docs/design/composer.md`](docs/design/composer.md): dispositions, leaders, the shelf, `forget`,
   handoff, steering, and running a command.
 - [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's worktree,
-  where in it and on what branch, and snapshots.
+  where in it and on what branch, snapshots, and where everything a session keeps on disk is and
+  what it takes.
 - [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
 - [`docs/design/sandbox.md`](docs/design/sandbox.md): the mount namespace `bash` runs behind, and

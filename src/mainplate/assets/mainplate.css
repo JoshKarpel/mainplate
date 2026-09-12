@@ -3424,6 +3424,17 @@ main:has(> .forking) {
     font-family: var(--mono);
 }
 
+/* What the session takes on disk. Between the date and the repository, in the repository's face and
+   size because it is the same kind of fact, and never wrapped or cut: a figure cut to `46` is a
+   different figure, where a repository name cut short is still that name. */
+.session .footprint {
+    flex: none;
+    white-space: nowrap;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+}
+
 /* Which turn the fork left its parent at, which is the one fact that distinguishes two forks of
    the same conversation from each other. */
 .session .from {
@@ -3564,6 +3575,7 @@ main:has(> .forking) {
     }
 
     .session .when,
+    .session .footprint,
     .session .where {
         display: none;
     }

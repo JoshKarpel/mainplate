@@ -9,6 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- What a session takes on disk, on its row in the sidebar and on the line under the message box:
+  its worktree, git's directory for it, its scratch and its plugins' scratches, counted as `du`
+  counts them. Measured by a sweep on a timer (`measure_every`, five minutes by default) rather than
+  when a page is drawn, since a session that fetched a toolchain holds tens of thousands of files;
+  the figure's title says when it was measured. `Places.of` is the one list of which directories are
+  a session's, which is what taking a session off the disk will read.
 - **Plugins**: somebody adds to this console without editing it. A plugin is a single executable,
   spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
   written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and

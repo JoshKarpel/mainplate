@@ -54,6 +54,7 @@ from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
+from mainplate.footprint import Footprints
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
@@ -454,6 +455,16 @@ class Service:
     nobody asked to look one up.
     """
 
+    footprints: Footprints = field(default_factory=Footprints)
+    """
+    What every session takes on disk, as the last sweep measured it, refreshed off the request path.
+
+    The third holder of the same shape, and empty by default for the reason `references` is: a
+    console nothing has measured is one whose rows say nothing, which is what a store opened on its
+    own and every test that is not about the figure want. Reading it is a lookup per row; the walk
+    is the sweep's, in `footprint.py`.
+    """
+
     watching: timedelta = DEFAULT_WATCHING
     """
     How often a page's live connection asks whether the session it is showing has moved.
@@ -514,8 +525,12 @@ class Service:
         """What the picker offers, which is nothing at all where there are no workspaces."""
         return self.workspaces.reaching.current if self.workspaces is not None else Reachable(repositories=())
 
+    def footprinted(self, session: Session) -> Session:
+        """The row with what the last sweep measured for it, which is a lookup and never a walk."""
+        return replace(session, footprint=self.footprints.current.get(session.id))
+
     async def listed(self) -> tuple[Session, ...]:
-        return await read_sessions(self.database)
+        return tuple(self.footprinted(session) for session in await read_sessions(self.database))
 
     async def read(self, session: str) -> Conversation | None:
         """
@@ -528,6 +543,7 @@ class Service:
         found = await read_session(self.database, session)
         if found is None:
             return None
+        found = self.footprinted(found)
         recorded = await self.checkpointer.load(session)
         chosen = choice_of(recorded)
         working = chosen is not None and chosen.repository is not None

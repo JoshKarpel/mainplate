@@ -124,6 +124,7 @@ from mainplate.service import Idle
 from mainplate.service import Queued
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
+from mainplate.sessions import Footprint
 from mainplate.sessions import Session
 from mainplate.snapshots import LONGEST_REF
 from mainplate.tending import AGAIN
@@ -695,6 +696,22 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
                                             if session.forked
                                             else ()
                                         ),
+                                        # What it takes on disk, drawn only once something has been
+                                        # measured and something is there: a session that has not
+                                        # worked yet holds nothing, and nothing is not worth a
+                                        # figure, for the reason a session in no repository says
+                                        # nothing about where it works.
+                                        *(
+                                            (
+                                                span(
+                                                    cls="footprint",
+                                                    attrs={"title": footprint_note(session.footprint)},
+                                                    children=sized(session.footprint.allocated),
+                                                ),
+                                            )
+                                            if session.footprint is not None and session.footprint.allocated
+                                            else ()
+                                        ),
                                         *(
                                             (
                                                 span(
@@ -738,6 +755,38 @@ def tokens(count: int) -> str:
     if count >= 1_000:
         return f"{count / 1_000:.0f}K"
     return str(count)
+
+
+def sized(allocated: int) -> str:
+    """
+    Bytes on disk as a person compares them, which is to two or three figures in a binary unit.
+
+    Binary, unlike `tokens`, because this is a size to allocate against rather than a number to
+    weigh: it is what `du` prints and what `df` will get back, and the unit says which base it is in
+    so nobody has to know. One decimal under ten and none above, since `1.2 GiB` and `466 MiB` are
+    each the digits a person reads and `1.21 GiB` is precision nobody asked for.
+    """
+    value = float(allocated)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            break
+        value /= 1024
+    figure = str(round(value)) if value >= 10 or unit == "B" else f"{value:.1f}".removesuffix(".0")
+    return f"{figure} {unit}"
+
+
+def footprint_note(footprint: Footprint) -> str:
+    """
+    What the figure on a row is a figure of, and when it was true, as the sentence behind it.
+
+    One sentence for both places the figure is drawn, so the sidebar and the note under the message
+    box cannot describe the same directories two ways. It says *when* because the number is as old
+    as the last sweep, and a size with no time beside it reads as current.
+    """
+    return (
+        f"{sized(footprint.allocated)} on disk across this session's worktree, scratch and plugins, "
+        f"measured at {footprint.measured_at.strftime('%H:%M')}"
+    )
 
 
 def dollars(rate: float) -> str:
@@ -1863,6 +1912,7 @@ def chosen_note(
     repository: str | None = None,
     worktree: Path | None = None,
     spent: Spent | None = None,
+    footprint: Footprint | None = None,
 ) -> Element:
     """
     What an existing session is on, as a fact rather than a control: it cannot be changed.
@@ -1931,6 +1981,21 @@ def chosen_note(
                     ),
                 )
                 if spent is not None and spent.cost is not None
+                else ()
+            ),
+            *(
+                (
+                    span(
+                        cls="footprint",
+                        # Last, after what the session cost, because it is the other thing a session
+                        # is spending and the one this line can do something about: the money is
+                        # gone and the disk comes back. On the same terms as the sidebar's figure,
+                        # which is the same sentence behind it, so a row and its page agree.
+                        attrs={"title": footprint_note(footprint)},
+                        children=f"\N{MIDDLE DOT} {sized(footprint.allocated)} on disk",
+                    ),
+                )
+                if footprint is not None and footprint.allocated
                 else ()
             ),
         ],
@@ -4446,7 +4511,13 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                 transcript_region(links, showing),
                 composer(
                     links.to_say(showing.session.id),
-                    chosen_note(showing.chosen, showing.repository, showing.worktree, showing.said.total),
+                    chosen_note(
+                        showing.chosen,
+                        showing.repository,
+                        showing.worktree,
+                        showing.said.total,
+                        showing.session.footprint,
+                    ),
                     live=True,
                     refusing=stalled is not None,
                     # Only where there is something to act on. Forking an empty conversation makes a
