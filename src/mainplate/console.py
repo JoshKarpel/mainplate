@@ -817,14 +817,24 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
     answers rather than leaving a message to appear whenever the stream next looks, and the
     connection then sends the same thing, which morphs to nothing.
 
-    `FORK` cannot do that, because what it makes is a *different* session and the reader has to
-    end up there. A `303` would be followed by htmx and swapped into the transcript, which would
-    leave somebody reading the branch at the parent's URL, so this answers `HX-Redirect` and the
+    `PARENT` cannot do that, because the message goes into a *different* session and the reader has
+    to end up there. A `303` would be followed by htmx and swapped into the transcript, which would
+    leave somebody reading the parent at the branch's URL, so this answers `HX-Redirect` and the
     browser navigates for real.
+
+    Nothing here forks. A fork is made from a rule, at a turn boundary, through the fork page, and
+    the composer offered one at the end of the conversation until it did not: carrying on a live
+    session is typing into it, and an archived one carries the same link on the rule under its last
+    turn.
     """
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    # Every arm, before any of them: an archived session takes nothing more, whichever way it was
+    # addressed and whoever posted it. The page's own controls are disabled, so reaching this is a
+    # caller that is not this page, and a message on the floor is the state the key exists to end.
+    if found.session.archived is not None:
+        return page_response(422, refusal_page(LINKS, 422, f"session {session} is archived; fork it instead"))
     # A plugin's own answer, before the console's, because it is not a `Disposition` at all: what
     # happens to what you typed is the plugin's to decide, and the effects it asks for are performed
     # by the service exactly as they are inside a pass.
@@ -860,22 +870,6 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             # `send`, because a boundary between turns is the only place one can be.
             await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
             return await redrawn(service, session)
-        case Disposition.FORK | Disposition.ASIDE:
-            # The parent's own choice, not a posted one: a fork from the composer offers no picker,
-            # and `Service.fork` is what decides the repository either way. Forking the *end* carries
-            # every turn, so nothing is left behind and nothing is re-asked.
-            if found.chosen is None:
-                return page_response(422, refusal_page(LINKS, 422, f"session {session} records no endpoint"))
-            forked = await service.fork(
-                session,
-                at=found.said.turns,
-                chosen=found.chosen,
-                said=sending.said,
-                aside=sending.where is Disposition.ASIDE,
-            )
-            if forked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            return navigating(LINKS.to_session(forked.id))
         case Disposition.RUN:
             # Not a message at all: the text is run in this session's worktree, as the person, and
             # the record of it is never told to a model. Refused rather than silently ignored where
@@ -933,6 +927,8 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    if found.session.archived is not None:
+        return page_response(422, refusal_page(LINKS, 422, f"session {session} is archived; fork it instead"))
     if not settling(found):
         return page_response(
             422, refusal_page(LINKS, 422, f"session {session} has already loaded its plugins; fork it instead")
@@ -973,6 +969,27 @@ async def press(service: Service, session: str, pressed: Pressed) -> Response:
     return page_response(200, fragment(plugin_card(LINKS, session, enrolled, settings)))
 
 
+@post(t"/sessions/{session_id}/archive", session_id, summary="Archive a session, keeping its conversation")
+async def archive(service: Service, session: str) -> Response:
+    """
+    Close the session, and go back to it as the archived thing it now is.
+
+    An ordinary form post answered with a `303`, because what changes is not one region: the box
+    goes, the rail's card says when, the transcript says why, and the row in the sidebar is muted.
+    The live connection carries only the transcript, so a fragment would leave three of those as they
+    were until a reload, and a reload is what the redirect is. It is also why the press on a sidebar
+    row lands on the session it closed rather than back where the row was: the page that opens is
+    the one saying what just happened.
+
+    A `303` to the same page is also what makes pressing it twice harmless: the key is write-once, so
+    the second press is the first one again, and the page it lands on is the same page.
+    """
+    archived = await service.archive(session)
+    if archived is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return seeing(LINKS.to_session(session))
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
     start,
@@ -985,6 +1002,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     say,
     setup,
     press,
+    archive,
     request_record,
 )
 
@@ -1001,5 +1019,6 @@ LINKS = Links(
     fork=fork,
     setup=setup,
     press=press,
+    archive=archive,
     assets=ASSETS,
 )

@@ -35,12 +35,14 @@ from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.commands import Commands
 from mainplate.commands import Slot
+from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import declared_in
 from mainplate.conversation import failure_in
+from mainplate.conversation import latest_tree
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
@@ -54,6 +56,7 @@ from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
+from mainplate.footprint import Footprints
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
@@ -454,6 +457,16 @@ class Service:
     nobody asked to look one up.
     """
 
+    footprints: Footprints = field(default_factory=Footprints)
+    """
+    What every session takes on disk, as the last sweep measured it, refreshed off the request path.
+
+    The third holder of the same shape, and empty by default for the reason `references` is: a
+    console nothing has measured is one whose rows say nothing, which is what a store opened on its
+    own and every test that is not about the figure want. Reading it is a lookup per row; the walk
+    is the sweep's, in `footprint.py`.
+    """
+
     watching: timedelta = DEFAULT_WATCHING
     """
     How often a page's live connection asks whether the session it is showing has moved.
@@ -498,7 +511,7 @@ class Service:
 
         The repository a *forge* currently reaches when there is one, so a page shows `owner/repo`
         rather than the id, and the recorded id itself when no forge reaches it any more. The rule
-        is `Reachable.readable`'s, so the note under a message box and a row in the sidebar cannot
+        is `Reachable.readable`'s, so the session's card in the rail and a row in the sidebar cannot
         come to call one repository two different things.
         """
         if chosen is None or chosen.repository is None:
@@ -514,8 +527,12 @@ class Service:
         """What the picker offers, which is nothing at all where there are no workspaces."""
         return self.workspaces.reaching.current if self.workspaces is not None else Reachable(repositories=())
 
+    def footprinted(self, session: Session) -> Session:
+        """The row with what the last sweep measured for it, which is a lookup and never a walk."""
+        return replace(session, footprint=self.footprints.current.get(session.id))
+
     async def listed(self) -> tuple[Session, ...]:
-        return await read_sessions(self.database)
+        return tuple(self.footprinted(session) for session in await read_sessions(self.database))
 
     async def read(self, session: str) -> Conversation | None:
         """
@@ -528,6 +545,7 @@ class Service:
         found = await read_session(self.database, session)
         if found is None:
             return None
+        found = self.footprinted(found)
         recorded = await self.checkpointer.load(session)
         chosen = choice_of(recorded)
         working = chosen is not None and chosen.repository is not None
@@ -617,6 +635,20 @@ class Service:
     async def attention(self, session: str) -> Attention:
         """What the worker is doing about this session, as `attention_of` reads one `attended`."""
         return attention_of(await self.attended(session))
+
+    async def held(self, session: str) -> bool:
+        """
+        Whether something is writing in this session's worktree right now: a pass, or a command a
+        person ran.
+
+        Both are live state rather than anything recorded, and both are the same fact from two sides:
+        while either holds the session, the worktree is a moving thing, and what a capture of it
+        would record is a mixture nothing ever saw. The reconciler asks this before taking a worktree
+        away, and a fork from the end asks it before capturing one.
+        """
+        if isinstance(await self.attention(session), Claimed):
+            return True
+        return self.commands is not None and any(slot.session == session for slot in self.commands.running.values())
 
     async def token(self, session: str) -> str:
         """
@@ -728,7 +760,6 @@ class Service:
         at: int,
         chosen: Choice,
         said: str | None = None,
-        aside: bool = False,
     ) -> Session | None:
         """
         A new session carrying this one's turns before `at`, on `chosen`, and asking `said` next.
@@ -751,12 +782,11 @@ class Service:
         because the other reason to fork a turn is to rephrase it.
 
         `said` of `None` leaves the fork waiting instead, which is the honest state when there is
-        no message to re-ask - forking from the end of a conversation to carry on somewhere else.
+        no message to re-ask - forking from the end of an archived conversation to carry it on.
 
-        `aside` records that this fork is meant to come back, and changes nothing else: the copy, the
-        worktree and the choice are the same either way, because what differs is only what somebody
-        intended. It is recorded because nothing else could recover it and because the sidebar cannot
-        draw the difference otherwise.
+        `Origin.aside` is never set here any more: the composer's aside was the one thing that set
+        it, and it went with the composer's fork. Rows written while it existed still carry it, and
+        the sidebar still draws them as what they were.
 
         The message goes last, after the choice, for the reason it does in `start`: a prompt is
         what *queues* a session, so a worker taking this one between the two would find no endpoint
@@ -795,7 +825,7 @@ class Service:
             # A fork's opening line is its parent's, because it literally carries it: the title is
             # what the first message says, and the first message came across with the rest.
             title=parent.title,
-            forked=Origin(session=session, turn=at, aside=aside),
+            forked=Origin(session=session, turn=at),
         )
         # And then a branch of the fork's *own*, which is the other half of `settled` dropping the
         # parent's: dropping it alone would leave every fork on a detached `HEAD`, where a fork is
@@ -821,7 +851,15 @@ class Service:
         #
         # Recorded here rather than planted here for the reason `start` clones nothing: this is a
         # request, and a checkout is not.
+        #
+        # Forking the *end* has no turn to re-ask and so no opening tree to carry, and planting at the
+        # repository's head there would hand the branch files the conversation never saw. So it
+        # plants at the newest tree the parent recorded - the one the reconciler captured on the way
+        # to archiving it, which is the end the rule offers, or the last request's for an end reached
+        # by URL - which is `latest_tree`'s rule.
         started_on = recorded.get(opening_tree_key(at))
+        if started_on is None and at > 0:
+            started_on = latest_tree(recorded)
         if started_on is not None:
             await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
         # **Nothing any plugin declared, contributed, or was confirmed for comes across**, and that is
@@ -848,6 +886,26 @@ class Service:
             # until somebody typed, and the settings step would have nothing to draw.
             await self.durable.scheduler.make_ready(forked.id)
         return forked
+
+    async def archive(self, session: str) -> Session | None:
+        """
+        Close a session: nothing more is said in it, and its files come off the disk.
+
+        **The press records a fact and the reconciler acts on it**, which is the split every slow
+        thing in this console takes. What this writes is one key, so the page it redirects to is
+        already the archived one: the box is gone, the rail says so, the row is muted. Taking the
+        worktree and the scratch off the disk is minutes on a big scratch and has to wait for any pass
+        still holding the session, so it is a background loop's, once a minute, reading the same key.
+
+        Write-once, so archiving twice is the first press twice over and nothing un-archives a
+        session: what brings a conversation back is `fork`, which carries every turn and leaves this
+        key behind, so the branch is a live session with the archived one's whole past.
+        """
+        found = await read_session(self.database, session)
+        if found is None:
+            return None
+        await self.checkpointer.supply(session, ARCHIVED_KEY, records.Archived(at=self.now()).recorded())
+        return await read_session(self.database, session)
 
     async def run(self, session: str, said: str) -> str | None:
         """

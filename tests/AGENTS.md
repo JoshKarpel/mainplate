@@ -83,7 +83,7 @@ So does a missing `bwrap` in `test_sandbox.py`, where every assertion is about w
 namespace actually does and a skipped one catches nothing.
 
 **Sideways scroll is asserted here rather than in the shots, and that is the same lesson again.**
-`shoot.mjs` prints it beside the screenshot it is measuring and fails nothing, which is a diagnostic
+`shoot.py` prints it beside the screenshot it is measuring and fails nothing, which is a diagnostic
 for somebody already looking; `TestTheShapeOfANarrowWindow` fails a build.
 
 Its `console` fixture is the one thing there that leaves the gallery, and it has to. The gallery

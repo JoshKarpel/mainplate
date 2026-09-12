@@ -104,9 +104,8 @@ scrolled, and re-entered by sending a message. `land` therefore has to route its
 bottom and the scroll listener switches following back on at the very moment they asked to be
 somewhere in particular.
 
-The rail (search, key, dock, shelf, a card per running plugin, theme) lives **outside** the region
-that swaps, so no
-control is rebuilt under a reader's finger. What it projects back *onto* the transcript, the search
+The rail (search, key, dock, shelf, a card per running plugin, what the session is, archiving,
+theme) lives **outside** the region that swaps, so no control is rebuilt under a reader's finger. What it projects back *onto* the transcript, the search
 marks, the panel landed on, which kinds are muted, what is folded, cannot live in the markup either,
 so `assets/mainplate.js` holds it as values and reapplies it after every swap. That projection is
 one idempotent `repaint()` serving the first render, every swap, and every press.
@@ -163,6 +162,23 @@ rather than saying nothing. That is `SELECTION` reading the repository straight 
 
 A fork is drawn nested under what it came from and labelled with the turn it left at, which is
 emergent from the `Origin` on each row rather than from anything inside a checkpoint.
+
+Each row also says what its session takes on disk, read off [a holder a sweep
+fills](workspace.md#what-a-session-takes-on-disk), and an [archived](workspace.md#archiving) row
+is muted with the word beside its date: the same join that reaches the repository reaches the
+`archived` key, so neither is a column.
+
+**Every live row carries the archive control, shown on hover and on focus, laid over the row's
+corner.** A console that has been used for a while is closed down from the list, and opening each
+session to reach its rail is a step per session. Laid over rather than added to the row, because a
+control that took a line of its own would move every row beneath it as the pointer passed down the
+list; hidden until reached, because a list of sessions with a button on every row is a list of
+buttons, and what the list is for is telling sessions apart. It is the rail's own disclosure, the
+sentence and then the press, so a mis-press on a row is exactly as impossible as one in the rail,
+and the redirect lands on the session it closed, which is the page saying what just happened. The
+cost, stated: it covers the tail of a long name while it shows, which is the corner every row action
+lives in, and the whole name is in the title. It is not drawn on a phone, where nothing hovers; a
+session is opened and closed from its rail there.
 
 ## The picker
 
@@ -305,10 +321,51 @@ reached the model, so the box belongs on the same side of it as the panel a mess
 the ground Send is painted in. The gold in a screenshot is the focus ring (`--mark`) over that
 border, not the border.
 
-**The Send control takes its own height rather than the box's**, and the row's `flex-end` puts it
-level with the bottom of the box, which is where its menu hangs from anyway. Stretched to a box that
-now reaches fourteen lines, it would be a slab of person-hue reading as a panel rather than a
-button.
+**The box is one card: the text, and under it a row of what to do with it.** The edge, the ground
+and the focus ring are the card's rather than the textarea's, so Send and its menu read as the box's
+own tools and not as a button beside a field, and a phone and a wide window draw one shape: the row
+under the box used to be a phone rule that wrapped the buttons under a box they no longer fitted
+beside, and buttons that wrapped read as buttons that fell off. It is also the shape every chat
+composer a reader already knows takes, so there is nothing to learn. Send stands at the right of
+that row, where a thumb and a pointer both already are, and the room to its left is what anything a
+message may one day be sent with would take. The row is exactly one line of the box tall, so a box
+at rest is two equal rows, and it is the box's `<label>`: a press on the part of it where no tool is
+puts the cursor in the box, which is the browser's own rule for a label rather than a listener, and
+a press on a tool is the tool's. The cost, stated: a wide window spends a row on Send that used to
+sit beside the box, and the menu, which opens upward from the caret, now opens over the text rather
+than beside it.
+
+**Nothing sits under the box, and what sits above it is only what the next press depends on.** The
+line saying [whether the cache is still warm and what re-sending
+costs](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth), the sentence saying what
+the box will do while it is in [a mode](composer.md#leaders), and `sending…` for the length of a
+round trip; each appears above the box so that what grows is the composer's top edge and the box
+stays under the cursor. What the session *is* - the endpoint and model, the thinking level, the
+repository and branch, what it takes on disk - used to be a line under the box and is a card in the
+rail, among the cards about the session as a whole. The move is a grouping and not a saving:
+whatever stands against the box is read as being about the act of sending, and none of those is;
+they were settled when the session was made and took a row on every window and three on a phone to
+say so every turn. The rail is where facts about the whole session already stand, and on a phone it
+is behind the clasp, which is right for facts that never change. The one of them the box still needs
+is the branch, which somebody about to type `git push` has to be able to read, and the sentence over
+a command box names it. The session's total went with the line, because the running total on the
+last rule is the same figure and moves with the transcript where a card in the rail sits stale until
+a reload. The cost, stated: the counts behind that total, tokens in and out over the whole session,
+are drawn nowhere now.
+
+That the box is the last thing on the page is also what a phone needs: the keyboard comes up under
+whatever is focused, and a row under the composer is a row the keyboard covers or the browser has to
+scroll past to show the box. [How the shell makes room for the
+keyboard](assets.md#the-document-never-scrolls-and-every-box-between-has-to-say-so) is the
+stylesheet's and the script's.
+
+**An archived session has no box at all**, rather than one that refuses. A disabled control is
+honest only where something on the page could enable it, and [nothing un-archives a
+session](workspace.md#archiving): the box would be a promise the page cannot keep, and the cache
+note over it would price a request nobody can make. The transcript ends in the sentence saying why,
+and the rule under the last turn is the way on. A session stalled on a missing endpoint keeps its
+refusing box, because a configuration put back *does* enable it, and that is the whole difference
+between the two stops.
 
 **And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
 button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
@@ -578,7 +635,8 @@ one is deciding that for them.
 page. Every request of a turn carries the whole conversation again, so a summed input says what the
 provider charged for, several times over about the same tokens; what a reader wants off a rule is
 how much of the window is gone, which is where the turn's *last* request left it. The summed figure
-is still true and still drawn, under the message box, as what the session has been charged for.
+is still true and is not drawn: the money on the rule already says what the provider charged for,
+and a second count that disagrees with the first by design would be a page arguing with itself.
 
 **A symbol per figure, and the words in the titles.** A rule is one line that must not wrap and it
 now carries six figures where it carried three. `↑` and `↓` are a count of tokens going up to the

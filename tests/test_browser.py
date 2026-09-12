@@ -702,7 +702,7 @@ class TestTheShapeOfANarrowWindow:
     """
     A phone gets one column, and no page pushes the document sideways to get it.
 
-    Here rather than in `scripts/shoot.mjs`, which prints the same overflow beside the screenshot it
+    Here rather than in `scripts/shoot.py`, which prints the same overflow beside the screenshot it
     is measuring and fails nothing: that is a diagnostic for somebody already looking at a shot, and
     the layout it is measuring is a deliverable that regresses without anybody looking. It is the
     reason the rest of this module exists, applied once more.
@@ -717,8 +717,8 @@ class TestTheShapeOfANarrowWindow:
     @pytest.mark.parametrize("name", EVERY_PAGE)
     async def test_no_page_pushes_the_document_sideways(self, phone: Page, gallery: str, name: str) -> None:
         await phone.goto(f"{gallery}/{name}", wait_until="load")
-        # The transcript may scroll its own wide blocks and the session strip scrolls itself; what
-        # must never move is the document, which has nowhere to overflow to.
+        # The transcript may scroll its own wide blocks and the session list scrolls inside its own
+        # card; what must never move is the document, which has nowhere to overflow to.
         room = await phone.evaluate(
             "() => ({ document: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth })"
         )
@@ -733,6 +733,57 @@ class TestTheShapeOfANarrowWindow:
         # goes to the conversation. A count alone is satisfied by `none`, which is what a shell that
         # had stopped being a grid at all would report.
         assert columns.split() == [f"{PHONE['width']}px"]
+
+
+class TestTheSessionListOnAPhone:
+    """
+    The session list lies off the left edge of a phone until its clasp is pressed, as the rail does
+    off the right, and only one of the two is out at a time.
+
+    A browser because both states are correct markup: the list is on the page whether it is parked
+    or slid out, and what changes is a transform and a visibility that only a rendering resolves.
+    """
+
+    async def test_the_list_is_shut_until_its_clasp_is_pressed(self, phone: Page, gallery: str) -> None:
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        start = phone.locator(".sessions .start")
+        await expect(start).to_be_hidden()
+        await phone.locator(".sessions__clasp").click()
+        # In the viewport rather than merely visible, because visibility flips at the start of the
+        # slide and the list is still off the edge for a fifth of a second after it.
+        await expect(start).to_be_in_viewport()
+
+    async def test_opening_the_list_shuts_the_rail(self, phone: Page, gallery: str) -> None:
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await phone.locator(".rail__clasp").click()
+        await expect(phone.locator(".search")).to_be_visible()
+        await phone.locator(".sessions__clasp").click()
+        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await expect(phone.locator(".search")).to_be_hidden()
+        assert await phone.get_attribute(".rail__clasp", "aria-expanded") == "false"
+
+    async def test_escape_shuts_the_list(self, phone: Page, gallery: str) -> None:
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await phone.locator(".sessions__clasp").click()
+        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await phone.keyboard.press("Escape")
+        await expect(phone.locator(".sessions .start")).to_be_hidden()
+
+    async def test_the_rail_scrolls_itself_while_out(self, phone: Page, gallery: str) -> None:
+        # The rail is fixed to the viewport, so nothing else can scroll it, and on a phone it is
+        # taller than the window: shut, its cards were cut off at the bottom with no way to them.
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await phone.locator(".rail__clasp").click()
+        await expect(phone.locator(".search")).to_be_visible()
+        scrolled = await phone.evaluate(
+            "() => { const rail = document.querySelector('.rail'); rail.scrollTop = 10000; return rail.scrollTop; }"
+        )
+        assert scrolled > 0
+
+    async def test_a_wide_window_draws_no_clasp(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(page.locator(".sessions__clasp")).to_be_hidden()
+        await expect(page.locator(".sessions .start")).to_be_visible()
 
 
 # Short enough that the choosing with a group open is longer than the window, which is the whole
@@ -2060,9 +2111,29 @@ class TestTheSwitchOnATiersHeading:
         )
 
 
+async def a_branch(console: tuple[str, Service], page: Page) -> tuple[str, str]:
+    """
+    A conversation and a branch of it from its end, on the page, as the two ids.
+
+    Made the way a rule's fork link makes one, through the service rather than a press, because
+    nothing in the composer forks: what these tests drive is the way *back*.
+    """
+    url, service = console
+    session = await a_conversation(console, page)
+    found = await service.read(session)
+    assert found is not None
+    assert found.chosen is not None
+    branch = await service.fork(session, at=found.said.turns, chosen=found.chosen, said="let me check something")
+    assert branch is not None
+    await page.goto(f"{url}/sessions/{branch.id}", wait_until="load")
+    await landed_on_the_branch(console, page)
+    await expect(page.locator("#transcript")).to_contain_text("let me check something")
+    return session, branch.id
+
+
 class TestWhereTheComposerSendsTo:
     """
-    That pressing Fork lands the reader in a *different* session, driven by a real htmx.
+    That pressing Parent lands the reader in a *different* session, driven by a real htmx.
 
     Two things this rests on are htmx's rather than ours, and both were read out of a minified
     bundle: that it appends the submit button's own `name`/`value` to the request, and that it
@@ -2070,31 +2141,14 @@ class TestWhereTheComposerSendsTo:
     every in-memory test, and shows up only as a button that quietly sends to the wrong place.
     """
 
-    async def test_forking_navigates_to_a_new_session(self, page: Page, console: tuple[str, Service]) -> None:
-        session = await a_conversation(console, page)
-        await page.fill(".composer textarea", "try it another way")
-        await page.click(".sender__caret")
-        await page.click('.sender__option[value="fork"]')
-
-        await page.wait_for_url(lambda url: session not in url)
-        assert "/sessions/" in page.url
-        await landed_on_the_branch(console, page)
-        await expect(page.locator("#transcript")).to_contain_text("try it another way")
-        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
-
-    async def test_stepping_aside_and_coming_back_returns_to_where_it_started(
+    async def test_sending_back_returns_to_where_the_branch_started(
         self, page: Page, console: tuple[str, Service]
     ) -> None:
         """
-        The whole round trip, which no single request shows: two navigations and a message that ends
-        up in the conversation the reader left rather than the one they were in.
+        The whole round trip, which no single request shows: a navigation and a message that ends up
+        in the conversation the reader left rather than the one they were in.
         """
-        session = await a_conversation(console, page)
-        await page.fill(".composer textarea", "let me check something")
-        await page.click(".sender__caret")
-        await page.click('.sender__option[value="aside"]')
-        await page.wait_for_url(lambda url: session not in url)
-        await landed_on_the_branch(console, page)
+        session, _ = await a_branch(console, page)
 
         await page.fill(".composer textarea", "here is what I found")
         await page.click(".sender__caret")
@@ -2284,7 +2338,7 @@ class TestTurningTheBoxIntoACommandBox:
         await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "run")
         await expect(page.locator(".sender__more")).to_have_attribute("open", "")
         await expect(page.locator('.sender__option[value="run"]')).to_be_visible()
-        await expect(page.locator('.sender__option[value="fork"]')).to_be_hidden()
+        await expect(page.locator('.sender__option[value="forget"]')).to_be_hidden()
         assert await page.input_value(".composer textarea") == "!"
 
     async def test_a_command_box_stays_one_once_a_command_has_gone(
@@ -2387,7 +2441,7 @@ class TestTurningTheBoxIntoACommandBox:
 
 class TestNamingAModeFromTheKeyboard:
     """
-    `/fork` and the rest, which reach the sending menu's own rows without the pointer.
+    `/forget` and the rest, which reach the sending menu's own rows without the pointer.
 
     A browser, for the reasons the command box is one and one more: the palette *is* the menu, so
     what these ask is that one control answers two questions without confusing them. A row pressed
@@ -2403,7 +2457,7 @@ class TestNamingAModeFromTheKeyboard:
         await page.keyboard.type("/")
 
         await expect(page.locator(".sender__more")).to_have_attribute("open", "")
-        await expect(page.locator('.sender__option[value="fork"]')).to_be_visible()
+        await expect(page.locator('.sender__option[value="forget"]')).to_be_visible()
         await expect(page.locator(".sender__option[data-shelf]")).to_be_visible()
 
     async def test_typing_narrows_the_offer_to_what_still_fits(self, page: Page, console: tuple[str, Service]) -> None:
@@ -2415,8 +2469,8 @@ class TestNamingAModeFromTheKeyboard:
         await page.click(".composer textarea")
         await page.keyboard.type("/f")
 
-        await expect(page.locator('.sender__option[value="fork"]')).to_be_visible()
-        await expect(page.locator('.sender__option[value="aside"]')).to_be_hidden()
+        await expect(page.locator('.sender__option[value="forget"]')).to_be_visible()
+        await expect(page.locator(".sender__option[data-shelf]")).to_be_hidden()
 
     async def test_a_space_after_the_whole_word_takes_that_answer(
         self, page: Page, console: tuple[str, Service]
@@ -2428,10 +2482,10 @@ class TestNamingAModeFromTheKeyboard:
         """
         await a_conversation(console, page)
         await page.click(".composer textarea")
-        await page.keyboard.type("/fork ")
+        await page.keyboard.type("/forget ")
 
-        await expect(page.locator(".composer")).to_have_attribute("data-leading", "fork")
-        await expect(page.locator('.sender__leader[data-leader="fork"]')).to_be_visible()
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "forget")
+        await expect(page.locator('.sender__leader[data-leader="forget"]')).to_be_visible()
         await expect(page.locator(".sender__send")).to_be_hidden()
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
         assert await page.input_value(".composer textarea") == "", "the leader and its space are consumed"
@@ -2478,42 +2532,43 @@ class TestNamingAModeFromTheKeyboard:
         await page.click(".composer textarea")
         await page.keyboard.type("/fo ")
 
-        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "fork")
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "forget")
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
         assert await page.input_value(".composer textarea") == "/fo "
 
-    async def test_enter_takes_the_row_the_keyboard_is_on(self, page: Page, console: tuple[str, Service]) -> None:
+    async def test_enter_takes_the_row_the_keyboard_is_on(self, page: Page, working: tuple[str, Service]) -> None:
         """
         The palette's own key, which is what a half-typed word is finished with: the space names an
         answer in full, and Enter takes whichever row the arrows have arrived at.
 
-        `/fo` is a genuinely ambiguous prefix - `forget` and `fork` both answer to it - which is what
-        makes this a test of the *position* rather than of there happening to be one row left. The
-        arrow is what proves it: without it, taking the first row and taking the row the keyboard is
-        on are the same thing and the key could be wrong in a way nothing here would see.
+        A bare `/` is the one prefix every answer fits, so on a session with files and a turn being
+        answered it offers `next`, `forget`, `run` and `keep` at once, which is what makes this a
+        test of the *position* rather than of there happening to be one row left. The arrow is what
+        proves it: without it, taking the first row and taking the row the keyboard is on are the
+        same thing and the key could be wrong in a way nothing here would see.
         """
-        await a_conversation(console, page)
+        await a_session_with_files(working, page)
         await page.click(".composer textarea")
-        await page.keyboard.type("/fo")
-        await expect(page.locator(".sender__option:visible")).to_have_count(2)
+        await page.keyboard.type("/")
+        await expect(page.locator(".sender__option:visible")).to_have_count(4)
         await page.keyboard.press("ArrowDown")
         await page.keyboard.press("Enter")
 
-        await expect(page.locator(".composer")).to_have_attribute("data-leading", "fork")
-        await expect(page.locator('.sender__leader[data-leader="fork"]')).to_be_visible()
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "forget")
+        await expect(page.locator('.sender__leader[data-leader="forget"]')).to_be_visible()
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
         assert await page.input_value(".composer textarea") == "", "the leader is consumed, not sent"
 
-    async def test_enter_on_an_ambiguous_prefix_takes_the_row_it_starts_on(
-        self, page: Page, console: tuple[str, Service]
+    async def test_enter_on_an_open_offer_takes_the_row_it_starts_on(
+        self, page: Page, working: tuple[str, Service]
     ) -> None:
         """The other half of the pair above: untouched, the keyboard is on the first row that fits."""
-        await a_conversation(console, page)
+        await a_session_with_files(working, page)
         await page.click(".composer textarea")
-        await page.keyboard.type("/fo")
+        await page.keyboard.type("/")
         await page.keyboard.press("Enter")
 
-        await expect(page.locator(".composer")).to_have_attribute("data-leading", "forget")
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "next")
 
     async def test_a_word_no_answer_answers_to_is_ordinary_text(self, page: Page, console: tuple[str, Service]) -> None:
         """
@@ -2526,7 +2581,7 @@ class TestNamingAModeFromTheKeyboard:
         await page.keyboard.type("/etc/hosts is where it lives")
 
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
-        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "fork")
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "forget")
         assert await page.input_value(".composer textarea") == "/etc/hosts is where it lives"
 
     async def test_a_slash_partway_into_a_message_offers_nothing(
@@ -2538,26 +2593,25 @@ class TestNamingAModeFromTheKeyboard:
         """
         await a_conversation(console, page)
         await page.click(".composer textarea")
-        await page.keyboard.type("look in /fork")
+        await page.keyboard.type("look in /forget")
 
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
-        assert await page.input_value(".composer textarea") == "look in /fork"
+        assert await page.input_value(".composer textarea") == "look in /forget"
 
     async def test_the_mode_decides_where_the_keyboard_sends(self, page: Page, console: tuple[str, Service]) -> None:
         """
         The one that matters, and the one only a browser can ask: a leader is worth nothing unless the
-        send it sets up actually goes where the button says. Fork answers `HX-Redirect`, so what a
-        working one looks like is a different session's URL.
+        send it sets up actually goes where the button says. Parent answers `HX-Redirect`, so what a
+        working one looks like is the parent session's URL.
         """
-        session = await a_conversation(console, page)
+        session, branch = await a_branch(console, page)
         await page.click(".composer textarea")
-        await page.keyboard.type("/fork ")
-        await page.keyboard.type("try it another way")
+        await page.keyboard.type("/parent ")
+        await page.keyboard.type("here is what I found")
         await page.keyboard.press("Shift+Enter")
 
-        await page.wait_for_url(lambda url: session not in url)
-        await landed_on_the_branch(console, page)
-        await expect(page.locator("#transcript")).to_contain_text("try it another way")
+        await page.wait_for_url(lambda url: session in url and branch not in url)
+        await expect(page.locator("#transcript")).to_contain_text("here is what I found")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
 
     async def test_pressing_a_row_while_a_leader_is_typed_chooses_the_mode_rather_than_sending(
@@ -2565,17 +2619,18 @@ class TestNamingAModeFromTheKeyboard:
     ) -> None:
         """
         The one failure reusing the menu as the palette can have: the rows are submit buttons, so a
-        press with `/fo` in the box would post `/fo` as the message and fork on it - which is both a
-        message nobody wrote and a session nobody asked for.
+        press with `/fo` in the box would post `/fo` as the message and forget on it - which is a
+        message nobody wrote, sent with the context cleared.
         """
         session = await a_conversation(console, page)
         await page.click(".composer textarea")
         await page.keyboard.type("/fo")
-        await page.click('.sender__option[value="fork"]')
+        await page.click('.sender__option[value="forget"]')
 
-        await expect(page.locator(".composer")).to_have_attribute("data-leading", "fork")
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "forget")
         assert await page.input_value(".composer textarea") == ""
         assert session in page.url, "choosing a mode sends nothing, so nothing navigates"
+        await expect(page.locator("#transcript")).not_to_contain_text("/fo")
 
     async def test_escape_puts_the_offer_away_and_leaves_what_was_typed(
         self, page: Page, console: tuple[str, Service]
@@ -2592,7 +2647,7 @@ class TestNamingAModeFromTheKeyboard:
         await page.keyboard.press("Escape")
 
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
-        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "fork")
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "forget")
         assert await page.input_value(".composer textarea") == "/f"
 
     async def test_a_session_with_no_files_is_offered_no_run(self, page: Page, console: tuple[str, Service]) -> None:
@@ -2621,9 +2676,9 @@ class TestNamingAModeFromTheKeyboard:
         await page.click(".composer textarea")
         before = await page.locator(".composer textarea").bounding_box()
 
-        await page.keyboard.type("/fork ")
+        await page.keyboard.type("/forget ")
 
-        await expect(page.locator('.leading[data-leader="fork"]')).to_be_visible()
+        await expect(page.locator('.leading[data-leader="forget"]')).to_be_visible()
         after = await page.locator(".composer textarea").bounding_box()
         assert before
         assert after

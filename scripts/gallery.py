@@ -81,6 +81,7 @@ from mainplate.service import Claimed
 from mainplate.service import Conversation
 from mainplate.service import Delayed
 from mainplate.service import Idle
+from mainplate.sessions import Footprint
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.snapshots import branch_named
@@ -134,7 +135,7 @@ CATALOGUE = Catalogue(
         # Both settled here for the reason `Service.start` settles them: a fixture naming a
         # repository while recording that it reaches no files, or that it is on no branch, would draw
         # a page no real session can produce. Every session working in a repository is on a branch
-        # named after it, so the line under the message box says one and a screenshot has to show it.
+        # named after it, so the card in the rail says one and a screenshot has to show it.
         isolation=Isolation(filesystem=Filesystem.WORKTREE),
         branch=branch_named(PARENT_ID),
         thinking="high",
@@ -185,12 +186,27 @@ WORKING_IN = "exe-github:mainplate"
 # the second one still reads as a repository is not a thing a markup assertion can answer.
 DETACHED = "exe-github:archived"
 
-PARENT = Session(id=PARENT_ID, created_at=WHEN, title="Why does the poll stop after one answer", repository=WORKING_IN)
+# When the sweep last measured the sessions below, a little after everything else happened, so the
+# time in the figure's title is a fixed one and two renders agree.
+MEASURED = WHEN + timedelta(minutes=12)
+
+PARENT = Session(
+    id=PARENT_ID,
+    created_at=WHEN,
+    title="Why does the poll stop after one answer",
+    repository=WORKING_IN,
+    # Large, because that is what a session that fetched a toolchain into its scratch looks like and
+    # the figure exists to be noticed on that one.
+    footprint=Footprint(allocated=1_290_000_000, measured_at=MEASURED),
+)
 
 # A branch, and a branch of that branch, so the sidebar's nesting is drawn at more than one depth
 # and the turn each left at is visible on the row. A fork inherits its parent's repository, so the
 # three of them read the same, and the two below are the other states a row can be in: one working
 # in nothing, one working in something nothing reaches.
+#
+# Every unit the figure can be drawn in is on one row or another, and the two states that draw no
+# figure at all are too: a session measured at nothing, and one nothing has measured.
 LISTED = (
     PARENT,
     Session(
@@ -199,19 +215,41 @@ LISTED = (
         title=PARENT.title,
         forked=Origin(session=PARENT.id, turn=1),
         repository=WORKING_IN,
+        footprint=Footprint(allocated=46_400_000, measured_at=MEASURED),
     ),
     Session(
         id="cc" * 16,
         created_at=WHEN + timedelta(minutes=9),
         title=PARENT.title,
         # An aside rather than a plain fork, so the sidebar's two marks are both on the page and a
-        # styling change can be seen against the pair rather than against one of them.
+        # styling change can be seen against the pair rather than against one of them. Nothing writes
+        # the flag any more; rows written while the composer offered asides still carry it.
         forked=Origin(session="bb" * 16, turn=2, aside=True),
         repository=WORKING_IN,
+        footprint=Footprint(allocated=812_000, measured_at=MEASURED),
     ),
-    Session(id="dd" * 16, created_at=WHEN, title="Add a thinking control to the picker"),
+    Session(
+        id="dd" * 16,
+        created_at=WHEN,
+        title="Add a thinking control to the picker",
+        footprint=Footprint(allocated=0, measured_at=MEASURED),
+    ),
     Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
+    # Archived, and already off the disk, so the row is drawn muted with the word beside the date
+    # and no figure: what a closed session looks like once the reconciler has been round.
+    Session(
+        id="ff" * 16,
+        created_at=WHEN - timedelta(days=1),
+        title="Rewrite the seeder around Choice.settled",
+        repository=WORKING_IN,
+        archived=WHEN - timedelta(hours=20),
+        footprint=Footprint(allocated=0, measured_at=MEASURED),
+    ),
 )
+
+# The archived row above, as the page it opens on: there is no box, the transcript says why, the
+# rail's card says when, and the fork from the end is the one control left.
+ARCHIVED = LISTED[-1]
 
 # One turn per kind of thing a panel can hold, so a styling change can be seen against all of them
 # at once rather than against whichever session happened to be open. The code block is deliberately
@@ -815,6 +853,7 @@ def pages() -> dict[str, str]:
     # because that is the shape it comes in - there is no pass to have written one - and it is the arm
     # whose whole content is that nothing is coming.
     dropped = showing(PARENT, answering, attention=Idle())
+    archived = showing(ARCHIVED, settled, attention=Idle())
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
     # The other way to be stopped, which points somewhere different because nothing can be put back:
     # what the provider turned down is the recorded history itself, so the sentence names the fork.
@@ -869,6 +908,7 @@ def pages() -> dict[str, str]:
         "refused.html": session_page(LINKS, LISTED, turned_down, REACHABLE),
         "failed.html": session_page(LINKS, LISTED, fell_over, REACHABLE),
         "dropped.html": session_page(LINKS, LISTED, dropped, REACHABLE),
+        "archived.html": session_page(LINKS, LISTED, archived, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one.

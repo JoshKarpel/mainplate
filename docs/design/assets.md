@@ -21,7 +21,8 @@ idempotent `repaint()` serving the first render, every swap, and every press.
 
 Over 78rem the shell is three columns and the rail stands beside the conversation; between 48rem and
 78rem it is two, with the rail lying over the page and drawn shut behind its clasp; under 48rem it
-is one, and the session list becomes a strip of chips across the top.
+is one, and the session list lies off the left edge behind a clasp of its own, the way the rail
+lies off the right.
 
 **Every phone rule is in one block at the *end* of `mainplate.css`, and that is not tidiness:** the
 queries overlap, so the narrow one wins only by coming later. Split up, the rail's own `max-width:
@@ -30,13 +31,18 @@ the conversation about a hundred pixels to render in, a bug invisible in either 
 with both in one list. So a rule that changes shape on a phone goes in that block; a rule that
 applies at two widths, such as the rail's overlay, stays with the thing it is about.
 
-A strip rather than a shorter band, and the axis is what decides it: a band is a second *vertical*
-scroller stacked on the transcript's own, and two of those on one axis is what feels broken under a
-thumb. What a chip gives up is the date, the repository and the tree's indentation, which are for
-telling sessions apart where a strip is for getting back to one; the fork marker stays.
-`toCurrentSession` brings the session being read into that list and is deliberately shape-blind:
-`nearest` scrolls the list on whichever axis it actually scrolls on, so one call serves the strip
-and the full-height column both.
+The session list on a phone is the rail's mechanism from the other edge: fixed to the viewport,
+`pointer-events: none` on the box and back on its children, the clasp left in place and everything
+else parked off the edge by a transform until the clasp is pressed. One script wires both clasps and
+opening either shuts the other, since a phone has room for one of them across it at a time. Slid
+out, the list is the column a wide window draws, with the date, the repository and the tree's
+indentation that a strip of chips across the top had to give up; the strip was tried first and was
+one more scroller, sideways, to learn. The cost, stated: the two clasps stand in a band at the top
+of the page that `main` clears for them, about the height the strip took, because floating them
+over the corners as the rail's clasp floats between 48rem and 78rem would put the left one over the
+picker's first legend and the role of whichever panel scrolled under it. `toCurrentSession` brings
+the session being read into the list whether it is parked or out, since a hidden box keeps its
+layout and still scrolls.
 
 Two more things change on a phone, and both follow from it having one column of room. **Nested
 same-axis scrollers go away**: the wide picker has the models scrolling inside a block that scrolls
@@ -77,6 +83,36 @@ under them: on the fork page, seventeen pixels of list and then nothing with fiv
 **`contain` belongs on a scroller that *is* the reading surface**, which the transcript is and a
 bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on into
 the block around it, which is what a reader who kept flicking asked for.
+
+**A phone's keyboard is the one thing `100dvh` does not know about.** `dvh` is the window less the
+browser's own bars; a keyboard is laid *over* the page, so the visual viewport shrinks to what is
+left and the layout viewport, which `dvh` and so the shell are sized by, stays where it was. The
+shell then runs on under the keys with the message box at the bottom of it, and what a browser does
+about that is scroll the page so that the *focused* element is in view: the textarea, and not the
+row under it holding Send, which on a phone is the one control a message can be sent with, since
+Shift-Enter does not exist there. Two things cover it, and they are one mechanism each side of a
+browser split:
+
+- **The viewport meta asks for the layout viewport to shrink too**, with
+  `interactive-widget=resizes-content`. Chrome and Firefox honour it, and there the shell's `100dvh`
+  ends where the keyboard begins and nothing else is needed. Safari does not honour it in any shipped
+  release, though WebKit carries the implementation.
+- **`wireKeyboard` covers Safari**, from the visual viewport: where it is shorter than the window at
+  scale one, which is a keyboard and nothing else, the script sets `--visible-height` to what is
+  left, the shell is that tall, and the page is put back at its top, since Safari will already have
+  scrolled it to show the textarea. On the resize of the visual viewport and never its scroll: the
+  shell is then exactly what can be seen, so there is nothing to scroll, and following the visual
+  viewport as a thumb drags it is what makes a layout jitter. At any other scale the visual viewport
+  is a pinch zoom, and shrinking the page to the part being looked at would be wrong, so
+  `keyboardLeaves` answers nothing and the property is taken off. On a browser that honoured the
+  meta both viewports shrank together, so the same test answers nothing there and the two cannot
+  fight.
+
+The cost, stated: **this is written against what the two viewports are documented to do and against
+nothing measured**, because neither Playwright nor the suite can raise a keyboard, and no device it
+was tried on is a claim this page can make. What it must not do it cannot do: with the script
+absent the property is never set and the shell is `100dvh` as before, and on a browser that resizes
+its content the test never fires.
 
 ## One value scales the whole page
 
@@ -161,6 +197,5 @@ tag deciding which actually register. Why one file rather than core plus separat
 extensions is on [the console's page](console.md#htmx-4), because what reads the allowlist is
 `EXTENSIONS` in `pages.py` rather than anything here.
 
-`mainplate.js` itself depends on nothing. `package.json` at the repository root exists only for
-`scripts/shoot.mjs`, so a checkout pins two Chromiums: Playwright's Python and Node bindings each
-fetch their own.
+`mainplate.js` itself depends on nothing, and nothing in the repository needs Node: `just shots`
+drives the same Python Playwright the suite does, so a checkout pins one Chromium.

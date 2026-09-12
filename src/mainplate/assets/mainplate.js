@@ -87,6 +87,14 @@
     return Math.min(Math.max(current + direction, 0), tops.length - 1);
   };
 
+  // What a phone's keyboard leaves of the window, in pixels, or nothing where no keyboard is up. A
+  // visual viewport shorter than the window at scale one is a keyboard laid over the page and
+  // nothing else; at any other scale it is a pinch zoom, which must not shrink the page to the part
+  // being looked at. The pixel of slack is for a fractional height, which is a rounding and not a
+  // keyboard.
+  const keyboardLeaves = (windowHeight, visualHeight, scale) =>
+    scale === 1 && visualHeight < windowHeight - 1 ? Math.round(visualHeight) : null;
+
   // --- Storage -----------------------------------------------------------
   //
   // A privilege the page can be opened without, so every read answers with nothing rather than
@@ -280,17 +288,16 @@
       });
     };
 
-    // The session being read, brought into the list of them. On a narrow window that list is a
-    // strip scrolling sideways, so the conversation on screen can be off one end of it; on a wide
-    // one it is a column long enough to put the current session below the fold. One call answers
-    // both, and nothing here knows which shape it is looking at: `nearest` scrolls the list on
-    // whichever axis it actually scrolls on, and does nothing when the session is already showing.
+    // The session being read, brought into the list of them, which is a column long enough to put
+    // the current session below the fold. On a phone that column lies shut off the edge of the
+    // page, and it still scrolls: a hidden box keeps its layout, so the session is in view when the
+    // list slides out. `nearest` does nothing when it is already showing.
     //
     // Not through `scrolling`, unlike every other scroll this file performs: the listener that
     // guard exists for watches the transcript, and this moves a different box entirely.
     const toCurrentSession = () => {
       const current = document.querySelector(".sessions .session.current");
-      if (current) current.scrollIntoView({ block: "nearest", inline: "center" });
+      if (current) current.scrollIntoView({ block: "nearest" });
     };
 
     // --- Projection ------------------------------------------------------
@@ -408,7 +415,7 @@
 
     // --- Leaders ------------------------------------------------------------
     //
-    // `/fork ` typed into an empty box puts the composer into that answer's mode, and Escape puts it
+    // `/forget ` typed into an empty box puts the composer into that answer's mode, and Escape puts it
     // back. `! ` is the same thing for `/run`, which earns a key of its own by being the mode reached
     // oftenest. A leader is a shortcut to a row of the sending menu and never a second way of saying
     // it: the server parses no leader out of a message, so a paragraph that opens with `/` is a
@@ -1290,21 +1297,33 @@
     };
 
     // Where the rail has room to stand beside the conversation there is nothing to unclasp, and
-    // the stylesheet does not draw this at all. Where it has not, the rail would lie over the very
-    // text it exists to navigate, so it is held shut and this is the press that lets it out.
-    // Nothing here measures the window, so the two cannot disagree about where the rail fits.
-    const wireClasp = () => {
-      const rail = document.querySelector(".rail");
-      const clasp = rail && rail.querySelector(".rail__clasp");
-      if (!rail || !clasp) return;
-      const open = (wanted) => {
-        if (wanted) rail.dataset.open = "";
-        else delete rail.dataset.open;
-        clasp.setAttribute("aria-expanded", String(wanted));
+    // the stylesheet does not draw its clasp at all. Where it has not, the rail would lie over the
+    // very text it exists to navigate, so it is held shut and the clasp is the press that lets it
+    // out. The session list is the same thing from the other edge on a phone. Nothing here measures
+    // the window, so the script and the stylesheet cannot disagree about where either fits.
+    //
+    // Opening one shuts the other: a phone has room for one of them across it at a time, and the
+    // two slid out together would cross in the middle.
+    const wireClasps = () => {
+      const folds = [".sessions", ".rail"]
+        .map((selector) => {
+          const box = document.querySelector(selector);
+          return { box, clasp: box && box.querySelector(":scope > [aria-expanded]") };
+        })
+        .filter(({ clasp }) => clasp);
+      const open = (fold, wanted) => {
+        if (wanted) fold.box.dataset.open = "";
+        else delete fold.box.dataset.open;
+        fold.clasp.setAttribute("aria-expanded", String(wanted));
       };
-      clasp.addEventListener("click", () => open(clasp.getAttribute("aria-expanded") !== "true"));
+      folds.forEach((fold) => {
+        fold.clasp.addEventListener("click", () => {
+          const wanted = fold.clasp.getAttribute("aria-expanded") !== "true";
+          folds.forEach((other) => open(other, other === fold && wanted));
+        });
+      });
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") open(false);
+        if (event.key === "Escape") folds.forEach((fold) => open(fold, false));
       });
     };
 
@@ -1404,7 +1423,7 @@
         if (offering) {
           const showing = narrowLeaders();
           // The space is what commits a leader, and only where the box names an answer in full:
-          // `/fork ` and `! ` are somebody who has finished the word, where `/fo ` is somebody who
+          // `/forget ` and `! ` are somebody who has finished the word, where `/fo ` is somebody who
           // has not, and taking the row the keyboard happens to be on would put the box in a mode
           // they were still spelling their way towards. Unnamed, the key types itself, which breaks
           // the pattern and puts the menu away on the next `input`.
@@ -1692,6 +1711,37 @@
       document.addEventListener("htmx:after:swap", () => repaint());
     };
 
+    // --- The keyboard on a phone -----------------------------------------
+    //
+    // A phone lays its keyboard over the page: the *visual* viewport shrinks to what is left, and
+    // the layout viewport, which `100dvh` and so the shell are sized by, does not. The viewport meta
+    // asks for the layout viewport to shrink too (`interactive-widget=resizes-content`), and Chrome
+    // and Firefox do, after which the box sits on the keyboard with nothing for this to do. Safari
+    // does not, in any shipped version, and scrolls the page instead so that the box being typed
+    // into is in view - the box, and not the row under it, which is where the one control a phone
+    // can send with is. So where the visual viewport is shorter than the window, the shell is sized
+    // to what can be seen and the page is put back at its top, and the composer is on the keys.
+    //
+    // On the resize and never the scroll of the visual viewport: the shell is then exactly what can
+    // be seen, so there is nothing to scroll, and following the visual viewport as a reader drags it
+    // is what makes the layout jitter under a thumb. It cannot be driven from here or from the
+    // suite, since neither can raise a keyboard, so it is written against what the two viewports are
+    // documented to do and against nothing measured.
+    const wireKeyboard = () => {
+      const viewport = window.visualViewport;
+      if (!viewport) return;
+      const fit = () => {
+        const left = keyboardLeaves(window.innerHeight, viewport.height, viewport.scale);
+        if (left === null) {
+          document.documentElement.style.removeProperty("--visible-height");
+          return;
+        }
+        document.documentElement.style.setProperty("--visible-height", `${left}px`);
+        window.scrollTo(0, 0);
+      };
+      viewport.addEventListener("resize", fit);
+    };
+
     const wireShapes = () => {
       // The one thing the stream says that is not a region: the page was drawn as the settings step
       // and the session has since loaded, so there is nothing on this page for the conversation to
@@ -1714,7 +1764,7 @@
     wireFolds();
     wireShutting();
     wireTheme();
-    wireClasp();
+    wireClasps();
     wireFolding();
     wireFilter();
     wireNumbers();
@@ -1726,6 +1776,7 @@
     wireFresh();
     wireSwaps();
     wireShapes();
+    wireKeyboard();
     wireHash();
 
     toCurrentSession();
