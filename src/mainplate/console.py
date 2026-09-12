@@ -91,11 +91,15 @@ of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # parameter for the reason the endpoint is one: htmx sends a triggering input's own value, so the
 # card needs no interpolation and no script to build a URL.
 of_workspace = query_param(WORKSPACE_FIELD, once(str), schema={"type": "string"})
-# Which conversation a watching page is showing. A query parameter rather than a path segment
+# Which conversation a watching page is showing, if any. A query parameter rather than a path segment
 # because the stream belongs to the page: this narrows what one connection reports on, where a path
-# segment would say the connection is a thing *of* that session. It is what lets a second region
-# join the same connection later without the path becoming a lie.
-watched = query_param("session", once(str), schema={"type": "string"})
+# segment would say the connection is a thing *of* that session. It is what let a second region join
+# the same connection without the path becoming a lie, and what lets the start page, which shows no
+# conversation, hold the same connection for the session list alone.
+watched = query_param("session", optional(str), schema={"type": "string"})
+# Which conversation a page has just been shown, which unlike `watched` is never absent: a page with
+# no session has nothing to acknowledge and is given nowhere to do it.
+acknowledged = query_param("session", once(str), schema={"type": "string"})
 
 
 def parse_shape(value: str) -> bool:
@@ -745,11 +749,14 @@ async def show_session(service: Service, session: str) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    # Serving the page is showing it to somebody, which is what the mark means; before the list is
+    # read, so the row for this session is drawn as looked at. See `Service.saw`.
+    await service.saw(session)
     return page_response(200, session_page(LINKS, await service.listed(), found, service.reachable))
 
 
 @get("/fragments/stream", watched, shaped, summary="What a page is watching, sent as it changes")
-async def stream(service: Service, session: str, on_step: bool | None) -> Reply:
+async def stream(service: Service, session: str | None, on_step: bool | None) -> Reply:
     """
     The live connection a page holds open, carrying whatever it is watching as that changes.
 
@@ -757,7 +764,8 @@ async def stream(service: Service, session: str, on_step: bool | None) -> Reply:
     a path segment: this does not pick a conversation out of the resource tree, it tells a
     page-level connection which one that page is showing. What comes back is `<hx-partial>`
     elements naming their own targets, so a second region joins the same connection rather than
-    opening another.
+    opening another. A page showing no session, which is the start page, names none and is sent
+    the session list, which is the region every page has.
 
     The page says which shape it was drawn in, for the same reason it says which session: the stream
     sends what that shape has somewhere to put, and says once when the shape is over. See
@@ -771,10 +779,29 @@ async def stream(service: Service, session: str, on_step: bool | None) -> Reply:
     refusal: an event stream that opened and immediately ended would be reconnected by the client
     forever, where a `404` is an answer it can act on.
     """
-    found = await service.read(session)
-    if found is None:
+    if session is not None and await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return event_stream(with_heartbeat(watching(service, LINKS, session, service.watching, on_step=bool(on_step))))
+
+
+@post("/fragments/seen", acknowledged, summary="A page has shown what its connection just sent")
+async def seen(service: Service, session: str) -> Response:
+    """
+    The other direction of the live connection: the page saying it has shown the conversation as the
+    last message carried it, which is what marks a session as looked at while it is open.
+
+    The page's to say rather than the stream's to assume, and the reason is the one `Links.to_seen`
+    gives: the server cannot tell a reading page from one whose tab has gone dark. Nothing comes back
+    but the status, since the page asked nothing; the list on every open page redraws on its own,
+    because the mark is part of the list's token.
+
+    The session is checked for the reason the stream checks it: a page acknowledging a session nobody
+    started is a stale page, and a `404` is an answer it can act on where a silent `204` is not.
+    """
+    if await service.read(session) is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    await service.saw(session)
+    return Response(status=204)
 
 
 @get(
@@ -995,6 +1022,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start,
     show_session,
     stream,
+    seen,
     endpoint_models,
     workspace_branches,
     fork_form,
@@ -1012,6 +1040,7 @@ LINKS = Links(
     session=show_session,
     say=say,
     stream=stream,
+    seen=seen,
     request_record=request_record,
     endpoint_models=endpoint_models,
     workspace_branches=workspace_branches,

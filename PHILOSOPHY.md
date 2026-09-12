@@ -34,11 +34,18 @@ value, and both tables are in the one file, so `SELECTION` reads a session's rep
 of its `choice` with a `LEFT JOIN` and `json_extract`: one small row per session, and no word of any
 conversation. That is the shape any further "what is this session on" question should take. A column
 would be the second copy this console is built to avoid, and unlike the title it would be a copy of
-something recorded elsewhere and already authoritative.
+something recorded elsewhere and already authoritative. When a session was last written to is the
+same reach one step further: the store stamps every row it files, so the newest stamp on a session's
+inbox is when somebody last said something to it, and the list is ordered by that without a column
+that would have to be kept in step with every message.
 
-The two columns that *are* there for presentation earn it by being facts nothing else records:
-`Origin.aside` is what somebody meant by a fork, and `Tending` is what is being done to a running
-session. Neither is written anywhere else, so neither is a copy.
+The columns that *are* there for presentation earn it by being facts nothing else records:
+`Origin.aside` is what somebody meant by a fork, `Tending` is what is being done to a running
+session, and `seen_seq` is how far into a session somebody has looked. None is written anywhere else,
+so none is a copy. The last two move, and the same argument carries both: a setting has to be
+mutable to be a setting, and a look is a new fact every time, and the two places this console
+otherwise keeps things refuse them - a checkpoint key keeps its first value for ever, and
+`localStorage` is one browser's, where a look is the reader's on every device they read from.
 
 ### The catalogue is configuration that lives at the far end of a request
 

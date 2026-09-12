@@ -1,7 +1,7 @@
 # The console
 
 The page: how it is rendered, how a second render reaches a browser nobody reloaded, and the
-controls around the conversation. What *draws* it, the three shapes, the one value that scales
+controls around the conversation. What *draws* it, the two shapes, the one value that scales
 everything, and the monospace grid, is [the stylesheet and the grid](assets.md).
 
 ## htmx 4
@@ -43,10 +43,16 @@ from one value are four chances for a caller to pair a transcript with another s
 **One connection drives whichever regions the page's shape has**, which is what `partial` was always
 for. A session past [its settings step](plugins.md#starting-a-session-takes-four-steps) is the
 transcript and [the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in
-the composer; a session still on that step is the step, which has neither of those and is the only
-region there is. One predicate, `settling`, decides both which shape the page is drawn in and which
-partials the stream sends, so the two cannot disagree - and they must not, because a partial naming a
-target that is not there is dropped in silence, which is a spinner that never resolves.
+the composer; a session still on that step is the step, which has neither of those. One predicate,
+`settling`, decides both which shape the page is drawn in and which partials the stream sends, so the
+two cannot disagree - and they must not, because a partial naming a target that is not there is
+dropped in silence, which is a spinner that never resolves. **The session list rides every message
+on every page**, the start page included, because it is a region of every page and it moves when any
+session does: the token the stream polls has a half for the list, three aggregates over the store,
+beside the session's own. So the start page holds a connection too, sent the list alone, where it
+used to hold none. What is redrawn is the `<ul>` and not the sidebar around it, because what holds
+the list slid out on a phone is an attribute the script put on the sidebar, and a morph of the
+sidebar would take it off and snap the sheet shut under a thumb every time any session moved.
 
 **The page states its shape when it connects, and the stream says once when that shape is over.** A
 page drawn as the step whose session has since loaded is exactly the case above: the checkpoint's
@@ -76,6 +82,23 @@ Three things about that connection are decided rather than incidental:
   there because a pass that falls over records *nothing*, so a token made of the count alone holds
   still while the page sits under a spinner; see
   [what the worker is doing about a session](durability.md#what-the-worker-is-doing-about-a-session).
+- **A hidden tab lets the connection go, and takes it up again when shown.** That is htmx's own
+  `pauseOnBackground`, pinned by `TestLettingGoOfTheConnectionWhileHidden` rather than anything this
+  console wrote: a page nobody can see costs the console no polling, and coming back to the tab
+  reconnects, where the first message is the whole current state, so the page is current at once.
+  It is also what makes the seen mark below honest.
+
+**The page acknowledges what it has shown, and that is what marks a session as looked at while it is
+open.** The stream deliberately marks nothing. The server learns that a tab has gone dark only when a
+write to it fails, and the first write after that lands in a socket the browser has already left, so
+a mark made on send would land on exactly the answer that arrived while nobody was looking - and
+`without-http`'s HTTP/1.1 path reads the socket only while the request is being read, so there is no
+earlier signal to have. The page, which lets go of the connection while hidden and so is only ever
+sent what it can show, posts to `/fragments/seen` after it has swapped a message in, coalesced over a
+short beat because a running turn is several messages a second and the mark says "as it now stands".
+The address rides on the stream element as `data-seen`, so the thing acknowledging is the thing that
+was sent to. With the script absent, serving the page is the one mark there is. The cost, stated: one
+small request per beat of a running turn on every open page, which is a row update and no render.
 
 The transcript swaps with **`outerMorph`**, and that is what lets a turn be watched: a turn records
 several times while it runs, so a replacement would shut a call the reader opened to watch, over and
@@ -155,6 +178,35 @@ one control. The permalink gives up its own `margin-left: auto` only where the b
 take it over, so a page rendered with the script absent still has it flush right.
 
 ## The session list
+
+**The list is ordered by when a session was last written to, not by when it was started**, because
+the conversation somebody is in is the one they are looking for, and a creation date puts a session
+worked in all week under everything started since. The moment is read rather than recorded: the
+store stamps every checkpoint row as it files it, so the newest stamp on a session's inbox is the
+last thing said to it, and a session nobody has written to yet is dated from its making. The row
+prints the moment it is ordered by, with both moments in its title, since a list sorted by one date
+and labelled with another reads as unsorted. The cost is that the order is the tree's: a branch
+worked in this morning sits under what it branched from rather than at the top, and siblings are
+what the moment orders. The clock is the store's and not the console's, which is why the two are
+compared and never subtracted, and why a test about the order writes the stamps rather than racing
+them. An answer arriving moves no row, since nobody said anything; what says an answer arrived is the
+word below.
+
+**A row says `new` when its session has recorded something since anybody looked at it.** "Recorded
+something" is the newest row in the session's checkpoint that is not in its inbox - an answer, a
+refusal, a command's result, a plugin setting itself up - because a person's own message is not news
+to them. "Looked at" is `seen_seq` on the session's row in the index, the highest row the store had
+filed for it when a page showing it was last served or last acknowledged a message, which is [the
+index's other mutable column](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies)
+and earns it the way `Tending` does: a fact nothing else records. It is the console's mark and not
+any one reader's, because this console has no accounts, which is right for one person on several
+devices - the phone that read the answer has read it for the laptop too - and becomes a table keyed
+by reader the day there are readers to key it by. The word and not a dot, for the archived word's
+reason: a dot alone reads as a styling accident. In the console's own mark hue, because it is about
+the console's bookkeeping and not about who spoke. Never on an archived row, since nothing more is
+said in one, and never on the row being read, because serving that page is what marks it. A console
+upgraded onto the column has it filled to where every session stood, since `NULL` reads as never
+looked at and lighting every session at once would tell the reader nothing.
 
 Each row names the repository its session works in, which is what tells two conversations apart
 once there is more than one. It reads `owner/repo` while a forge still reaches the repository and

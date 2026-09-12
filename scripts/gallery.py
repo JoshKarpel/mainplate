@@ -193,6 +193,9 @@ MEASURED = WHEN + timedelta(minutes=12)
 PARENT = Session(
     id=PARENT_ID,
     created_at=WHEN,
+    # Written to after it was made, so the row is dated by the later moment and its title carries
+    # both; every other row here was made and never written to, which dates it from its making.
+    last_said_at=WHEN + timedelta(minutes=11),
     title="Why does the poll stop after one answer",
     repository=WORKING_IN,
     # Large, because that is what a session that fetched a toolchain into its scratch looks like and
@@ -233,6 +236,9 @@ LISTED = (
         created_at=WHEN,
         title="Add a thinking control to the picker",
         footprint=Footprint(allocated=0, measured_at=MEASURED),
+        # Answered since anybody looked, so the word the list says for that is on one row and a
+        # styling change can be seen against the rows that do not carry it.
+        unseen=True,
     ),
     Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
     # Archived, and already off the disk, so the row is drawn muted with the word beside the date

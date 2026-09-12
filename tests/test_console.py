@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
+from datetime import datetime
 from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from re import sub
 
 import pytest
+from calling import Caller
 from calling import calling
 from conftest import CONFIG
 from conftest import DEFAULT_CHOICE
@@ -59,6 +62,7 @@ from mainplate.conversation import registered_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import tree_key
 from mainplate.pages import CACHE_ID
+from mainplate.pages import LISTED_ID
 from mainplate.pages import SETUP_ID
 from mainplate.pages import TRANSCRIPT_ID
 from mainplate.plugins.asking import Declaring
@@ -75,6 +79,7 @@ from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
+from mainplate.sessions import prepare
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
 from mainplate.tending import AGAIN
@@ -119,6 +124,20 @@ async def answered(service: Service, session: str, *said: object) -> int:
     return turn
 
 
+async def said_to_at(service: Service, session: str, when: datetime) -> None:
+    """
+    Stamp everything in a session's inbox as said at `when`, which is the one moment the suite's
+    clock does not set: the store stamps an inbox row as it files it, off its own clock, and the list
+    is ordered by that stamp. A test about the order says the stamps rather than racing them.
+    """
+    await service.database.run(
+        lambda connection: connection.execute(
+            "UPDATE workflow_checkpoint SET written_at = ? WHERE workflow = ? AND step GLOB ?",
+            (when.timestamp(), session, f"{INBOX}*"),
+        )
+    )
+
+
 async def a_session(app: ASGIApp, service: Service, said: str = "what is a mainplate", title: str | None = None) -> str:
     """
     A session started the way a browser starts one, with its first message in it.
@@ -153,10 +172,27 @@ async def watched(app: ASGIApp, session: str) -> str:
     fail measuring the wrong thing.
 
     The first message and then out, because a stream has no end: what it opens with is current
-    state, which is the whole of what these want.
+    state, which is the whole of what these want. With the session list taken out of it, because the
+    same message carries the list and the list carries the title - which is that same text again,
+    escaped as an ordinary child, and the copy the first paragraph says these must not measure.
     """
     async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
-        return (await anext(events)).data
+        return without_region((await anext(events)).data, LISTED_ID)
+
+
+def partial_of(target: str) -> re.Pattern[str]:
+    """The partial naming one target, out of a stream message that carries several, each naming its own."""
+    return re.compile(rf'<hx-partial hx-target="#{target}"[^>]*>(.*?)</hx-partial>', re.DOTALL)
+
+
+def region_in(message: str, target: str) -> str:
+    found = partial_of(target).search(message)
+    assert found is not None, f"no partial for #{target} in {message[:200]!r}"
+    return found.group(1)
+
+
+def without_region(message: str, target: str) -> str:
+    return partial_of(target).sub("", message)
 
 
 def blocks_carrying_markdown(region: str) -> list[dict[str, str | None]]:
@@ -527,6 +563,194 @@ class TestTheConsole:
             answered = await caller.get("/fragments/stream?session=nothing-here")
         assert answered.status == 404
 
+    async def test_every_message_carries_the_session_list_beside_what_the_page_is_watching(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The list is a region of every page, so it rides the one connection as one more partial."""
+        session = await a_session(app, service)
+        async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
+            first = await anext(events)
+        assert f'<hx-partial hx-target="#{LISTED_ID}" hx-swap="outerMorph">' in first.data
+        assert f'id="listed-{session}"' in region_in(first.data, LISTED_ID)
+        assert f'hx-target="#{TRANSCRIPT_ID}"' in first.data, "beside the transcript, not instead of it"
+
+    async def test_the_start_page_holds_a_connection_that_is_sent_the_list_alone(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        A page showing no conversation still shows the list, and the list moves when any session
+        does: a session answered while somebody was choosing what to start next is the case.
+        """
+        await a_session(app, service)
+        async with calling(app) as caller:
+            page = await caller.get("/")
+            async with caller.watching("/fragments/stream") as events:
+                first = await anext(events)
+        assert 'hx-sse:connect="/fragments/stream"' in page.text
+        assert f'hx-target="#{LISTED_ID}"' in first.data
+        assert f'hx-target="#{TRANSCRIPT_ID}"' not in first.data, "there is no transcript on that page to land in"
+
+    async def test_a_refusal_holds_no_connection(self, app: ASGIApp) -> None:
+        """A page with no list on it has nothing for a connection to report, so it holds none."""
+        async with calling(app) as caller:
+            answered = await caller.get("/sessions/nothing-here")
+        assert answered.status == 404
+        assert "hx-sse:connect" not in answered.text
+
+    async def test_a_session_recording_something_moves_the_list_on_every_other_page(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The token has a half for the list, so a page watching one conversation is sent the list again
+        when a *different* session records anything, with that session's row marked.
+        """
+        watched_one = await a_session(app, service, "the one being read")
+        other = await a_session(app, service, "the other one")
+        async with calling(app) as caller:
+            await caller.get(f"/sessions/{other}")
+            await caller.get(f"/sessions/{watched_one}")
+            async with caller.watching(f"/fragments/stream?session={watched_one}") as events:
+                first = await anext(events)
+                await answered(service, other)
+                second = await anext(events)
+        assert 'class="unseen"' not in region_in(first.data, LISTED_ID)
+        assert f'id="listed-{other}"' in region_in(second.data, LISTED_ID)
+        assert region_in(second.data, LISTED_ID).count('class="unseen"') == 1
+
+
+class TestWhatIsNewInTheList:
+    """
+    The word on a row whose session has recorded something since anybody looked at it.
+
+    "Looked at" is a page showing the session having been served or sent, which the console records
+    as how far the store had got; everything below drives it through the routes and the stream, since
+    those are the two places the mark is made.
+    """
+
+    async def looked_at(self, caller: Caller, session: str) -> None:
+        assert (await caller.get(f"/sessions/{session}")).status == 200
+
+    async def unseen(self, service: Service, session: str) -> bool:
+        (found,) = [each for each in await service.listed() if each.id == session]
+        return found.unseen
+
+    async def test_a_session_nobody_has_opened_is_new_and_opening_it_is_what_clears_that(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service)
+        assert await self.unseen(service, session), "it recorded its choice, and nobody has looked"
+        async with calling(app) as caller:
+            await self.looked_at(caller, session)
+        assert not await self.unseen(service, session)
+
+    async def test_an_answer_recorded_since_the_last_look_marks_the_session(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service)
+        async with calling(app) as caller:
+            await self.looked_at(caller, session)
+            await answered(service, session)
+            assert await self.unseen(service, session)
+            await self.looked_at(caller, session)
+        assert not await self.unseen(service, session)
+
+    async def test_what_a_person_says_themselves_is_not_news_to_them(self, app: ASGIApp, service: Service) -> None:
+        """The inbox is left out of the comparison: a message is not something to catch up on."""
+        session = await a_session(app, service)
+        async with calling(app) as caller:
+            await self.looked_at(caller, session)
+            assert (await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})).status == 200
+        assert not await self.unseen(service, session)
+
+    async def test_the_page_acknowledging_a_message_is_what_marks_it_seen(self, app: ASGIApp, service: Service) -> None:
+        """
+        The stream sending the conversation marks nothing, because a send is not a showing: the first
+        write after a tab goes dark lands in a socket the browser has left. The page says so instead,
+        at the address the stream element carries.
+        """
+        session = await a_session(app, service)
+        await answered(service, session)
+        async with calling(app) as caller:
+            page = await caller.get("/")
+            async with caller.watching(f"/fragments/stream?session={session}") as events:
+                await anext(events)
+            assert await self.unseen(service, session), "sent, and not shown to anybody that the server can tell"
+            acknowledged = await caller.post(f"/fragments/seen?session={session}", {})
+        assert acknowledged.status == 204
+        assert not await self.unseen(service, session)
+        assert f'data-seen="/fragments/seen?session={session}"' not in page.text, "the start page acknowledges nothing"
+
+    async def test_the_page_carries_where_to_acknowledge_on_the_element_that_is_sent_to(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service)
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session}")
+            refused = await caller.post("/fragments/seen?session=nothing-here", {})
+        assert f'data-seen="/fragments/seen?session={session}"' in page.text
+        assert refused.status == 404
+
+    async def test_the_row_says_new_and_the_row_being_read_does_not(self, app: ASGIApp, service: Service) -> None:
+        """
+        The mark is made before the list is read, so the page being served draws its own row as seen
+        in the same render that draws another session's as new.
+        """
+        reading = await a_session(app, service, "the one being read")
+        other = await a_session(app, service, "the other one")
+        await answered(service, other)
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{reading}")
+        rows = {
+            row.group(1): row.group(2)
+            for row in re.finditer(r'<li id="listed-([0-9a-f]+)"(.*?)</li>', page.text, re.DOTALL)
+        }
+        assert set(rows) == {other, reading}
+        assert '<span class="unseen" title="Something new since you last looked">new</span>' in rows[other]
+        assert "unseen" not in rows[reading]
+
+    async def test_an_archived_session_is_never_new(self, app: ASGIApp, service: Service) -> None:
+        """Nothing more is said in one, and the press that archived it is not something to catch up on."""
+        session = await a_session(app, service)
+        await service.archive(session)
+        assert await self.unseen(service, session), "the record says so"
+        async with calling(app) as caller:
+            page = await caller.get("/")
+        assert 'class="unseen"' not in page.text, "and the row does not"
+
+    async def test_a_console_upgraded_onto_the_mark_does_not_light_every_session_at_once(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The column is filled to where every session stood when it is added, because `NULL` reads as
+        never looked at and an upgrade is not a reason to catch up on everything.
+        """
+        session = await a_session(app, service)
+        await answered(service, session)
+        await service.database.run(lambda connection: connection.execute("ALTER TABLE sessions DROP COLUMN seen_seq"))
+        await prepare(service.database)
+        assert not await self.unseen(service, session)
+        async with calling(app) as caller:
+            assert (await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})).status == 200
+        await answered(service, session)
+        assert await self.unseen(service, session)
+
+    async def test_a_look_moves_the_list_token_so_another_device_sees_the_word_go(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The list's token sums every mark, so a phone reading the answer takes the word off the
+        laptop's list without the laptop reloading. The sum rather than the highest mark, because a
+        look at any session but the furthest-on one would leave the maximum where it was.
+        """
+        before = await service.listing_token()
+        session = await a_session(app, service)
+        moved = await service.listing_token()
+        await service.saw(session)
+        looked = await service.listing_token()
+        assert before != moved != looked
+        await service.saw(session)
+        assert await service.listing_token() == looked, "a look at a session already looked at changes nothing"
+
     async def test_a_message_into_a_session_answers_with_the_transcript_alone(
         self, app: ASGIApp, service: Service
     ) -> None:
@@ -625,6 +849,45 @@ class TestTheConsole:
         async with calling(app) as caller:
             answered = await caller.get("/")
         assert answered.text.index("the newer one") < answered.text.index("the older one")
+
+    async def test_a_session_written_to_again_rises_above_one_started_since(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The list is ordered by the last thing said to a session and not by when it was started.
+
+        The stamps are written by hand because the store puts its own clock on an inbox row and
+        nothing in the suite turns that clock: two sessions started in one test are stamped within a
+        millisecond of each other, and the order between them would otherwise be whichever the clock
+        happened to give.
+        """
+        older = await a_session(app, service, "the older one")
+        newer = await a_session(app, service, "the newer one")
+        await said_to_at(service, newer, WHEN)
+        await said_to_at(service, older, WHEN + timedelta(hours=1))
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert answered.text.index("the older one") < answered.text.index("the newer one")
+        assert [each.last_said_at for each in await service.listed()] == [WHEN + timedelta(hours=1), WHEN]
+
+    async def test_a_session_nobody_has_written_to_is_dated_from_its_making(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        async with calling(app) as caller:
+            assert (await caller.post("/sessions", starting_form())).status == 303
+        (listed,) = await service.listed()
+        assert listed.last_said_at is None
+        assert listed.latest == listed.created_at == WHEN
+
+    async def test_the_row_is_dated_by_the_last_message_and_titled_with_both(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service)
+        await said_to_at(service, session, WHEN + timedelta(days=2))
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert f'datetime="{(WHEN + timedelta(days=2)).isoformat()}"' in answered.text
+        assert 'title="Last message Mar 16, 15:09. Created Mar 14, 15:09"' in answered.text
 
     async def test_a_session_nobody_started_is_a_page_with_a_way_back(self, app: ASGIApp) -> None:
         async with calling(app) as caller:

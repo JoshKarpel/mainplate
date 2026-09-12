@@ -76,12 +76,14 @@ from mainplate.reference import resending
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
+from mainplate.sessions import listing_token
 from mainplate.sessions import mint_session_id
 from mainplate.sessions import name_from
 from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
 from mainplate.sessions import rename
+from mainplate.sessions import saw
 from mainplate.sessions import set_settings
 from mainplate.sessions import switch
 from mainplate.settings import DEFAULT_WATCHING
@@ -533,6 +535,14 @@ class Service:
 
     async def listed(self) -> tuple[Session, ...]:
         return tuple(self.footprinted(session) for session in await read_sessions(self.database))
+
+    async def saw(self, session: str) -> None:
+        """A page showing this session as it now stands reached somebody; see `sessions.saw`."""
+        await saw(self.database, session)
+
+    async def listing_token(self) -> str:
+        """Whether the list of sessions is worth drawing again; see `sessions.listing_token`."""
+        return await listing_token(self.database)
 
     async def read(self, session: str) -> Conversation | None:
         """

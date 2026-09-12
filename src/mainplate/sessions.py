@@ -23,12 +23,18 @@
 # facts it holds. A column copying something already recorded would be the second copy the whole
 # console is built to avoid.
 #
-# `Tending` is the one thing here that is *not* settled, and it is not that second copy either: it
-# has no other home. A session's own settings have to be mutable to be settings at all, and the two
-# places this console otherwise keeps things both refuse them - the checkpoint keeps the value a key
-# was first given, so a setting saved twice would keep its first answer for ever, and `localStorage`
-# is in a browser where the worker that reads this may be another process entirely. So it is a
-# column, and the table that already answers "which sessions are there" is where it goes.
+# `Tending` is one of two things here that are *not* settled, and it is not that second copy either:
+# it has no other home. A session's own settings have to be mutable to be settings at all, and the
+# two places this console otherwise keeps things both refuse them - the checkpoint keeps the value a
+# key was first given, so a setting saved twice would keep its first answer for ever, and
+# `localStorage` is in a browser where the worker that reads this may be another process entirely.
+# So it is a column, and the table that already answers "which sessions are there" is where it goes.
+#
+# `seen_seq` is the other, and the same argument carries it: how far into a session somebody has
+# looked is a fact nothing else records, it moves every time they look, and it has to be the same on
+# every device they look from, which rules out the browser. It is the console's mark and not any one
+# reader's, because this console has no accounts; the day it does, this column becomes a table keyed
+# by session and reader, and nothing that reads or advances it today says anything about who.
 
 from __future__ import annotations
 
@@ -41,6 +47,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import Final
 
+from without_durability import INBOX
 from without_durability_sqlite import Database
 
 from mainplate.conversation import ARCHIVED_KEY
@@ -83,13 +90,26 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 # Added to a table that predates them. `CREATE TABLE IF NOT EXISTS` does nothing to a table that
 # already exists, so a database written before forking existed would keep its three columns and
-# every read naming a fourth would fail.
+# every read naming a fourth would fail. Each entry is the statements run when its column is missing,
+# in order, so a column that needs its existing rows filled in says so beside the one that adds it.
+#
+# `seen_seq` is filled to where every session stands the moment it is added, because `NULL` reads as
+# nobody having looked: left alone, a console upgraded onto this would light every session it has as
+# new at once, which tells the reader nothing. The cost is one moment's honesty - an answer nobody had
+# looked at before the upgrade is marked as looked at by it - paid once.
 ADDED = (
-    ("forked_from", "ALTER TABLE sessions ADD COLUMN forked_from TEXT"),
-    ("forked_at", "ALTER TABLE sessions ADD COLUMN forked_at INTEGER"),
-    ("forked_aside", "ALTER TABLE sessions ADD COLUMN forked_aside INTEGER"),
-    ("enabled", "ALTER TABLE sessions ADD COLUMN enabled TEXT"),
-    ("settings", "ALTER TABLE sessions ADD COLUMN settings TEXT"),
+    ("forked_from", ("ALTER TABLE sessions ADD COLUMN forked_from TEXT",)),
+    ("forked_at", ("ALTER TABLE sessions ADD COLUMN forked_at INTEGER",)),
+    ("forked_aside", ("ALTER TABLE sessions ADD COLUMN forked_aside INTEGER",)),
+    ("enabled", ("ALTER TABLE sessions ADD COLUMN enabled TEXT",)),
+    ("settings", ("ALTER TABLE sessions ADD COLUMN settings TEXT",)),
+    (
+        "seen_seq",
+        (
+            "ALTER TABLE sessions ADD COLUMN seen_seq INTEGER",
+            "UPDATE sessions SET seen_seq = (SELECT max(seq) FROM workflow_checkpoint WHERE workflow = sessions.id)",
+        ),
+    ),
 )
 
 # Long enough that an id is not guessable, which matters because a session id *is* its URL: this
@@ -227,6 +247,44 @@ class Session:
     workspaces. A page draws nothing for it rather than a zero, since a zero is a claim.
     """
 
+    last_said_at: datetime | None = None
+    """
+    When something was last said to this session, or nothing at all for one nobody has written to.
+
+    Reached rather than copied, like the repository and the archive date: everything a person sends
+    is filed in the session's inbox, the store stamps every row it files, and the newest stamp among
+    the inbox rows is this. It is the store's clock and not the console's, which is why `created_at`
+    beside it is the other kind of value and the two are only compared, never subtracted.
+
+    It is what the list is ordered by, because a conversation somebody is in is the one they are
+    looking for, and a creation date puts a session worked in all week under everything started
+    since. A fork copies its parent's prefix at the moment of forking, so a fresh fork counts as
+    written to then, which is when somebody did act on it.
+    """
+
+    unseen: bool = False
+    """
+    Whether this session has recorded something since anybody last looked at it.
+
+    Two reaches compared: the newest row the session recorded that is not something a person said,
+    against `seen_seq`, which is how far the store had got when a page showing this session was last
+    sent. A person's own message is not news to them, which is why the inbox is left out; everything
+    else a session records - an answer, a tool's refusal, a command's result, a plugin setting itself
+    up - is. A session nobody has ever opened has everything it recorded unseen, which is the honest
+    reading and the one the migration above spares an upgraded console.
+
+    It is the console's answer and not any one reader's, for the reason `seen_seq` is the console's
+    mark: a phone that read the answer has read it for the laptop too.
+    """
+
+    @property
+    def latest(self) -> datetime:
+        """
+        The moment a row is ordered and dated by: the last thing said to it, or its making for one
+        nobody has written to yet.
+        """
+        return self.last_said_at or self.created_at
+
 
 def mint_session_id() -> str:
     return secrets.token_hex(ID_BYTES)
@@ -244,8 +302,10 @@ async def prepare(database: Database) -> None:
     def migrate(connection: sqlite3.Connection) -> None:
         connection.executescript(SCHEMA)
         held = {str(row[1]) for row in connection.execute("PRAGMA table_info(sessions)")}
-        for column, statement in ADDED:
-            if column not in held:
+        for column, statements in ADDED:
+            if column in held:
+                continue
+            for statement in statements:
                 connection.execute(statement)
 
     await database.run(migrate)
@@ -270,6 +330,13 @@ COLUMNS = "id, created_at, title, forked_from, forked_at, forked_aside"
 # in its checkpoint, once, by the press, and the sidebar and the reconciler both want it per row
 # without loading a conversation. Most rows join nothing there, which is a `NULL` and a session
 # still being answered.
+#
+# The two subqueries are the third and fourth reach, and subqueries rather than joins because each
+# wants the newest of many rows rather than one. The store stamps every row it files, and the newest
+# stamp on a session's inbox is when somebody last said something to it; the highest `seq` among the
+# rows that are *not* its inbox is the newest thing it recorded that nobody said, which against
+# `seen_seq` is whether there is anything new to look at. `GLOB` rather than `LIKE` because the prefix
+# is matched case-sensitively and the unique index on the pair is what the lookup walks.
 SELECTION = """
 SELECT sessions.id,
        sessions.created_at,
@@ -280,7 +347,14 @@ SELECT sessions.id,
        sessions.enabled,
        sessions.settings,
        json_extract(choice.value, :repository_path),
-       json_extract(archived.value, :archived_path)
+       json_extract(archived.value, :archived_path),
+       (SELECT max(said.written_at)
+          FROM workflow_checkpoint AS said
+         WHERE said.workflow = sessions.id AND said.step GLOB :inbox_glob),
+       (SELECT max(told.seq)
+          FROM workflow_checkpoint AS told
+         WHERE told.workflow = sessions.id AND told.step NOT GLOB :inbox_glob),
+       sessions.seen_seq
   FROM sessions
   LEFT JOIN workflow_checkpoint AS choice
     ON choice.workflow = sessions.id AND choice.step = :choice_key
@@ -296,6 +370,7 @@ SCHEME: Final = {
     "repository_path": f"$.{REPOSITORY_FIELD}",
     "archived_key": ARCHIVED_KEY,
     "archived_path": "$.at",
+    "inbox_glob": f"{INBOX}*",
 }
 
 
@@ -344,14 +419,85 @@ async def rename(database: Database, session: str, title: str) -> None:
 
 
 async def read_sessions(database: Database) -> tuple[Session, ...]:
-    """Every session, newest first, which is the order a chat console reads in."""
-    rows = await selecting(database, f"{SELECTION} ORDER BY sessions.created_at DESC, sessions.id DESC", SCHEME)
-    return tuple(parse_session(row) for row in rows)
+    """
+    Every session, the one most recently written to first, which is the order a chat console reads in.
+
+    Ordered here rather than in the statement because what orders a row is `Session.latest`, which
+    is one moment or the other, and saying which in SQL as well would be the same rule written twice.
+    Creation breaks a tie between two written to at the same stamp, which the store's millisecond
+    clock makes ordinary for two sessions started together; the id after that is only so the order is
+    a function of the rows.
+    """
+    rows = await selecting(database, SELECTION, SCHEME)
+    return tuple(
+        sorted(
+            (parse_session(row) for row in rows),
+            key=lambda session: (session.latest, session.created_at, session.id),
+            reverse=True,
+        )
+    )
 
 
 async def read_session(database: Database, session: str) -> Session | None:
     rows = await selecting(database, f"{SELECTION} WHERE sessions.id = :session", {**SCHEME, "session": session})
     return parse_session(rows[0]) if rows else None
+
+
+# How far the store had got on this session, which is the mark a look leaves. The whole of the
+# session's rows and not only the ones that count as news, so a look lands past everything there was
+# to see; the inbox is excluded on the other side, when the mark is compared.
+SAW = """
+UPDATE sessions
+   SET seen_seq = (SELECT max(seq) FROM workflow_checkpoint WHERE workflow = sessions.id)
+ WHERE id = :session
+"""
+
+
+async def saw(database: Database, session: str) -> None:
+    """
+    Record that a page showing this session, as it now stands, reached somebody.
+
+    Written by the route that serves the page and by the page itself each time it has swapped in a
+    message from its live connection, because both are the same fact: what the session had recorded
+    was put in front of a reader. The page says so rather than the connection, because the server
+    cannot tell a page that is reading from one whose tab has gone dark - it learns of the latter only
+    when a write fails - where the page lets go of the connection while hidden and so only ever
+    acknowledges what it was shown. With the script absent, serving the page is the one mark there is.
+
+    A statement rather than a read and a write, so two pages looking at once cannot move the mark
+    backwards: each sets it to where the store stands, and the store only goes forwards.
+    """
+    await database.run(lambda connection: connection.execute(SAW, {"session": session}))
+
+
+# Whether anything about the list has changed, in three numbers nothing reads as a position: the
+# highest row the store has filed for anybody, how many sessions there are, and how far every look
+# has got in total. The sum rather than the highest mark, because a look at any one session moves
+# the sum and only a look at the furthest-on session would move the maximum. `max(seq)` is the
+# table's primary key, so the first is an index endpoint and not a scan.
+LISTING = """
+SELECT (SELECT max(seq) FROM workflow_checkpoint),
+       count(*),
+       coalesce(sum(seen_seq), 0)
+  FROM sessions
+"""
+
+
+async def listing_token(database: Database) -> str:
+    """
+    Whether the list is worth drawing again, as a token compared for inequality and nothing else.
+
+    What a live connection asks several times a second, beside the session's own token, so it has to
+    cost less than the list it guards. It moves when any session records anything, when a session is
+    made, and when a look at any session advances its mark; it does not move for what a sweep measures
+    a session taking on disk, which a row draws whenever it is next drawn for another reason.
+    """
+
+    def query(connection: sqlite3.Connection) -> str:
+        filed, count, looked = connection.execute(LISTING).fetchone()
+        return f"{filed}:{count}:{looked}"
+
+    return await database.run(query)
 
 
 # The two columns on their own, without the join every other read here makes. A pass wants a
@@ -436,7 +582,21 @@ async def switch(database: Database, session: str, enabled: Mapping[str, bool]) 
     )
 
 
-type Row = tuple[str, str, str, str | None, int | None, int | None, str | None, str | None, str | None, str | None]
+type Row = tuple[
+    str,
+    str,
+    str,
+    str | None,
+    int | None,
+    int | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    float | None,
+    int | None,
+    int | None,
+]
 
 
 async def selecting(database: Database, statement: str, parameters: Mapping[str, str]) -> list[Row]:
@@ -460,6 +620,9 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 None if settings is None else str(settings),
                 None if repository is None else str(repository),
                 None if archived is None else str(archived),
+                None if said is None else float(said),
+                None if told is None else int(told),
+                None if seen is None else int(seen),
             )
             for (
                 identifier,
@@ -472,6 +635,9 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 settings,
                 repository,
                 archived,
+                said,
+                told,
+                seen,
             ) in connection.execute(statement, parameters)
         ]
 
@@ -479,7 +645,21 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
 
 
 def parse_session(row: Row) -> Session:
-    identifier, created_at, title, forked_from, forked_at, forked_aside, enabled, settings, repository, archived = row
+    (
+        identifier,
+        created_at,
+        title,
+        forked_from,
+        forked_at,
+        forked_aside,
+        enabled,
+        settings,
+        repository,
+        archived,
+        said,
+        told,
+        seen,
+    ) = row
     return Session(
         id=identifier,
         created_at=datetime.fromisoformat(created_at),
@@ -491,6 +671,12 @@ def parse_session(row: Row) -> Session:
         repository=repository,
         tending=parse_tending(enabled, settings),
         archived=None if archived is None else datetime.fromisoformat(archived),
+        # The store's stamp is seconds since the epoch, in UTC by definition, where every other
+        # moment here is the ISO text the console wrote; both come out aware so they compare.
+        last_said_at=None if said is None else datetime.fromtimestamp(said, UTC),
+        # Nothing recorded is nothing to see, whoever has looked; something recorded and no mark is a
+        # session nobody has opened, and everything in it is new.
+        unseen=told is not None and (seen is None or told > seen),
     )
 
 

@@ -179,6 +179,11 @@ SEND_SWAP: Final = "outerMorph scroll:bottom"
 
 TRANSCRIPT_ID: Final = "transcript"
 
+# The session list itself, which is the region the live connection redraws: the `<ul>` and not the
+# whole sidebar, so a list slid out on a phone is not snapped shut by its own redraw, since what holds
+# it open is an attribute the script put on the sidebar and a morph of the sidebar would take it off.
+LISTED_ID: Final = "listed"
+
 MODEL_ID: Final = "model"
 
 # The two folds on the picker. A `<label>` reaches its control by id, so these have to be different
@@ -386,6 +391,7 @@ class Links:
     session: Reversible
     say: Reversible
     stream: Reversible
+    seen: Reversible
     request_record: Reversible
     endpoint_models: Reversible
     workspace_branches: Reversible
@@ -411,13 +417,14 @@ class Links:
     def to_say(self, session: str) -> str:
         return url_for(self.say, {"session": session})
 
-    def to_stream(self, session: str, settling: bool = False) -> str:
+    def to_stream(self, session: str | None, settling: bool = False) -> str:
         """
         The connection a page holds open, told which conversation it is showing and in which shape.
 
         A query parameter for the reason `to_endpoint_models` uses one: it narrows what a single
         connection reports on rather than picking a resource out. The stream is the page's, and the
-        session is what the page happens to be looking at.
+        session is what the page happens to be looking at. A page looking at no session, which is the
+        start page, names none and is sent the one region every page has, the session list.
 
         **The shape rides along because the page is the only thing that knows it.** The stream sends
         whichever regions the page's shape has, and a page still drawing the settings step has no
@@ -427,8 +434,24 @@ class Links:
         page is still on the step and answers it the same way. Only the step names itself, since the
         conversation is the shape a page has unless it says otherwise.
         """
-        shape = f"&{SHAPE_FIELD}={SETTLING}" if settling else ""
-        return f"{url_for(self.stream)}?session={session}{shape}"
+        asked = [
+            *(() if session is None else (f"session={session}",)),
+            *((f"{SHAPE_FIELD}={SETTLING}",) if settling else ()),
+        ]
+        return url_for(self.stream) + (f"?{'&'.join(asked)}" if asked else "")
+
+    def to_seen(self, session: str) -> str:
+        """
+        Where a page says it has shown the conversation as the connection just sent it.
+
+        The page's to say and not the connection's: the server cannot tell a page that is reading from
+        one whose tab has gone dark, since it learns of the latter only when a write fails, and the
+        first write after a tab is hidden goes into a socket the browser has already left. The page
+        lets go of the connection while hidden, so what it acknowledges is what it was shown. Beside
+        the stream under `fragments/` and addressed the same way, because it is the same connection's
+        other direction.
+        """
+        return f"{url_for(self.seen)}?session={session}"
 
     def to_endpoint_models(self) -> str:
         """
@@ -500,7 +523,7 @@ class Links:
 EXTENSIONS: Final = "sse"
 
 
-def stream_element(links: Links, session: str, settling: bool = False) -> Element:
+def stream_element(links: Links, session: str | None, settling: bool = False) -> Element:
     """
     The page's one live connection, and the sink a message that named no region would land in.
 
@@ -519,14 +542,27 @@ def stream_element(links: Links, session: str, settling: bool = False) -> Elemen
     connecting element untouched; the sink is what a message carrying anything else would land in,
     where a target pointing at the conversation would let a stray message replace it.
 
-    Only where there is a session, because that is the only thing there is to watch. A page-level
-    connection with nothing to report on would be a held socket and a heartbeat.
+    On every page that draws the session list, the start page included, because the list is a region
+    of every one of them and it moves when any session does: a session answered while somebody was
+    choosing what to start next is the case. A page with no list, which is a refusal, holds none, since
+    a connection with nothing to report on would be a held socket and a heartbeat.
+
+    The connection is let go while the page's tab is hidden and taken up again when it is shown, which
+    is htmx's own `pauseOnBackground` and not anything this console does: a hidden page is not being
+    read, so it costs the console no polling and acknowledges nothing. Coming back to the tab
+    reconnects, and the first message on a connection is always the whole current state, so the page
+    is current at once.
+
+    `data-seen` is where the page says it has shown what a message carried, which is how a session is
+    marked as looked at while it is open; see `Links.to_seen`. On the element that receives the
+    messages, so the thing acknowledging is the thing that was sent to.
     """
     return div(
         attrs={
             "id": STREAM_ID,
             "hidden": True,
             "hx-sse:connect": links.to_stream(session, settling),
+            "data-seen": None if session is None else links.to_seen(session),
             "hx-sse:close": LOADED,
             "hx-target": "this",
             "hx-swap": "innerHTML",
@@ -541,12 +577,15 @@ def document(
     session: str | None = None,
     forked_from: str | None = None,
     settling: bool = False,
+    live: bool = True,
 ) -> str:
     """
     The whole document, which every page is this with something different in the middle.
 
     `settling` is which shape the session page was drawn in, and it goes on the stream element so
-    the connection can say when that shape is over; see `Links.to_stream`.
+    the connection can say when that shape is over; see `Links.to_stream`. `live` is whether the page
+    holds that connection at all, which every page with the session list on it does and a refusal
+    does not; see `stream_element`.
 
     `session` is on the body because what the reader has decided about a conversation, which is
     which kinds they set aside and what they have kept unsent, belongs to that conversation and
@@ -612,7 +651,7 @@ def document(
                     ),
                     body(
                         attrs={"data-session": session, "data-forked-from": forked_from},
-                        children=[*((stream_element(links, session, settling),) if session else ()), children],
+                        children=[*((stream_element(links, session, settling),) if live else ()), children],
                     ),
                 ],
             ),
@@ -658,12 +697,14 @@ def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
 
 def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reachable: Reachable) -> Element:
     """
-    Every session, newest first, with branches under what they branched from and the current one marked.
+    Every session, the one most recently written to first, with branches under what they branched
+    from and the current one marked.
 
-    Newest first among siblings rather than across the whole list, which is what a tree costs and
-    what it buys: a branch made this morning sits with the conversation it came from rather than at
-    the top away from it, and the ordering within any one group is still the one a chat console
-    reads in.
+    Most recent first among siblings rather than across the whole list, which is what a tree costs
+    and what it buys: a branch worked in this morning sits with the conversation it came from rather
+    than at the top away from it, and the ordering within any one group is still the one a chat
+    console reads in. The row dates itself by the same moment it is ordered by, since a list sorted by
+    one date and labelled with another reads as unsorted.
 
     A row says which repository its session works in, because that is the thing two conversations
     with the same opening line are actually told apart by once a console is used to work in more
@@ -684,6 +725,9 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
     of its own, so that on a phone a finger between two rows lands on the list and scrolls it rather
     than falling through to the conversation underneath. On a wide window the sheet is simply the
     column, and it is the column that scrolls at every width.
+
+    The list inside the sheet is `listed_region`, because it is the part the live connection redraws;
+    see `LISTED_ID` for why the redraw stops there.
     """
     return aside(
         cls="sessions",
@@ -698,20 +742,32 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
                 cls="sessions__sheet",
                 children=[
                     a(cls="start", attrs={"href": links.to_home()}, children=NEW_SESSION),
-                    ul(
-                        children=[
-                            li(
-                                attrs={"data-depth": str(depth)},
-                                children=[
-                                    session_row(links, session, showing, depth, reachable),
-                                    *((archive_action(links, session.id),) if session.archived is None else ()),
-                                ],
-                            )
-                            for session, depth in arrange(listed)
-                        ]
-                    ),
+                    listed_region(links, listed, showing, reachable),
                 ],
             ),
+        ],
+    )
+
+
+def listed_region(links: Links, listed: tuple[Session, ...], showing: str | None, reachable: Reachable) -> Element:
+    """
+    The rows of the session list, which is what the live connection sends when any session moves.
+
+    Every row carries an id, and that is for the morph rather than for anybody to link to: the list
+    reorders when a session is written to and a row moves up it, and a morph that cannot tell a moved
+    row from a changed one rebuilds it, shutting an archive disclosure somebody had open on it.
+    """
+    return ul(
+        attrs={"id": LISTED_ID},
+        children=[
+            li(
+                attrs={"id": f"listed-{session.id}", "data-depth": str(depth)},
+                children=[
+                    session_row(links, session, showing, depth, reachable),
+                    *((archive_action(links, session.id),) if session.archived is None else ()),
+                ],
+            )
+            for session, depth in arrange(listed)
         ],
     )
 
@@ -731,10 +787,27 @@ def session_row(links: Links, session: Session, showing: str | None, depth: int,
             span(
                 cls="meta",
                 children=[
+                    # Something recorded since anybody looked, said in a word beside the
+                    # date for the archived word's reason: a dot on its own reads as a
+                    # styling accident, and the word is what a reader scanning for
+                    # something to catch up on looks for. Never on an archived row,
+                    # since nothing more is said in one, and never on the row being
+                    # looked at, because the page drawing it is what marks it seen.
+                    *(
+                        (
+                            span(
+                                cls="unseen",
+                                attrs={"title": "Something new since you last looked"},
+                                children="new",
+                            ),
+                        )
+                        if session.unseen and session.archived is None
+                        else ()
+                    ),
                     time(
                         cls="when",
-                        attrs={"datetime": session.created_at.isoformat()},
-                        children=session.created_at.strftime("%b %d, %H:%M"),
+                        attrs={"datetime": session.latest.isoformat(), "title": moments(session)},
+                        children=session.latest.strftime("%b %d, %H:%M"),
                     ),
                     # Said in a word as well as by muting the name, because a
                     # muted row on its own reads as a styling accident, and the
@@ -744,7 +817,7 @@ def session_row(links: Links, session: Session, showing: str | None, depth: int,
                         (
                             span(
                                 cls="archived",
-                                attrs={"title": f"Archived {archived_on(session.archived)}"},
+                                attrs={"title": f"Archived {dated(session.archived)}"},
                                 children="archived",
                             ),
                         )
@@ -3842,7 +3915,7 @@ def archive_card(links: Links, session: str, archived: datetime | None) -> Eleme
             },
             children=[
                 div(cls="archive__head", children="archived"),
-                dl(cls="facts", children=[*fact("since", archived_on(archived))]),
+                dl(cls="facts", children=[*fact("since", dated(archived))]),
             ],
         )
     return details(
@@ -3927,9 +4000,8 @@ def rail(
 
     The clasp comes first so that on a window too narrow to stand the rail beside the conversation
     it is left where the cards' head was, and the cards slide off. Which width that is stays the
-    stylesheet's to say, and so is which of the clasp's two faces is drawn: the glyph where it floats
-    over a corner of the conversation and a word would cover the text there, the word on a phone,
-    where it stands in a row the page clears for it.
+    stylesheet's to say. It says its word, as the session list's does, because wherever it is drawn
+    at all it stands in a row the page clears for the two of them.
 
     The cards are in one sheet, and the sheet is what slides, for the session list's reason: a
     finger between two cards lands on the sheet and scrolls it, rather than falling through to the
@@ -3974,10 +4046,7 @@ def rail(
             button(
                 cls="rail__clasp",
                 attrs={"type": "button", "aria-expanded": "false", "aria-label": "Conversation controls"},
-                children=[
-                    span(cls="clasp__glyph", attrs={"aria-hidden": "true"}, children="\N{EQUALS SIGN}"),
-                    span(cls="clasp__word", children="Controls"),
-                ],
+                children="Controls",
             ),
             div(
                 cls="rail__sheet",
@@ -4586,9 +4655,22 @@ def start_page(
     )
 
 
-def archived_on(archived: datetime) -> str:
-    """When a session was archived, in the words the sidebar dates a session in, so the two agree."""
-    return archived.strftime("%b %d, %H:%M")
+def dated(when: datetime) -> str:
+    """A moment in the words the sidebar dates a session in, so every date on a row agrees."""
+    return when.strftime("%b %d, %H:%M")
+
+
+def moments(session: Session) -> str:
+    """
+    Both of a row's moments, for the title over the one it prints.
+
+    The row prints the one it is ordered by, and for a session written to that is not when it was
+    made; somebody wondering which of two conversations is the older one hovers rather than guesses.
+    """
+    created = f"Created {dated(session.created_at)}"
+    if session.last_said_at is None:
+        return created
+    return f"Last message {dated(session.last_said_at)}. {created}"
 
 
 def stalled_by(showing: Conversation) -> str | None:
@@ -4612,7 +4694,7 @@ def stalled_by(showing: Conversation) -> str | None:
     # a fork past a refusal would carry on a session that was deliberately closed.
     if showing.session.archived is not None:
         return (
-            f"Archived {archived_on(showing.session.archived)}: nothing more is said in it, and its worktree "
+            f"Archived {dated(showing.session.archived)}: nothing more is said in it, and its worktree "
             f"and scratch are taken off the disk. Fork it to carry on from where it left off."
         )
     if showing.chosen is None:
@@ -5098,6 +5180,7 @@ def refusal_page(links: Links, status: int, why: str) -> str:
                 a(attrs={"href": links.to_home()}, children="Back to mainplate"),
             ],
         ),
+        live=False,
     )
 
 

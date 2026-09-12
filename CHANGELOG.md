@@ -9,6 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A row in the session list says `new`** when its session has recorded something since anybody
+  looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
+  message of your own. Opening the session clears it, and so does watching the answer arrive on a
+  page already open, which the page reports itself once it has drawn it. The mark is the console's
+  rather than any one browser's, so reading an answer on a phone clears it on the laptop too. A
+  console upgraded onto this starts with nothing marked.
+- **The session list is live.** It rides the same connection the transcript does, on every page
+  including the start page, so a session answered while you were reading another one shows `new` in
+  the list at once and a session written to moves up it without a reload. A tab in the background
+  lets the connection go and picks it up again when shown, so a hidden page costs nothing and is
+  current the moment you come back to it.
 - **Archiving a session**, from a card in the rail, under the settings step, or from its row in the
   session list, where the control shows as the pointer or the focus reaches the row: nothing more is
   said in it, the message box is gone from its page and the row is muted at once, and a reconciler
@@ -241,6 +252,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The fork page's `Fork and ask` button wears the same face as `Create session`, which is the same
+  press one page over; it had the browser's own.
 - **A session whose pass fell over says so.** A pass that raises is left unanswered by the worker and
   redelivered once per lease for as long as it keeps raising, which is the right answer to a fault
   somebody can fix - but the whole account of it was a line in the log, so the page drew the same
@@ -270,6 +283,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A window too narrow for three columns takes the phone's shape at once**: the session list and
+  the rail both fold away behind the two clasps in the row across the top, at the width where the
+  three stop fitting. There used to be a shape between, with the rail folded behind a glyph floating
+  over the conversation while the list kept its column; it was a third state with a folding mechanism
+  of its own, and a half-width laptop window now gets the conversation alone with both panels a press
+  away. What a phone needs beyond the fold, a rule's parts stacked and its running total dropped,
+  fields that do not zoom on focus, targets sized for a thumb, stays a phone's.
+- **The session list is ordered by when a session was last written to**, so the conversation being
+  worked in sits at the top however long ago it was started; it used to be ordered by when each was
+  made. The row is dated by the same moment, and hovering the date says when the last message was
+  and when the session was made. The order is still the tree's: a branch sits under what it came
+  from, and the moment orders siblings. Nothing new is recorded for it, since the store already stamps
+  every message as it files it.
 - On a phone the session list folds away off the left edge behind a clasp, the way the rail folds
   away off the right, and opening either shuts the other. Slid out it is the column a wide window
   draws, dates, repositories and the tree's indentation included; it used to be a strip of chips

@@ -1760,6 +1760,32 @@
       viewport.addEventListener("resize", fit);
     };
 
+    // The other direction of the live connection. A message the page has swapped in is a message
+    // somebody was shown, and the page is the only party that knows it: the server learns that a tab
+    // went dark only when a write to it fails, and the first write after that lands in a socket the
+    // browser has already left. So the mark is the page's to make, after the swap and never before
+    // it, and never while hidden - a message cannot arrive then, since the connection is let go, but
+    // the tick between the tab going dark and the connection noticing is exactly the one to refuse.
+    //
+    // Coalesced over a short beat rather than sent per message, because a turn records several times
+    // a second while it runs and each is a message; the mark says "as it now stands", so the last
+    // one is the one that matters. `keepalive` so an acknowledgement in flight survives the page
+    // being left.
+    const wireSeen = () => {
+      const stream = document.getElementById("stream");
+      const where = stream && stream.dataset.seen;
+      if (!where) return;
+      let pending = null;
+      document.addEventListener("htmx:sse:after:message", (event) => {
+        if (event.target !== stream || document.hidden || pending !== null) return;
+        pending = setTimeout(() => {
+          pending = null;
+          if (document.hidden) return;
+          fetch(where, { method: "POST", keepalive: true }).catch(() => {});
+        }, 250);
+      });
+    };
+
     const wireShapes = () => {
       // The one thing the stream says that is not a region: the page was drawn as the settings step
       // and the session has since loaded, so there is nothing on this page for the conversation to
@@ -1794,6 +1820,7 @@
     wireFresh();
     wireSwaps();
     wireShapes();
+    wireSeen();
     wireKeyboard();
     wireHash();
 

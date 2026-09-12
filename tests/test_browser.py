@@ -88,8 +88,8 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 VIEWPORT = ViewportSize(width=1400, height=1000)
 
 # And a phone, which is the collapsed layout the width above exists to avoid. Comfortably under the
-# stylesheet's 48rem, because what these ask is whether the narrow shape is the one it means to draw
-# rather than where exactly it starts drawing it.
+# stylesheet's 78rem, because what these ask is whether the narrow shape is the one it means to draw
+# rather than where exactly it starts drawing it; `TestTheShapeOfANarrowWindow` asks the latter once.
 PHONE = ViewportSize(width=390, height=844)
 
 # Every page the gallery renders, named at collection so each is a test of its own rather than a
@@ -707,11 +707,13 @@ class TestTheShapeOfANarrowWindow:
     the layout it is measuring is a deliverable that regresses without anybody looking. It is the
     reason the rest of this module exists, applied once more.
 
-    Two questions rather than one, because overflow alone can be right for the wrong reason. The
-    stylesheet's two breakpoints overlap and every session page matched both, so the rail's own
-    `max-width: 78rem` block put the 17rem sidebar column back under the narrow one and left the
-    conversation about a hundred pixels to render in. Whether the shell is *one track* is what
-    catches that directly; whether the document scrolls sideways is what catches the ways it shows.
+    Two questions rather than one, because overflow alone can be right for the wrong reason. When the
+    stylesheet had two breakpoints they overlapped and every session page matched both, so a rule in
+    the wider block put the 17rem sidebar column back under the narrow one and left the conversation
+    about a hundred pixels to render in. Whether the shell is *one track* is what catches that
+    directly; whether the document scrolls sideways is what catches the ways it shows. There is one
+    breakpoint now, and the third question is that it is where three columns stop fitting: a window
+    too narrow for all three goes straight to this shape rather than to one between.
     """
 
     @pytest.mark.parametrize("name", EVERY_PAGE)
@@ -733,6 +735,42 @@ class TestTheShapeOfANarrowWindow:
         # goes to the conversation. A count alone is satisfied by `none`, which is what a shell that
         # had stopped being a grid at all would report.
         assert columns.split() == [f"{PHONE['width']}px"]
+
+    async def test_a_window_too_narrow_for_three_columns_is_the_narrow_shape_at_once(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        No shape between: either all three stand, or the list and the rail both lie off their edges
+        behind their clasps. Measured a little either side of the stylesheet's 78rem at the browser's
+        default 16px, so this is a claim about where the shape changes and not only that it does.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        tracks = "() => getComputedStyle(document.querySelector('.shell')).gridTemplateColumns.split(' ').length"
+        await page.set_viewport_size({"width": 1280, "height": 900})
+        assert await page.evaluate(tracks) == 3
+        await expect(page.locator(".sessions__clasp")).to_be_hidden()
+        await expect(page.locator(".rail__clasp")).to_be_hidden()
+        await page.set_viewport_size({"width": 1200, "height": 900})
+        assert await page.evaluate(tracks) == 1
+        await expect(page.locator(".sessions__clasp")).to_be_visible()
+        await expect(page.locator(".rail__clasp")).to_be_visible()
+        await expect(page.locator(".sessions .start")).to_be_hidden()
+        await expect(page.locator(".search")).to_be_hidden()
+
+    async def test_the_fold_does_not_bring_a_phones_lines_with_it(self, page: Page, phone: Page, gallery: str) -> None:
+        """
+        A rule stacks its parts and drops the running total because a phone has no room on a line
+        for them, and a laptop window in the narrow shape has all the room it had: the fold is about
+        the columns, and a phone's rules are nested under it for what a phone lacks beyond that.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.set_viewport_size({"width": 1200, "height": 900})
+        running = page.locator(".rule__running").first
+        await expect(running).to_be_visible()
+        assert await page.evaluate("() => getComputedStyle(document.querySelector('.rule')).flexWrap") == "nowrap"
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(phone.locator(".rule__running").first).to_be_hidden()
+        assert await phone.evaluate("() => getComputedStyle(document.querySelector('.rule')).flexWrap") == "wrap"
 
 
 class TestTheSessionListOnAPhone:
@@ -1451,6 +1489,116 @@ class TestWatchingATurnArrive:
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(1)
         await expect(page.locator(".panel[data-fresh]")).to_have_count(0)
+
+
+async def shown(page: Page, visible: bool) -> None:
+    """
+    Tell the page it has been hidden or shown, the way the browser does when its tab is switched.
+
+    Playwright cannot background a tab, so this sets what `document.hidden` answers and fires the event
+    a real switch fires. What is under test is how the page answers that event, which is htmx's own
+    `pauseOnBackground`; that the browser fires it on a tab switch is the platform's documented
+    behaviour and not something this can reach.
+    """
+    await page.evaluate(
+        """(hidden) => {
+            Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+            document.dispatchEvent(new Event("visibilitychange"));
+        }""",
+        not visible,
+    )
+
+
+async def unseen(service: Service, session: str) -> bool:
+    (found,) = [each for each in await service.listed() if each.id == session]
+    return found.unseen
+
+
+class TestLettingGoOfTheConnectionWhileHidden:
+    """
+    A hidden page is not being read, so it holds no connection and marks nothing as seen; shown again,
+    it reconnects and the first message is the whole current state, so it is current at once.
+
+    The letting go is htmx's own and not this console's, which is exactly why it is pinned here: the
+    mark a send makes means "somebody was shown this" only for as long as that holds, and a library
+    default changing under the console would turn the mark into a lie on every tab left open.
+    """
+
+    async def test_a_hidden_page_is_sent_nothing_and_catches_up_when_shown(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+        await taking(service, session.id)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+        await page.evaluate(
+            """() => {
+                window.reconnections = 0;
+                document.addEventListener("htmx:sse:before:connection", () => { window.reconnections += 1; });
+            }"""
+        )
+        await shown(page, False)
+        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
+        # A bound on nothing happening rather than a wait for something: three of the stream's own
+        # polls, after which a connection still held would have sent the answer and the page would
+        # have acknowledged it.
+        await asyncio.sleep(3 * service.watching.total_seconds())
+        await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(0)
+        assert await unseen(service, session.id), "nothing showed it to anybody"
+
+        # The acknowledgement is the signal, so it is what is waited for: the answer on the page is
+        # necessary and not sufficient, since the page says so a beat after it swaps.
+        async with page.expect_response(lambda response: "/fragments/seen" in response.url) as acknowledged:
+            await shown(page, True)
+            await expect(page.locator(".panel[data-kind=thinking]")).to_contain_text("Two files to look at.")
+        assert (await acknowledged.value).status == 204
+        assert await page.evaluate("() => window.reconnections") == 1
+        assert not await unseen(service, session.id), "and being shown again is what marks it"
+
+
+class TestTheListMovingUnderAPage:
+    """
+    The session list is a region of every page, so another session recording an answer marks its row
+    on the page somebody is reading, with nobody reloading anything.
+    """
+
+    async def test_another_sessions_answer_marks_its_row_on_the_page_being_read(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        url, service = console
+        reading = await started(service, "the one being read", DEFAULT_CHOICE)
+        other = await started(service, "the other one", DEFAULT_CHOICE)
+        await taking(service, other.id)
+        await service.saw(other.id)
+        await page.goto(f"{url}/sessions/{reading.id}", wait_until="load")
+        row = page.locator(f"#listed-{other.id}")
+        await expect(row).to_be_visible()
+        await expect(row.locator(".unseen")).to_have_count(0)
+        await service.checkpointer.supply(other.id, messages_key(0), recorded_turn("an answer nobody has read"))
+        await expect(row.locator(".unseen")).to_have_text("new")
+        await expect(page.locator(f"#listed-{reading.id} .unseen")).to_have_count(0)
+
+    async def test_a_list_slid_out_on_a_phone_stays_out_while_it_is_redrawn(
+        self, phone: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        What holds the list open is an attribute the script put on the sidebar, so the redraw has to
+        stop at the list itself: a morph of the whole sidebar would take the attribute off and snap the
+        sheet shut under a thumb every time any session moved.
+        """
+        url, service = console
+        reading = await started(service, "the one being read", DEFAULT_CHOICE)
+        other = await started(service, "the other one", DEFAULT_CHOICE)
+        await taking(service, other.id)
+        await service.saw(other.id)
+        await phone.goto(f"{url}/sessions/{reading.id}", wait_until="load")
+        await phone.locator(".sessions__clasp").click()
+        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await service.checkpointer.supply(other.id, messages_key(0), recorded_turn("an answer nobody has read"))
+        await expect(phone.locator(f"#listed-{other.id} .unseen")).to_have_text("new")
+        await expect(phone.locator(".sessions .start")).to_be_visible()
+        assert await phone.get_attribute(".sessions__clasp", "aria-expanded") == "true"
 
 
 class TestShuttingAFoldFromItsFrame:
