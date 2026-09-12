@@ -35,6 +35,7 @@ from without_html import DOCTYPE
 from without_html import Attributes
 from without_html import Child
 from without_html import Element
+from without_html import Node
 from without_html import VoidElement
 from without_html import a
 from without_html import aside
@@ -85,6 +86,7 @@ from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
+from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Block
 from mainplate.conversation import Command
 from mainplate.conversation import Disposition
@@ -100,23 +102,36 @@ from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
 from mainplate.markup import as_document
 from mainplate.markup import as_message
+from mainplate.plugins.asking import running
+from mainplate.plugins.installed import ON
+from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.installed import grouped as by_tier
+from mainplate.plugins.protocol import Number
+from mainplate.plugins.protocol import Setting
+from mainplate.plugins.protocol import Switch
+from mainplate.plugins.protocol import settings_of
 from mainplate.reference import Cost
 from mainplate.reference import Described
 from mainplate.reference import Reference
 from mainplate.reference import describe
 from mainplate.sandbox import Filesystem
+from mainplate.service import Claimed
 from mainplate.service import Conversation
+from mainplate.service import Delayed
+from mainplate.service import Idle
+from mainplate.service import Queued
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import Session
 from mainplate.snapshots import LONGEST_REF
-from mainplate.tending import HANDS_OFF_FIELD
-from mainplate.tending import LEAST_ROOM
-from mainplate.tending import RESERVE_FIELD
-from mainplate.tending import TENDED
-from mainplate.tending import THOUSAND
+from mainplate.tending import AGAIN
+from mainplate.tending import ENABLED_FIELD
+from mainplate.tending import PLUGIN_FIELD
+from mainplate.tending import SETTLE_FIELD
+from mainplate.tending import SETTLED
 from mainplate.tending import Tending
-from mainplate.tending import reserving
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
 
@@ -137,6 +152,21 @@ SWAP: Final = "outerMorph"
 # only `<hx-partial>` elements leaves it alone, and one that somehow carried bare markup lands here
 # rather than over a conversation somebody is reading.
 STREAM_ID: Final = "stream"
+
+# The one named event the stream sends, which says the page's shape is no longer the checkpoint's:
+# a page drawing the settings step whose session has since loaded its plugins. It is named rather
+# than a partial because there is nothing to swap - the page it is sent to has none of the regions
+# the new shape has - so what a reader needs is the page again, and a named event is what htmx hands
+# to a script rather than to a target. The stream element closes on it, and `mainplate.js` reloads.
+# Three readers of one word: here, the stream, and the script, which spells it as a literal. It is
+# the word `settling`'s other half already uses for the shape past the step.
+LOADED: Final = "loaded"
+
+# The query parameter a page states its shape on when it opens the stream, and the one value it
+# takes. Only the step names itself; a page showing the conversation sends nothing, since that is
+# the shape a page has unless it says otherwise.
+SHAPE_FIELD: Final = "shape"
+SETTLING: Final = "settling"
 
 # What a send does, which is the same merge plus a scroll: a message just typed is the one thing a
 # reader definitely wants to be looking at, and unlike an update arriving on its own this cannot
@@ -165,6 +195,9 @@ REPOSITORY_ID: Final = "repository"
 NETWORK_TOGGLE_ID: Final = "open-network"
 NETWORK_ID: Final = "network"
 
+TRUST_TOGGLE_ID: Final = "open-trust"
+TRUST_ID: Final = "trust"
+
 # The one field the worktree group posts. Form-only rather than a recorded field, because what
 # it carries is *two* recorded things at once - a repository and a filesystem level - and which
 # two is decided by parsing it, at the boundary, once.
@@ -177,6 +210,10 @@ BASIS_ID: Final = "basis"
 BRANCHES_ID: Final = "branches"
 FOUND_ID: Final = "branches-found"
 
+# The dots inside that block, shown while the forge is being asked what branches it has. Named here
+# for the same reason the block is: the card points `hx-indicator` at it and the block draws it.
+BASIS_LOADING_ID: Final = "basis-loading"
+
 SENDING_ID: Final = "sending"
 
 # Whether the provider still holds this conversation's prefix, and what the next request pays if it
@@ -186,13 +223,13 @@ SENDING_ID: Final = "sending"
 # `streaming.py` was built for. See `cache_note`.
 CACHE_ID: Final = "cache"
 
-# The form the picker's controls belong to, named because on the start page they do not sit inside
-# it. There the choosing fills `main`'s growing row and the box is pinned under it, so the endpoint
-# radios, the model radios and the two selects are *siblings* of the form that posts them; without
-# this the browser submits a message with no endpoint and no model on it and the console refuses its
-# own page. `form` is what associates a control with a form it is not inside, so the layout stays
-# what it is and the page still posts with no script at all. The fork page nests its picker inside
-# the same-named form, where the attribute simply names the ancestor it already had.
+# The form the picker's controls belong to, named rather than relied on by nesting. Both pages nest
+# them inside it today, so on both the `form` attribute names the ancestor a control already had -
+# but what carries it is `model_cards` and `starting_at`, which are also served as fragments, and a
+# fragment is markup with no ancestor at all until the swap lands. Naming the form is what makes a
+# control's association a property of the control rather than of wherever it is put, which is what
+# lets one component serve the page and the swap. `TestWhatAFormPosts` is what fails when it goes,
+# by asking a browser what `form.elements` holds.
 CHOOSING_ID: Final = "choosing"
 
 # What each kind of panel is called where a person reads it: the role label on the panel, and the
@@ -202,7 +239,7 @@ NAMES: Final[tuple[tuple[Kind, str], ...]] = (
     ("system-prompt", "system prompt"),
     ("guidance", "guidance"),
     ("prompt", "prompt"),
-    ("handoff", "handoff"),
+    ("note", "note"),
     ("steer", "steer"),
     ("command", "command"),
     ("thinking", "thinking"),
@@ -225,7 +262,10 @@ TITLES: Final[dict[Kind, str]] = {
     ),
     # The third, and the one where leaving it out would be worst: every other message in a
     # conversation was typed by somebody, so a reader has no reason to suspect this one was not.
-    "handoff": "The console wrote this itself, so that the conversation could carry on with a cleared context.",
+    # **It is the fallback rather than the answer**: a note carries its own `title` where the plugin
+    # that asked for it named one, since a pre-commit failure and a handoff document are different
+    # things to meet halfway down a transcript. This is what a plugin that named none gets.
+    "note": "A plugin asked for this. Nobody in the conversation typed it.",
 }
 
 # Which side of the exchange a kind is on: what reached the model, and what the model produced.
@@ -241,10 +281,12 @@ SIDES: Final[dict[Kind, str]] = {
     # request, which is not something a hue can say.
     "guidance": "person",
     "prompt": "person",
-    # The person's side because the axis is who produced the *text*, and what a handoff holds was
-    # produced by this session rather than by the model about to be handed it. Its `title` says the
-    # console composed it, exactly as `command`'s says no model was told.
-    "handoff": "person",
+    # The person's side because the axis is who produced the *text*, and what a note holds was
+    # produced by this console's own machinery with the model as the party about to be told. Its
+    # `title` says a plugin asked for it, exactly as `command`'s says no model was told. What a
+    # plugin gets to vary is the `tone`, which is weight *within* this side rather than a hue
+    # competing with it.
+    "note": "person",
     "steer": "person",
     # The person's side because the axis is who produced the text, which is the same rule `steer`
     # follows. It is the one kind on that side the model never saw, and the panel's own `title` says
@@ -266,9 +308,9 @@ SIDES: Final[dict[Kind, str]] = {
 # Reference is shut and conversation is open, which is the one line through every kind here. A system
 # prompt and a delivered guidance file are documents somebody committed, so they are drawn as the
 # line they open with; everything else is what was said, and a conversation whose replies had
-# to be opened one at a time would not be a transcript. A handoff falls on the conversation side of
-# that despite reading like a document: it is a message, it is the one nobody wrote, and so it is the
-# one a reader cannot recall for themselves. A tool panel is *open* with each call inside it shut,
+# to be opened one at a time would not be a transcript. A note falls on the conversation side of
+# that despite often reading like a document: it is a message, it is the one nobody wrote, and so it
+# is the one a reader cannot recall for themselves. A tool panel is *open* with each call inside it shut,
 # which is today's rendering exactly: the calls are listed, and what each was handed is a press away.
 OPENS: Final[dict[Kind, bool]] = {
     "system-prompt": False,
@@ -276,7 +318,7 @@ OPENS: Final[dict[Kind, bool]] = {
     "prompt": True,
     # Open, because it is a message and not reference material: what it says is why the turn under it
     # goes the way it does, and it is the one message a reader did not write and so cannot recall.
-    "handoff": True,
+    "note": True,
     "steer": True,
     "command": True,
     "thinking": True,
@@ -342,7 +384,8 @@ class Links:
     workspace_branches: Reversible
     fork_form: Reversible
     fork: Reversible
-    tend: Reversible
+    setup: Reversible
+    press: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -360,15 +403,24 @@ class Links:
     def to_say(self, session: str) -> str:
         return url_for(self.say, {"session": session})
 
-    def to_stream(self, session: str) -> str:
+    def to_stream(self, session: str, settling: bool = False) -> str:
         """
-        The connection a page holds open, told which conversation it is showing.
+        The connection a page holds open, told which conversation it is showing and in which shape.
 
         A query parameter for the reason `to_endpoint_models` uses one: it narrows what a single
         connection reports on rather than picking a resource out. The stream is the page's, and the
         session is what the page happens to be looking at.
+
+        **The shape rides along because the page is the only thing that knows it.** The stream sends
+        whichever regions the page's shape has, and a page still drawing the settings step has no
+        transcript for a message to land in: the moment the checkpoint's shape stops matching the
+        page's, the stream says so once and the page reloads, which is `LOADED`. Sent by the page
+        rather than remembered by the stream, so a connection re-opened after the change is told the
+        page is still on the step and answers it the same way. Only the step names itself, since the
+        conversation is the shape a page has unless it says otherwise.
         """
-        return f"{url_for(self.stream)}?session={session}"
+        shape = f"&{SHAPE_FIELD}={SETTLING}" if settling else ""
+        return f"{url_for(self.stream)}?session={session}{shape}"
 
     def to_endpoint_models(self) -> str:
         """
@@ -408,8 +460,20 @@ class Links:
     def to_fork(self, session: str) -> str:
         return url_for(self.fork, {"session": session})
 
-    def to_tend(self, session: str) -> str:
-        return url_for(self.tend, {"session": session})
+    def to_setup(self, session: str) -> str:
+        """Where a session says which of its plugins it runs, which it may until it answers a turn."""
+        return url_for(self.setup, {"session": session})
+
+    def to_press(self, session: str) -> str:
+        """
+        Where one control on one plugin's card posts to.
+
+        One route for every plugin rather than one per plugin, because which plugin and which control
+        are *values on the form* rather than places in the resource tree: a card is a form, and what
+        it posts names what it is about. That is also what keeps the route a fixed string a page can
+        hold without knowing what a session enrolled.
+        """
+        return url_for(self.press, {"session": session})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -424,9 +488,14 @@ class Links:
 EXTENSIONS: Final = "sse"
 
 
-def stream_element(links: Links, session: str) -> Element:
+def stream_element(links: Links, session: str, settling: bool = False) -> Element:
     """
     The page's one live connection, and the sink a message that named no region would land in.
+
+    It says which shape the page was drawn in, and closes on the one event that says that shape is
+    over: a settings step whose session has loaded is a page with nothing for a message to land in,
+    so the connection ends and the script reloads the page rather than a partial being dropped on the
+    floor. See `Links.to_stream`.
 
     Outside everything that swaps, which is what makes it the page's rather than a region's: the
     transcript is morphed whenever the session moves, and a connection held by the element being
@@ -445,7 +514,8 @@ def stream_element(links: Links, session: str) -> Element:
         attrs={
             "id": STREAM_ID,
             "hidden": True,
-            "hx-sse:connect": links.to_stream(session),
+            "hx-sse:connect": links.to_stream(session, settling),
+            "hx-sse:close": LOADED,
             "hx-target": "this",
             "hx-swap": "innerHTML",
         }
@@ -453,10 +523,18 @@ def stream_element(links: Links, session: str) -> Element:
 
 
 def document(
-    links: Links, heading: str, children: Element, session: str | None = None, forked_from: str | None = None
+    links: Links,
+    heading: str,
+    children: Element,
+    session: str | None = None,
+    forked_from: str | None = None,
+    settling: bool = False,
 ) -> str:
     """
     The whole document, which every page is this with something different in the middle.
+
+    `settling` is which shape the session page was drawn in, and it goes on the stream element so
+    the connection can say when that shape is over; see `Links.to_stream`.
 
     `session` is on the body because what the reader has decided about a conversation, which is
     which kinds they set aside and what they have kept unsent, belongs to that conversation and
@@ -512,7 +590,7 @@ def document(
                     ),
                     body(
                         attrs={"data-session": session, "data-forked-from": forked_from},
-                        children=[*((stream_element(links, session),) if session else ()), children],
+                        children=[*((stream_element(links, session, settling),) if session else ()), children],
                     ),
                 ],
             ),
@@ -741,9 +819,8 @@ def along(fraction: float) -> str:
     """
     One fraction as a distance along a rule, capped because a gauge cannot draw past its own width.
 
-    A session past a window the database understates asks for no more line than there is, and a
-    reserve is capped by the same rule rather than because it can exceed one: `reserving` already
-    refuses an interval that does not fit.
+    A session past a window the database understates asks for no more line than there is, which is
+    the one way a fraction here can exceed one.
     """
     return f"{min(fraction, 1.0):.1%}"
 
@@ -1315,6 +1392,96 @@ def network_cards(chosen: bool) -> Element:
     )
 
 
+TRUST_CHOICES: Final[tuple[tuple[str, bool, str], ...]] = (
+    ("trusted", True, "Its own plugins run, confined to the worktree"),
+    ("read only", False, "None of its own code runs unattended"),
+)
+"""
+The two answers to whether this session runs code the repository carries, and what each means.
+
+**Trusted comes first because it is the default**, and the default is the honest reading of what
+picking a repository already means: a session with a shell runs its build, its tests, its hooks and
+whatever those shell out to, every one of them unread. A plugin is one more caller of that.
+
+What the second answer is for is the session where that reading does not hold - a stranger's pull
+request being read rather than worked in, or a session on `no files` that picked a repository and
+hands the model no shell at all. That is why it is drawn here rather than inferred from the
+isolation: the two are near enough to look like one question and are not.
+"""
+
+
+def trust_card(naming: str, holds: bool, saying: str, chosen: bool) -> Element:
+    """
+    One answer to whether a repository's own code runs, as a card in the group.
+
+    The network group's own classes rather than a set of its own, because it is the same control
+    asking the same shape of question one row down: two answers, one word and a phrase apiece. A
+    second set would be a second thing to restyle the day either moves.
+
+    `holds` is the answer this card *is* and `chosen` is whether it is the one picked, which are two
+    things a boolean each and easy to run together: the value posted is the card's own, and only the
+    picked one carries `checked`.
+    """
+    return label(
+        cls="network",
+        attrs={"data-name": naming},
+        children=[
+            input_(
+                cls="network__pick",
+                attrs={
+                    # `on` and nothing, by `network_card`'s rule inverted: a radio that is not checked
+                    # posts no field, so an absent field has to mean the *default*, which here is
+                    # trusted. Refusing is the thing somebody has to have actually said.
+                    "type": "radio",
+                    "name": TRUSTED_FIELD,
+                    "value": "on" if holds else "",
+                    "checked": chosen,
+                    "form": CHOOSING_ID,
+                },
+            ),
+            span(cls="network__name", children=naming),
+            span(cls="network__note", children=saying),
+        ],
+    )
+
+
+def trust_cards(trusted: bool) -> Element:
+    """
+    Whether this session runs code the repository carries, which today means the plugins it declares.
+
+    **Per session and never per repository**, which is the whole shape of it: a repository changes,
+    so an answer recorded against one covers a branch somebody pushed this morning as readily as the
+    one you reviewed last year. Recorded on the `Choice` it is a decision about this conversation,
+    settled before its first message and fixed for its life, and changing your mind is `fork`.
+
+    Drawn only where a repository is picked, by the same rule the base and the branch follow: with no
+    worktree there is nothing whose code could be trusted or not.
+
+    The cost, stated: a repository's plugin runs unattended at every turn boundary and puts text into
+    the conversation, which is a delivery channel for prompt injection with a guaranteed slot. The
+    settings step is where every session then shows what it actually loaded, in those terms, before
+    anything has been said to it - which is the part somebody can act on, since the grant is coarse
+    and the exposure is what is made visible instead.
+    """
+    return choosing(
+        "Repository code",
+        TRUST_TOGGLE_ID,
+        [named for named, _, _ in TRUST_CHOICES],
+        div(
+            cls="networks",
+            attrs={"id": TRUST_ID, "role": "radiogroup", "aria-label": "Repository code"},
+            children=[
+                div(
+                    cls="networks__grid",
+                    children=[
+                        trust_card(named, holds, saying, holds is trusted) for named, holds, saying in TRUST_CHOICES
+                    ],
+                )
+            ],
+        ),
+    )
+
+
 def workspace_card(links: Links, naming: str, value: str, saying: str, chosen: bool) -> Element:
     """
     One answer to what files a session has: a repository of its own, or one of the two that are not.
@@ -1350,6 +1517,12 @@ def workspace_card(links: Links, naming: str, value: str, saying: str, chosen: b
                     "hx-get": links.to_workspace_branches(),
                     "hx-target": f"#{BASIS_ID}",
                     "hx-swap": "outerHTML",
+                    # The dots inside the block being replaced, rather than the card that asked:
+                    # what a reader is waiting on is the fields, and the card has already answered
+                    # by drawing itself picked. Being inside the target is what makes it right
+                    # rather than a problem - it is shown for exactly as long as the block it is
+                    # standing in for has not arrived, and the swap that ends the request removes it.
+                    "hx-indicator": f"#{BASIS_LOADING_ID}",
                     "hx-status:4xx": "swap:none",
                     "hx-status:5xx": "swap:none",
                 },
@@ -1403,12 +1576,19 @@ def starting_at(repository: str | None, base: str | None, branch: str | None, br
     would stop the next one planting at all. So one says where to begin and the other says what to
     begin, and the placeholder on this one has to say so rather than implying the first answers both.
     """
+    # The branches come off a forge, so a card is picked and the fields under it *arrive*: on a cold
+    # clone that is seconds of a block that has not changed yet, which reads as a card that did
+    # nothing. The dots are drawn in both shapes because both are what a pick lands on, including the
+    # empty anchor a repository is picked *from*. They take no room until the request starts; see
+    # `.basis__loading`.
+    loading = working(saying="loading branches", extra="basis__loading", identified=BASIS_LOADING_ID)
     if repository is None:
-        return div(attrs={"id": BASIS_ID})
+        return div(attrs={"id": BASIS_ID}, children=loading)
     return div(
         cls="basis",
         attrs={"id": BASIS_ID},
         children=[
+            loading,
             label(
                 cls="basis__field",
                 children=[
@@ -1574,7 +1754,8 @@ def picker(
     reachable: Reachable | None,
     reference: Reference | None,
     chosen: Choice | None = None,
-    tended: Tending = TENDED,
+    naming: Placed = None,
+    acting: Placed = None,
 ) -> Element:
     """
     Everything a session is decided by, laid out as the question it actually is.
@@ -1633,6 +1814,11 @@ def picker(
             # out decides what it can do with them, and the endpoint and model only decide who
             # answers.
             network_cards(starting.isolation.network),
+            # Whether the repository's own code runs, directly under what the session can reach and
+            # whether it can dial out, because it is the third question about the same subject: what
+            # this session's files are, what may be done with them, and whose code runs in them.
+            # Drawn only where a repository is picked, since with none there is nothing to trust.
+            *((trust_cards(starting.trusted),) if starting.repository is not None else ()),
             choosing(
                 "Endpoint",
                 ENDPOINT_TOGGLE_ID,
@@ -1641,7 +1827,15 @@ def picker(
             ),
             model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
             thinking_cards(starting.thinking),
-            tending_group(tended),
+            # What to call it, last, because it is the one question here that decides nothing about
+            # how the session runs: everything above it is what the session *is*, and this is what a
+            # reader will call it. Handed in rather than drawn here, because the fork page asks the
+            # same five questions and has nothing to name.
+            naming,
+            # And what acts on all of it, under the last question rather than pinned below the
+            # picker. Pinned it needed a row of its own that `main`'s grid had to hold open, and a
+            # reader who has answered the last question is already looking at the bottom of the list.
+            acting,
         ],
     )
 
@@ -1758,17 +1952,23 @@ def written(text: str, *, document: bool = False) -> Element:
     return div(cls="text", children=as_document(text) if document else as_message(text))
 
 
-def working() -> Element:
+def working(*, saying: str = "working", extra: str | None = None, identified: str | None = None) -> Element:
     """
     Three dots that say something is still happening.
 
-    Not an `hx-indicator`: those show while a *request* is in flight, and this is the opposite
-    case, a fact read off the checkpoint that holds across however many renders it takes. The two
-    are drawn alike because a reader is being told the same thing.
+    Drawn the same whichever thing is still happening, because a reader is being told the same
+    thing, and that is the whole of what these share. A turn with no answer yet, a tool call that has
+    not returned, a session whose worktree is still being planted: each is a fact read off the
+    checkpoint, holding across however many renders it takes. A request in flight is htmx's instead,
+    held for one round trip and shown by whatever points `hx-indicator` at it, which is what `extra`
+    and `identified` are for.
+
+    What a caller must not do is read one off the other. A panel that drew itself working because a
+    form was posting would be saying the model is answering when what is happening is a swap.
     """
     return span(
-        cls="waiting",
-        attrs={"role": "status", "aria-label": "working"},
+        cls=("waiting", extra),
+        attrs={"id": identified, "role": "status", "aria-label": saying},
         children=[span(), span(), span()],
     )
 
@@ -2077,7 +2277,7 @@ def record_fold(links: Links, session: str, turn: int, at: int) -> Element:
     """
     The `r{turn}.{at}` marker on a rule, and the raw record of that request behind it.
 
-    Named the whole way, for `Panel.label`'s reason one level along: a rule inside a turn draws no
+    Named the whole way, for `Panel.address`'s reason one level along: a rule inside a turn draws no
     `#N`, so a bare `r1` said which request without saying of what, and a reader following one
     permalink out of several had nothing to tell them apart. The `r` is what keeps it from being
     read as a panel, which numbers a different axis - `#3.1` is turn 3's second *panel* and `r3.1`
@@ -2131,7 +2331,6 @@ def rule_element(
     forget: bool = False,
     window: int | None = None,
     running: Decimal | None = None,
-    reserved: float | None = None,
 ) -> Element:
     """
     A line across the conversation where one round trip to the model began.
@@ -2200,14 +2399,6 @@ def rule_element(
             "style": None if filled is None else f"--filled: {along(filled)}",
         },
         children=[
-            # Where the reserve opens, on the same scale the fill is drawn against, so watching the
-            # line grow toward it is watching the handoff approach. An element rather than a second
-            # pseudo because it is conditional; see `.rule__reserve`.
-            *(
-                (span(cls="rule__reserve", attrs={"style": f"--reserved: {along(reserved)}"}),)
-                if reserved is not None
-                else ()
-            ),
             *(
                 (a(cls="rule__at", attrs={"href": f"#rule-{turn}", "title": f"Turn {turn}"}, children=f"#{turn}"),)
                 if opens
@@ -2335,6 +2526,12 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
             "id": panel.anchor,
             "data-kind": panel.kind,
             "data-side": SIDES[panel.kind],
+            # Which ink a note takes, which is weight *within* its side rather than a hue competing
+            # with it. Drawn from the attribute rather than from a colour in the markup, because a
+            # hex a plugin wrote is one this console could never restyle and one that reads well in
+            # the light theme is the one that disappears in the dark. Absent on every other kind,
+            # since only a note is ever asked.
+            "data-tone": panel.tone if panel.kind == "note" else None,
             "data-turn": str(panel.turn),
             **opens(OPENS[panel.kind]),
         },
@@ -2343,7 +2540,12 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 panel.kind,
                 panel_opening(panel.blocks),
                 anchor=panel.anchor,
-                label=panel.label,
+                label=panel.address,
+                # What the plugin that asked for this note called it, and what it said the note is.
+                # Both fall back to the console's own answer for the kind, which for the role is the
+                # word `note` and for the hover text is the sentence saying nobody typed it.
+                role=panel.role,
+                title=panel.title,
             ),
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
         ],
@@ -2356,6 +2558,8 @@ def panel_meta(
     *,
     anchor: str | None = None,
     label: str | None = None,
+    role: str | None = None,
+    title: str | None = None,
 ) -> Element:
     """
     A panel's row of facts, which is also the summary that folds it.
@@ -2375,14 +2579,19 @@ def panel_meta(
 
     The marker itself is the stylesheet's, on the role, because it turns with the panel's own `open`
     and nothing here would have to be told twice.
+
+    `role` and `title` are what a note's own plugin named, and every other kind passes neither: what a
+    panel's role says is the console's word for the kind, and the one kind that can carry somebody
+    else's is the one nobody in the conversation wrote. A plugin that named nothing gets the console's
+    answer for both, which is why these are overrides rather than the only source.
     """
     return summary(
         cls="panel__meta",
         children=[
             span(
                 cls="panel__role",
-                attrs={"title": said} if (said := TITLES.get(kind)) is not None else {},
-                children=dict(NAMES)[kind],
+                attrs={"title": said} if (said := title or TITLES.get(kind)) is not None else {},
+                children=role or dict(NAMES)[kind],
             ),
             span(cls="opening", children=opening if opening is not None else working()),
             *(
@@ -2630,23 +2839,13 @@ def cache_note(showing: Conversation) -> Element:
     )
 
 
-def reserve_mark(showing: Conversation) -> float | None:
-    """
-    Where on a rule's gauge this session's reserve falls, or nothing at all where no mark belongs.
-
-    The same scale `--filled` is on, so the mark and the fill are read against one another: the fill
-    says how far this request got and the mark says where the handoff would be asked for. That is the
-    whole of what the card's line used to say in words, and it says it once per rule instead of once
-    per page, on the control a reader is already watching lengthen.
-
-    Nothing where the switch is off, because a mark for something that will not happen is a line to
-    explain. Nothing where the reserve describes no interval either, which is `reserving`'s answer and
-    the same one the pass acts on, so the page cannot draw a boundary the worker will not use.
-    """
-    if not showing.session.tending.hands_off:
-        return None
-    held = reserving(showing.window, showing.session.tending.reserve)
-    return None if held is None else consumed(held.opens, showing.window)
+# `reserve_mark` used to be here, and the plugin protocol is what deleted it. It drew a bar across
+# every rule at the fraction the handoff reserve opens at, read off two columns this table no longer
+# has: a reserve is a plugin's own setting now, and the console has no vocabulary for a plugin
+# drawing in the transcript region. Stretching the card language that far to reach it would be
+# inventing an axis in order to have a cross-product, so the gauge stays the console's and a handoff
+# shipped as a plugin does without the mark. The fill itself is unaffected, since how much of the
+# window a request used is the console's own arithmetic.
 
 
 def transcript_region(links: Links, showing: Conversation) -> Element:
@@ -2682,7 +2881,6 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
     said = showing.said
     window = showing.window
     stalled = stalled_by(showing)
-    reserved = reserve_mark(showing)
     drawn: list[Element] = []
     # What the conversation has cost by the time each rule is drawn. A turn rule carries the total
     # through the turn it opens, exactly as it already carries that turn's own spend: both figures on
@@ -2715,7 +2913,6 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
                 forget=within[0].forget,
                 window=window,
                 running=through,
-                reserved=reserved,
             )
         )
         # Directly under the rule that opens the stretch, so a reader meets the boundary, then what
@@ -2738,15 +2935,22 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
                             spent=asking[at].spent,
                             window=window,
                             running=climbing[at],
-                            reserved=reserved,
                         )
                     )
             drawn.append(panel_element(links, session, panel))
         before = through
-    if said.awaiting and stalled is None and not out_on_a_call(said):
-        drawn.append(waiting_panel())
+    # What is happening at the end of the conversation, as one of three things and never two. A
+    # refusal outranks the rest because it is the only one nothing can be waiting on; then why nothing
+    # is happening, where something should be; and the dots last, which is what a reply being written
+    # actually looks like. A call still out is already drawn working on its own panel, so the dots are
+    # left off there and the sentence is not: a pass can fall over with a call outstanding.
+    waiting = None if stalled is not None else waiting_for(showing)
     if stalled is not None:
         drawn.append(p(cls="stalled", children=stalled))
+    elif waiting is not None:
+        drawn.append(attention_element(showing, waiting))
+    elif said.awaiting and not out_on_a_call(said):
+        drawn.append(waiting_panel())
     return div(
         cls="transcript",
         attrs={"id": TRANSCRIPT_ID},
@@ -2986,160 +3190,407 @@ def theme_card() -> Element:
     )
 
 
-HANDOFF_ID: Final = "handoff"
-"""The card's own id, because the card is what its settings form swaps: see `handoff_card`."""
-
-SWITCH_CLASS: Final = "tending__switch"
+SWITCH_CLASS: Final = "plugin__switch"
 """
-What the switch is called, named once because two things reach it by that name.
+What a control that takes effect on the press is called, named once because three things reach it.
 
-The card's `hx-trigger` listens for a `change` from it, and the stylesheet draws it; a class the
-script or a trigger depends on is a name to write down rather than to spell twice.
+The card's `hx-trigger` listens for a `change` from it, the stylesheet draws it, and the script's
+tier switch sets every one under a heading. A class a trigger or the script depends on is a name to
+write down rather than to spell three times.
 """
 
+TIER_SWITCH_CLASS: Final = "tier__switch"
+"""
+What the switch on a tier's heading is called, which sets the switches under it and nothing else.
 
-def tending_fields(tended: Tending, form: str | None = None) -> tuple[Element, Element]:
+**It is not a third kind of answer.** What a session records is a switch per plugin; this is one
+control that moves all of them in its group, which is why it posts no field of its own and works only
+with the script present. Without `mainplate.js` every plugin's own switch still works, which is the
+standing bargain every other scripted control here takes.
+"""
+
+
+def plugin_control(control: Switch | Number, held: Setting, plugin: str, form: str | None = None) -> Element:
     """
-    The switch and the reserve, drawn once for the three places that ask them.
+    One row of a plugin's card, drawn by the console from what the plugin declared.
 
-    The rail's card changes a running session's; the start page and the fork page decide a new one's
-    before it exists. One question asked in three places is one control rendered three times, exactly
-    as `model_cards` serves both a page and the swap that replaces it - and what a card posts and what
-    a picker posts then cannot come apart, because they are the same two names from the same call.
+    **A card is declared, not rendered.** A render executes nothing, and only a press runs the
+    script, which is what lets a card come from a repository at all: rendering is constant and an
+    action is rare, so the one place a spawn is affordable is exactly where it lands. It is also what
+    keeps a plugin's card in step with the console's own controls, where a card a plugin drew would
+    drift the first time anything was restyled.
 
-    `form` is what associates them with a form they are not nested inside, which the picker needs and
-    the card does not: on the start page every control is a sibling of the form that posts them. It is
-    the same `form="choosing"` every other question in the picker carries.
+    The declared card is also the settings schema, so `held` is a value read back under the same name
+    the control declares: there is no second schema and no way for the two to disagree about a type.
 
-    The reserve's own value is the record divided down, since the box is denominated in thousands and
-    the record is in tokens. See `THOUSAND`.
+    `form` is what associates a control with a form it is not nested inside, which the settings step
+    needs and the rail's card does not.
     """
-    return (
-        label(
+    named = f"{PLUGIN_FIELD}:{plugin}:{control.name}"
+    if isinstance(control, Switch):
+        return label(
             cls=SWITCH_CLASS,
             children=[
                 input_(
                     attrs={
-                        "type": "checkbox",
-                        "name": HANDS_OFF_FIELD,
                         # The state, not a default: an unchecked box posts no field, so what comes
                         # back is exactly what the box shows.
-                        "checked": tended.hands_off,
+                        "type": "checkbox",
+                        "name": named,
+                        "checked": bool(held),
                         "form": form,
                     }
                 ),
-                span(children="auto at reserve"),
+                span(children=control.label),
             ],
-        ),
-        label(
-            cls="tending__reserve",
-            children=[
-                span(children="reserve"),
-                input_(
-                    attrs={
-                        "type": "number",
-                        "name": RESERVE_FIELD,
-                        "value": str(tended.reserve // THOUSAND),
-                        # The floor the boundary refuses below, said to the browser as well so the
-                        # refusal usually happens before the post rather than only after it. One
-                        # number, in `tending.py`, read by both.
-                        "min": str(LEAST_ROOM // THOUSAND),
-                        "form": form,
-                        "aria-label": "Thousands of tokens kept free for writing a handoff",
-                    }
-                ),
-                # The unit, which is what lets the box hold two digits instead of six. Not part of the
-                # label's own words, because it belongs after the number rather than before it.
-                span(cls="tending__unit", children="K"),
-            ],
-        ),
+        )
+    return label(
+        cls="plugin__number",
+        children=[
+            span(children=control.label),
+            input_(
+                attrs={
+                    "type": "number",
+                    "name": named,
+                    "value": str(int(held)),
+                    # The bounds the plugin declared, said to the browser as well so the refusal
+                    # usually happens before the post rather than only after it. Re-checked at the
+                    # boundary regardless, because a `min` on an input is a suggestion.
+                    "min": None if control.least is None else str(control.least),
+                    "max": None if control.most is None else str(control.most),
+                    "form": form,
+                    "aria-label": control.label,
+                }
+            ),
+            # The unit, which is what lets a box hold two digits instead of six. Not part of the
+            # label's own words, because it belongs after the number rather than before it.
+            *((span(cls="plugin__unit", children=control.unit),) if control.unit else ()),
+        ],
     )
 
 
-def tending_group(tended: Tending) -> Element:
+def plugin_card(links: Links, session: str, plugin: Enrolled, settings: Mapping[str, Setting]) -> Element:
     """
-    The pair as the picker's last question, which is what a session is tended with from its first turn.
-
-    Last, by the picker's own widest-first order taken to its end: the workspace decides what a session
-    can touch, the network what it can do with that, the endpoint and model who answers, the thinking
-    level how hard, and this how long the conversation gets before the console writes it down. It is
-    the only one of the six measured against the model above it, which is the other reason it follows.
-
-    Not a `choosing` group, for `starting_at`'s reason: `choosing` is the component for a question with
-    a closed set of answers to draw, and a number of tokens has none. It takes the heading that group
-    would have had, because `auto at reserve` on its own says nothing about what is being automated -
-    in the rail the card's own head says `handoff` and here nothing else would.
-    """
-    return div(
-        cls="tending",
-        children=[span(cls="tending__head", children="Handoff"), *tending_fields(tended, form=CHOOSING_ID)],
-    )
-
-
-def handoff_card(links: Links, session: str, tended: Tending) -> Element:
-    """
-    When this session hands itself off unasked, and how much room it keeps to do it in.
-
-    **Settings only, because asking for one is `/handoff` in the box.** A handoff takes an optional
-    note saying what it should dwell on, and the box is exactly where such a note is written, so it
-    is one more answer to what happens to what you typed rather than a button of its own; see
-    `Disposition.HANDOFF`. What is left here is the pair of settings, which are about the session
-    rather than about anything typed.
-
-    **The rail's own docstring says "navigates", and this does not.** Widening that is the deliberate
-    half of putting it here: what the rail holds is conversation controls, which is what its
-    `aria-label` has always said, and a second region pinned to the same edge would be one piece of
-    chrome too many for the sake of a word.
+    One running plugin's own card, drawn from what it declared and posting back to it.
 
     A form and not a scripted control, so it works with `mainplate.js` absent, and it swaps *itself*
-    rather than the transcript: nothing about the conversation changed, and the only thing that did is
-    the line above the controls.
+    rather than the transcript: nothing about the conversation changed, and the only thing that did
+    is inside this card.
 
-    The line comes before them rather than after, because it is what somebody reads before deciding to
-    touch either: how much room is left is the question, and the switch and the number are the two
-    answers to it.
+    **The switch takes effect on the press and the number does not**, which is the difference between
+    a control you set and one you type into. A checkbox says the whole of what it means the moment it
+    moves, so waiting for `Set` leaves a console that looks switched and is not; a number is
+    half-written for as long as somebody is writing it, so a `change` on the box would post whatever
+    was in it when they tabbed away.
+
+    A plugin that declared no card gets none here, rather than an empty frame with its name on it: a
+    heading over nothing reports a feature rather than a fact.
     """
+    if plugin.described.card is None:
+        return div(cls="plugin", attrs={"hidden": True})
+    card = plugin.described.card
     return div(
-        cls="handoff",
-        attrs={"id": HANDOFF_ID},
+        cls="plugin",
+        attrs={"id": plugin_id(plugin.qualified)},
         children=[
-            div(cls="handoff__head", children="handoff"),
+            div(cls="plugin__head", children=card.heading),
             form(
-                cls="handoff__tending",
+                cls="plugin__settings",
                 attrs={
                     "method": "post",
-                    "action": links.to_tend(session),
-                    "hx-post": links.to_tend(session),
-                    # Itself, because the card is what this changes: the standing line is read off
-                    # the reserve, so a swap that left the card alone would save a number and go on
-                    # showing the answer to the old one.
-                    "hx-target": f"#{HANDOFF_ID}",
+                    "action": links.to_press(session),
+                    "hx-post": links.to_press(session),
+                    "hx-target": f"#{plugin_id(plugin.qualified)}",
                     "hx-swap": "outerHTML",
                     "hx-status:4xx": "swap:none",
                     "hx-status:5xx": "swap:none",
-                    # **The switch takes effect on the press and the number does not**, which is the
-                    # difference between a control you set and one you type into. A checkbox says the
-                    # whole of what it means the moment it moves, so waiting for `Set` leaves a
-                    # console that looks switched and is not; a number is half-written for as long as
-                    # somebody is writing it, so a `change` on the box would post whatever was in it
-                    # when they tabbed away.
-                    #
-                    # `submit` stays beside it, because `Set` is what the number is sent with and what
-                    # this form does with no script at all. Either way the whole form posts, so a
-                    # number typed and then a switch flicked saves both rather than losing the typing.
                     "hx-trigger": f"submit, change from:.{SWITCH_CLASS}",
-                    "aria-label": "When this session hands itself off",
+                    "aria-label": card.heading,
                 },
                 children=[
-                    *tending_fields(tended),
-                    button(cls="handoff__set", attrs={"type": "submit"}, children="Set"),
+                    *(
+                        plugin_control(
+                            row.control, settings.get(row.control.name, row.control.default), plugin.qualified
+                        )
+                        for row in card.rows
+                    ),
+                    button(cls="plugin__set", attrs={"type": "submit"}, children="Set"),
                 ],
             ),
         ],
     )
 
 
-def rail(links: Links, session: str, tended: Tending) -> Element:
+TIER_NAMES: Final[dict[Tier, tuple[str, str]]] = {
+    Tier.BUNDLED: ("bundled", "Shipped with this console."),
+    Tier.USER: ("yours", "Installed by whoever runs this console, in its config.yaml."),
+    Tier.REPOSITORY: (
+        "this repository's",
+        "Carried by the repository this session works in. They run unattended at every turn boundary, "
+        "and what they write is said to the model.",
+    ),
+}
+"""
+What each tier is called on the settings step, and the one line under the heading.
+
+**Grouping by where a plugin came from rather than by what it does is the whole point**: the three
+are not equally trusted, and a reader deciding what to leave on is deciding about provenance.
+
+The repository's line is the exposure in plain terms rather than a warning that something may be
+unsafe. Behind the confinement one of those plugins can read and write the worktree and run what is
+in it, which is what that session's `bash` could already do; the two things it adds are that it runs
+unattended rather than because a model asked, and that it puts text into the conversation, which is a
+delivery channel for prompt injection with a guaranteed slot on every turn. A reader's next question
+is always *what happens*, and this answers it.
+"""
+
+SETUP_ID: Final = "setup"
+"""The step's own id, because it is what its own form swaps and what the live connection replaces."""
+
+
+def plugin_switch(plugin: Installed, on: bool, form: str | None = None) -> Element:
+    """
+    One plugin's own on-and-off, which is the whole of what the settings step decides.
+
+    **Drawn from what was declared and never from what a plugin said**, because none of them has
+    been asked anything yet: this is the control that decides which of these programs is run at all,
+    so it is made of the name somebody installed the plugin under and the file it is. What a plugin
+    calls itself is on its card, and its card comes back from having asked it.
+
+    **Live here because nothing has been run yet, and gone afterwards**, which is not a
+    preference: a tool definition leaving the cached prefix invalidates everything under it exactly
+    as one arriving late does, so what plugins a session runs is settled the moment they are loaded.
+    The rail then draws each running plugin's card and does not draw these, and forking is how a
+    conversation changes its mind, as it is for the model and the repository.
+    """
+    return label(
+        cls=SWITCH_CLASS,
+        children=[
+            # The same name, `off`, ahead of the box: an unchecked checkbox posts no field at all, so
+            # without this a plugin somebody turned off is indistinguishable from one this form never
+            # carried, and a step with every switch off posts nothing whatsoever. The box wins where
+            # it is checked because both values arrive and the reader takes the last.
+            input_(
+                attrs={"type": "hidden", "name": f"{ENABLED_FIELD}:{plugin.qualified}", "value": "off", "form": form}
+            ),
+            input_(
+                attrs={
+                    "type": "checkbox",
+                    "name": f"{ENABLED_FIELD}:{plugin.qualified}",
+                    "checked": on,
+                    "form": form,
+                }
+            ),
+            span(cls="plugin__name", children=plugin.name),
+            # And the file it is, for the two tiers where a reader is deciding about a program
+            # somebody else wrote: the path is the whole of what there is to go on before it has been
+            # asked anything, and it is what tells two plugins with the same name apart. A bundled
+            # one's path is inside this package and says nothing a reader can act on.
+            *(() if plugin.tier is Tier.BUNDLED else (span(cls="plugin__says", children=str(plugin.path)),)),
+        ],
+    )
+
+
+def tier_group(tier: Tier, plugins: Sequence[Installed], tending: Tending, form: str) -> Element:
+    """
+    One tier's plugins, under a heading whose switch sets every switch below it.
+
+    **The tier switch is one control that moves the ones under it, and never a second answer.** What
+    a session records is a switch per plugin, so turning a tier off is turning each of its plugins
+    off; a tier that recorded an answer of its own would be a second place the same question is
+    answered, which is what this console removes wherever it finds it.
+
+    Every tier is drawn, empty ones included, so the step is the same shape on every session and the
+    flow can be learned and tested as one thing rather than as however many lists a repository
+    happens to produce.
+    """
+    named, saying = TIER_NAMES[tier]
+    states = [tending.on(plugin.qualified, ON) for plugin in plugins]
+    switches = [plugin_switch(plugin, on, form=form) for plugin, on in zip(plugins, states, strict=True)]
+    on = sum(states)
+    return div(
+        cls="tier",
+        attrs={"data-tier": tier.value},
+        children=[
+            label(
+                cls=TIER_SWITCH_CLASS,
+                children=[
+                    input_(
+                        attrs={
+                            # No `name`, because it posts nothing: it is a control over the controls
+                            # below it, which is why it works only with the script present and why
+                            # every plugin's own switch works without it.
+                            "type": "checkbox",
+                            "checked": bool(states) and on == len(states),
+                            "indeterminate": 0 < on < len(states),
+                            "disabled": not states,
+                        }
+                    ),
+                    span(cls="tier__head", children=named),
+                ],
+            ),
+            p(cls="tier__says", children=saying),
+            *(
+                (p(cls="tier__none", children="none"),)
+                if not switches
+                else (div(cls="tier__plugins", children=switches),)
+            ),
+        ],
+    )
+
+
+SETUP_SAYS: Final = (
+    "None of these has been run. Setting up executes each one you leave on, once, to install "
+    "whatever it needs and ask it what it contributes; that set is then fixed for this "
+    "conversation, and forking is how it changes."
+)
+"""
+The line above the switches, which says what the button does rather than what the list is.
+
+**A reader deciding here is deciding whether to execute somebody else's program**, and nothing else
+on the page says so: the tier lines say who wrote each one, and the names say what they are called.
+Three halves of the sentence are load-bearing - that nothing has run yet is why the step is worth
+stopping at, that a setup *installs* is why it is the one moment with a network, and that the set is
+then fixed is why it cannot be left until later.
+"""
+
+SETUP_WORKING: Final = "Setting up: each plugin is installing whatever it needs and saying what it contributes."
+"""
+What the page says while the pass that answers the press is out.
+
+It names the slow half rather than the press, because that is what somebody is waiting on and what
+can take minutes: a repository plugin fetching a toolchain is a session sitting here, and a line
+saying only "loading" would read as this console being slow.
+"""
+
+
+def setup_step(links: Links, showing: Conversation) -> Element:
+    """
+    Which of the plugins a session declares to load, drawn between creating one and typing into it.
+
+    **The step is the confirmation before anything is executed.** A plugin is a program, so the pass
+    that plants a session's worktree reads only what each tier *declares* - a directory listing and
+    two YAML mappings - and the switches here are drawn from that. Pressing the button is what runs
+    them, in the request that answers this form, and only the ones left on. So a session that never
+    gets past this screen has invoked nothing at all.
+
+    **Always drawn while it applies, and there is always something in it.** Skipping it when nothing
+    is declared would make the number of steps depend on what a repository happens to carry, so the
+    flow could not be described, learned or tested as one thing - and the empty version is not a case
+    worth designing around anyway, because a console ships bundled plugins and so the step always has
+    at least a heading and a switch in it.
+
+    **It is a state of the session page and not a route of its own.** The session id exists from the
+    moment the choices are posted, so the URL is stable and bookmarkable while the clone runs, and
+    the page already has the live connection that fills this in when the declaration lands. A second
+    address would be a page somebody can be sitting on when the thing it is waiting for arrives
+    somewhere else.
+
+    **It stands alone on that page rather than above the conversation.** A message box drawn beside
+    this is pointed at a harness nobody has chosen yet, and the rail draws a card per *running
+    plugin*, which is a plugin's own surface standing on the screen that exists to decide whether to
+    run it. Which shape the page takes is `settling`, and the live connection sends whichever regions
+    that shape has.
+
+    **A branch is the case where there is something to stand in front of**, since a fork carries its
+    parent's turns and none of its plugins. Its transcript is withheld until the step is answered
+    rather than drawn under it: what a reader can act on there is the press, and every control the
+    conversation would offer - sending, forking, going back to a parent - wants a session whose set
+    of tools is settled. The cost, stated: a fork made only to re-read what its parent said has to be
+    set up before it will show it.
+
+    Four states, and each says the one thing a reader can act on. Nothing declared yet is the clone
+    and the worktree. A refusal names what could not be read and offers another pass. A press that
+    has been answered and not yet finished is the setup itself, which is the other slow moment in a
+    session's life and the one a repository's own plugin decides the length of. Otherwise it is the
+    tiers, with a switch apiece, under the button that sets them up - carrying the reason the last
+    attempt stopped, where one did.
+
+    Every button here is a plain submit and none of them swaps, because what each one leads to is a
+    differently shaped page: settling and loaded are the two halves of `settling`'s own condition, so
+    answering with a fragment would leave a reader on the half they had just left.
+    """
+    # The id and the wrapper once rather than once per arm, because the id is what the live
+    # connection replaces: three spellings of it is three chances for a state to stop being the thing
+    # that gets swapped in, and only one of them would be visible.
+    inside: Node
+    if showing.declared is None:
+        inside = [
+            p(cls="setup__working", children=working()),
+            p(
+                cls="setup__says",
+                children=(
+                    "Setting up: planting this session's worktree and reading what it declares."
+                    if showing.refused_plugins is None
+                    else showing.refused_plugins.why
+                ),
+            ),
+            *(
+                (
+                    form(
+                        cls="setup__again",
+                        attrs={"method": "post", "action": links.to_setup(showing.session.id)},
+                        children=button(
+                            attrs={"type": "submit", "name": SETTLE_FIELD, "value": AGAIN},
+                            children="Try again",
+                        ),
+                    ),
+                )
+                if showing.refused_plugins is not None
+                else ()
+            ),
+        ]
+    elif showing.settling_up and showing.refused_setup is None:
+        inside = [p(cls="setup__working", children=working()), p(cls="setup__says", children=SETUP_WORKING)]
+    else:
+        # Named rather than spelled at both ends: the switches sit outside the form and are bound to
+        # it by this id, so the two coming to differ is every control posting nothing.
+        settling = SETUP_ID + "-form"
+        inside = form(
+            cls="setup__plugins",
+            attrs={
+                "id": settling,
+                "method": "post",
+                "action": links.to_setup(showing.session.id),
+                "aria-label": "Which plugins this session loads",
+            },
+            children=[
+                p(cls="setup__says", children=SETUP_SAYS),
+                # Why the last attempt did not get anywhere, above the switches rather than beside
+                # the plugin it names: what a reader does about a plugin that will not set up is turn
+                # it off, and the switch is one line down. It is recorded against that attempt, so
+                # pressing again is a new one and this sentence goes.
+                *(
+                    ()
+                    if showing.refused_setup is None
+                    else (p(cls="setup__failed", children=showing.refused_setup.why),)
+                ),
+                *(
+                    tier_group(tier, plugins, showing.session.tending, form=settling)
+                    for tier, plugins in by_tier(showing.declared)
+                ),
+                button(
+                    cls="setup__set",
+                    attrs={"type": "submit", "name": SETTLE_FIELD, "value": SETTLED},
+                    children="Load plugins",
+                ),
+            ],
+        )
+    return div(cls="setup", attrs={"id": SETUP_ID}, children=div(cls="settling", children=inside))
+
+
+def plugin_id(qualified: str) -> str:
+    """
+    A card's own id, which is what its settings form swaps.
+
+    The qualified name with the colon taken out, because a colon in an id is a selector somebody has
+    to escape and `hx-target` is a selector. One rule, here, so the element and everything pointing at
+    it are built from one call.
+    """
+    return f"plugin-{qualified.replace(':', '-')}"
+
+
+def rail(links: Links, session: str, tended: Tending, plugins: Sequence[Enrolled] = ()) -> Element:
     """
     Everything that navigates the conversation, in one column outside the region that swaps.
 
@@ -3153,10 +3604,22 @@ def rail(links: Links, session: str, tended: Tending) -> Element:
     stylesheet's to say.
 
     **What it holds is conversation controls, which is wider than navigating and always was**: the
-    `aria-label` has said so since there was a rail, and the handoff card is the first thing here
-    that is about a session rather than about moving around inside one. It sits under the shelf,
-    which is the boundary: everything above it reads the conversation, and it is the first thing that
-    changes how the conversation is run.
+    `aria-label` has said so since there was a rail, and a plugin's card is about a session rather
+    than about moving around inside one. They sit under the shelf, which is the boundary: everything
+    above it reads the conversation, and these are the first things that change how it is run.
+
+    **A card per running plugin, in enrolment order, and none for a plugin that declared none.**
+    Which plugins those are is settled for the session, so the rail draws the cards a session has
+    rather than every card this console could draw; a plugin that is off contributes nothing here for
+    the same reason it contributes no tool.
+
+    **The switches that turn plugins on and off are not here**, and that is the one asymmetry worth
+    naming: those are live only before the first message, because a tool definition leaving the
+    cached prefix invalidates everything under it exactly as one arriving late does. So the settings
+    step draws them and the rail draws what a running plugin's card says. A plugin's *settings* stay
+    live where its being loaded does not, and the two are different questions rather than an
+    inconsistency: a setting is a value the plugin reads when it runs, and being loaded decides what
+    is in the prefix.
 
     **The theme goes last, pinned to the bottom by the stylesheet**, because it is the one card here
     that is not about this conversation at all - it is the reader's, across every session - so it is
@@ -3175,33 +3638,51 @@ def rail(links: Links, session: str, tended: Tending) -> Element:
             key_card(),
             dock_card(),
             shelf_card(),
-            handoff_card(links, session, tended),
+            *(
+                plugin_card(links, session, plugin, settings_of(plugin.described, tended.of(plugin.qualified)))
+                for plugin in plugins
+                if plugin.described.card is not None
+            ),
             theme_card(),
         ],
     )
 
 
-def naming() -> VoidElement:
+def naming() -> Element:
     """
-    What to call this session, offered above the box and safe to ignore.
+    What to call this session, as one more of the picker's questions rather than a stray box.
+
+    **Drawn like every other control on the page**, which is what its own class used to prevent: it
+    was a field above a message box, and there is no message box here any more, so a full-width input
+    in the composer's own idiom read as the thing somebody came to type rather than as the optional
+    half of a choice. Legend, then field, in the shape `starting_at` already draws a base and a
+    branch in.
 
     Optional, and the placeholder says what happens if you leave it: a session with no name given is
-    named after its first message, exactly as every session was before this existed. So the field
-    adds a choice without adding a step, which is the only way it earns a place above the thing
-    somebody actually came here to type.
+    named after its first message, exactly as every session was before this existed.
 
-    A plain input with no `hx-` attribute on it, because it is submitted with the message rather
-    than being a question of its own: nothing exists to name until the form posts.
+    A plain input with no `hx-` attribute on it, because it is submitted with the choices rather than
+    being a question of its own: nothing exists to name until the form posts.
     """
-    return input_(
-        cls="composer__name",
-        attrs={
-            "type": "text",
-            "name": TITLE_FIELD,
-            "maxlength": str(TITLE_LENGTH),
-            "placeholder": "Name this session (or leave it to the first message)",
-            "aria-label": "Session name",
-        },
+    return div(
+        cls="naming",
+        children=[
+            div(
+                cls="basis__field",
+                children=[
+                    span(cls="basis__label", children=span(cls="picker__legend", children="Name")),
+                    input_(
+                        attrs={
+                            "type": "text",
+                            "name": TITLE_FIELD,
+                            "maxlength": str(TITLE_LENGTH),
+                            "placeholder": "Named after the first thing said in it",
+                            "aria-label": "Session name",
+                        }
+                    ),
+                ],
+            )
+        ],
     )
 
 
@@ -3268,6 +3749,46 @@ def dispatched(disposition: Disposition, saying: str, *, staying: bool = False, 
     )
 
 
+PLUGIN_LEADER: Final = "plugin:"
+"""
+What a plugin's own answer posts in the disposition field, ahead of the leader it owns.
+
+A prefix rather than a field of its own, because a submit button carries one name and one value and
+the menu row, the mode button and the sentence are all that one button. The boundary reads the prefix
+first and everything after it is the leader somebody typed, which is a word the session's own plugins
+answer to rather than one this console has a list of.
+"""
+
+
+def plugin_answers(plugins: Sequence[Enrolled]) -> tuple[Answer, ...]:
+    """
+    Everything this session's plugins offer to do with what you typed, each under its own leader.
+
+    **Declared once by the plugin and rendered three times by the console**, exactly as the console's
+    own answers are: a row in the menu, the button the box shows in that mode, and the sentence above
+    it. That is what stops a plugin's control drifting from the console's the first time anything is
+    restyled, and it is the whole argument for a card being declared rather than drawn.
+
+    `demands` is the one thing a plugin has to be able to say about a control it does not draw: the
+    box is `required`, which is right for a message and wrong for an answer whose text is an optional
+    note. Both renderings carry `formnovalidate` where it says so, because both submit.
+    """
+    return tuple(
+        Answer(
+            leader=leader,
+            saying=declared.saying,
+            posts={"type": "submit", "name": DISPOSITION_FIELD, "value": f"{PLUGIN_LEADER}{leader}"},
+            # Never, because a plugin's answer is a thing somebody meant once. `Run` is the one mode
+            # the box stays in, and it stays because a session that reaches for it reaches again a
+            # line later; nothing here can claim that of somebody else's answer.
+            staying=False,
+            demands=declared.demands,
+        )
+        for plugin in plugins
+        for leader, declared in plugin.answers()
+    )
+
+
 def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[Answer, ...]:
     """
     Everything that can happen to what you typed, other than the thing Send already does.
@@ -3283,10 +3804,11 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
     come back from, a `Fork` is a conversation of its own, `Parent` reaches the one this came out of,
     `Run` is not a message at all, and `Keep` sends it nowhere.
 
-    `Handoff` sits beside `Forget` because they are the same family: both end a stretch of context
-    where they stand, and what separates them is who writes what the next one opens on. It is also
-    the one answer whose box may be empty, since what it does with the text is point the handoff at
-    something rather than send it anywhere.
+    **A plugin's own answers are not here**, and they are appended by `composer` rather than merged
+    into this list: what a session offers depends on what it loaded, where these are the
+    console's own and are the same on every session. `handoff` used to be one of these and is now the
+    bundled handoff plugin's leader, which is what makes the pair worth keeping apart - this list is
+    a constant, and that one is read off a session.
     """
     return (
         *(
@@ -3302,11 +3824,6 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
         dispatched(
             Disposition.FORGET,
             "Ask it with the model's context cleared, leaving the whole conversation on the page",
-        ),
-        dispatched(
-            Disposition.HANDOFF,
-            "Have it write down where it has got to and carry on from that, dwelling on anything you typed",
-            demands=False,
         ),
         dispatched(Disposition.ASIDE, "Step out into a side conversation you mean to come back from"),
         dispatched(Disposition.FORK, "Ask it in a new session carrying this whole conversation"),
@@ -3487,6 +4004,7 @@ def composer(
     running: bool = False,
     above: Placed = None,
     identified: str | None = None,
+    plugins: Sequence[Enrolled] = (),
 ) -> Element:
     """
     The box you type in, which posts to `action`, with `beneath` under it.
@@ -3533,7 +4051,7 @@ def composer(
     with the sentence under the box, entering a mode moved the box itself out from under the cursor.
     Above it, what grows is the composer's top edge and the box stays exactly where it was.
     """
-    answers = sending_answers(returning, answering, running) if continuing else ()
+    answers = (*sending_answers(returning, answering, running), *plugin_answers(plugins)) if continuing else ()
     driving = (
         {
             "hx-post": action,
@@ -3638,21 +4156,21 @@ def start_page(
     reference: Reference | None = None,
 ) -> str:
     """
-    Where a session begins: what to answer it with, and the box that starts it.
+    Where a session begins: everything it is decided by, and the button that creates it.
 
-    The choosing fills the page and the box sits under it, which is the opposite of what a session
-    page does and is right for the same reason. On a session page the conversation is the content
-    and the box is how you add to it. Here there is no conversation, and what somebody is actually
-    doing is deciding what they are about to talk to; a page that gave that a row of selects under
-    the message box was answering the wrong question first.
+    **There is no message box here any more**, and that is the visible half of a change with two
+    mechanical causes. A repository's plugins cannot be named until its worktree is planted, which the
+    worker does on a pass; and none of them may be run until somebody has seen the list, because
+    running one is executing a program. So this page records the choices, the settings step on the
+    session's own page decides what it loads, and the message box is there once both are settled.
 
-    There is no transcript element on this page at all. An empty one was a region with nothing in it
-    saying "ask it something", which is the message box's job to say and the message box says it
-    better by being the thing you type into.
+    The cost, stated: **creating stops being fire-and-forget.** Time to a first answer is unchanged,
+    since the clone happens either way, but you now create, wait, confirm, and come back to type.
+    That is bigger than an extra click, and it is taken because a boundary in front of executing
+    somebody else's program is worth more here than the convenience.
 
-    Nothing is created until something is said, which is why this page has no id in its URL. A
-    session that existed with nothing in it would be a row in the list nobody can name and nobody
-    asked for, and it would have to be recorded on an endpoint chosen for it rather than by anybody.
+    There is no transcript element on this page at all, for the reason there never was: what somebody
+    is doing here is deciding what they are about to talk to.
     """
     return document(
         links,
@@ -3663,8 +4181,26 @@ def start_page(
             showing=None,
             reachable=reachable,
             pane=[
-                div(cls="setup", children=picker(links, catalogue, reachable, reference)),
-                composer(links.to_start(), None, live=False, above=naming(), identified=CHOOSING_ID),
+                form(
+                    cls="choosing",
+                    attrs={"id": CHOOSING_ID, "method": "post", "action": links.to_start()},
+                    children=div(
+                        cls="setup",
+                        children=picker(
+                            links,
+                            catalogue,
+                            reachable,
+                            reference,
+                            naming=naming(),
+                            # Named for what it makes rather than for what it begins, because the
+                            # page after this one is the settings step and not a conversation: a
+                            # button saying `Start` promised a session you could type into.
+                            acting=div(
+                                cls="starting", children=button(attrs={"type": "submit"}, children="Create session")
+                            ),
+                        ),
+                    ),
+                )
             ],
         ),
     )
@@ -3707,8 +4243,197 @@ def stalled_by(showing: Conversation) -> str | None:
     )
 
 
+DUE_FIELD: Final = "data-due"
+"""
+How long until the next pass at this session is due, in seconds, as of this render.
+
+Read by `paintDue`, which is what keeps the figure current: the stream sends this region when the
+worker's standing *changes*, and counting down is exactly the interval where it does not. The word is
+here rather than at both ends, for `CACHE_ID`'s reason.
+"""
+
+ATTENTION_ID: Final = "attention"
+"""The one line saying why nothing is happening, where nothing is and something should be."""
+
+
+@dataclass(frozen=True, slots=True)
+class Waiting:
+    """
+    Why nothing is happening to this session, in the three parts the line is drawn from.
+
+    **Three parts and not one sentence, because one of them is not prose.** `reason` is an exception's
+    `repr`: it can be a line or a paragraph, it is full of quotes and brackets and paths, and it is
+    the one thing in the box a reader has to actually read. Run together with the text either side of
+    it, it is a wall nobody can find the edges of, so the page sets it apart and this is what lets it.
+
+    `then` is what happens next, which is the half that makes this different from a refusal: the
+    session is coming back, and saying so is what turns an error into a wait. Absent only where the
+    statement is already the whole of it.
+    """
+
+    said: str
+    reason: str | None = None
+    then: str | None = None
+
+
+def waiting_for(showing: Conversation) -> Waiting | None:
+    """
+    Why nothing is happening to this session, where something should be and nothing is.
+
+    **The dots are the answer for every ordinary state, and this is the answer for the ones they lie
+    about.** A reply being written and a session no worker will ever pick up drew the same three dots,
+    for as long as the second lasted, which made a broken pass a thing nobody could see. So this
+    speaks only where the dots would be wrong, and the caller draws them where it returns nothing.
+
+    **Driven by the recorded failure rather than by the worker's standing**, which is what keeps it
+    quiet. A delivery held back is ordinary for a moment on every pass - the queue reserves the row
+    before the claim lands - so a line drawn on `Delayed` alone would flash "nothing is answering
+    this" through healthy turns. A live failure is what tells a held-back delivery the worker is
+    waiting out from the one nobody is coming back to, and `failure_in` is what makes it live.
+
+    **The exception is a session nothing is scheduled for at all.** There is no race that produces one
+    with something outstanding: a message and the row that queues it are written in a single commit,
+    and a pass asks for the next one from inside itself, so this state is a session that has genuinely
+    been dropped and is worth saying so about even with no reason recorded.
+
+    Nothing at all where nothing is outstanding and nothing failed, which is a settled conversation:
+    there is nothing to be stuck about, so there is nothing to say.
+
+    It says why the session is stopped and not *when* it resumes, which is `attention_element`'s half:
+    one of these is a fact that will read the same in an hour and the other is a figure that is wrong
+    a second later, so only the second needs the script.
+    """
+    failed = showing.failed
+    if not showing.said.awaiting and failed is None:
+        return None
+    fell = "The last pass at this session failed." if failed is not None else None
+    why = None if failed is None else failed.why
+    match showing.attention:
+        case Claimed():
+            return None if fell is None else Waiting(said=fell, reason=why, then="Another pass is answering it now.")
+        case Queued():
+            return None if fell is None else Waiting(said=fell, reason=why, then="It is queued for another pass.")
+        case Delayed():
+            # **It does not promise the retry will work**, and that is deliberate rather than hedging.
+            # Most of what lands here is fixable and the next pass carries on from where this one
+            # stopped; some of it is not, because what a pass replays is *recorded*, so a response the
+            # agent will not accept is one every later pass will also not accept. Nothing here can
+            # tell those apart, so it says what the mechanism does and names the way out of the second
+            # - which is `stalled_by`'s way out, for the same reason: forking drops the turn's own
+            # requests and keeps everything under them.
+            carrying = "It will be tried again, carrying on from here. Fork at this turn if it keeps failing."
+            return None if fell is None else Waiting(said=fell, reason=why, then=carrying)
+        case Idle():
+            nothing = "Nothing is answering this session and nothing is scheduled to."
+            return Waiting(said=nothing) if fell is None else Waiting(said=fell, reason=why, then=nothing)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def attention_element(showing: Conversation, waiting: Waiting) -> Element:
+    """
+    Why nothing is happening and how long until something does, with the reason set apart.
+
+    **Three children rather than one paragraph**, which is what makes the reason readable: it is an
+    exception's `repr`, so it is the one thing in the box a reader has to work through, and it sits in
+    a block of its own in the monospace face with the prose above and below it. Centred prose around a
+    left-aligned block, because a `repr` that wraps is unreadable centred and a one-line statement is
+    not.
+
+    **The server renders the figure and the script keeps it current**, which is `cache_note`'s bargain
+    one field along and for the same reason: the stream sends this region when the worker's standing
+    changes, and counting down is exactly the interval where it does not. `data-due` is what the script
+    measures from, against its own clock from the moment it first saw the element, so no two machines'
+    clocks are subtracted. A reader with no script gets the wait as it was when the page was drawn,
+    which is a figure that goes stale rather than a sentence that is missing.
+
+    The figure is only on the one arm that has one, and the sentence before it reads correctly alone.
+    """
+    due = showing.attention.until if isinstance(showing.attention, Delayed) else None
+    then: list[Element | str] = [] if waiting.then is None else [waiting.then]
+    if due is not None and waiting.then is not None:
+        then.extend((" Due in ", span(cls="attention__due", children=elapsed(due)), "."))
+    return div(
+        cls="attention",
+        attrs={"id": ATTENTION_ID, **({DUE_FIELD: f"{due.total_seconds():.0f}"} if due is not None else {})},
+        children=[
+            p(cls="attention__said", children=waiting.said),
+            *(
+                ()
+                if waiting.reason is None
+                else (pre(cls="attention__reason", children=code(children=waiting.reason)),)
+            ),
+            *(() if not then else (p(cls="attention__then", children=then),)),
+        ],
+    )
+
+
+def settling(showing: Conversation) -> bool:
+    """
+    Whether this session is still on its settings step, which is what shape its page takes.
+
+    **The registration alone, and the turn count deliberately not.** A session that has set nothing up
+    is on the step, whether nobody has pressed the button yet or a pass is out answering the press,
+    because the thing that takes a session past the step is a registration and nothing else writes one.
+
+    A fork is why the turn count is not read here. It carries its parent's turns and none of its
+    plugins, so it is a session holding a conversation and still owing an answer to the step - which is
+    the point, since it plants a fresh worktree whose toolchain nothing has installed yet and may be
+    planted at a tree where `.mainplate/` says something new. What the cached prefix cannot survive is
+    a plugin set changing under a request already made, and a fork has made none.
+
+    Two shapes of one page rather than one page with a banner: settling is the step alone, and loaded
+    is the transcript, the message box and the rail. The live connection sends whichever regions the
+    page's shape has and says so when the checkpoint's stops matching it, and the route answering the
+    step refuses anything this says is past it, so this is the one predicate all three read.
+    """
+    return showing.plugins is None
+
+
+def running_plugins(showing: Conversation) -> tuple[Enrolled, ...]:
+    """
+    The plugins this session actually runs, which is what the rail draws a card for.
+
+    Asked of the registration and the session's own switches together, which is `running`'s job:
+    nothing here decides what a default is, and a plugin that is off contributes no card for the same
+    reason it contributes no tool.
+
+    Thinned by `running` itself, because a card is a control over something that runs: a repository
+    contribution dropped for claiming a name already taken reaches no event, so a card for it would
+    be a form whose `Set` changes nothing anybody can see.
+    """
+    if showing.plugins is None:
+        return ()
+    return running(showing.plugins, showing.session.tending)
+
+
 def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation, reachable: Reachable) -> str:
+    """
+    One session, in whichever of its two shapes it is in.
+
+    **Settling is the step alone**, in the transcript's own place because that is what it stands in
+    for: a message box would be pointed at a harness nobody has chosen yet, and every control in the
+    rail belongs to a session whose tools are settled. Settled is the page this console is otherwise
+    about. `settling` is what decides, and `streaming.watching` and the route answering the step read
+    the same predicate, so the page, the connection driving it and the press cannot disagree about
+    which shape is on screen.
+
+    A branch has turns and still takes the first shape, which is the one place these two are not
+    "before the conversation" and "after it" - see `setup_step`.
+    """
+    if settling(showing):
+        return document(
+            links,
+            showing.session.title or UNTITLED,
+            shell(links, listed, showing=showing.session.id, reachable=reachable, pane=[setup_step(links, showing)]),
+            session=showing.session.id,
+            forked_from=showing.session.forked.session if showing.session.forked is not None else None,
+            settling=True,
+        )
     stalled = stalled_by(showing)
+    # Once for both readers, so the composer's menu and the rail's cards cannot be built from two
+    # answers to the same question, and the thinning behind it is done once per render.
+    plugins = running_plugins(showing)
     return document(
         links,
         showing.session.title or UNTITLED,
@@ -3740,12 +4465,14 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     # is a standing fact about the conversation and that is what the next press does,
                     # so the transient one sits closest to the thing it describes.
                     above=cache_note(showing),
+                    # What this session's own plugins offer in the composer, each under the leader
+                    # somebody types. Declared once by the plugin and rendered by the console, so a
+                    # menu row, the button the box shows in that mode, and the sentence above it
+                    # cannot disagree about what is on offer.
+                    plugins=plugins,
                 ),
             ],
-            # Only where there is a conversation to navigate. On the page where a session does not
-            # exist yet every control in it would be pointed at an empty transcript, which is a
-            # row of dead buttons rather than an offer.
-            aside_rail=[rail(links, showing.session.id, showing.session.tending)],
+            aside_rail=[rail(links, showing.session.id, showing.session.tending, plugins)],
         ),
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,
@@ -3874,10 +4601,9 @@ def fork_page(
                             attachable(showing, reachable),
                             reference,
                             showing.chosen,
-                            # The parent's own, so a branch that wants what the session it came from
-                            # had needs nothing touched. It is settled afresh rather than inherited by
-                            # the service, for `Service.fork`'s reason, so the page is what carries it.
-                            showing.session.tending,
+                            # And no name to give: a fork's title is its parent's, because it
+                            # literally carries it - the title is what the first message says, and
+                            # the first message came across with the rest.
                         ),
                         div(
                             cls="forking__act",

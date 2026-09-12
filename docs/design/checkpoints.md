@@ -14,7 +14,7 @@ The store's space is one key:
 
 | Key | Holds | Written by |
 |---|---|---|
-| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run` and `Service.hand_off` from outside a pass, and the `hand_off` tool from inside one |
+| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
 
 This console's is the rest:
 
@@ -29,7 +29,9 @@ This console's is the rest:
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `StepwiseDurability` |
 | `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `StepwiseDurability` |
 | `turn:{n}:tool:{id}` | What one tool call returned and how long it ran | `StepwiseDurability` |
+| `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
 | `turn:{n}:messages` | What the agent run produced | The conversation body |
+| `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |
 
 **Nothing allocates a number by trying any more, and no key is contended.** A message used to name
 the turn it was going into, so writing one meant deciding which turn that was against a checkpoint
@@ -62,10 +64,26 @@ draining its inbox passes over one rather than reading it.
 to is decided by where its entry landed: a key naming one would be a second answer to that question,
 written by a handler reading a page that may have moved on.
 
+**`failed:{at}` is keyed by progress rather than by attempt, and that is what keeps it finite.** A
+pass that raises is redelivered once per lease for as long as it keeps raising, so a key numbered by
+attempt would grow a record per lease for ever. `at` is how many records the session held when the
+pass fell over, counting every key but these, so a pass falling over at the same point claims the
+same name and the store keeps what is there; one that gets further before falling over writes a new
+one. Counting the failures in would defeat it, since the record a failing pass writes would move the
+number it was just keyed by.
+
+It is also how the page tells a current failure from a spent one: this is why the session is stopped
+exactly while `at` is still what the session holds, because anything recorded since is a pass that
+got past it. That is `turn:{n}:refused:{i}`'s rule against a count rather than against a turn, and it
+has to be a count because a pass can fall over where no turn names it - planting a worktree, reading
+a declaration, running a setup.
+
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model requests
 happen in a fixed order, so counting them names a step the same way on every pass, and the tree
 captured before each one and the cursor recorded for it ride the same counter, so `tree:{i}`,
-`heard:{i}` and `model:{i}` are three parts of one request. A *batch* of tool calls runs
+`heard:{i}` and `model:{i}` are three parts of one request. `end:{j}` counts something else, which
+is how many times the turn has tried to end, and carries the response count it was asked at so the
+page knows which request it went in front of. A *batch* of tool calls runs
 concurrently, so counting those would name a record by whichever won a race and hand a later pass
 somebody else's result. A call already carries an id, and that id is part of the model response the
 conversation recorded, so a replay is handed the same one for free. `Stepping.key` is the positional
@@ -97,6 +115,35 @@ both halves of that are decided. Not turn-prefixed, because `before` copies thos
 fork that attached a repository its parent never had would inherit instructions with no guidance in
 them. Not session-level, because a forget ends a stretch of context and composing again there is
 free: the prefix it would have invalidated has just been thrown away.
+
+The four `plugins:…` keys are session-level for the same reason `instructions:{n}` is not
+turn-prefixed, and they come in two pairs one moment apart. `plugins:declared:console` and
+`plugins:declared:repository` hold what each tier's files *name*, written by the session's first pass
+and read by [the settings step](plugins.md#starting-a-session-takes-four-steps);
+`plugins:console` and `plugins:repository` hold what those plugins said when they were *run*, written
+by the pass that follows that step being answered. A fork carries none of the four and reads and
+runs both tiers again, out of the tree it is planted at.
+
+`setup:environment` is written on that same pass, before the two registrations and under the same
+rule that nothing is recorded until every setup has answered: it holds what this session's repository
+plugins [asked to have set](plugins.md#getting-the-repository-ready-is-a-plugin-too) for its
+commands, merged across them. Session-level for the reason the four above are, and written even where
+nothing asked for anything, so a session past its step always has an answer there rather than a
+missing key that means two different things.
+
+**`plugins:setup:{n}` is numbered where those four are not**, and the retry is what decides it. It
+records that somebody answered the step for the `n`th time, which is the only thing that lets a pass
+run a plugin at all, and `plugins:setup:{n}:refused` holds why that attempt stopped where it did.
+Unnumbered, a write-once store would make the first failure the sentence every later press showed,
+and pressing again after turning a plugin off is the whole recovery path. It carries no list of which
+plugins were left on, deliberately: that is the `enabled` column's, and a write-once copy would have
+the second press run exactly what the first one ran.
+
+A fork carries it, numbered from zero, where its parent has one. That is the same asymmetry the pairs
+above have: the operator's half is set up afresh in a branch, and nothing may run a plugin without
+this key, so a branch without one would sit with nothing loaded and refuse its first message. It is
+the parent's confirmation being carried rather than a second one invented, because a fork carries
+turns and [the step is not drawable over a conversation](forking.md#what-a-fork-does-not-inherit).
 
 `choice` goes in before the first message and never again *within a session*. The order is
 load-bearing: the message is what *queues* a session, so writing it first would let a worker take

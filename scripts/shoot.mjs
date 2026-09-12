@@ -23,12 +23,17 @@ const [baseUrl, outDir, ...requested] = process.argv.slice(2);
 const targets = (requested.length ? requested : [
   "start.html",
   "start-unreferenced.html",
+  "setting-up.html",
+  "settings.html",
+  "settings-refused.html",
   "session.html",
   "waiting.html",
   "answering.html",
   "handed-off.html",
   "stalled.html",
   "refused.html",
+  "failed.html",
+  "dropped.html",
   "forking.html",
   "forking-attach.html",
 ]).map((each) => {

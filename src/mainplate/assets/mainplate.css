@@ -365,15 +365,35 @@ main > * {
    delivered but nobody here wrote: what is in both is the operator's own guidance and the
    repository's own, written by people. They are two kinds rather than one because they sit in
    different places in the request, which is not something a hue can say. */
-/* And the handoff, which nobody typed at all: what is in it was produced by this session, which is
-   the person's side of the axis, and the panel's own title is what says the console composed it. */
+/* And a note, which nobody in the conversation typed at all: a plugin asked for it and this console
+   put it in the inbox, so what is in it was composed by this console's own machinery with the model
+   as the party about to be told. That is the person's side of the axis, and the panel's own title is
+   what says a plugin asked. What a plugin gets to vary is the `tone` below, which is weight *within*
+   this side rather than a hue competing with it. */
 .panel[data-kind="prompt"],
-.panel[data-kind="handoff"],
+.panel[data-kind="note"],
 .panel[data-kind="steer"],
 .panel[data-kind="command"],
 .panel[data-kind="system-prompt"],
 .panel[data-kind="guidance"] {
     --kind: var(--person-edge);
+}
+
+/* Which of the console's inks a note takes, named by the plugin and resolved here. Three, because
+   there are three and the set wants settling before the first plugin ships: a tone goes in the
+   record, and the record is the conversation. `quiet` is for something a reader can skim past and
+   `strong` is for something that changes what happens next, which is the same answer the forget rule
+   reached in taking a stronger ink rather than a colour of its own. */
+.panel[data-kind="note"][data-tone="quiet"] .panel__role {
+    color: var(--ink-faint);
+}
+
+.panel[data-kind="note"][data-tone="strong"] {
+    --kind: var(--mark);
+}
+
+.panel[data-kind="note"][data-tone="strong"] .panel__role {
+    color: var(--mark);
 }
 
 .panel[data-kind="assistant"] {
@@ -503,7 +523,7 @@ main > * {
 /* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
    tell the kinds apart without reading the word. */
 .panel[data-kind="prompt"] .panel__role,
-.panel[data-kind="handoff"] .panel__role,
+.panel[data-kind="note"] .panel__role,
 .panel[data-kind="steer"] .panel__role,
 .panel[data-kind="command"] .panel__role,
 .panel[data-kind="system-prompt"] .panel__role,
@@ -1344,6 +1364,55 @@ pre > .copy {
     text-align: center;
 }
 
+/* Why nothing is happening, where nothing is and something should be. Every state that draws this is
+   a fault - a pass that fell over, or a session nothing is coming for - so it is in the error's own
+   hue, on a ground faint enough to read as a tint rather than as a filled block.
+
+   **Dashed where `.stalled` is solid, and that is the whole difference between them.** Both say the
+   session has stopped; this one says it will be tried again, so the same red in a broken line rather
+   than a second hue nobody has to learn. Mixed against `--raised` rather than given a value apiece,
+   so both halves follow the theme the tokens already switch. */
+.attention {
+    max-width: 40rem;
+    margin: var(--gap) auto 0;
+    padding: 0.55rem 0.85rem;
+    border: 1px dashed var(--error-edge);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--vermilion) 8%, var(--raised));
+    color: var(--ink-soft);
+    text-align: center;
+}
+
+.attention__said,
+.attention__then {
+    margin: 0;
+}
+
+/* The reason, set apart from the prose either side of it. An exception's `repr` is the one thing in
+   the box a reader has to work through, and it is neither a sentence nor centred text: it gets the
+   monospace face, its own ground, the left margin a wrapped line needs, and room to scroll sideways
+   rather than pushing the document along with it. */
+.attention__reason {
+    position: relative;
+    margin: 0.55rem 0;
+    /* Room on the right for the copy button the script seats in the corner, so the first line of a
+       `repr` does not run under it. */
+    padding: 0.45rem 3.4rem 0.45rem 0.6rem;
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--vermilion) 10%, var(--ground));
+    color: var(--ink);
+    font-size: 0.8rem;
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* The reason is not in a panel, so the panel's own hover rule cannot reach its button. */
+.attention:hover .copy,
+.attention .copy:focus-visible {
+    opacity: 1;
+}
+
 /* --- The box you type in ---------------------------------------------- */
 
 .composer {
@@ -1453,22 +1522,19 @@ pre > .copy {
     display: none;
 }
 
-/* The one place a mode is listed by name, which is the same bargain the card kinds take. Spelled out
-   because CSS cannot ask whether a descendant's attribute matches an ancestor's, and the pairing is
-   exactly that question.
+/* Whichever pair the mode leaves standing, marked by the script rather than matched here.
 
-   An answer added without a line here is worse than a mode drawn plainly: the rule above has already
-   taken Send away, so what is left is a composer with no primary button and no sentence saying where
-   the text is about to go. `TestNamingAModeFromTheKeyboard` asks it of every button the server drew
-   rather than of a chosen one, which is what makes that a failing build. */
-.composer[data-leading="next"] :is(.sender__leader, .leading)[data-leader="next"],
-.composer[data-leading="forget"] :is(.sender__leader, .leading)[data-leader="forget"],
-.composer[data-leading="handoff"] :is(.sender__leader, .leading)[data-leader="handoff"],
-.composer[data-leading="aside"] :is(.sender__leader, .leading)[data-leader="aside"],
-.composer[data-leading="fork"] :is(.sender__leader, .leading)[data-leader="fork"],
-.composer[data-leading="parent"] :is(.sender__leader, .leading)[data-leader="parent"],
-.composer[data-leading="run"] :is(.sender__leader, .leading)[data-leader="run"],
-.composer[data-leading="keep"] :is(.sender__leader, .leading)[data-leader="keep"] {
+   This used to be a written-out list of every leader, because CSS cannot ask whether a descendant's
+   attribute matches an ancestor's and the pairing is exactly that question. A plugin's answer can
+   never be added to such a list: which leaders a composer offers is a fact about one session, read
+   off what that session registered, so the stylesheet cannot know them. So the script marks the pair
+   when it sets the mode, which is the same one-attribute move `data-leading` already is.
+
+   An answer that never gets the mark would be worse than one drawn plainly - the rule above has
+   already taken Send away, so what is left is a composer with no primary button and no sentence
+   saying where the text is about to go. `TestNamingAModeFromTheKeyboard` asks it of every button the
+   server drew rather than of a chosen one, which is what makes that a failing build. */
+.composer :is(.sender__leader, .leading)[data-showing] {
     display: revert;
 }
 
@@ -1668,33 +1734,98 @@ pre > .copy {
 }
 
 /* The name a session is given before it has one, above the box that would otherwise name it. */
-.composer__name {
+/* Not a `.picker__part`, and that is what keeps the counting honest: every part on this page is a
+   folding group whose head says how many answers it holds, and a name has no answers to count. It
+   takes the field's own rules and the legend above it, which is the whole of what makes it look like
+   the rest.
+   */
+.naming {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* The name is one more of the picker's questions and takes its legend, and the box takes the *message
+   box's* rules rather than a setting's. That is the palette's own axis: cool is what reached the
+   model, and a name is text the person writes, where a base, a branch and a filter are settings that
+   narrow a choice. It is also the widest thing they type on this page, so it takes the width the way
+   the composer's box does rather than sitting in a settings-sized field.
+
+   The placeholder is quieter than the label above it, because this is the optional half of the form:
+   something you may fill in, not something you came here to do. */
+.naming input {
     width: 100%;
     /* An `<input>` carries an intrinsic width from its `size` attribute, and `width: 100%` does not
        override it: the element still reports that width as its minimum, so a flex or grid parent
        sizes itself to fit and the page grows to hold it. `min-width: 0` is what actually lets it
        shrink, and without it this one field widens `main` on a narrow window. */
     min-width: 0;
-    padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--edge);
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--person-edge);
     border-radius: var(--radius);
     background: var(--raised);
-    color: var(--ink);
+    color: inherit;
     font: inherit;
 }
 
-/* Quieter than the message box, because it is the optional half of this form: something you may
-   fill in, not something you came here to do. */
-.composer__name::placeholder {
+.naming input::placeholder {
     color: var(--ink-faint);
+}
+
+/* What starts a session, and the one primary action on this page. It reads as the picker's own
+   rather than as the composer's Send: the same mono, the same uppercase and the same letter spacing
+   every legend and card name on this page takes, in the person's hue because starting a session is
+   the person's act.
+
+   The last thing in the picker rather than a band pinned under it: left-aligned on the edge every
+   legend, card and field above it starts at, so a reader's eye comes down one line rather than
+   crossing the page to find the thing that acts. Pinned it cost `main` a row held open for it and
+   put a gap between the last question and the button that answers all of them. */
+.starting {
+    display: flex;
+}
+
+.starting button {
+    padding: var(--space-3) var(--space-6);
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.starting button:hover,
+.starting button:focus-visible {
+    border-color: var(--mark);
+    color: var(--mark);
 }
 
 /* --- Choosing what a session runs on ----------------------------------- */
 
-/* The middle of the start page, and the body of the fork page. `main` is a grid whose middle row
-   grows, so putting this there is what gives the choosing the room and leaves the box at the
-   bottom - which is the opposite arrangement to a session page and right for the same reason:
-   there is no conversation yet, and what somebody is doing is deciding what to talk to. */
+/* The form the start page posts, and the only thing in `main` on it. It passes `main`'s growing row
+   straight through to the choosing rather than sitting between them as a plain block, because a
+   block here is floored at its own content: the row then sizes to the whole picker, the page
+   overflows `100dvh`, and `.setup` never becomes the scroller it is written to be. The symptom that
+   shows is a dead zone - `.models` stays at its full height, so it is a scroll container with
+   nothing to scroll, and a wheel over the model list moves neither it nor the page under it. */
+.choosing {
+    display: grid;
+    /* `main > *` sets only `min-width`, and a grid item's minimum is its min-content on both axes:
+       without this the row this sits in grows to the picker and the bound above is never taken. */
+    min-height: 0;
+}
+
+/* The body of the two pages with no conversation on them yet: the choosing on the start page, and
+   what a session loaded on the settings step. Both put it in `main`'s growing row, which is where a
+   session page puts the transcript and right for the same reason - it is the thing being read, and
+   what is under it is a row of its own height. On the settings step that row is the message box; on
+   the start page there is nothing in it, because the button that acts is the last question's
+   neighbour rather than a band pinned below the lot. See `.starting`. */
 .setup {
     display: flex;
     flex-direction: column;
@@ -1861,6 +1992,28 @@ pre > .copy {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
     gap: var(--space-3);
+    margin-top: var(--space-3);
+}
+
+/* The dots while the forge is being asked what branches it has, on a row of their own above the
+   fields they stand in for.
+
+   `display` and not the `opacity` htmx's own indicator rules toggle, which is the one place here
+   that reaches for `htmx-request` directly: an element hidden by `opacity` still holds its row, so
+   the block would carry a permanent gap above the two fields for the sake of dots that are shown
+   for a second. Hidden by `display` it costs the layout nothing until the request starts. */
+.basis__loading {
+    display: none;
+    grid-column: 1 / -1;
+}
+
+.basis__loading.htmx-request {
+    display: inline-flex;
+}
+
+/* Alone, it is standing in a block that has no fields yet - picking a repository from `no files` -
+   so it carries the space the arriving block will have rather than sitting flush under the cards. */
+.basis__loading:only-child {
     margin-top: var(--space-3);
 }
 
@@ -2035,10 +2188,13 @@ pre > .copy {
     color: var(--tool-edge);
 }
 
+/* Whole, and never broken mid-word, which is where this differs from a repository's name: those are
+   `owner/some-very-long-repository` and genuinely have to break somewhere, where every name in this
+   group is one or two short words. Given the room to shrink it wrapped `trusted` as `truste` / `d`
+   on a phone, which reads as a rendering fault. The note beside it is what gives up width instead. */
 .network__name {
-    min-width: 0;
+    flex: none;
     font-weight: 600;
-    overflow-wrap: anywhere;
 }
 
 /* What the level actually means, in the quiet voice the forge uses on a repository row: the name is
@@ -2201,10 +2357,16 @@ pre > .copy {
 
        The floor is what stops "shrink to fit" becoming "shrink to nothing": past it the outer block
        scrolls after all, which is the right answer in a window too short to show a choice and a
-       message box at once. */
+       message box at once.
+
+       And it chains, deliberately: `overscroll-behavior: contain` here made the end of the list a
+       wall, so a wheel that started over the models could not reach the rest of the page it sits in
+       - on the fork page, seventeen pixels of list and then nothing, with five hundred left below.
+       `contain` belongs on a scroller that *is* the reading surface, which the transcript is and a
+       bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on
+       into the block around it, which is what a reader who kept flicking asked for. */
     min-height: 7rem;
     overflow-y: auto;
-    overscroll-behavior: contain;
 }
 
 .models__provider {
@@ -2415,6 +2577,15 @@ pre > .copy {
         display: grid;
     }
 
+    /* The clasp lies over the top-right corner of whatever is under it, which costs a panel nothing
+       - what is there is an empty corner beside a role - and costs this a word, because the setup
+       step is one sentence and its first line runs exactly under the button. So the sentence keeps
+       clear of it while it is floating, and only while it is floating. */
+    .setup__says,
+    .setup__working {
+        padding-inline-end: 3.2rem;
+    }
+
     .rail > :not(.rail__clasp) {
         visibility: hidden;
         transform: translateX(calc(100% + 1.6rem));
@@ -2505,46 +2676,41 @@ mark.hit.current {
 }
 
 /* Under the shelf, which is the boundary in this column: everything above reads the conversation and
-   this is the first thing that changes how it is run. */
-.handoff {
+   these are the first things that change how it is run. One per running plugin that declared a card,
+   drawn by the console from what the plugin said - which is what keeps somebody else's card in step
+   with this console's own controls, where a card a plugin drew would drift the first time anything
+   was restyled. */
+.plugin {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
 }
 
-.handoff__head {
+.plugin__head {
     color: var(--ink-faint);
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
-/* What the card is actually about, so it takes the ordinary ink where the head above it is faint:
-   how much room is left is the thing somebody reads before deciding to touch either control. It
-   wraps, because every one of the things it can say is a phrase rather than a figure. */
-.handoff__standing {
-    margin: 0;
-    color: var(--ink-soft);
-}
-
-/* Two rows rather than a wrap, and the shape is decided rather than whatever the rail's width leaves.
-   Wrapped, `Set` lands on a line of its own reading as a third setting; laid out, it sits beside the
-   number it applies, and the switch above takes the full width because it is a sentence. */
-.handoff__tending {
+/* Two columns rather than a wrap, and the shape is decided rather than whatever the rail's width
+   leaves. Wrapped, `Set` lands on a line of its own reading as a further setting; laid out, it sits
+   beside the last row, and a switch takes the full width because it is a sentence. */
+.plugin__settings {
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: center;
     gap: var(--space-2);
 }
 
-.handoff__tending .tending__switch {
+.plugin__settings .plugin__switch {
     grid-column: 1 / -1;
 }
 
 /* `min-width: 0` on the label as well as on the box inside it, and both are load-bearing: a grid
-   item's own floor is its content, so without it the number's track refuses to shrink and pushes
-   `Set` out of the card entirely rather than out of its column. */
-.tending__switch,
-.tending__reserve {
+   item's own floor is its content, so without it a number's track refuses to shrink and pushes `Set`
+   out of the card entirely rather than out of its column. */
+.plugin__switch,
+.plugin__number {
     display: flex;
     align-items: center;
     gap: 0.25rem;
@@ -2553,13 +2719,11 @@ mark.hit.current {
     cursor: pointer;
 }
 
-/* The box takes what the label and the unit leave. `min-width: 0` is what actually lets it, since a
-   number input's own content-based floor is wider than the rail and would push `Set` out of the
-   card. */
-/* Four digits and no more, which is a bound rather than a guess: the reserve is in thousands and a
-   context window past 1000K is not a thing to size a box for today. Sized rather than stretched, so
-   the box says how much it expects and `Set` sits against it instead of across the card. */
-.tending__reserve input {
+/* Four digits and no more, which is a bound rather than a guess: a control declared in units is
+   chosen in round ones, and a box sized for six is one nobody can read at a glance. Sized rather
+   than stretched, so the box says how much it expects and `Set` sits against it instead of across
+   the card. */
+.plugin__number input {
     flex: none;
     inline-size: calc(4ch + 1.2rem);
     min-width: 0;
@@ -2571,42 +2735,27 @@ mark.hit.current {
     font: inherit;
 
     /* No spinner, because there is no increment that is right: a step of 1 is a hundred presses to
-       move a reserve anywhere worth moving it, and any larger one is a number this console would have
-       to invent. What the arrows cost is real - they sit inside the box and take the room a third
-       digit needs - so the type stays `number`, for the keypad it asks for on a phone and the `min`
-       it validates against, and the arrows go. */
+       move a number anywhere worth moving it, and any larger one is a value this console would have
+       to invent on a plugin's behalf. What the arrows cost is real - they sit inside the box and take
+       the room a further digit needs - so the type stays `number`, for the keypad it asks for on a
+       phone and the bounds it validates against, and the arrows go. */
     appearance: textfield;
 }
 
-.tending__reserve input::-webkit-outer-spin-button,
-.tending__reserve input::-webkit-inner-spin-button {
+.plugin__number input::-webkit-outer-spin-button,
+.plugin__number input::-webkit-inner-spin-button {
     appearance: none;
     margin: 0;
 }
 
 /* The unit reads as part of the figure rather than as a word beside it, so it takes the ink the
    number does and sits tight against the box. */
-.tending__unit {
+.plugin__unit {
     flex: none;
     color: var(--ink);
 }
 
-/* The same pair as the picker's last question, in a column because there is no `Set` beside them
-   there: the form that posts them is the one the message goes with, so the reserve takes the width
-   rather than leaving an empty second track. */
-.tending {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-}
-
-.tending__head {
-    color: var(--ink-faint);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.handoff__set {
+.plugin__set {
     padding: 0.25rem 0.4rem;
     border: 1px solid var(--edge);
     border-radius: 0.35rem;
@@ -2616,28 +2765,153 @@ mark.hit.current {
     cursor: pointer;
 }
 
-.handoff__set:hover,
-.handoff__set:focus-visible {
+.plugin__set:hover,
+.plugin__set:focus-visible {
     background: var(--sunk);
     color: var(--mark);
 }
 
-/* The switch takes effect on the press and the number does not, so the button has to say when there
-   is something in the box that has not been recorded. `--mark` is the same gold every control on this
-   page draws its focus ring in, which is what makes it read as "this wants a press" rather than as a
+/* A switch takes effect on the press and a number does not, so the button has to say when there is
+   something in a box that has not been recorded. `--mark` is the same gold every control on this page
+   draws its focus ring in, which is what makes it read as "this wants a press" rather than as a
    warning; the border alone, since filling it would make an unpressed button look pressed.
 
    With `mainplate.js` absent nothing sets `data-dirty` and the button is simply always plain, which
    is the state it was in before there was a mark. */
-.handoff__tending[data-dirty] .handoff__set {
+.plugin__settings[data-dirty] .plugin__set {
     border-color: var(--mark);
     color: var(--mark);
 }
 
-.handoff__ask {
+/* The step between creating a session and typing into it: which of the plugins it declares to run.
+   It stands alone in `main`, because a session being set up has no transcript to read, nothing to
+   type into and nothing to navigate.
+
+   The column `.picker` is on the start page, and deliberately the same one: these are the two pages
+   with no conversation on them, they are consecutive, and a reader crossing from one to the other
+   should not watch the measure move under them. The padding is inside the scroller rather than on
+   it, for `.picker`'s own reason - `.setup` computes `overflow-x` to `auto`, so a focus ring flush
+   with its edge is clipped, and this is the room that ring reaches into. */
+.settling {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-6);
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+    min-height: 0;
+    padding-block: var(--gap);
+    padding-inline: var(--space-2);
+}
+
+.setup__plugins {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    align-items: start;
+}
+
+.setup__working {
+    margin: 0;
+}
+
+.setup__says {
+    margin: 0;
+    color: var(--ink-soft);
+    max-inline-size: 60ch;
+}
+
+/* Why the last press did not load, above the switches rather than beside the plugin it names: what a
+   reader does about a plugin that will not describe is turn it off, and the switch is a line down.
+   The refusal ink, because this is the same kind of sentence a stalled session's is. */
+.setup__failed {
+    margin: 0;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--error-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--ink-soft);
+    max-inline-size: 60ch;
+    overflow-wrap: anywhere;
+}
+
+/* Grouped by where a plugin came from rather than by what it does, which is the whole point: the
+   three are not equally trusted, and a reader deciding what to leave on is deciding about
+   provenance. */
+.tier {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.tier__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.tier__switch {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+}
+
+.tier__says {
+    margin: 0;
+    color: var(--ink-faint);
+    max-inline-size: 46ch;
+}
+
+.tier__none {
+    margin: 0;
+    color: var(--ink-faint);
+    font-style: italic;
+}
+
+.tier__plugins {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding-inline-start: var(--space-3);
+}
+
+.plugin__name {
+    color: var(--ink);
+}
+
+/* The file a plugin is, beside the name it was installed under. Nothing has been run at this point,
+   so there is no card and no heading to print: what a reader is deciding is whether that program
+   runs, and the path is the whole of what there is to go on. */
+.plugin__says {
+    color: var(--ink-faint);
+}
+
+/* What loads them, and the one primary action on this page. It takes `.starting button`'s rules
+   rather than a settings control's, because it is the same kind of press one page earlier: the last
+   thing in the column, on the edge every heading above it starts at, so a reader's eye comes down one
+   line rather than crossing the page to find the thing that acts. */
+.setup__set,
+.setup__again button {
+    padding: var(--space-3) var(--space-6);
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.setup__set:hover,
+.setup__set:focus-visible,
+.setup__again button:hover,
+.setup__again button:focus-visible {
+    border-color: var(--mark);
+    color: var(--mark);
 }
 
 .shelf__title {
@@ -2723,7 +2997,7 @@ mark.hit.current {
 }
 
 .key__chip[data-kind="prompt"],
-.key__chip[data-kind="handoff"],
+.key__chip[data-kind="note"],
 .key__chip[data-kind="steer"],
 .key__chip[data-kind="command"],
 .key__chip[data-kind="system-prompt"],
@@ -2929,29 +3203,6 @@ mark.hit.current {
     block-size: 1px;
     background-image: linear-gradient(to right, var(--gauge-from), var(--vermilion));
     clip-path: inset(0 calc(100% - var(--filled, 0%)) 0 0);
-}
-
-/* Where the reserve opens, on the same scale as the fill: a short bar standing across the rule, so
-   the fill growing toward it is the whole of what the handoff card used to say in words.
-
-   An element rather than a second pseudo, because it is *conditional*. The fill is unconditional and
-   draws nothing at 0%, where a mark has no position to fall back on: keyed off the style attribute it
-   would be a selector matching on the text of one, and given a fallback offset it would be a bar
-   parked somewhere rather than absent. Drawn only where there is one to draw, which is `reserve_mark`.
-
-   Across the line rather than along it, and taller than the rule is thick, because a mark the same
-   height as what it marks is invisible against it. It rises and falls by the same amount, so the rule
-   itself stays on its baseline and a run of rules keeps reading as evenly spaced.
-
-   `--ink-faint` rather than a colour of its own: the gauge already spends the palette's one red on
-   how far the context has got, and a second hue here would read as a second kind of trouble. */
-.rule__reserve {
-    position: absolute;
-    inset-block-start: -3px;
-    inset-inline-start: var(--reserved);
-    block-size: 5px;
-    inline-size: 1px;
-    background: var(--ink-faint);
 }
 
 /* More air above a turn than above a request within one, because the two are boundaries of
@@ -3338,7 +3589,9 @@ main:has(> .forking) {
        not zoom back out: every control that takes text or a choice is held at it, rather than the
        search alone, because the box you write a message in is the one that matters most. */
     .composer textarea,
-    .composer__name,
+    .naming input,
+    .basis input,
+    .plugin__number input,
     .forking textarea,
     .picker__filter-field,
     .search__input {
@@ -3364,6 +3617,8 @@ main:has(> .forking) {
 
     .composer button,
     .forking__act button,
+    .starting button,
+    .setup__set,
     .picker__filter-field,
     .repo,
     .think {
@@ -3385,9 +3640,9 @@ main:has(> .forking) {
        row that grows, the picker is taller than it whatever happens, so the part that was meant to
        give had nothing to give from.
 
-       So the models simply stop scrolling and `.setup` carries the lot. The message box is still
-       pinned under it, which is the property that mattered: however far down the list somebody
-       scrolls, the thing they came to type in has not moved.
+       So the models simply stop scrolling and `.setup` carries the lot, which is one box scrolling
+       inside a document that does not - the property that mattered, and the same one every other
+       page here has.
 
        The `flex: none` is the other half and is not optional. Every `min-height: 0` above exists to
        let a part shrink so the models can be the one that gives; with nothing left to scroll, that

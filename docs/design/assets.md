@@ -55,6 +55,29 @@ the wrong reason: whether any page pushes the document sideways on a phone, and 
 carrying a rail is still *one* grid track there. The second is the direct guard on the breakpoint
 ordering above, and it reports the sidebar track coming back rather than one of the ways that shows.
 
+## The document never scrolls, and every box between has to say so
+
+`.shell` is `100dvh` and nothing above it moves, so a page is a window with one thing scrolling
+inside it: the transcript on a session page, `.setup` on the start page, and the model list inside
+that. **What makes it work is a chain, and every box in the chain has to pass the bound down.** A
+grid or flex item's minimum is its own min-content unless it says `min-height: 0`, so one box that
+does not say it is floored at its content and the bound stops there: `main`'s growing row sizes to
+the whole picker, the page overflows the window, and the model list, which is sized by the room left,
+is left at its full height. Wrapping the start page's picker in a `<form>` did exactly that, which is
+why `.choosing` is a grid that says `min-height: 0` rather than the plain block a form otherwise is.
+
+**The symptom a reader meets is not the page having grown.** It is that a wheel anywhere over the
+model list moves nothing at all, because a list at its full height is a scroll container with nothing
+to scroll. So the guard is written as the gesture: `TestWhatScrollsOnTheStartPage` wheels over the
+list and asks that the list moved *and* that the block around it took the rest.
+
+That second half is why the model list does not set `overscroll-behavior: contain`. Contained, the
+end of the list was a wall, and a wheel that started over the models could not reach the questions
+under them: on the fork page, seventeen pixels of list and then nothing with five hundred left below.
+**`contain` belongs on a scroller that *is* the reading surface**, which the transcript is and a
+bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on into
+the block around it, which is what a reader who kept flicking asked for.
+
 ## One value scales the whole page
 
 **And it is `html { font-size }`.** Everything except the monospace grid is sized in `rem`, the

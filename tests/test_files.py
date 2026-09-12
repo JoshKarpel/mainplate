@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic_ai import ModelRetry
 
+from mainplate.snapshots import Worktree
 from mainplate.tools.files.anchors import GUTTER
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import Splice
@@ -30,7 +31,7 @@ SOURCE = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
 @pytest.fixture
 def files(tmp_path: Path) -> Files:
     (tmp_path / "app.py").write_text(SOURCE)
-    return Files(roots=(GitTracked(path=tmp_path),))
+    return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)),))
 
 
 def naming(files: Files, at: int) -> str:
@@ -38,6 +39,54 @@ def naming(files: Files, at: int) -> str:
     found = Anchored.over(Text.of((files.roots[0].path / "app.py").read_text()).lines).codes[at]
     assert found is not None
     return found
+
+
+class TestTheWorktreesPointerIsOutOfReach:
+    """
+    That `.git` is refused by name, which the sandbox cannot do for these tools.
+
+    They write from the parent and never pass through a sandbox, so the read-only bind that stops
+    `bash` replacing the pointer does not reach `edit`. Without this, closing the sandbox path just
+    moves the vector one tool over.
+    """
+
+    async def test_the_pointer_is_refused(self, files: Files) -> None:
+        (files.roots[0].path / ".git").write_text("gitdir: /somewhere/real\n")
+
+        with pytest.raises(Refused, match="pointer"):
+            files.resolved(".git")
+
+    async def test_editing_the_pointer_is_refused(self, files: Files) -> None:
+        """Through the tool rather than through `resolved`, since that is what a model reaches."""
+        pointer = files.roots[0].path / ".git"
+        pointer.write_text("gitdir: /somewhere/real\n")
+
+        with pytest.raises(Refused, match="pointer"):
+            await files.read(".git", offset=1, limit=10)
+
+        assert pointer.read_text() == "gitdir: /somewhere/real\n"
+
+    async def test_a_file_merely_named_like_it_is_not_refused(self, files: Files) -> None:
+        """
+        The refusal is the pointer at a root's top level and nothing else. A repository with a
+        `.github/`, a `.gitignore`, or a fixture carrying a nested `.git` is ordinary, and refusing
+        those would be a tool that cannot read most of what it is pointed at.
+        """
+        (files.roots[0].path / ".gitignore").write_text("built/\n")
+        (files.roots[0].path / "fixture").mkdir()
+        (files.roots[0].path / "fixture" / ".git").write_text("gitdir: /a/nested/one\n")
+
+        assert files.resolved(".gitignore").path == files.roots[0].path / ".gitignore"
+        assert files.resolved("fixture/.git").path == files.roots[0].path / "fixture" / ".git"
+
+    async def test_a_scratch_seals_nothing(self, tmp_path: Path) -> None:
+        """A scratch is not a worktree, so it has no pointer and a `.git` in it is just a file."""
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        (scratch / ".git").write_text("not a pointer\n")
+        files = Files(roots=(Scratch(path=scratch),))
+
+        assert files.resolved(".git").path == scratch / ".git"
 
 
 class TestTwoCallsAtOneFileAtOnce:
@@ -103,7 +152,7 @@ class TestReachingTheScratchDirectory:
         scratch = tmp_path.parent / "scratch-for-session"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(path=tmp_path), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)), Scratch(path=scratch)))
 
     async def test_a_file_there_can_be_created_read_and_edited(self, reaching: Files) -> None:
         where = str(reaching.roots[1].path / "plan.md")
@@ -157,7 +206,7 @@ class TestNamingTheRootInsteadOfSpellingItOut:
         scratch = tmp_path.parent / f"scratch-{tmp_path.name}"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(path=tmp_path), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)), Scratch(path=scratch)))
 
     async def test_a_named_root_is_what_a_relative_path_joins(self, reaching: Files) -> None:
         await reaching.create("plan.md", "one\ntwo\n", root="scratch")

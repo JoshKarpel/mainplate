@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
@@ -23,10 +24,13 @@ from conftest import already
 from conftest import answered_with
 from conftest import came_back
 from conftest import recorded_turn
+from conftest import registered
 from conftest import run
+from conftest import started
 from playwright.async_api import Browser
 from playwright.async_api import Locator
 from playwright.async_api import Page
+from playwright.async_api import Route
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
 from playwright.async_api import expect
@@ -50,6 +54,13 @@ from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
 from mainplate.pages import CACHE_ID
 from mainplate.pages import OPENING
+from mainplate.plugins.asking import Declaring
+from mainplate.plugins.installed import BUNDLED_ROOT
+from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.protocol import Described
+from mainplate.plugins.running import Spawned
 from mainplate.service import Service
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
@@ -156,7 +167,13 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
     turn records, a test records itself, a step at a time - which is also the only way to hold a
     turn half-finished for long enough to look at it.
     """
-    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues) as service:
+    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues) as opened:
+        # A console that can answer a plugin's card without ever running one, which is what these
+        # tests are about: what is under test is the console's own drawing of a declaration and the
+        # writes a press makes, and the plugin behind `CARDED` wants no `action`, so `speaking` is
+        # never reached. It is supplied all the same and would fail loudly if it were, since a
+        # console that quietly did nothing here would pass these tests while doing nothing.
+        service = replace(opened, declaring=Declaring(speaking=Spawned(environ={})))
         async with serving(build_app(already(service)), port=0) as server:
             yield f"http://{server.host}:{server.port}", service
 
@@ -214,6 +231,39 @@ async def taking(service: Service, session: str, turn: int = 0) -> None:
     await service.checkpointer.supply(
         session, opened_key(turn), [key for key in recorded if key.startswith(INBOX)][turn]
     )
+
+
+# A plugin with a card of both kinds of control, which is what the rail draws and what the card tests
+# press. Written out rather than taken from the bundled handoff, because what these assert is the
+# *rendering* of a declaration: a fixture that changed when a bundled plugin's copy changed would be
+# a test that fails for a reason nobody reading it would expect.
+CARDED = Enrolled(
+    # Pointed at the plugin this repository actually ships, because two of the tests below press its
+    # answer in the composer and what has to run then is the real script over a real pipe. The
+    # declaration is written out all the same: what the card tests assert is the console's *rendering*
+    # of a declaration, and a fixture that changed when the bundled plugin's copy changed would be a
+    # test failing for a reason nobody reading it would expect.
+    installed=Installed(tier=Tier.BUNDLED, name="handoff", path=BUNDLED_ROOT / "handoff"),
+    described=Described.model_validate(
+        {
+            "events": ["tool", "after_turn", "compose"],
+            "answers": [
+                {
+                    "leader": "handoff",
+                    "saying": "Have it write down where it has got to and carry on from that",
+                    "demands": False,
+                }
+            ],
+            "card": {
+                "heading": "handoff",
+                "rows": [
+                    {"switch": {"name": "hands_off", "label": "auto at reserve", "default": True}},
+                    {"number": {"name": "reserve", "label": "reserve", "unit": "K", "default": 40, "least": 8}},
+                ],
+            },
+        }
+    ),
+)
 
 
 async def showing_model(page: Page) -> str:
@@ -375,7 +425,9 @@ class TestWhereTheReaderIs:
 # `parse_form_start` refuses a message naming no endpoint and no model, and `parse_form_fork`
 # refuses one naming no turn as well.
 CHOOSING = (
-    ("start.html", frozenset({"prompt", "endpoint", "model", "thinking"})),
+    # No `prompt` on the start page: creating a session and saying the first thing in it are two
+    # steps, so this form decides what a session *is* and the box is on the session's own page.
+    ("start.html", frozenset({"endpoint", "model", "thinking"})),
     ("forking.html", frozenset({"at", "prompt", "endpoint", "model", "thinking"})),
 )
 
@@ -432,7 +484,7 @@ WATCH_SUBMITS = """
 """
 
 # Every page with a box to type a message into, and the form each one belongs to.
-BOXES = (("start.html", "composer"), ("session.html", "composer"), ("forking.html", "forking"))
+BOXES = (("session.html", "composer"), ("forking.html", "forking"))
 
 
 class TestSendingFromTheKeyboard:
@@ -467,8 +519,8 @@ class TestSendingFromTheKeyboard:
     async def test_shift_enter_in_an_empty_box_sends_nothing(self, page: Page, gallery: str) -> None:
         # The composer's box is `required`, and `requestSubmit` honours that where `submit` would
         # not: an empty box refuses from the keyboard exactly as it refuses from the button, rather
-        # than starting a session on a message nobody typed.
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        # than recording a message nobody typed.
+        await page.goto(f"{gallery}/session.html", wait_until="load")
         await page.evaluate(WATCH_SUBMITS)
         await page.press("textarea[name=prompt]", "Shift+Enter")
         assert await page.evaluate("() => window.submitted") == []
@@ -681,6 +733,75 @@ class TestTheShapeOfANarrowWindow:
         # goes to the conversation. A count alone is satisfied by `none`, which is what a shell that
         # had stopped being a grid at all would report.
         assert columns.split() == [f"{PHONE['width']}px"]
+
+
+# Short enough that the choosing with a group open is longer than the window, which is the whole
+# point of it: at the suite's own thousand the start page fits and a layout that had stopped bounding
+# anything still looks right.
+SHORT = ViewportSize(width=1400, height=620)
+
+
+class TestWhatScrollsOnTheStartPage:
+    """
+    The choosing scrolls inside itself, the model list is what gives, and the document never moves.
+
+    A browser, and for `TestTheShapeOfANarrowWindow`'s reason one axis over: every rendering of this
+    is a correct picture of *some* page, and what is wrong when it breaks is that the page grew past
+    the window. The symptom a reader meets is not the growth. `.models` is bounded by the room left,
+    so a block that never took a bound leaves it at its full height - a scroll container with nothing
+    to scroll - and a wheel anywhere over the model list then moves nothing at all.
+    """
+
+    async def test_the_choosing_takes_the_window_rather_than_growing_past_it(self, page: Page, gallery: str) -> None:
+        await page.set_viewport_size(SHORT)
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+
+        room = await page.evaluate(
+            "() => ({ document: document.documentElement.scrollHeight,"
+            " viewport: document.documentElement.clientHeight })"
+        )
+        assert room["document"] <= room["viewport"]
+
+    async def test_the_model_list_is_the_part_that_gives(self, page: Page, gallery: str) -> None:
+        await page.set_viewport_size(SHORT)
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+
+        # Bounded by the room left, so it holds more than it shows. The negation is the broken shape:
+        # a list at its content height reports these equal and scrolls nowhere.
+        held = await page.evaluate(
+            "() => { const models = document.querySelector('.models');"
+            " return { holds: models.scrollHeight, shows: models.clientHeight }; }"
+        )
+        assert held["holds"] > held["shows"]
+
+    async def test_a_wheel_over_the_model_list_reaches_the_end_of_the_list_and_then_the_page(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        What a reader actually does, and the assertion the two above exist to explain.
+
+        Both ends of one gesture: the list moves, and once it has nowhere left to go the block around
+        it takes the rest. `overscroll-behavior: contain` here made the second half of that a wall,
+        so a wheel that started over the models could not reach the questions under them.
+        """
+        await page.set_viewport_size(SHORT)
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+        over = await page.locator(".models").bounding_box()
+        assert over is not None
+        await page.mouse.move(over["x"] + over["width"] / 2, over["y"] + 20)
+
+        for _ in range(12):
+            await page.mouse.wheel(0, 300)
+
+        moved = await page.evaluate(
+            "() => ({ models: document.querySelector('.models').scrollTop,"
+            " choosing: document.querySelector('.setup').scrollTop })"
+        )
+        assert moved["models"] > 0
+        assert moved["choosing"] > 0
 
 
 # Where a conversation draws monospace, which is the fenced blocks a model answers in and the body of
@@ -953,7 +1074,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         self, page: Page, console: tuple[str, Service]
     ) -> None:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
@@ -973,7 +1094,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         would otherwise be the one panel a reader could not copy.
         """
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator(".panel[data-kind=thinking]")).to_have_count(0)
@@ -1013,7 +1134,7 @@ class TestWatchingATurnArrive:
     async def started(self, console: tuple[str, Service], page: Page) -> Service:
         """A session with a question in it, open in the browser, with nothing answered yet."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
@@ -1123,6 +1244,25 @@ class TestWatchingATurnArrive:
         await expect(call).not_to_have_attribute("open", "")
         await expect(reply).to_have_attribute("open", "")
 
+    async def test_the_settings_step_becomes_the_conversation_when_the_session_loads(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The step and the conversation are two shapes of one page, and a page drawing the first has
+        no region the second's messages could land in. So what the stream says when the shape is
+        over is a named event rather than a partial, and the script's answer is the page again. This
+        is the one that used to need a reload by hand.
+        """
+        url, service = console
+        session = await service.start(DEFAULT_CHOICE)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator("#setup")).to_be_visible()
+        await expect(page.locator("#transcript")).to_have_count(0)
+        await service.say(session.id, "what is a mainplate")
+        await registered(service, session.id)
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+        await expect(page.locator("#setup")).to_have_count(0)
+
     async def test_a_message_leaves_the_connection_and_its_sink_alone(
         self, page: Page, console: tuple[str, Service]
     ) -> None:
@@ -1198,7 +1338,7 @@ class TestWatchingATurnArrive:
         watch the whole of it flash at them.
         """
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
@@ -1222,7 +1362,7 @@ class TestShuttingAFoldFromItsFrame:
 
     async def a_command_with_output(self, console: tuple[str, Service], page: Page) -> None:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         entry = await service.checkpointer.append(session.id, recorded_command("git status"))
         await service.checkpointer.supply(
@@ -1284,7 +1424,7 @@ class TestShuttingAFoldFromItsFrame:
     async def a_call_a_reader_opened(self, console: tuple[str, Service], page: Page) -> Locator:
         """A finished call, which the server renders shut, opened the way a reader opens one."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await service.checkpointer.supply(session.id, tool_key(0, "call-1"), came_back("the first file"))
@@ -1332,7 +1472,7 @@ class TestFoldingAPanel:
 
     async def a_turn_that_reasoned(self, console: tuple[str, Service], page: Page, said: str) -> Locator:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(
             session.id,
@@ -1426,7 +1566,7 @@ class TestTheLineAShutPanelStandsFor:
 
     async def a_turn_that_reasoned(self, console: tuple[str, Service], page: Page, said: str) -> Locator:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(
             session.id,
@@ -1637,7 +1777,7 @@ class TestOpeningTheRecordBehindARequest:
     async def opened(self, console: tuple[str, Service], page: Page) -> Locator:
         """A conversation with one recorded request in it, as the closed tag on that request's rule."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await taking(service, session.id)
         await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
@@ -1700,10 +1840,25 @@ class TestOpeningTheRecordBehindARequest:
         assert placed["record"]["width"] > placed["rule"]["width"] / 2
 
 
+async def landed_on_the_branch(console: tuple[str, Service], page: Page) -> None:
+    """
+    Answer the settings step of the branch a send just navigated to, so a transcript is drawn.
+
+    **A fork lands on that step**, because it carries its parent's turns and none of its plugins, and
+    that is the console working rather than a fixture to loosen: a branch plants a fresh worktree and
+    may be planted at a tree whose `.mainplate/` says something new, so it asks again. This console
+    runs no worker, so the pass that press would ask for never happens and the registration is written
+    here instead of clicked.
+    """
+    _, service = console
+    await registered(service, page.url.rsplit("/", 1)[-1])
+    await page.reload(wait_until="load")
+
+
 async def a_conversation(console: tuple[str, Service], page: Page) -> str:
     """One session with a turn being answered, on the page, as the id to write further steps against."""
     url, service = console
-    session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+    session = await started(service, "what is a mainplate", DEFAULT_CHOICE, enrolled=(CARDED,))
     await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
@@ -1777,29 +1932,31 @@ class TestSayingWhetherTheCacheIsStillWarm:
         await expect(page.locator(f"#{CACHE_ID}")).to_be_hidden()
 
 
-class TestSettingWhenASessionHandsItselfOff:
+class TestAPluginsOwnCard:
     """
-    The rail's own card, where the two controls deliberately do not behave the same way.
+    A card the console draws from what a plugin declared, where the two controls deliberately differ.
 
     A browser, twice over: which of them takes effect on the press is htmx's trigger rather than
     anything in the markup, and whether the button says there is something unsaved is a comparison
     against a property no server renders. Both look identical in what is sent either way.
+
+    **A card is declared, not rendered**, so what is under test is the console's own drawing of
+    somebody else's declaration - which is the whole reason a repository may have one.
     """
 
     async def test_the_switch_takes_effect_on_the_press(self, page: Page, console: tuple[str, Service]) -> None:
         """
         A checkbox says the whole of what it means the moment it moves, so waiting for `Set` leaves a
-        console that looks switched off and is not. What proves it landed is the mark on every rule's
-        gauge, which is drawn only where the switch is on.
+        console that looks switched off and is not.
         """
         _, service = console
         session = await a_conversation(console, page)
-        await expect(page.locator(".tending__switch input")).to_be_checked()
+        await expect(page.locator(".plugin__switch input")).to_be_checked()
 
-        await page.uncheck(".tending__switch input")
+        await page.uncheck(".plugin__switch input")
 
-        await expect(page.locator(".rule__reserve")).to_have_count(0)
-        assert not (await read_tending(service.database, session)).hands_off
+        await expect(page.locator(".plugin__switch input")).not_to_be_checked()
+        assert (await read_tending(service.database, session)).of("bundled:handoff")["hands_off"] is False
 
     async def test_the_number_waits_to_be_set_and_says_that_it_is_waiting(
         self, page: Page, console: tuple[str, Service]
@@ -1813,15 +1970,15 @@ class TestSettingWhenASessionHandsItselfOff:
         session = await a_conversation(console, page)
         before = await read_tending(service.database, session)
 
-        await page.fill(".tending__reserve input", "120")
+        await page.fill(".plugin__number input", "120")
 
-        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__settings")).to_have_attribute("data-dirty", "")
         assert await read_tending(service.database, session) == before, "typing records nothing"
 
-        await page.click(".handoff__set")
+        await page.click(".plugin__set")
 
-        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
-        assert (await read_tending(service.database, session)).reserve == 120_000
+        await expect(page.locator(".plugin__settings")).not_to_have_attribute("data-dirty", "")
+        assert (await read_tending(service.database, session)).of("bundled:handoff")["reserve"] == 120
 
     async def test_typing_the_recorded_value_back_leaves_nothing_to_press(
         self, page: Page, console: tuple[str, Service]
@@ -1831,14 +1988,76 @@ class TestSettingWhenASessionHandsItselfOff:
         keystroke, so undoing a change unmarks the button rather than leaving it lit for ever.
         """
         await a_conversation(console, page)
-        box = page.locator(".tending__reserve input")
+        box = page.locator(".plugin__number input")
         recorded = await box.input_value()
 
         await box.fill("120")
-        await expect(page.locator(".handoff__tending")).to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__settings")).to_have_attribute("data-dirty", "")
         await box.fill(recorded)
 
-        await expect(page.locator(".handoff__tending")).not_to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__settings")).not_to_have_attribute("data-dirty", "")
+
+    async def test_the_unit_the_plugin_declared_is_drawn_beside_the_box(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        Which is what lets a reserve of forty thousand tokens be two digits rather than six to count
+        the zeroes of. The console does no arithmetic with it: the stored value is whatever the
+        plugin says it is.
+        """
+        await a_conversation(console, page)
+        await expect(page.locator(".plugin__unit")).to_have_text("K")
+
+
+class TestTheSwitchOnATiersHeading:
+    """
+    One control over the controls under it, in three states, drawn by the script and nothing else.
+
+    A browser because none of it is in the markup: the server renders the heading's three states from
+    what it knows, and after that every one of them is a property the script sets on an element. Both
+    a heading that has gone stale and one stuck on "some of them" are correct markup showing the wrong
+    thing, and the switches under it stay right either way, so nothing else here would notice.
+    """
+
+    HEADING = '.tier[data-tier="bundled"] .tier__switch input'
+    UNDER = '.tier[data-tier="bundled"] .plugin__switch input[type=checkbox]'
+
+    async def test_a_heading_says_full_when_every_switch_under_it_is_on(self, page: Page, gallery: str) -> None:
+        """
+        Which the hidden `off` field beside each switch is what made hard: counted as a switch, it is
+        one that is never on, so a full group could report at most half of itself and the heading was
+        stuck indeterminate however many were ticked.
+        """
+        await page.goto(f"{gallery}/settings.html", wait_until="load")
+        heading = page.locator(self.HEADING)
+        await expect(heading).to_be_checked()
+
+        await page.locator(self.UNDER).first.uncheck()
+
+        assert await self.state(page) == {"checked": False, "indeterminate": True}, "some of them, and it says so"
+
+        await page.locator(self.UNDER).first.check()
+
+        assert await self.state(page) == {"checked": True, "indeterminate": False}
+
+    async def test_the_heading_sets_every_switch_under_it_and_none_beside_it(self, page: Page, gallery: str) -> None:
+        """The other direction, and the tier it is not: what a session records is a switch per plugin."""
+        await page.goto(f"{gallery}/settings.html", wait_until="load")
+        elsewhere = '.tier[data-tier="user"] .plugin__switch input[type=checkbox]'
+        await expect(page.locator(elsewhere)).to_be_checked()
+
+        await page.locator(self.HEADING).uncheck()
+
+        for each in await page.locator(self.UNDER).all():
+            await expect(each).not_to_be_checked()
+        await expect(page.locator(elsewhere)).to_be_checked()
+
+    async def state(self, page: Page) -> dict[str, bool]:
+        return await page.evaluate(
+            "(selector) => { const box = document.querySelector(selector);"
+            " return {checked: box.checked, indeterminate: box.indeterminate}; }",
+            self.HEADING,
+        )
 
 
 class TestWhereTheComposerSendsTo:
@@ -1859,6 +2078,7 @@ class TestWhereTheComposerSendsTo:
 
         await page.wait_for_url(lambda url: session not in url)
         assert "/sessions/" in page.url
+        await landed_on_the_branch(console, page)
         await expect(page.locator("#transcript")).to_contain_text("try it another way")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
 
@@ -1874,6 +2094,7 @@ class TestWhereTheComposerSendsTo:
         await page.click(".sender__caret")
         await page.click('.sender__option[value="aside"]')
         await page.wait_for_url(lambda url: session not in url)
+        await landed_on_the_branch(console, page)
 
         await page.fill(".composer textarea", "here is what I found")
         await page.click(".sender__caret")
@@ -1923,9 +2144,9 @@ class TestWhereTheComposerSendsTo:
         """
         await a_conversation(console, page)
         await page.click(".sender__caret")
-        await page.click('.sender__option[value="handoff"]')
+        await page.click('.sender__option[value="plugin:handoff"]')
 
-        await expect(page.locator('.panel[data-kind="handoff"]')).to_have_count(1)
+        await expect(page.locator('.panel[data-kind="note"]')).to_have_count(1)
 
     async def test_a_handoff_carries_what_was_typed_as_what_to_dwell_on(
         self, page: Page, console: tuple[str, Service]
@@ -1937,9 +2158,9 @@ class TestWhereTheComposerSendsTo:
         await a_conversation(console, page)
         await page.fill(".composer textarea", "dwell on the parser work")
         await page.click(".sender__caret")
-        await page.click('.sender__option[value="handoff"]')
+        await page.click('.sender__option[value="plugin:handoff"]')
 
-        asked = page.locator('.panel[data-kind="handoff"]')
+        asked = page.locator('.panel[data-kind="note"]')
         await expect(asked).to_contain_text("dwell on the parser work")
         await expect(asked).to_contain_text("Hand this conversation off")
 
@@ -2014,7 +2235,7 @@ async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces
 
 async def a_session_with_files(working: tuple[str, Service], page: Page) -> str:
     url, service = working
-    session = await service.start("what is a mainplate", replace(DEFAULT_CHOICE, repository=FIXTURE))
+    session = await started(service, "what is a mainplate", replace(DEFAULT_CHOICE, repository=FIXTURE))
     await taking(service, session.id)
     await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
     await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
@@ -2335,6 +2556,7 @@ class TestNamingAModeFromTheKeyboard:
         await page.keyboard.press("Shift+Enter")
 
         await page.wait_for_url(lambda url: session not in url)
+        await landed_on_the_branch(console, page)
         await expect(page.locator("#transcript")).to_contain_text("try it another way")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
 
@@ -2582,6 +2804,39 @@ class TestNarrowingTheBranches:
         # The block itself stays, since it is what the next pick swaps over.
         await expect(page.locator("#basis")).to_be_attached()
 
+    async def test_the_dots_stand_in_for_the_fields_while_the_forge_is_being_asked(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """
+        A cold clone is seconds of a block that has not changed, which reads as a card that did
+        nothing. The request is held open here rather than raced, because the window it is shown in
+        is exactly as long as a loopback round trip and a test that waited for it would be asserting
+        on whichever side of it the scheduler landed.
+        """
+        url, _ = working
+        await page.goto(f"{url}/", wait_until="load")
+
+        # Hidden by `display` and not by `opacity`, so the block carries no row for it at rest. The
+        # difference is invisible to `to_be_hidden`, which is why the height is asked for too.
+        await expect(page.locator("#basis-loading")).to_be_hidden()
+        assert await page.evaluate("() => document.querySelector('#basis-loading').getBoundingClientRect().height") == 0
+
+        answering = asyncio.Event()
+
+        async def hold(route: Route) -> None:
+            await answering.wait()
+            await route.continue_()
+
+        await page.route("**/fragments/branches*", hold)
+        await page.click('label[for="open-repository"]')
+        await page.click(f'.repo[data-name="{FIXTURE_NAME}"]')
+
+        await expect(page.locator("#basis-loading")).to_be_visible()
+
+        answering.set()
+        await expect(page.locator(".basis__box")).to_be_attached()
+        await expect(page.locator("#basis-loading")).to_be_hidden()
+
 
 class TestWhereTheCursorIsAfterSending:
     """
@@ -2630,7 +2885,7 @@ class TestTheShelf:
 
     async def opened(self, console: tuple[str, Service], page: Page) -> tuple[str, Service]:
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
         return session.id, service
@@ -2701,7 +2956,7 @@ class TestTheShelf:
         url, service = console
         await self.opened(console, page)
         await self.keep(page, "meant for the first one")
-        other = await service.start("a different conversation", DEFAULT_CHOICE)
+        other = await started(service, "a different conversation", DEFAULT_CHOICE)
         await page.goto(f"{url}/sessions/{other.id}", wait_until="load")
 
         await expect(page.locator(".shelf__take")).to_have_count(0)
@@ -2716,6 +2971,7 @@ class TestTheShelf:
         await self.keep(page, "worth carrying across")
         forked = await service.fork(session, at=1, chosen=DEFAULT_CHOICE, said="try again")
         assert forked is not None
+        await registered(service, forked.id)
         await page.goto(f"{url}/sessions/{forked.id}", wait_until="load")
 
         await expect(page.locator(".shelf__take")).to_have_text("worth carrying across")
@@ -2733,6 +2989,7 @@ class TestTheShelf:
         await self.keep(page, "worth carrying across")
         forked = await service.fork(session, at=1, chosen=DEFAULT_CHOICE, said="try again")
         assert forked is not None
+        await registered(service, forked.id)
         await page.goto(f"{url}/sessions/{forked.id}", wait_until="load")
         await page.click(".shelf__drop >> nth=0")
         await expect(page.locator(".shelf__take")).to_have_count(0)
@@ -2753,7 +3010,7 @@ class TestFollowingTheEnd:
     async def a_long_conversation(self, console: tuple[str, Service], page: Page) -> None:
         """Enough turns that the transcript scrolls, which is the precondition for any of this."""
         url, service = console
-        session = await service.start("what is a mainplate", DEFAULT_CHOICE)
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
         for turn in range(12):
             # The two records a pass writes for a turn, by hand: which entry it took, and what came
             # of it. The `console` fixture runs no worker, so a test that wants twelve settled turns
@@ -2868,3 +3125,59 @@ class TestTheFocusRingHasRoomToBeDrawn:
         assert room["reach"] > 0, "the focused field has no ring to leave room for"
         assert room["left"] >= room["reach"]
         assert room["right"] >= room["reach"]
+
+
+class TestTheLineWhereNothingIsHappening:
+    """
+    The box at the end of a transcript that says why nothing is happening, and the two things on it
+    a still cannot show.
+
+    Both are script, and both are the difference between a page that is waiting and a page that is
+    stuck. The countdown moves while the page holds still, which is exactly the interval the stream
+    sends nothing in, so a server-rendered figure would sit at its first value for the whole wait.
+    The copy button is seated by the same walk that seats a panel's, and it is outside a panel, so a
+    change to that walk takes it away with nothing else noticing.
+    """
+
+    async def test_the_reason_is_copyable(self, page: Page, gallery: str) -> None:
+        """
+        Which is the whole point of setting it apart: it is the one thing on the page somebody pastes
+        into an issue, a search, or a message to whoever wrote the plugin.
+        """
+        await page.goto(f"{gallery}/failed.html", wait_until="load")
+        reason = page.locator("#attention .attention__reason")
+        button = reason.locator("button.copy")
+
+        await expect(button).to_have_count(1)
+        assert (await reason.inner_text()).startswith("PluginFailed"), "and the reason is really under it"
+
+    async def test_the_countdown_moves_while_the_page_holds_still(self, page: Page, gallery: str) -> None:
+        """
+        Driven by moving the clock rather than by waiting, so this costs no wall time and cannot be
+        flaky: what is under test is that the figure is computed from `data-due` and the time since
+        the element was seen, not that a timer fires.
+        """
+        await page.goto(f"{gallery}/failed.html", wait_until="load")
+        due = page.locator("#attention .attention__due")
+        before = await due.inner_text()
+
+        moved = await page.evaluate(
+            """() => {
+                const line = document.getElementById("attention");
+                line.seenAt = Date.now() - 300_000;
+                return Number(line.dataset.due);
+            }"""
+        )
+        await page.evaluate("() => document.dispatchEvent(new CustomEvent('htmx:after:swap'))")
+
+        assert moved > 0, "the control: the server really did hand over a figure to count down from"
+        await expect(due).not_to_have_text(before)
+
+    async def test_a_page_with_nothing_wrong_draws_no_such_line(self, page: Page, gallery: str) -> None:
+        """
+        The control the rest of this rests on. A line drawn through healthy turns would be a console
+        that cries wolf, and every ordinary page here is one where nothing is wrong.
+        """
+        await page.goto(f"{gallery}/answering.html", wait_until="load")
+
+        await expect(page.locator("#attention")).to_have_count(0)

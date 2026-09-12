@@ -38,7 +38,8 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   where the message goes, and being a `Prompt` is what makes it possible: a boundary between turns
   is the only place one can be, so it must never be folded into a turn already running. See
   [Forget](#forget).
-- `handoff` is `Service.hand_off`, and it is **the one answer whose box may be empty**. What it does
+- `handoff` is the bundled handoff plugin's own leader, and it is **the one answer whose box may be
+  empty**. What it does
   with the text is point the handoff at something rather than send it anywhere, and the ordinary
   handoff has nothing typed into it, so the button carries `formnovalidate` and the boundary allows
   an empty message for this disposition alone. It shares the family `forget` is in, both ending a
@@ -57,7 +58,11 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   offered from **any** fork rather than only an aside, because what it needs is `Origin.session` and
   every fork has one; gating it on the flag would be a restriction invented to make the flag look
   load-bearing. The destination is read off the row and never posted, so a form cannot put a message
-  in a conversation nobody was looking at.
+  in a conversation nobody was looking at. It is drawn once the branch is past [its own settings
+  step](plugins.md#setup), since this control is in the composer and a settling page has none: an
+  aside is a fork, so the round trip is step aside, confirm, read, send back. That falls out of how
+  forks work rather than being a rule about asides, and it is left that way rather than given a
+  second page shape to keep working.
 - `run` is `Service.run`, and it is the one answer here that is not a message going somewhere. It is
   in the same field all the same, because the question the menu asks is what happens to what you
   typed; a control of its own would spend a slot in the row above the box. It is offered only where
@@ -335,85 +340,16 @@ transcript, which is what "before any forget" means.
 
 ## Handoff
 
-**A forget whose message the session wrote itself.** The console asks a session to write down where
-it has got to; the model does that with its own tools, calls `hand_off` with the document, and the
-document is delivered back as a message carrying a boundary. What the next model is told is the
-document and nothing above it.
+**A forget whose message the session wrote itself**, and the one answer in the menu whose box may be
+empty. It is [a bundled plugin](../plugins/handoff.md), so what a handoff is, when one fires on its
+own, and what its card in the rail holds are that page's; what is the composer's is that `/handoff`
+is a leader like any other, and that its row is the one carrying `formnovalidate`.
 
-**It happens in the session, not in an aside**, which was the first design and was worse in four
-ways at once:
-
-- **The worktree.** A fork plants a fresh one at a recorded tree, and an end-fork has no recorded
-  tree at all, so it falls through to the repository's default branch. The agent asked to describe
-  the work would have been looking at a directory with none of it in it, and "check rather than
-  recall" is the whole reason for letting it use tools.
-- **The cost.** `altogether` sums a session's own turns, so a handoff's spend would have landed on a
-  different total, and the parent's running figures would have been quietly missing it.
-- **The recursion.** An aside inherits its parent's settings, and it carries the parent's whole
-  window, so it starts near any reserve by construction. Turning auto-handoff off on the copy is one
-  line and exactly the kind that gets forgotten until it recurses in production.
-- **The cache.** Instructions are the per-request parameter Pydantic AI renders in front of the
-  whole cached prefix, so a fork's first request pays full price for the window unless its composed
-  instructions come out byte-identical. In-session there is no second prefix: the handoff turn is
-  the next turn on the one already cached.
-
-**The tool is in every session's prefix**, and that is arithmetic rather than convenience. Tool
-definitions sit above the system prompt in the cached prefix, so adding one invalidates the whole
-conversation beneath it: introduced at handoff time it would cost a full uncached read of the
-window, where a permanent one costs its own description at cache-read prices on every request. Four
-orders of magnitude. `agent_for` therefore adds it unconditionally, and unlike the file tools it is
-not conditioned on the isolation, because what it reaches is the conversation rather than the
-machine.
-
-**A tool rather than the turn's prose, because models leak the framing.** Asked for a handoff in
-words, a model writes "Here is the handoff document: ... What would you like next?", and the framing
-is then durably part of what the next model is told. An argument splits the document from the chat
-around it, and `hand_off` refuses anything under `LEAST` characters, which is what catches the model
-that acknowledges the ask instead of answering it.
-
-**Neither the ask nor the tool prescribes a shape**, and that is a decision rather than an omission.
-What somebody picking up a refactor needs handed over and what somebody picking up an investigation
-needs are different documents, so a fixed set of headings would have every session filling in the
-ones it has nothing to say under. `ASKING` says what a handoff is about, where the work got to, what
-was decided and why, what to do next, and stops; the tool's description carries the parts that are
-*mechanical* rather than editorial (the document becomes the whole context, pass it alone, check
-rather than recall) and says outright that the shape is the model's.
-
-**A person who wants it pointed somewhere types it in the box**, and it is appended to the standing
-ask rather than replacing it: "dwell on the parser work" on its own is an instruction to summarise a
-summary. Both writers compose through `recorded_ask`, which takes the note where there is one and
-the bare ask where there is not, so a handoff nobody asked for and one somebody typed a paragraph
-into cannot come to say different things about what a handoff *is*.
-
-**It is delivered and not appended, and that costs a pass boundary.** An entry appended mid-pass is
-invisible to the pass that appended it, since `receive` reads the snapshot loaded at the top, which
-is what makes a drain replayable, and an append queues nothing. A handoff written that way leaves
-the session `Blocked` on a message already sitting in its own inbox with nothing that will ever wake
-it. `handing_through` therefore takes the whole `Durable` rather than the checkpointer a pass holds.
-
-**`records.Handoff` is an arm of `Delivered` rather than a flag on `Prompt`.** Every other message
-in a conversation was typed by somebody, so a reader has to be able to tell at a glance that this
-one was not; the tag is what the panel's kind is read off, which is the same argument that made
-`Steer` its own record. It behaves exactly as a `Prompt` otherwise, and `records.opens` and
-`records.forgets` are where that "exactly as" is written once rather than as an `isinstance` chain
-at each of the five readers. Both uses are `handoff` because both are the handoff: the ask carries
-no boundary and the document carries one.
-
-The panel takes the person's hue, by `command`'s rule: the axis is who produced the text, and what a
-handoff holds was produced by this session rather than by the model about to be handed it. Its
-`TITLES` entry is what says the console composed it, which is the one thing the label leaves out.
-
-**Asking for one is `/handoff` in the composer**, which is an answer in the sending menu like every
-other. The menu's premise is that its rows are decisions about the text somebody typed, and this one
-is: a handoff takes an optional note saying what it should dwell on, and the box is exactly where
-such a note is written. `/handoff` on its own hands off, and `/handoff` with a paragraph hands off
-pointed at what the paragraph says.
-
-**The box may be empty for this answer and no other**, which is what the row's `formnovalidate`
-buys. The box is `required`, which is right for a message and would refuse the ordinary handoff, so
-the button says it does not need the form's required fields and the boundary allows an empty message
-for this disposition alone. That is the browser's own mechanism rather than the script toggling an
-attribute under a reader, which is the same reason every mode's button is drawn by the server.
+**The box may be empty for this answer and no other.** The box is `required`, which is right for a
+message and would refuse the ordinary handoff, so the button says it does not need the form's
+required fields and the boundary allows an empty message for this disposition alone. That is the
+browser's own mechanism rather than the script toggling an attribute under a reader, which is the
+same reason every mode's button is drawn by the server.
 
 `Answer.demands` is where an answer says so, and it is read by *both* renderings: a menu row is a
 submit button exactly as a mode's own button is, so an exception on one of them would be a control
@@ -424,200 +360,12 @@ nothing look identical in the markup.
 It sits beside `Forget` in the menu because they are the same family: both end a stretch of context
 where they stand, and what separates them is who writes what the next one opens on.
 
-## Handing off without being asked
-
-The same call as `/handoff`, fired by a number rather than by a person: both go through
-`recorded_ask`, so the words a handoff is asked for in are in one place and cannot come apart. What
-the rail's card holds is the two settings that decide when.
-
-**`Tending` is the one thing about a session that changes, and it has nowhere else to live.** A
-session's `Choice` is recorded before the first message and fixed for life; this is what is being
-done *to* a running session, so it has to be changeable or it is not a setting. Neither place this
-console otherwise keeps things will take it: `without-durability-sqlite` writes steps with `ON
-CONFLICT ... DO UPDATE SET value = workflow_checkpoint.value`, so a key keeps the value it was first
-given and a setting saved twice would keep its first answer for ever; and `localStorage` is in a
-browser where the worker that acts on this may be another process. So it is two columns on the
-`sessions` row, arriving through `ADDED` the way `forked_aside` did, and `tend` is the only thing
-that writes them. That is [not the second copy the index otherwise
-refuses](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies), because
-it is recorded nowhere else.
-
-**`NULL` reads as a module constant rather than a `Settings` field.** A process-wide answer would be
-a second place a session's question is answered, exactly as a process-wide model would be, and
-nobody has asked to set these per console. Moving a constant therefore moves every session nobody
-has told anything, and a session somebody *has* told stops following it, which is the point of
-having said something. `parse_tending` defaults each column on its own, unlike `parse_origin`, which
-demands its pair: half an origin is a row nothing here could have written, where a session told one
-setting and not the other is ordinary.
-
-**Headroom in tokens, never a percentage.** What has to be true is that the handoff run has room to
-do its work: the ask, a few tool calls, the returns they bring back, and the document. That is an
-absolute quantity and the same one on every model, where a fifth of the window is 40k on a 200k
-model and 200k on a 1M one, the same setting re-tuned per model, by somebody who would have to know
-the absolute number anyway in order to pick the fraction.
-
-**A window and not a threshold**, which is `Reserve` in `tending.py`: `opens` is where a handoff
-becomes worth asking for and `shuts` is where there is no longer room to write one. Two bounds
-because a single turn can cross the first and overshoot the second, which one large tool return is
-enough to do. `LEAST_ROOM` is the second bound and is a constant rather than a setting, because it
-is not a preference: below it a handoff is a request nobody should pay for.
-
-**Past the close the console stops offering, and reaches for nothing smaller.** A cheaper
-non-agentic summariser would be a second path that only ever runs when the first is already failing,
-so nothing would exercise it and its bugs would surface during the one moment a conversation is
-least able to absorb them. What is left is the person's, `forget` or `fork`, and both cost nothing.
-There is deliberately no second stall mechanism either: a request that no longer fits is refused by
-the provider, and `turn:{n}:refused:{i}` already says so in the same sentence-instead-of-a-spinner
-shape.
-
-**`standing` is asked of the reserve rather than of a whole `Tending`**, because where a
-conversation is and whether the console will act on it are two questions, and the gauge answers only
-the first.
-
-**Off where the model has no reference record.** `Conversation.window` is `None` for a model the
-database has never heard of, so there is no fraction, no way to know a reserve was crossed, and no
-gauge on any rule either, which is what a session showed before there was one.
-
-**Where it says so is the gauge on every rule, not a line in the card.** `reserve_mark` puts a short
-bar across the rule at the fraction the reserve opens at, on the same scale `--filled` is drawn
-against, so watching the line lengthen toward the mark is watching the handoff approach. That costs
-no row and no words, on a control a reader is already reading, where a sentence in the rail said the
-same thing once per page in a place nobody is looking. It is drawn only where the switch is on,
-because a mark for something that will not happen is a line to explain.
-
-It is an element rather than a second pseudo, and that is forced: the fill is unconditional and
-draws nothing at 0%, where a mark has no position to fall back on. Keyed off the style attribute it
-would be a selector matching on the text of one, and given a fallback offset it would be a bar
-parked somewhere rather than absent.
-
-**The pass decides and the composition root writes**, which is `Crossed`. Asking for a handoff means
-putting a message in an inbox, and that *queues* the session, so it is a fact about the queue in
-front of a pass rather than about answering one and it belongs where `make_ready` already is. It is
-also what makes the decision testable as a value: a test drives one pass and reads what came back,
-with no store and no scheduler anywhere near the arithmetic.
-
-**Fired at the boundary that crosses the reserve, not at the start of the next turn**, because the
-conversation's prefix is warm right then and may not be when somebody comes back and types. The same
-argument that makes a handoff cheap in-session makes it cheap here.
-
-**A turn that opened on a handoff never triggers another**, and that is the whole of what stops this
-recursing. The reserve stays crossed for as long as the context is large, so without it the ask
-turn, whose own context is the conversation it is summarising, would cross it again the instant it
-ended, and so would every turn after that. Asking about the message the turn opened on covers both
-the ask and the document. A model that answers the ask in prose instead of calling the tool is
-therefore not asked again until a person says something, which is a retry per human action rather
-than one per turn: the rule a refusal already follows.
-
-**The settings are snapshotted once at the top of a pass**, injected as `Tendings` the way
-`Handoffs`, `Pricer`, `Draining` and `Guiding` are. Once, because a setting re-read at each turn
-boundary is a place two writers share, so a switch flicked while a turn was in flight would have
-that turn answered under one answer and judged under another. What it costs is that a change takes
-effect on the next pass, which is the next turn. `None` is a console that was never given a way to
-read them, and such a console tends nothing: the same reading `prices` and `handoffs` already take,
-and what keeps the arithmetic inert in every test that does not ask for it by construction rather
-than by the accident of some other value being missing.
-
-**The window is asked for at the boundary rather than at the top of the pass**, because the
-reference under it is reloadable configuration exactly as the rates are. `Prices.facts` is that one
-lookup, and `pricer` reads it too: what a turn is priced by and how big its window is are the same
-record read for two fields, which is `facts_of`'s own argument said one layer in.
-
-**Safe to default on, and only here.** Every other harness defaults its compaction on as a bet that
-the summary is good enough, because what the summary replaces is gone. A handoff replaces nothing:
-it is an append, the whole conversation stays in the transcript, it still counts toward what the
-session cost, it still comes across on a fork, and forking above the boundary carries the entire
-backlog into a session whose context holds all of it. The worst a wrong default costs is one turn
-nobody asked for.
-
-**The pair is asked in three places and rendered once**, which is `tending_fields`: the rail's card
-changes a running session's, and the start page and the fork page decide a new one's before it
-exists. What a card posts and what a picker posts then cannot come apart, because they are the same
-two names from the same call. `form="choosing"` is the only difference, and it is what associates
-the picker's copy with a form it is not nested inside, exactly as every other question there does
-it.
-
-**In the picker it is the last question**, by that page's widest-first order taken to its end: the
-workspace decides what a session can touch, the network what it can do with that, the endpoint and
-model who answers, the thinking level how hard, and this how long the conversation gets before the
-console writes it down. It is also the only one of the six measured against the model above it. Not
-a `choosing` group, for `starting_at`'s reason, since a number of tokens has no closed set of
-answers to draw, so it takes the heading that group would have had, because `auto at reserve` alone
-says nothing about what is being automated.
-
-**A fork settles it afresh rather than inheriting it**, and the fork page starts the control on the
-parent's so that wanting the same thing needs nothing touched. A reserve is a decision about how
-much room one conversation's context has left, and a branch's context is not that conversation's, so
-carrying the number across by *default* would be carrying an answer to a question the branch has not
-been asked.
-
-**Starting on the defaults writes no column at all.** The picker posts this pair on every session,
-so recording it unconditionally would make every column explicit, leave a moved constant reaching
-nothing, and make the defaulting branch a path only a database written before this existed can take,
-which is a path nothing exercises. Somebody who sets exactly the defaults is indistinguishable from
-somebody who left them, and that is the correct reading of both.
-
-**The switch takes effect on the press and the number does not**, which is the difference between a
-control you set and one you type into. A checkbox says the whole of what it means the moment it
-moves, so waiting for `Set` leaves a console that looks switched off and is not; a number is
-half-written for as long as somebody is writing it, so a `change` on that box would post whatever
-was in it when they tabbed away. The form's `hx-trigger` is `submit, change from:.tending__switch`
-for exactly that, and `submit` stays beside it because `Set` is what the number is sent with and
-what the form does with no script at all. Either way the whole form posts, so a number typed and
-then a switch flicked saves both rather than losing the typing.
-
-**Which leaves `Set` to say there is something to press.** `data-dirty` is the mark, set by
-comparing the box against its own `defaultValue`, which is exactly the `value` the server rendered,
-so nothing is kept anywhere and a swap needs no repaint: the box that comes back is a new element
-carrying the new default and no mark. Undoing a change unmarks it, because it is a comparison rather
-than a flag the first keystroke sets. `--mark` is the gold every control here draws its focus ring
-in, and the border alone rather than a fill, since a filled button reads as pressed.
-
-**No spinner on the box, because no increment is right**: a step of 1 is a hundred presses to move a
-reserve anywhere worth moving it, and any larger one is a number this console would have to invent.
-The type stays `number` for the keypad it asks for on a phone and the `min` it validates against,
-and the arrows go, since they sit inside the box and take the room a fourth digit needs. Four digits
-is the width, which is a bound rather than a guess: the reserve is in thousands and a context window
-past 1000K is not a thing to size a box for today.
-
-**The card answers itself rather than the transcript.** Nothing about the conversation changed, so
-swapping the transcript would replace the whole region in order to show what is already in the rail.
-What comes back is the box holding the value as it was recorded, which is worth doing rather than
-leaving the browser's own state alone precisely because the box is denominated in thousands.
-
-**The box is in thousands and the record is in tokens.** A reserve is only ever chosen in round
-thousands and six digits is a number to count the zeroes of, so the control holds `40` with a `K`
-beside it while the value behind it stays in the unit every other figure on the page is in.
-`THOUSAND` is the multiplier, named once, so the boundary and the card cannot disagree about which
-way it goes.
-
-**An unchecked checkbox posts no field**, so an absent `hands_off` on a *form* means off where an
-absent `hands_off` in the *column* means the default. Those answer two different questions, what
-this form said against what anybody has ever said, and nothing has to reconcile them, because the
-boundary resolves a form to a whole `Tending` and `tend` writes both columns in one statement.
-
-**An empty reserve box is the default and an unusable one is refused**, which is `posted_ref`'s
-split exactly. A reserve below `LEAST_ROOM` is refused at the boundary rather than stored and left
-to `reserving`, which would answer that the console cannot say where the session stands with nothing
-saying the number was why. A *stored* one is never clamped, for the same reason: correcting a number
-somebody typed into the shape this console prefers is how a setting stops meaning what it says.
-
-**A session nobody can answer may still be tended**, unlike `/handoff`, which such a session
-refuses. One nobody can answer is exactly one somebody might want the console to stop spending on,
-and that is the only useful thing left to do with it.
-
-**The card sits under the shelf, and the theme sits below it at the foot.** The shelf is the
-boundary in that column: everything above it reads the conversation, and this is the first thing
-that changes how the conversation is run. What `margin-top: auto` pins to the bottom is the theme,
-because it is the one card there that is not about this conversation at all, being the reader's
-across every session, so it is what somebody scanning the rail for something about *this* session
-can skip.
-
-`tending.py` is a module of its own for `thinking.py`'s reason, which is a cycle: the columns live
-on the session index and the decision is made inside a pass, so `sessions.py` and `conversation.py`
-both read it, and `sessions.py` already reads `conversation.py` for the key scheme. `HANDS_OFF_FIELD`
-and `RESERVE_FIELD` live there too, by `roots.py`'s rule: `pages.py` renders the controls and
-`console.py` parses them, and the module that owns the vocabulary is the one both can read without
-closing a ring.
+**A note a plugin delivers is delivered and not appended, and that costs a pass boundary.** An entry
+appended mid-pass is invisible to the pass that appended it, since `receive` reads the snapshot
+loaded at the top, which is what makes a drain replayable, and an append queues nothing. A note
+written that way leaves the session `Blocked` on a message already sitting in its own inbox with
+nothing that will ever wake it. `app.delivering` therefore takes the whole `Durable` rather than the
+checkpointer a pass holds.
 
 ## Steer
 

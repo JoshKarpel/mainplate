@@ -25,13 +25,21 @@ alias l := list
 
 # Two Chromiums, and for now that is what it costs: the suite drives Playwright's Python binding and
 # `shots` still drives its Node one, which pin their own browser builds separately.
-[doc('Prepare a fresh clone: dependencies, browsers, and pre-commit as a git hook')]
-setup:
+#
+# Split from `setup` because a mainplate session runs this half and cannot run the other: git's
+# hooks live in the clone's *common* directory, shared by every worktree of it and bound read-only
+# in a session, so `pre-commit install` there is both refused and wrong. `.mainplate/setup` is what
+# runs this in a session, and the split is what keeps the two callers on one definition.
+[doc('Fetch the dependencies and the browsers, which is the half of setup a session can run')]
+dependencies:
     uv sync
-    uv run pre-commit install
     uv run playwright install chromium
     npm install
     npx playwright install chromium
+
+[doc('Prepare a fresh clone: dependencies, browsers, and pre-commit as a git hook')]
+setup: dependencies
+    uv run pre-commit install
 
 # The stylesheet is a deliverable, and no string assertion checks one. These render every page from
 # fixture checkpoints and drive a real Chromium over them, so a styling change can be *looked at*.

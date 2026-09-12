@@ -65,6 +65,10 @@ from mainplate.forge import Repository
 from mainplate.pages import fork_page
 from mainplate.pages import session_page
 from mainplate.pages import start_page
+from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.protocol import Described
 from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
@@ -72,11 +76,14 @@ from mainplate.reference import facts_of
 from mainplate.reference import resending
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
+from mainplate.service import Attention
+from mainplate.service import Claimed
 from mainplate.service import Conversation
+from mainplate.service import Delayed
+from mainplate.service import Idle
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.snapshots import branch_named
-from mainplate.tools import ASKING
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 
@@ -291,6 +298,21 @@ own. A region that asks for itself has to get its own trigger right; a region wi
 nothing to get wrong.
 
 Run `just test` before saying anything is done.
+"""
+
+ASKING = (
+    "Hand this conversation off. Summarise where the work has got to, what was decided and why, and "
+    "what to do next, and pass that to `hand_off`. Check the working tree rather than trusting your "
+    "recollection of it."
+)
+"""
+What the bundled handoff plugin's ask says, copied here rather than imported.
+
+**One fact in two places, and the second place is a fixture.** A bundled plugin is an executable this
+console speaks to over a pipe, so there is nothing to import: the gallery would have to spawn a
+process to ask, which is the one thing it exists not to do. What it costs is that a reworded ask
+leaves this stale, and what that shows is a screenshot of words nobody will read again - which is a
+drift with no consequence, unlike the pair `tree_key` and `Stepping.key` make.
 """
 
 HANDED_OVER = (
@@ -574,6 +596,57 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
     }
 
 
+# What a session's first pass read out of files, which is what the settings step draws a switch for.
+# Three tiers with something in two of them, because what that step is *for* is provenance: a reader
+# deciding what to load is deciding whose program to run, and a shot of one tier would not show it.
+DECLARED: tuple[Installed, ...] = (
+    Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/opt/mainplate/plugins/handoff")),
+    Installed(tier=Tier.BUNDLED, name="guidance", path=Path("/opt/mainplate/plugins/guidance")),
+    Installed(tier=Tier.USER, name="notify", path=Path("/home/you/.config/mainplate/plugins/notify")),
+    Installed(tier=Tier.REPOSITORY, name="lint", path=Path("/srv/mainplate/worktrees/f3c1/.mainplate/lint")),
+)
+
+# And what the press then ran, as one plugin with a card of both kinds of control. Written out rather
+# than asked of the bundled handoff, because a gallery answers every question with a fixture and
+# asking would mean spawning a process: the point of this file is that a page is a pure function of
+# already-answered questions.
+ENROLLED: tuple[Enrolled, ...] = (
+    Enrolled(
+        installed=Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/opt/mainplate/plugins/handoff")),
+        described=Described.model_validate(
+            {
+                "events": ["tool", "after_turn", "compose"],
+                "answers": [
+                    {
+                        "leader": "handoff",
+                        "saying": (
+                            "Have it write down where it has got to and carry on from that, dwelling on "
+                            "anything you typed"
+                        ),
+                        "demands": False,
+                    }
+                ],
+                "card": {
+                    "heading": "handoff",
+                    "rows": [
+                        {"switch": {"name": "hands_off", "label": "auto at reserve", "default": True}},
+                        {
+                            "number": {
+                                "name": "reserve",
+                                "label": "reserve",
+                                "unit": "K",
+                                "default": 40,
+                                "least": 8,
+                            }
+                        },
+                    ],
+                },
+            }
+        ),
+    ),
+)
+
+
 def showing(
     session: Session,
     written: dict[str, object],
@@ -582,7 +655,11 @@ def showing(
     working: bool = True,
     started: bool = True,
     refused: records.Refused | None = None,
+    failed: records.Failed | None = None,
+    attention: Attention | None = None,
     since: timedelta | None = SINCE,
+    plugins: tuple[Enrolled, ...] | None = ENROLLED,
+    declared: tuple[Installed, ...] | None = DECLARED,
 ) -> Conversation:
     """
     One session as a page sees it.
@@ -596,6 +673,19 @@ def showing(
     of a checkpoint: `Service.read` measures it against a clock, and a gallery has none. Given rather
     than computed for that reason, and given a value under the retention by default so the cache note
     is drawn in the state a reader is usually in.
+
+    `declared` is what the session's first pass read out of files, and `plugins` is what the press on
+    the settings step then ran. The pair is the trust boundary and so is the pair of states worth
+    drawing: `plugins` of `None` is a session still on that step, and `declared` of `None` as well is
+    one whose worktree is still being planted. Both default to something, because that is what every
+    ordinary page shows - the rail draws a card per running plugin, and a gallery of pages with an
+    empty rail would be a gallery of a console nobody has.
+
+    `failed` and `attention` are the other thing a page cannot read out of a checkpoint, and the
+    second is the only argument here that is not a fact at all: what the worker is doing is true at the
+    instant it is read, and a gallery has no worker any more than it has a clock. `Claimed` by default
+    where a turn is outstanding, because that is what an ordinary page is showing - a reply being
+    written - and it is what makes the failure pages the *only* ones drawing the line.
     """
     chosen = CATALOGUE.default if working else replace(CATALOGUE.default, repository=None)
     said = transcript(snapshotted(written) if working and started else written)
@@ -605,7 +695,11 @@ def showing(
         said=said,
         chosen=chosen,
         answerable=answerable,
+        plugins=plugins,
+        declared=declared,
         refused=refused,
+        failed=failed,
+        attention=attention if attention is not None else Claimed(),
         repository=REPOSITORY if working else None,
         worktree=WORKSPACE / session.id if working else None,
         # Which follows the repository, because a command runs in a session's worktree: it is what
@@ -670,16 +764,57 @@ def pages() -> dict[str, str]:
     # been sent and not yet heard reads as one.
     answering[inbox_key(6)] = recorded_steer("and while you are there, check the phone width")
 
-    # A handoff, which is two panels of a kind nobody typed: the console's own ask, and the document
-    # that came back and starts the model's history again. Turn 1's opener is replaced rather than a
-    # turn being added, so the ask sits under a turn that actually worked - which is what a handoff
-    # turn looks like, and what a screenshot has to show is that the two panels read as the console's
-    # rather than as somebody's. The document is left unread, since a message waiting for its turn is
-    # both the honest state a moment after a handoff and the one that draws the boundary on the page.
+    # A handoff, which is two panels of a kind nobody in the conversation typed: the bundled plugin's
+    # own ask, and the document that came back and starts the model's history again. Turn 1's opener
+    # is replaced rather than a turn being added, so the ask sits under a turn that actually worked -
+    # which is what a handoff turn looks like, and what a screenshot has to show is that the two
+    # panels read as a plugin's rather than as somebody's. The document is left unread, since a
+    # message waiting for its turn is both the honest state a moment after a handoff and the one that
+    # draws the boundary on the page.
+    #
+    # **Two tones, which is the whole of what a note may vary.** The ask is `quiet` and the document
+    # is `strong`, because one is a console asking and the other is what the next stretch of context
+    # opens on; both are on the person's side of the palette, so what differs is weight rather than
+    # hue. A screenshot is where you find out whether that reads as two weights or as two colours.
     handed = dict(settled)
-    handed[inbox_key(1)] = records.Handoff(said=ASKING).recorded()
-    handed[inbox_key(7)] = records.Handoff(said=HANDED_OVER, forget=True).recorded()
+    handed[inbox_key(1)] = records.Note(
+        said=ASKING,
+        plugin="bundled:handoff",
+        label="handoff",
+        title="This session was asked to write down where it has got to.",
+        tone="quiet",
+    ).recorded()
+    handed[inbox_key(7)] = records.Note(
+        said=HANDED_OVER,
+        plugin="bundled:handoff",
+        forget=True,
+        label="handoff",
+        title="This is where the conversation's context starts again.",
+        tone="strong",
+    ).recorded()
 
+    # A pass that fell over and the worker waiting out the lease before trying again, which is the one
+    # state that used to be drawn as three dots and is the reason this line exists. The turn is the one
+    # in `answering`, so the page shows a half-finished turn with the sentence where its spinner was:
+    # what a screenshot has to prove is that a reader can tell this from a reply being written, which
+    # is exactly what no still of the old page could show.
+    fell_over = showing(
+        PARENT,
+        answering,
+        failed=records.Failed(
+            why=(
+                "PluginFailed(\"bundled:guidance exited 1: ValueError: '/srv/AGENTS.md' is not in the "
+                "subpath of '/srv/mainplate/worktrees/f3c1'\")"
+            ),
+            at=len(answering),
+        ),
+        attention=Delayed(until=timedelta(minutes=8, seconds=24)),
+    )
+    # And the other half of the same failure: nothing holds the session and nothing is scheduled to,
+    # which is a session that has been dropped rather than one waiting. Drawn with no reason recorded,
+    # because that is the shape it comes in - there is no pass to have written one - and it is the arm
+    # whose whole content is that nothing is coming.
+    dropped = showing(PARENT, answering, attention=Idle())
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
     # The other way to be stopped, which points somewhere different because nothing can be put back:
     # what the provider turned down is the recorded history itself, so the sentence names the fork.
@@ -699,12 +834,32 @@ def pages() -> dict[str, str]:
     queued = showing(
         LISTED[1], {inbox_key(0): recorded_prompt("Why does the poll stop after one answer?")}, started=False
     )
+    # The step between creating a session and typing into it, which is where a person says which
+    # programs this console may run. Four states, drawn differently, and the difference is the whole
+    # of what a reader can do about each: a first pass still planting has nothing to switch, one that
+    # has read the declarations has a switch per plugin under a heading per tier, one whose press has
+    # been answered is a pass out installing whatever those plugins need, and one whose setup stopped
+    # says which plugin would not answer, above the switch that turns it off.
+    planting = showing(LISTED[1], {}, started=False, plugins=None, declared=None)
+    choosing_plugins = showing(LISTED[1], {}, started=False, plugins=None)
+    installing = replace(choosing_plugins, settling_up=True)
+    failed_setup = replace(
+        choosing_plugins,
+        settling_up=True,
+        refused_setup=records.Refused(
+            why="repository:lint exited 127: .mainplate/lint: line 3: shellcheck: command not found"
+        ),
+    )
 
     return {
         "start.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, REFERENCE),
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
         "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
+        "setting-up.html": session_page(LINKS, LISTED, planting, REACHABLE),
+        "settings.html": session_page(LINKS, LISTED, choosing_plugins, REACHABLE),
+        "settings-installing.html": session_page(LINKS, LISTED, installing, REACHABLE),
+        "settings-refused.html": session_page(LINKS, LISTED, failed_setup, REACHABLE),
         "opening.html": session_page(LINKS, LISTED, queued, REACHABLE),
         "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
         "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),
@@ -712,6 +867,8 @@ def pages() -> dict[str, str]:
         "handed-off.html": session_page(LINKS, LISTED, showing(PARENT, handed), REACHABLE),
         "stalled.html": session_page(LINKS, LISTED, stalled, REACHABLE),
         "refused.html": session_page(LINKS, LISTED, turned_down, REACHABLE),
+        "failed.html": session_page(LINKS, LISTED, fell_over, REACHABLE),
+        "dropped.html": session_page(LINKS, LISTED, dropped, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one.

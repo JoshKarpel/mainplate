@@ -164,6 +164,16 @@ Five things there are decided rather than incidental:
   on a repository is both the case with no clone and the case where saying where to start matters
   most. It promises not to raise, `forge.offers`-style, so an unreachable host costs a suggestion
   rather than an ability.
+
+    Asking the remote is a round trip, so the fields *arrive* rather than appear, and on a cold
+    clone that is seconds of a block that has not changed yet: a card pressed and nothing under it,
+    which reads as a card that did nothing. So the block draws the same three dots a turn with no
+    answer yet draws, as the card's `hx-indicator`. They stand **inside the block being replaced**,
+    which is what makes them right rather than a problem: they are shown for exactly as long as the
+    thing they stand in for has not arrived, and the swap that ends the request removes them. They
+    are hidden by `display` and not by the `opacity` htmx's own indicator rules toggle, which is the
+    one place here reaching for `htmx-request` directly - an element hidden by `opacity` still holds
+    its row, and a permanent gap above the two fields is a poor price for dots shown for a second.
 - **The field is a search over them, and is the only control in the picker that is not cards.**
   Every other question here is a `choosing` group because every other question has a closed set of
   answers; a starting point does not, since a tag, a hash or `main~3` is still typed. So the
@@ -203,9 +213,13 @@ anybody who wants it.
 `snapshots.py` captures a tree through a *shadow index*, so nothing a reader can see moves: not
 their staged changes, not `HEAD`, not a branch, not `git log`. Four things there are easy to undo:
 
-- **The index path is asked for, never assumed to be `.git`.** In a linked worktree `.git` is a file
-  holding a pointer, and almost every workspace here is a linked one, so `staging` resolves it with
-  `rev-parse --absolute-git-dir`.
+- **Git is told which directory is its own, never left to find one.** In a linked worktree `.git` is
+  a file holding a pointer, and almost every workspace here is a linked one, so the git directory is
+  neither `.git` nor anything derived by reading it: `Worktrees.gitdir` computes
+  `<clone>/worktrees/<session>`, `Worktree.git` passes it as `--git-dir` with `--work-tree`, and
+  `staging` writes the shadow index there. The worktree is the one directory a session may write, so
+  discovering anything out of it is reading a value that session controls, and git configuration
+  names programs git runs. [What runs, and as whom](security.md) is why.
 - **A fresh index per operation, not one per workspace.** Two concurrent captures over one path
   write over each other, and the loser's `write-tree` then describes a tree that never existed, in
   practice the *empty* tree.

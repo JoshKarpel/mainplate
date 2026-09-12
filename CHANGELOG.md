@@ -9,6 +9,90 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Plugins**: somebody adds to this console without editing it. A plugin is a single executable,
+  spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
+  written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
+  reaches nothing it was not handed. It may contribute a tool, instructions, a card of settings, an
+  answer in the composer, and a message put into the conversation; it may be shipped with the
+  console, installed by the operator in `config.yaml`, or carried by the repository a session works
+  in. Handoff and the guidance below are both plugins, which is what makes the pair a test of the
+  protocol rather than two examples of it - and what makes either replaceable.
+- A repository's own plugins, declared in `.mainplate/mainplate.yaml` and run behind the same mount
+  namespace `bash` uses, reaching the worktree they were handed and nothing else. Trusted by default,
+  per session, settled before the first message: choosing to work in a repository is already choosing
+  to run its build, its tests and its hooks, so the control is the *refusal* - a session reading a
+  stranger's pull request says so in the picker and none of that repository's code runs unattended.
+- A step between creating a session and typing into it, which is where somebody says which programs
+  this console may run. Creating a session records the choices and asks for a pass; that pass plants
+  the worktree and reads what each tier *declares* out of files, running nothing; the step then lists
+  every declared plugin with its path, grouped by where it came from, with a switch apiece and one on
+  each group's heading. `Load plugins` records the switches and asks for another pass, and *that*
+  pass runs `setup` on exactly the ones left on, all at once, before the conversation opens. So a
+  plugin somebody switched off is not merely contributing nothing, it was never launched, and a
+  session nobody confirms has executed nothing at all. One that will not set up puts you back on the
+  step with the reason above the switches, rather than stalling the conversation. Which plugins a
+  session runs is then settled for its life, because a tool definition leaving the cached prefix
+  invalidates everything under it exactly as one arriving late does, and forking is how it changes: a
+  branch carries its parent's turns and none of its plugins, so it lands on this same step with the
+  parent's switches as its defaults and declares, sets up and confirms afresh. That is what makes
+  editing a repository's `.mainplate/` and forking the way to iterate on a plugin, and it is why the
+  press is asked for again rather than inherited - a branch is planted at a tree the model wrote, so
+  what licenses running it is the decision to fork plus the confirmation in the branch. The real
+  cost: creating a session no longer carries the first message, so you create, wait, confirm, and
+  come back to type, and a fork stops at that screen before it answers anything - the step standing
+  in the transcript's place, so a branch will not show what its parent said until it is set up. The
+  step is watched over the same connection the conversation is, and becomes the conversation the
+  moment the session has loaded, without a reload by hand.
+- **A plugin sets itself up**, in one event that both gets it ready and asks what it contributes. It
+  is the one event with a network and the one with a directory of its own that survives the session,
+  which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an
+  interpreter and its dependencies there, and a plugin that wants a toolchain in the worktree fetches
+  it there. That directory is one plugin's alone in one session, named on every payload as `scratch`
+  and in the environment as `$MAINPLATE_PLUGIN_SCRATCH`, and it is `$HOME` inside the namespace at
+  every event - never the session's own scratch, which the model writes, because a plugin must not
+  execute out of a path the model can rewrite. Every event after it runs with the network shut, because what makes a connected run safe
+  is that it happens before the first message - over the commit the repository supplied, with nothing
+  the model wrote in the tree yet. It runs in a pass rather than in the press, so a repository whose
+  plugin builds a toolchain shows a page that says it is working instead of a button that hangs; a
+  setup that will not finish is recorded against that attempt, so turning the plugin off and pressing
+  again is a fresh one.
+- **A repository gets itself ready with a plugin of its own.** Every command in a session now runs
+  with the session's own scratch as its `$HOME`, and a repository's plugin has two things at `setup`
+  that it has at no other event: that scratch bound read-write, so what it installs is where those
+  commands look for it, and `$MAINPLATE_ENV`, a file whose `KEY=value` lines are then set for those
+  commands and for nothing else. So `uv sync` in a three-line script that prints nothing is what it
+  takes for a session to be able to run `just test`, nothing in the console knows what a Python is,
+  and a `PATH` written there is the `PATH`. It is an ordinary repository-tier plugin in every other
+  respect, with a switch on the settings step, so a session reading a repository rather than working
+  in it can leave it off and open exactly as it would over a repository carrying no such plugin. This
+  repository carries one, which installs mise, the tools `mise.toml` pins, and `just dependencies` -
+  the half of `just setup` a session can run, split out because the other half installs a git hook
+  into a clone bound read-only.
+- **A plugin may stand in front of a turn ending.** A plugin that asks for `before_turn_end` is told each
+  time the model has answered and would stop, and an `inject` from it keeps the turn going: what it
+  said is put to the model in the console's voice and the model is asked again inside the same turn,
+  until it tries to stop and nothing sends it back. That is what a Claude Code `Stop` hook is, and it
+  is the event a check the model has to satisfy wants, where a delivery after the turn would open a
+  new one to say the same thing late. The payload carries `attempt`, how many times the turn has already
+  been sent back, so a plugin can bound itself; what was said is recorded per attempt and drawn
+  above the answer it shaped. The cost: every time the model is sent back is a model request, on the
+  largest context the turn has had, and the console sets no bound of its own.
+- **This repository carries a `pre-commit` plugin too**, in `.mainplate/`, so a mainplate session
+  working on mainplate runs the project's own hooks over what it has changed whenever the model
+  tries to stop, and sends it back with what is still failing. Ported from a Claude Code `Stop` hook,
+  keeping its shape, and different from it in the three ways a console is different from a terminal:
+  it stages nothing, because the clone is read-only and `--files` needs no index; it installs itself
+  at setup, because the namespace has nothing of the machine in it; and it lets the model stop after
+  a set number of attempts in one turn, because every time it sends the model back is a model
+  request somebody pays for.
+- **A plugin may refuse a tool call.** A plugin that asks for `before_tool` is told every call the
+  model makes, of any toolset, before it runs, and may answer `refuse` with a reason; the call then
+  does not run and the model is handed the reason in its place, naming the plugin, so that what a
+  refusal is for - `edit` rather than `sed -i`, this repository's own tool rather than a `bash` that
+  cannot reach it - is an answer the model can act on rather than a call that silently went nowhere.
+  A refusal is the call's return and not a retry, because nothing about the call was malformed, and
+  it is recorded in the call's own step, so a resumed pass replays it without asking the plugin
+  again. The cost: a process per tool call, per plugin that asked.
 - Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
   `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
   guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.
@@ -83,8 +167,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   documents. `/handoff` in the composer asks for one, and it is the one answer in that menu whose box
   may be empty: what it does with the text is point the handoff at something, appended to the standing
   ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
-  the console writes are drawn as their own `handoff` kind, because every other message in a
-  conversation was typed by somebody.
+  it writes are drawn as their own `note` kind, because every other message in a conversation was
+  typed by somebody. It ships as a **plugin** rather than as part of the console, which is what makes
+  every word of it replaceable: install your own beside it and turn ours off with one switch.
 - **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
   writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
   handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
@@ -93,9 +178,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default, which is safe only here: a handoff is an append, so the whole conversation stays in the
   transcript and a fork above the boundary recovers it, where every other harness's compaction
   defaults on as a bet that its summary is good enough because the original is gone. The switch and
-  the reserve are per session and changeable while it runs, in the rail's own card; where the reserve
-  falls is marked on every rule's gauge, so watching the line grow toward the mark is watching the
-  handoff approach.
+  the reserve are per session and changeable while it runs, on the plugin's own card in the rail.
 - A line above the message box saying whether the provider still holds this conversation's prefix, and
   what re-sending it costs with none of it cached. Meaningless before there was a cache and worth a row
   now that there is one: a conversation picked up after lunch pays full input price for everything said
@@ -119,6 +202,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A session whose pass fell over says so.** A pass that raises is left unanswered by the worker and
+  redelivered once per lease for as long as it keeps raising, which is the right answer to a fault
+  somebody can fix - but the whole account of it was a line in the log, so the page drew the same
+  three dots it draws for a reply being written and the two were indistinguishable for as long as the
+  fault lasted. The reason is now recorded, keyed by how far the session had got so a retry claims the
+  same key rather than adding one per lease, and the end of the transcript says which of the two is
+  happening: a pass is answering it, it is queued, the last one failed and here is what it said and
+  when the next is due, or nothing is scheduled at all. The failure is still re-raised, so the
+  redelivery that resumes the session once the fault is fixed is untouched. What made this visible was
+  a bundled plugin raising on every request for two days with nothing anywhere on screen.
+- The bundled `guidance` plugin no longer walks past the repository root looking for nested
+  `AGENTS.md` files. A worktree planted under the clone it came from has the console's own guidance
+  one directory up, which was never given to the session and has no name relative to its root, so the
+  plugin exited non-zero on every request after the model read anything nested - and a plugin that
+  fails is a turn that never makes its next request.
 - **Prompt caching is on.** It is opt-in on the Anthropic wire and was never asked for, so every
   request paid full input price for the whole conversation - and since a conversation is re-sent
   whole on every turn, on a long turn that is most of the bill. Nothing about the request looked any
@@ -365,7 +463,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   object at all. Forking checks the new session's worktree out at the tree the forked turn
   originally saw, so a branch re-asks its question against the files that question was asked about.
   Snapshots are gitignore-aware, so what a branch checks out is the source as that turn saw it and
-  never a `.venv`, a build directory, or an untracked file holding a secret.
+  never a `.venv`, a build directory, or an untracked file holding a secret. Everything this console
+  runs git for outside the sandbox, snapshots and `list` both, is told which git directory is its own
+  rather than finding one by looking down from the worktree, so the configuration git reads comes out
+  of the clone the sandbox binds read-only: settings that name a program git then runs are numerous
+  and the list is open-ended, and a session's worktree is the one directory that session may write.
+  A session cannot plant one either: the `.git` pointer at the root of its worktree is bound
+  read-only over the tree, so a command cannot write, remove, move or unmount it, and the file tools
+  refuse it by name because they write from the parent and pass through no sandbox at all.
 - Two isolation settings on a session, picked when it is created and fixed for its life like the
   endpoint and the model, with forking the way to change them. **What files it has** is a repository
   it works in, no files at all, or this whole machine. **Network** is on or off, and off rather than

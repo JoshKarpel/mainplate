@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum
@@ -150,6 +151,30 @@ class InAWorktree:
     worktree: Worktree
     scratch: Path
 
+    scratch_named: RootName = "scratch"
+    """
+    What the scratch is called inside, which is the one thing a plugin's namespace does differently.
+
+    A plugin gets this same shape around a directory of its **own** rather than the session's, so
+    calling it `scratch` in there would give one word two meanings: the place a model writes, and the
+    place this console keeps a plugin's installation out of the model's reach. See
+    `Spawned.scratch_for`.
+    """
+
+    session_scratch: Path | None = None
+    """
+    The session's own scratch, bound beside a plugin's own where a plugin is being set up.
+
+    Nothing for a session's commands, whose `scratch` above already *is* this directory, and nothing
+    for a plugin at any event but `setup`. What it is for is a plugin getting the repository ready:
+    what it installs is for the session's commands, so it has to land in the directory they get as
+    their `$HOME`.
+
+    **Bound is not `$HOME`.** `home` stays the plugin's own scratch at every event, so a plugin
+    *fills* this directory and never *runs out of* it, which is the whole of why the grant is safe.
+    See `Spawned.invocation`.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class OverEverything:
@@ -170,8 +195,8 @@ at all, so there is no confinement to describe rather than an empty one to carry
 async def confined_by(confinement: Confinement) -> Sandbox:
     """The sandbox one confinement means, asked of git where that is what decides the paths."""
     match confinement:
-        case InAWorktree(worktree=worktree, scratch=scratch):
-            return await Sandbox.around(worktree, scratch)
+        case InAWorktree(worktree=worktree, scratch=scratch, scratch_named=named, session_scratch=session):
+            return await Sandbox.around(worktree, scratch, named, session)
         case OverEverything():
             return Sandbox.everywhere()
         case _ as unreachable:
@@ -185,6 +210,25 @@ def starting_at(confinement: Confinement) -> Path:
             return worktree.root
         case OverEverything():
             return Path("/")
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def home_in(confinement: Confinement) -> Path | None:
+    """
+    What `$HOME` is for a session's own commands, which is its scratch where it has one.
+
+    The scratch rather than the tmpfs, because that is where a toolchain the session's `setup` script
+    installed keeps what it fetched, and a `$HOME` anywhere else is a shell that cannot find its own
+    tools. What a shell leaves in a home directory is therefore scratch by intent rather than by
+    accident, which is the cost of a session that can be set up at all. Nothing for a session over
+    the whole machine, which has no scratch and gets the tmpfs.
+    """
+    match confinement:
+        case InAWorktree(scratch=scratch):
+            return scratch
+        case OverEverything():
+            return None
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -224,13 +268,34 @@ class Sandbox:
     places: tuple[Bind, ...]
 
     @classmethod
-    async def around(cls, worktree: Worktree, scratch: Path) -> Sandbox:
+    async def around(
+        cls,
+        worktree: Worktree,
+        scratch: Path,
+        scratch_named: RootName = "scratch",
+        session_scratch: Path | None = None,
+    ) -> Sandbox:
         """
         A worktree, its clone read-only, and a scratch directory: what a `WORKTREE` session reaches.
 
-        `--git-common-dir` and not `--absolute-git-dir`: the per-worktree directory sits *inside* the
-        bare clone and its `commondir` points back out at it for objects and refs, so binding the
-        common one covers both and binding the other covers neither.
+        `session_scratch` adds a second writable directory under the name a command finds the
+        session's own under, which is what a plugin getting the repository ready is given at `setup`.
+        Absent everywhere else, including for the session's own commands, whose `scratch` is already
+        that directory: naming one path twice would put two binds of it in one namespace.
+
+        The clone and not the per-worktree directory: the latter sits *inside* the former and its
+        `commondir` points back out at it for objects and refs, so binding the common one covers both
+        and binding the other covers neither. Taken from `Worktree.common` where the tree's directory
+        was named, which is every session's, and asked of git only for a tree that named none - so
+        the ordinary path runs no subprocess and reads nothing out of the tree to decide what to bind.
+
+        **The pointer goes back over the worktree read-only, and the order is what makes that work.**
+        `.git` in a linked worktree is a one-line file naming the git directory, and it sits in the
+        one place a session may write, so without this a command replaces it with a repository of its
+        own and every later git in that directory reads *that* repository's configuration - which
+        names programs git runs. Bound over itself after the tree, the file cannot be written,
+        removed, moved, or unmounted from in here, and reading it and everything around it still
+        works. See [what runs, and as whom](../../docs/design/security.md).
 
         All three are **absolute as a precondition**, which is the same one `Clones` and `Worktrees`
         take: `Settings.workspace_root` resolves once where a configured path enters the process, so
@@ -238,12 +303,16 @@ class Sandbox:
         path would be resolved against whatever directory bwrap happened to start in, which is not a
         thing to guess at per call.
         """
-        common = await worktree.demand("rev-parse", "--path-format=absolute", "--git-common-dir")
+        common = worktree.common or Path(
+            await worktree.demand("rev-parse", "--path-format=absolute", "--git-common-dir")
+        )
         return cls(
             places=(
                 Bind(path=worktree.root, writable=True, name="worktree"),
-                Bind(path=Path(common), writable=False),
-                Bind(path=scratch, writable=True, name="scratch"),
+                Bind(path=worktree.pointer, writable=False),
+                Bind(path=common, writable=False),
+                Bind(path=scratch, writable=True, name=scratch_named),
+                *(() if session_scratch is None else (Bind(path=session_scratch, writable=True, name="scratch"),)),
             )
         )
 
@@ -259,9 +328,29 @@ class Sandbox:
         """
         return cls(places=(Bind(path=Path("/"), writable=True),))
 
-    def argv(self, at: str, venue: Venue = Venue.CONFINED) -> tuple[str, ...]:
+    def argv(
+        self,
+        at: str,
+        venue: Venue = Venue.CONFINED,
+        home: str | None = None,
+        environment: Mapping[str, str] | None = None,
+    ) -> tuple[str, ...]:
         """
         The `bwrap` prefix a command runs behind, as the arguments before the command itself.
+
+        `home` is what `$HOME` is inside, and the default is the tmpfs, which is what a session over
+        the whole machine gets. A session in a worktree passes its scratch, and a confined plugin
+        passes whichever directory is its to keep things in: every tool that fetches keeps what it
+        fetched under `$HOME`, so on a tmpfs a `setup` that resolved an interpreter and a package
+        tree would find neither at the next call, with the network shut and no way to fetch them
+        again. See `home_in` and `Spawned`.
+
+        `environment` is what a session's plugins asked to have set here, and it goes **last**, so a
+        plugin's `PATH` is the `PATH` rather than a fragment of one. It is what makes a toolchain a
+        `setup` script installed reachable without this console knowing what a shim is. Nothing hands
+        it to a plugin's own namespace, and that is the constraint rather than an omission: a
+        repository's script setting `PATH` for every plugin would redirect what the repository's
+        other plugins execute at every turn boundary.
 
         A `WORKTREE` sandbox binds the worktree read-write, its clone **read-only**, and the scratch
         read-write. The read-only clone is the load-bearing part: it leaves every read working -
@@ -298,6 +387,9 @@ class Sandbox:
             places.extend(("--bind" if bind.writable else "--ro-bind", str(bind.path), str(bind.path)))
             if bind.name is not None:
                 named.extend(("--setenv", environment_named(bind.name), str(bind.path)))
+        asked: list[str] = []
+        for name, value in (environment or {}).items():
+            asked.extend(("--setenv", name, value))
         return (
             *binds,
             "--proc",
@@ -324,11 +416,12 @@ class Sandbox:
             WHERE_COMMANDS_ARE,
             "--setenv",
             "HOME",
-            SOMEWHERE_TO_WRITE,
+            home if home is not None else SOMEWHERE_TO_WRITE,
             "--setenv",
             "TERM",
             "dumb",
             *named,
+            *asked,
             "--chdir",
             at,
         )

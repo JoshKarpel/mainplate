@@ -53,7 +53,7 @@ type StepKind = Literal[
     "choice",
     "instructions",
     "prompt",
-    "handoff",
+    "note",
     "steer",
     "command",
     "result",
@@ -62,8 +62,17 @@ type StepKind = Literal[
     "heard",
     "model",
     "refused",
+    "failed",
     "tool",
     "messages",
+    "plugins",
+    "plugin",
+    "declared",
+    "named",
+    "confirmed",
+    "injected",
+    "end",
+    "environment",
 ]
 """
 What a record says it is, and what a turn's keys are named by.
@@ -150,34 +159,71 @@ class Prompt(Record):
     """
 
 
-class Handoff(Record):
+class Note(Record):
     """
-    A message the console wrote itself: the ask that opens a handoff turn, and what came back from it.
+    A message a plugin asked for: the one thing in a conversation that nobody in it typed.
 
-    **An arm of its own rather than a flag on `Prompt`, because nobody typed it.** A reader has to be
-    able to tell at a glance that a message in their own conversation is not theirs, and the tag is
-    what the panel's kind is read off - the same argument that made `Steer` its own record rather
-    than a `Prompt` with a boolean, one axis along. It behaves exactly as a `Prompt` does otherwise:
-    it must open a turn of its own, a draining pass stops at it, and it may carry a boundary.
+    **An arm of its own rather than a flag on `Prompt`, because nobody typed it.** A reader has to
+    be able to tell at a glance that a message in their own conversation is neither theirs nor the
+    model's, and the tag is what the panel's kind is read off - the same argument that made `Steer`
+    its own record rather than a `Prompt` with a boolean, one axis along. It behaves exactly as a
+    `Prompt` does otherwise: it must open a turn of its own, a draining pass stops at it, and it may
+    carry a boundary.
 
-    Both uses are `handoff` because both are the handoff. The ask carries no boundary and opens the
-    turn that writes the document; the document carries one, because starting the model's history
-    again on a summary of what came before it is the whole of what a handoff is for.
+    **One arm for every plugin, the bundled ones included.** Letting a plugin name which record arm
+    to write would hand out the one vocabulary this console has to own, and special-casing a bundled
+    plugin so it kept an arm of its own would break the uniformity the whole design is for: the
+    built-in would be running on a path no third-party plugin could reach.
+
+    It replaced a `Handoff` arm, and the cost is stated: a tag no arm answers to is a hard failure,
+    so a checkpoint holding one no longer loads and sessions recorded before this do not survive it.
 
     **Recorded rather than composed at render time**, which is the fork's bargain and not the
-    catalogue's: what a handoff says is settled the moment the turn that wrote it ends, and nothing
-    will ever rewrite it. What the model was told and what the page shows are then one string.
+    catalogue's: what a note says is settled the moment it is delivered, and nothing will ever
+    rewrite it. What the model was told and what the page shows are then one string.
     """
 
-    kind: Literal["handoff"] = "handoff"
+    kind: Literal["note"] = "note"
     said: str
+
+    plugin: str
+    """
+    Which plugin asked for this, by qualified name, so a turn can be told who opened it.
+
+    Required rather than defaulted, because there is no such thing as a note nobody asked for: the
+    console composes none of these itself any more. It is read twice - by the page, which draws the
+    plugin's own name on the panel's role where the plugin named none, and by `after_turn`, where a
+    plugin has to be able to tell that a turn opened on its own delivery so it does not fire again.
+    """
 
     forget: bool = False
     """
-    Whether this message starts the model's history again, which the document does and the ask does not.
+    Whether this message starts the model's history again.
 
     Read by the same `forgets` predicate a `Prompt` is, since where a boundary may sit is a fact
     about turns rather than about who wrote the message that carries one.
+    """
+
+    label: str | None = None
+    """
+    The word on the panel's role, or nothing at all to take the plugin's own name.
+
+    A pre-commit failure and a handoff document are different things to meet halfway down a
+    transcript, so a plugin that cannot say anything about how its note looks would have every note
+    in the console drawn identically.
+    """
+
+    title: str | None = None
+    """The hover text saying what a reader is looking at, or nothing, as most kinds have none."""
+
+    tone: str | None = None
+    """
+    Which of the console's inks this panel takes, named rather than passed as a colour.
+
+    Held as a bare string rather than as the closed set, and read through `protocol.toned`: an
+    unknown tone draws the plain one rather than refusing, which is the opposite of what an unknown
+    `kind` does and deliberately so. A kind nothing answers to is a checkpoint this console cannot
+    read; a tone nothing answers to is a panel in the wrong ink.
     """
 
 
@@ -329,6 +375,36 @@ class Refused(Record):
     status: int | None = None
 
 
+class Failed(Record):
+    """
+    Why the last pass at this session raised, where one did, and how far it had got.
+
+    **`Refused`'s opposite, which is why it is a second record and not a second reading of that
+    one.** A refusal is settled: the provider will not take the request and no pass ever will, so it
+    is recorded once, the pass reports `Stalled`, and nothing wakes the session again. This is a pass
+    that fell over, on a plugin that exited non-zero, a tool that raised, a store that was briefly
+    unreachable, or a bug - and every one of those is something that can be *fixed*, after which the
+    redelivery the worker was already going to make resumes the session from where it stopped. So the
+    reason is written down and the failure is still re-raised, which is what keeps the retry.
+
+    **`at` is how many records the session held when the pass fell over**, counting every key but
+    these, and it is what makes one of these sound in a write-once store. A pass that fails at the
+    same point writes the same key and the store keeps what is there, so a session failing for ever
+    accumulates one record rather than one per lease. A pass that gets further and then fails has a
+    different count and so writes a new one. And it is what the page asks to tell a current failure
+    from a spent one: this is why the session is stopped exactly while `at` is still what the session
+    holds, because anything recorded since is a pass that got past it.
+
+    Named for what happened rather than for what it is about, because there is nothing it is about:
+    the failure is of the pass, and where the pass was is `at`.
+    """
+
+    kind: Literal["failed"] = "failed"
+
+    why: str
+    at: int = 0
+
+
 class Returned(Record):
     """
     What one tool call came back with, and how long it took.
@@ -365,9 +441,156 @@ class Messages(Record):
     messages: list[object]
 
 
-type Delivered = Annotated[Prompt | Handoff | Steer | Command, Field(discriminator="kind")]
+class Named(Record):
+    """
+    One plugin as a declaring file named it: where it came from, what it is called, and what to run.
+
+    **Everything here is read out of a file, and nothing here was run.** That is the whole difference
+    from `Enrolled` below, which is this plus what the plugin said when it was asked. A session
+    records these before its settings step and the other after it, because running a plugin is
+    executing a program and the step is where somebody says which ones to execute.
+    """
+
+    kind: Literal["named"] = "named"
+    name: str
+    tier: str
+    path: str
+
+
+class Declared(Record):
+    """
+    Which plugins a session *could* run, settled on its first pass and drawn on its settings step.
+
+    Two of these per session, under two keys, for the reason there are two registrations: the tiers
+    are read from different places and the repository's half can fail on its own, so a repository
+    that will not be read leaves the operator's declaration recorded rather than taking it down too.
+    A fork carries neither and reads both again.
+
+    Both are written even where there is nothing declared, which is what makes an empty declaration
+    mean *this session has looked* rather than *nobody has looked yet* - the same claim the
+    registration's own emptiness makes, one moment earlier.
+    """
+
+    kind: Literal["declared"] = "declared"
+    plugins: tuple[Named, ...] = ()
+
+
+class Enrolled(Record):
+    """
+    One plugin as a session recorded it: where it came from, what to run, and everything it declared.
+
+    **`described` is opaque here for the reason `Response.response` is.** What validates it is
+    `plugins.protocol.Described`, and this module imports nothing; `parse_described` is the other
+    half. Held whole rather than field by field, so a contribution added to that vocabulary is a
+    field there and no migration here.
+
+    `path` is recorded beside the name because a later pass has to run the same script without
+    reading any declaring file again: a repository's declaration is read once, on the session's first
+    pass, and every pass after replays this.
+    """
+
+    kind: Literal["plugin"] = "plugin"
+    name: str
+    tier: str
+    path: str
+    described: object
+
+
+class Registered(Record):
+    """
+    Which plugins a session ran and what they contributed, settled when its settings step was answered.
+
+    **Recorded rather than re-read**, which is `turn:0:tree:0`'s own shape: a fact about one session
+    that could only be learned by doing the work, written once and replayed after. Tool definitions
+    sit above the system prompt in the cached prefix, so a set that changed under a conversation
+    would invalidate the whole prefix beneath it and leave the turns already recorded having been
+    answered by a harness that session no longer has.
+
+    Two of these per session, under two keys, and that is the tiers rather than untidiness: they run
+    behind different isolation, so the set is split where it is already being split to be launched.
+    Both halves answer before either is written, so a tier that failed leaves neither recorded and the
+    whole step is retried; what the two keys buy is a resumed pass re-launching only the half it never
+    got to. A fork carries neither and sets both up again.
+    """
+
+    kind: Literal["plugins"] = "plugins"
+    plugins: tuple[Enrolled, ...] = ()
+
+
+class Confirmed(Record):
+    """
+    That somebody answered this session's settings step, which is what lets a pass run a plugin.
+
+    **The trust boundary written down.** Everything before it is files being read; this is the record
+    that a person looked at what was declared and pressed the button, and the pass that follows sets
+    up exactly what the switches left on.
+
+    **It holds nothing, and that is the decision rather than an omission.** Which plugins are on is
+    the `enabled` column's answer, and a copy here could never be corrected: what somebody does about
+    a plugin that will not set up is turn it off and press again, and a write-once list would have
+    the second press run exactly what the first one ran.
+    """
+
+    kind: Literal["confirmed"] = "confirmed"
+
+
+class Injected(Record):
+    """
+    What a plugin asked to be appended to one model request, recorded so a replay says it again.
+
+    A step, because a plugin cannot be trusted to be pure: `guiding` was safe unrecorded by being a
+    pure function of the history it was handed, and a script is not that. What is recorded is what
+    was injected, so a resumed pass replays the injection rather than recomputing it.
+
+    One record per request holding every plugin's contribution in order, rather than one per plugin:
+    what the request carried is one list, and a second key per plugin would be a numbering that has
+    to stay in step with which plugins answered.
+    """
+
+    kind: Literal["injected"] = "injected"
+    said: tuple[str, ...] = ()
+
+
+class End(Record):
+    """
+    One end of a turn: what the session's plugins said when it tried to end, recorded so a replay
+    says it again.
+
+    A turn that was sent back has several ends and only the last is real, so there is one of these
+    per attempt, `turn:{n}:end:{j}`, written whether or not anything was said: an empty `said` is the
+    record of the plugins letting the turn go, and a resumed pass reads that rather than asking
+    scripts that may answer differently the second time. It is `Injected`'s shape for `Injected`'s
+    reason - what was put to the model is one list in enrolment order - under its own kind, because
+    the word a key is built from is the word the record under it carries.
+
+    `at` is how many model responses the turn had made when it was asked, which is where the page
+    draws what was said: above the response it shaped, exactly as a steer is, and at the end while
+    that response is still out.
+    """
+
+    kind: Literal["end"] = "end"
+    said: tuple[str, ...] = ()
+    at: int = 0
+
+
+class Environment(Record):
+    """
+    What a session's repository plugins asked to have set for its own commands, merged across them.
+
+    Recorded on the pass that set them up, beside the registrations, and fixed for the session's life
+    like them: what a session's commands run under is part of its terms, and a fork sets up again and
+    records its own. Empty where nothing asked for anything, whether because no plugin sets the
+    repository up, every switch was off, or the session has no worktree, which are three ways of
+    saying the same thing to a command.
+    """
+
+    kind: Literal["environment"] = "environment"
+    values: dict[str, str] = {}
+
+
+type Delivered = Annotated[Prompt | Note | Steer | Command, Field(discriminator="kind")]
 """
-What one inbox entry holds: a message that must open a turn, one the console wrote itself, one that
+What one inbox entry holds: a message that must open a turn, one a plugin asked for, one that
 may join the running one, or something the person ran.
 
 The one place a *key* says nothing about what is under it, which is what the store minting the key
@@ -379,7 +602,7 @@ the queue answers a different question for each.
 DELIVERED: TypeAdapter[Delivered] = TypeAdapter(Delivered)
 
 
-def opens(what: Delivered) -> TypeIs[Prompt | Handoff]:
+def opens(what: Delivered) -> TypeIs[Prompt | Note]:
     """
     Whether a pass draining its inbox must stop at this entry rather than carrying past it.
 
@@ -389,10 +612,10 @@ def opens(what: Delivered) -> TypeIs[Prompt | Handoff]:
 
     The question every reader of the queue asks, written once here rather than as an `isinstance`
     chain repeated at each of them. A `Steer` may be folded into the turn already being answered and
-    a `Command` reaches no model at all, so both are carried past; a `Prompt` and a `Handoff` are
+    a `Command` reaches no model at all, so both are carried past; a `Prompt` and a `Note` are
     messages that must be answered on their own, whoever wrote them.
     """
-    return isinstance(what, Prompt | Handoff)
+    return isinstance(what, Prompt | Note)
 
 
 def forgets(what: Delivered) -> bool:
@@ -406,7 +629,22 @@ def forgets(what: Delivered) -> bool:
 
 
 type Step = Annotated[
-    Prompt | Handoff | Steer | Command | Result | Tree | Response | Refused | Messages | Returned | Instructions,
+    Prompt
+    | Note
+    | Steer
+    | Command
+    | Result
+    | Tree
+    | Response
+    | Refused
+    | Messages
+    | Returned
+    | Instructions
+    | Declared
+    | Registered
+    | Confirmed
+    | Injected
+    | End,
     Field(discriminator="kind"),
 ]
 """

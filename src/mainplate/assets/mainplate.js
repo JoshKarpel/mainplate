@@ -46,6 +46,10 @@
   // missed a paragraph cannot fold the reply it missed.
   const FRAMES = ".tool__body, .ran__body, .block--document";
 
+  // The line at the end of a transcript saying why nothing is happening, which two things here reach
+  // for: the countdown it carries, and the copy button its reason gets. The server's own `ATTENTION_ID`.
+  const ATTENTION = "attention";
+
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
   // must not leave the page in a scheme it has no rules for.
   const asTheme = (held) => (THEMES.includes(held) ? held : "system");
@@ -436,6 +440,14 @@
       if (!form) return;
       if (leading) form.dataset.leading = leading;
       else delete form.dataset.leading;
+      // And the pair the mode leaves standing, marked here rather than matched by a stylesheet rule
+      // that names every answer. CSS cannot ask whether a descendant's attribute matches an
+      // ancestor's, so the rule that did this was a written-out list of leaders - which a *plugin's*
+      // answer can never be added to, since which leaders exist is a fact about one session. Marking
+      // them is the same one-attribute move `data-leading` already is, one level down.
+      for (const each of form.querySelectorAll("[data-leader]")) {
+        each.toggleAttribute("data-showing", leading !== null && each.dataset.leader === leading);
+      }
     };
 
     // Into a mode, where the server offered one by that name. The answer is `false` otherwise, so a
@@ -663,6 +675,13 @@
         // and a button pinned in a scroller travels with the content and off its own corner.
         panel.querySelectorAll("pre").forEach((code, at) => seated(code, `${panel.id}:${at}`));
       });
+      // The reason a pass failed, which is the one thing on this page somebody is going to paste
+      // into an issue, a search, or a message to whoever wrote the plugin. Seated on its own rather
+      // than by the walk above, because it is not in a panel: it is the line the transcript ends on
+      // when nothing is answering the session. Named rather than numbered, since there is only ever
+      // one, and `wireCopy` needs nothing taught - the button sits inside a `pre` like every other.
+      const reason = box.querySelector(`#${ATTENTION} .attention__reason`);
+      if (reason) seated(reason, ATTENTION);
     };
 
     // Taken off again before a swap, for the reason the search marks are: these are elements the
@@ -823,6 +842,35 @@
       state.textContent = since >= retention ? "cold" : `warm as of ${ago(since)}`;
     };
 
+    // How long until, in the words the attention line uses. `ago`'s shape with seconds kept, because
+    // what this counts down is a lease rather than a lunch break: a wait of forty seconds reading
+    // `just now` would say the opposite of what it means.
+    const soon = (seconds) => {
+      if (seconds <= 0) return "any moment";
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 1) return `${Math.ceil(seconds)}s`;
+      const spare = Math.floor(seconds % 60);
+      return spare ? `${minutes}m ${spare}s` : `${minutes}m`;
+    };
+
+    // How long until the worker looks at this session again, counted here rather than on the server.
+    // The stream sends this region when the worker's standing *changes*, and counting down is exactly
+    // the interval where it does not, so a server-rendered figure would sit at its first value for the
+    // whole wait - which on a ten minute lease is the difference between a page that is waiting and a
+    // page that is stuck, said wrongly.
+    //
+    // `paintCache`'s bargain, field for field: `data-due` is what the server measured, the rest is
+    // measured from the moment this element was first seen, and the stamp lives on the element so a
+    // swap brings a fresh one. Absent on every arm but the held-back delivery, which is the only one
+    // with a figure to keep.
+    const paintDue = () => {
+      const line = document.getElementById(ATTENTION);
+      const due = line?.querySelector(".attention__due");
+      if (!line || !due || line.dataset.due === undefined) return;
+      if (line.seenAt === undefined) line.seenAt = Date.now();
+      due.textContent = soon(Number(line.dataset.due) - (Date.now() - line.seenAt) / 1000);
+    };
+
     // `announce` is false exactly once, on the first render: every panel is new to this file then,
     // and a conversation that flashed itself top to bottom on being opened would be pointing at
     // everything, which is pointing at nothing.
@@ -838,6 +886,7 @@
       paintCopies();
       paintCopied();
       paintCache();
+      paintDue();
       research(false);
       if (following) toEnd();
     };
@@ -1565,19 +1614,58 @@
     // the incoming markup into the DOM already on screen, and elements this file put there are not
     // in that markup, so leaving them would make the merge reconcile nodes the server has never
     // heard of.
-    // The reserve is the one control here that is typed rather than set, so it does not take effect
-    // on a keystroke and the button beside it has to say there is something to press. `defaultValue`
-    // is exactly the `value` attribute the server rendered, so this compares what is in the box
-    // against what was recorded rather than against anything kept here - which is why a swap needs no
-    // repaint: the box that comes back is a new element carrying the new default and no mark.
+    // A number on a plugin's card is typed rather than set, so it does not take effect on a keystroke
+    // and the button beside it has to say there is something to press. `defaultValue` is exactly the
+    // `value` attribute the server rendered, so this compares what is in the box against what was
+    // recorded rather than against anything kept here - which is why a swap needs no repaint: the box
+    // that comes back is a new element carrying the new default and no mark.
     //
     // Delegated, because that swap replaces the form: a listener wired to the box at load would be
     // pointing at a box that no longer exists after the first press.
-    const wireReserve = () => {
+    const wireNumbers = () => {
       document.addEventListener("input", (event) => {
         const box = event.target;
-        if (!(box instanceof HTMLInputElement) || !box.closest(".tending__reserve")) return;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".plugin__number")) return;
         box.form?.toggleAttribute("data-dirty", box.value !== box.defaultValue);
+      });
+    };
+
+    const SWITCHES = ".plugin__switch input[type=checkbox]";
+
+    // A tier's own switch sets every switch under it and posts nothing of its own: what a session
+    // records is a switch per plugin, so turning a tier off is turning each of its plugins off. A
+    // second answer of its own would be a second place the same question is answered.
+    //
+    // Without this file every plugin's own switch still works, which is the standing bargain every
+    // scripted control here takes: this is the convenience, and the switches are the mechanism.
+    const wireTiers = () => {
+      document.addEventListener("change", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".tier__switch")) return;
+        const group = box.closest(".tier");
+        if (!group) return;
+        // The checkbox and not every input under the label: each switch is drawn with a hidden field
+        // of the same name ahead of it, so that a plugin turned off posts something rather than
+        // nothing. Counted, that field is a second switch that is never on, and a heading could then
+        // never say a full group was full.
+        for (const each of group.querySelectorAll(SWITCHES)) {
+          if (each instanceof HTMLInputElement) each.checked = box.checked;
+        }
+        box.indeterminate = false;
+      });
+      // And back the other way, so a heading says what is actually under it rather than what was
+      // last pressed on it: three states, because "some of them" is a real answer and drawing it as
+      // either of the other two would be a control lying about the thing it controls.
+      document.addEventListener("change", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".plugin__switch")) return;
+        const group = box.closest(".tier");
+        const heading = group?.querySelector(".tier__switch input");
+        if (!(heading instanceof HTMLInputElement)) return;
+        const under = [...group.querySelectorAll(SWITCHES)];
+        const on = under.filter((each) => each instanceof HTMLInputElement && each.checked).length;
+        heading.checked = on === under.length;
+        heading.indeterminate = on > 0 && on < under.length;
       });
     };
 
@@ -1588,6 +1676,13 @@
       setInterval(paintCache, 15_000);
     };
 
+    const wireDue = () => {
+      // Every second, and not the cache note's fifteen, because this one counts *seconds* under a
+      // minute: a figure that says `40s` and holds still for fifteen of them is a countdown a reader
+      // stops believing. It is one `textContent` on one element that is usually absent.
+      setInterval(paintDue, 1_000);
+    };
+
     const wireSwaps = () => {
       document.addEventListener("htmx:before:swap", (event) => {
         if (event.target !== transcript()) return;
@@ -1595,6 +1690,17 @@
         stripCopies();
       });
       document.addEventListener("htmx:after:swap", () => repaint());
+    };
+
+    const wireShapes = () => {
+      // The one thing the stream says that is not a region: the page was drawn as the settings step
+      // and the session has since loaded, so there is nothing on this page for the conversation to
+      // land in. htmx hands a named event to the element holding the connection rather than to a
+      // target, and what a reader needs is the page again. The word is the server's `LOADED`.
+      document.addEventListener("loaded", (event) => {
+        if (!(event.target instanceof Element) || event.target.id !== "stream") return;
+        location.reload();
+      });
     };
 
     wireKey();
@@ -1611,12 +1717,15 @@
     wireClasp();
     wireFolding();
     wireFilter();
-    wireReserve();
+    wireNumbers();
+    wireTiers();
     wireCache();
+    wireDue();
     wireSend();
     wireCopy();
     wireFresh();
     wireSwaps();
+    wireShapes();
     wireHash();
 
     toCurrentSession();

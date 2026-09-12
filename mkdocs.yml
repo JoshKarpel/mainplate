@@ -83,12 +83,17 @@ nav:
       - Forking: design/forking.md
       - The composer: design/composer.md
       - The workspace: design/workspace.md
-      - What a session is told: design/guidance.md
       - How a model reaches a file: design/tools.md
       - Where a command runs: design/sandbox.md
+      - What runs, and as whom: design/security.md
       - Durability: design/durability.md
+      - Plugins: design/plugins.md
       - The console: design/console.md
       - The stylesheet and the grid: design/assets.md
       - Running it as a service: design/deployment.md
+  - Bundled plugins:
+      - plugins/index.md
+      - Handoff: plugins/handoff.md
+      - What a session is told: plugins/guidance.md
   - Maintaining: maintaining.md
   - Changelog: changelog.md

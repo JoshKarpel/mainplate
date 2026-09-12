@@ -26,6 +26,7 @@ from without_web import Route
 from without_web import body
 from without_web import get
 from without_web import once
+from without_web import optional
 from without_web import path_param
 from without_web import post
 from without_web import query_param
@@ -36,34 +37,40 @@ from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import THINKING_FIELD
+from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
 from mainplate.conversation import parse_disposition
+from mainplate.pages import PLUGIN_LEADER
+from mainplate.pages import SETTLING
+from mainplate.pages import SHAPE_FIELD
 from mainplate.pages import WORKSPACE_FIELD
 from mainplate.pages import Links
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
-from mainplate.pages import handoff_card
 from mainplate.pages import missing_record
 from mainplate.pages import model_cards
+from mainplate.pages import plugin_card
 from mainplate.pages import record_json
 from mainplate.pages import refusal_page
 from mainplate.pages import session_page
+from mainplate.pages import settling
 from mainplate.pages import stalled_by
 from mainplate.pages import start_page
 from mainplate.pages import starting_at
 from mainplate.pages import transcript_region
+from mainplate.plugins.protocol import settings_of
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
+from mainplate.sessions import read_tending
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
 from mainplate.streaming import watching
-from mainplate.tending import HANDS_OFF_FIELD
-from mainplate.tending import LEAST_ROOM
-from mainplate.tending import RESERVE_FIELD
-from mainplate.tending import THOUSAND
-from mainplate.tending import Tending
+from mainplate.tending import AGAIN
+from mainplate.tending import ENABLED_FIELD
+from mainplate.tending import PLUGIN_FIELD
+from mainplate.tending import SETTLE_FIELD
 from mainplate.thinking import DEFAULT_THINKING
 from mainplate.thinking import UnknownThinking
 from mainplate.thinking import thinking_named
@@ -89,6 +96,19 @@ of_workspace = query_param(WORKSPACE_FIELD, once(str), schema={"type": "string"}
 # segment would say the connection is a thing *of* that session. It is what lets a second region
 # join the same connection later without the path becoming a lie.
 watched = query_param("session", once(str), schema={"type": "string"})
+
+
+def parse_shape(value: str) -> bool:
+    """Whether a page said it is on the settings step, refusing any other word for a shape."""
+    if value != SETTLING:
+        raise ValueError(f"a page's shape is {SETTLING!r} or unstated, not {value!r}")
+    return True
+
+
+# Which shape the watching page was drawn in, which only the settings step states: a page showing
+# the conversation says nothing, so absent is that shape. Parsed at the boundary into the boolean
+# the stream reads, rather than carried as the word.
+shaped = query_param(SHAPE_FIELD, optional(parse_shape), schema={"type": "string", "enum": [SETTLING]})
 # Which turn a fork would start at, which is the first turn the branch does not inherit.
 at_turn = query_param("at", once(int), schema={"type": "integer"})
 # The two halves of a panel's identity, in the path because that is what they are: a panel is named
@@ -137,55 +157,115 @@ def parse_form_prompt(raw: bytes) -> str:
 prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
 
 
-def posted_tending(fields: Mapping[str, list[str]]) -> Tending:
+def posted_switches(fields: Mapping[str, list[str]]) -> dict[str, bool]:
     """
-    What a form asked this console to do for a session unasked, from wherever it was asked.
-
-    Three forms carry this pair now - the one that starts a session, the one that forks one, and the
-    rail's own card - so it is read here once rather than at each of them, exactly as `posted_workspace`
-    and `posted_thinking` are.
+    Which plugins the settings step said this session runs, as a switch per qualified name.
 
     **An absent switch is off**, because an unchecked checkbox posts no field, and there is no third
     reading available to a form: this is what somebody just said, where the column's own absence is
-    what nobody has ever said. See `HANDS_OFF_FIELD`.
+    what nobody has ever said. So the form carries a hidden name per plugin beside each box, which
+    is what makes the difference between "off" and "not on this form" representable at all.
 
-    **The box is in thousands and the record is in tokens**, so this is where the multiplication
-    happens and the card is where the division does. See `THOUSAND` for why the control is
-    denominated differently from the value behind it.
-
-    **An empty reserve is the default and an unusable one is refused**, which is `posted_ref`'s split
-    exactly: a cleared box is somebody taking what the console ships, where `4o` in it is somebody who
-    meant something, and quietly saving a number they did not type is how a setting stops meaning what
-    it says. A reserve below the room a handoff needs at all is refused here rather than left to
-    `standing` - it would be stored, read back, and answer that the console cannot say where the
-    session stands, with nothing saying the number was the reason.
+    The names are read off the form rather than checked against a list, because what a session
+    enrolled is the service's answer and a name that is not one of them is a write nothing will read.
     """
-    written = fields.get(RESERVE_FIELD, [""])[0].strip()
-    if not written:
-        return Tending(hands_off=HANDS_OFF_FIELD in fields)
-    try:
-        reserve = int(written) * THOUSAND
-    except ValueError:
-        raise NotAMessage(f"{written!r} is not a number of thousands of tokens") from None
-    if reserve < LEAST_ROOM:
-        raise NotAMessage(
-            f"a reserve of {reserve // THOUSAND}K leaves less room than a handoff needs, "
-            f"which is {LEAST_ROOM // THOUSAND}K"
-        )
-    return Tending(hands_off=HANDS_OFF_FIELD in fields, reserve=reserve)
+    return {
+        name.removeprefix(f"{ENABLED_FIELD}:"): values[-1] == "on"
+        for name, values in fields.items()
+        if name.startswith(f"{ENABLED_FIELD}:")
+    }
 
 
-def parse_form_tending(raw: bytes) -> Tending:
+@dataclass(frozen=True, slots=True)
+class SettingUp:
     """
-    The rail card's own post, which is the one here that carries no message at all.
+    What the settings step posted: which plugins to run, and which of its two buttons was pressed.
 
-    A route of its own for that reason: what it changes is the session rather than the conversation
-    in it, where the same pair on the start and fork forms is part of deciding what a session *is*.
+    The button is a field rather than the shape of the post, because the two answers are not
+    distinguishable by shape: a step with every switch off posts the same emptiness as a step with
+    nothing to switch, and reading that as "try again" would silently discard the one answer somebody
+    took the trouble to give.
     """
-    return posted_tending(fields_in(raw))
+
+    switches: Mapping[str, bool]
+    again: bool
 
 
-tending = body(parse_form_tending, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
+def parse_form_setup(raw: bytes) -> SettingUp:
+    """The settings step's own post, which carries a switch per plugin and the button that was pressed."""
+    fields = fields_in(raw)
+    return SettingUp(switches=posted_switches(fields), again=fields.get(SETTLE_FIELD, [""])[0] == AGAIN)
+
+
+setting_up = body(parse_form_setup, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
+
+
+@dataclass(frozen=True, slots=True)
+class Pressed:
+    """
+    One plugin's card as the form holding it posted, which is every control on it at once.
+
+    Which plugin is a value rather than a place in the resource tree, because a card *is* a form and
+    what it posts names what it is about. That is what keeps one route serving every plugin, so a
+    page can hold the address without knowing what a session enrolled.
+
+    **The whole card, not the one control that moved**, because a form has no way to say which did:
+    the box submits every control it holds whether the trigger was `Set` or a switch changing. What
+    the service does with that is compare each against what is stored and tell the plugin about the
+    ones that actually moved, which is both the honest reading and the one an `action` event means.
+
+    `posted` holds only what the browser sent, so a switch that is off is simply absent - and that is
+    resolvable rather than ambiguous, because the card declares every control it has and the service
+    holds the card.
+    """
+
+    plugin: str
+    posted: Mapping[str, str]
+
+
+def parse_form_press(raw: bytes) -> Pressed:
+    """
+    What a plugin's card posted, as the plugin it belongs to and the controls it carried.
+
+    Every control on a card is named `plugin:<qualified>:<control>`, so the plugin is read off the
+    first field and the rest are held to naming the same one: a post carrying two plugins' controls
+    is not a card this console drew.
+
+    **Cut from the right and never from the left**, which is the one thing here that is easy to get
+    wrong: a qualified name is `<tier>:<key>` and already holds a colon, so splitting at the first
+    one names the *tier* and every press would look like a plugin called `bundled`. The control name
+    is the last segment and the plugin is everything before it.
+    """
+    fields = fields_in(raw)
+    named = {name: values[0] for name, values in fields.items() if name.startswith(f"{PLUGIN_FIELD}:")}
+    if not named:
+        raise NotAMessage("a card posts at least one of its own controls")
+    plugin, _, _ = next(iter(named)).removeprefix(f"{PLUGIN_FIELD}:").rpartition(":")
+    if not plugin:
+        raise NotAMessage("a posted control does not name a plugin")
+    posted: dict[str, str] = {}
+    for name, value in named.items():
+        held, _, control = name.removeprefix(f"{PLUGIN_FIELD}:").rpartition(":")
+        if held != plugin or not control:
+            raise NotAMessage(f"{name!r} is not a control of {plugin!r}")
+        posted[control] = value
+    return Pressed(plugin=plugin, posted=posted)
+
+
+pressing = body(parse_form_press, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
+
+
+@dataclass(frozen=True, slots=True)
+class ToPlugin:
+    """
+    One of this session's plugins, named by the leader it answers to.
+
+    Its own arm rather than a member of `Disposition`, because a disposition is a closed set this
+    console owns and a leader is a word a session's own plugins claim: there is no list here to add
+    one to, and which leaders exist is a fact about a session rather than about this module.
+    """
+
+    leader: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,7 +273,7 @@ class Sending:
     """What the composer posted: a message, and where it is going."""
 
     said: str
-    where: Disposition
+    where: Disposition | ToPlugin
 
 
 def parse_form_send(raw: bytes) -> Sending:
@@ -214,11 +294,21 @@ def parse_form_send(raw: bytes) -> Sending:
     """
     fields = fields_in(raw)
     named = fields.get(DISPOSITION_FIELD, [""])[0].strip()
-    where = Disposition.HERE if not named else parse_disposition(named)
+    where: Disposition | ToPlugin | None
+    if named.startswith(PLUGIN_LEADER):
+        # A plugin's own answer, named by the leader it claims. Whether this session has one is not a
+        # question this layer can put: what leaders exist is a fact about what that session
+        # registered, so the handler asks the service and refuses there.
+        where = ToPlugin(leader=named.removeprefix(PLUGIN_LEADER))
+    else:
+        where = Disposition.HERE if not named else parse_disposition(named)
     if where is None:
         raise NotAMessage(f"{named!r} is not somewhere a message can be sent")
     said = said_in(fields)
-    if not said and where is not Disposition.HANDOFF:
+    # **Every console answer demands a message and a plugin's own may not**, which is what `demands`
+    # on a declared answer says. This layer cannot tell which, for the reason above, so an empty box
+    # is allowed through to the handler and the plugin is what does or does not mind.
+    if not said and not isinstance(where, ToPlugin):
         raise NotAMessage("a message cannot be empty")
     return Sending(said=said, where=where)
 
@@ -247,21 +337,16 @@ def parse_form_start(raw: bytes) -> Started:
     leading `-` from ever reaching one.
     """
     fields = fields_in(raw)
-    said = said_in(fields)
-    if not said:
-        raise NotAMessage("a message cannot be empty")
     endpoint = fields.get("endpoint", [""])[0].strip()
     model = fields.get("model", [""])[0].strip()
     if not endpoint or not model:
-        raise NotAMessage("a message needs an endpoint and a model to be answered on")
+        raise NotAMessage("a session needs an endpoint and a model to be answered on")
     return Started(
-        said=said,
         # Optional, and an empty box is the same as no field at all: `parse_qs` drops empty values,
-        # so both arrive here as nothing and both mean "name it after what I said". The length is
-        # bounded by the message bound above, and cut to a name by `Service.start`, which is where
-        # the one rule about what a session name is already lives.
+        # so both arrive here as nothing and both mean "name it after the first thing said". The
+        # length is bounded by the form bound above, and cut to a name by `Service.start`, which is
+        # where the one rule about what a session name is already lives.
         title=fields.get(TITLE_FIELD, [""])[0].strip() or None,
-        tending=posted_tending(fields),
         chosen=Choice(
             endpoint=endpoint,
             model=model,
@@ -269,9 +354,23 @@ def parse_form_start(raw: bytes) -> Started:
             base=posted_ref(fields, BASE_FIELD, parse_commitish, "a commit, branch or tag"),
             branch=posted_ref(fields, BRANCH_FIELD, parse_branch, "a branch name"),
             isolation=posted_isolation(fields),
+            trusted=posted_trust(fields),
             thinking=posted_thinking(fields),
         ),
     )
+
+
+def posted_trust(fields: Mapping[str, list[str]]) -> bool:
+    """
+    Whether this session runs code the repository carries, which is what the picker's third card asks.
+
+    **Absent is trusted**, which is the default said as a parse and the opposite of how the network
+    radio reads: refusing is the thing somebody has to have actually said, since a form predating the
+    control names a session that would have run a repository's plugins. A session with no repository
+    is settled to trusted by `Choice.settled` whatever arrives here, because there is nothing for it
+    to be about.
+    """
+    return fields.get(TRUSTED_FIELD, ["on"])[0].strip() == "on"
 
 
 def posted_ref(
@@ -354,9 +453,7 @@ def posted_thinking(fields: Mapping[str, list[str]]) -> ThinkingLevel | None:
 class Started:
     """A new session as the form describes it, before anything has decided it is possible."""
 
-    said: str
     chosen: Choice
-    tending: Tending
 
     title: str | None = None
     """What to call it, or nothing at all to name it after its first message as every session was."""
@@ -372,7 +469,6 @@ class Forking:
     at: int
     chosen: Choice
     said: str | None
-    tending: Tending
 
 
 def parse_form_fork(raw: bytes) -> Forking:
@@ -409,7 +505,6 @@ def parse_form_fork(raw: bytes) -> Forking:
             thinking=posted_thinking(fields),
         ),
         said=said_in(fields) or None,
-        tending=posted_tending(fields),
     )
 
 
@@ -472,6 +567,20 @@ def navigating(where: str) -> Response:
     return Response(status=200, headers=((b"hx-redirect", where.encode()),))
 
 
+async def redrawn(service: Service, session: str) -> Response:
+    """
+    The transcript as it now stands, which is what every arm that changed one answers with.
+
+    A message, a command and a plugin's delivery all end the same way, because the page is a function
+    of the checkpoint and the only thing they did was move it: there is nothing for an arm to say
+    about its own write that reading again does not already show.
+    """
+    asked = await service.read(session)
+    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return page_response(200, fragment(transcript_region(LINKS, asked)))
+
+
 @get("/", summary="Start a session")
 async def start_here(service: Service) -> Response:
     return page_response(
@@ -486,10 +595,15 @@ async def start_here(service: Service) -> Response:
     )
 
 
-@post("/sessions", starting, summary="Say the first thing, which is what creates a session")
+@post("/sessions", starting, summary="Create a session on a chosen endpoint and model")
 async def start(service: Service, started: Started) -> Response:
     """
-    Mint a session on the chosen endpoint and hand it its first message.
+    Mint a session on the chosen endpoint, and go to it so it can be set up.
+
+    **Nothing is said in it here**, which is the change the plugin protocol forced: a repository's
+    plugin cannot be *named* until its worktree is planted, the worker plants it, and a session's
+    settings step is drawn from what those files declared. So this records the choice and asks for a
+    pass, and the message box is on the session's own page once there is a session to type into.
 
     An ordinary form post rather than an htmx one, because this is the request that changes which
     session the browser is looking at, and htmx never sees a redirect: the browser follows it
@@ -512,7 +626,7 @@ async def start(service: Service, started: Started) -> Response:
     # session, and this console answered nothing else until repositories existed.
     if started.chosen.repository is not None and not service.reaches(started.chosen.repository):
         return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {started.chosen.repository}"))
-    session = await service.start(started.said, started.chosen, started.title, started.tending)
+    session = await service.start(started.chosen, started.title)
     return seeing(LINKS.to_session(session.id))
 
 
@@ -565,7 +679,7 @@ async def fork(service: Service, session: str, branch: Forking) -> Response:
     # is already in; a posted repository for a session that has one is ignored rather than refused.
     if branch.chosen.repository is not None and not service.reaches(branch.chosen.repository):
         return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {branch.chosen.repository}"))
-    forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said, tended=branch.tending)
+    forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said)
     if forked is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return seeing(LINKS.to_session(forked.id))
@@ -634,8 +748,8 @@ async def show_session(service: Service, session: str) -> Response:
     return page_response(200, session_page(LINKS, await service.listed(), found, service.reachable))
 
 
-@get("/fragments/stream", watched, summary="What a page is watching, sent as it changes")
-async def stream(service: Service, session: str) -> Reply:
+@get("/fragments/stream", watched, shaped, summary="What a page is watching, sent as it changes")
+async def stream(service: Service, session: str, on_step: bool | None) -> Reply:
     """
     The live connection a page holds open, carrying whatever it is watching as that changes.
 
@@ -644,6 +758,10 @@ async def stream(service: Service, session: str) -> Reply:
     page-level connection which one that page is showing. What comes back is `<hx-partial>`
     elements naming their own targets, so a second region joins the same connection rather than
     opening another.
+
+    The page says which shape it was drawn in, for the same reason it says which session: the stream
+    sends what that shape has somewhere to put, and says once when the shape is over. See
+    `Links.to_stream`.
 
     Under `fragments/` for the reason every other swap-shaped path is: it is the disposable half of
     the URL space, and it is now where all of a watching page's traffic goes, which makes it one
@@ -656,7 +774,7 @@ async def stream(service: Service, session: str) -> Reply:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return event_stream(with_heartbeat(watching(service, LINKS, session, service.watching)))
+    return event_stream(with_heartbeat(watching(service, LINKS, session, service.watching, on_step=bool(on_step))))
 
 
 @get(
@@ -707,6 +825,27 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    # A plugin's own answer, before the console's, because it is not a `Disposition` at all: what
+    # happens to what you typed is the plugin's to decide, and the effects it asks for are performed
+    # by the service exactly as they are inside a pass.
+    #
+    # A session nobody can answer is refused rather than asked, because a plugin whose delivery
+    # nothing will ever answer is a panel that waits for ever - the one state the stall sentence
+    # exists to prevent, reached from the other direction.
+    if isinstance(sending.where, ToPlugin):
+        if stalled_by(found) is not None:
+            return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
+        delivered = await service.compose(session, found, sending.where.leader, sending.said)
+        if delivered is None:
+            return page_response(
+                422, refusal_page(LINKS, 422, f"no plugin of session {session} answers to /{sending.where.leader}")
+            )
+        # Read again only where something was actually put in the inbox. A plugin that asked for a
+        # `set` and nothing else left the checkpoint exactly as it is above, and the conversation is
+        # what a full decode of it costs.
+        if not delivered:
+            return page_response(200, fragment(transcript_region(LINKS, found)))
+        return await redrawn(service, session)
     match sending.where:
         case Disposition.HERE:
             # Nobody here decides between a steer and a turn of its own, and that is the point: the
@@ -714,21 +853,13 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             # thing reading at the moment the answer is true. The page this was posted from was
             # rendered from a state that has since moved, and so was any read this could make.
             await service.send(session, sending.said)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, asked)
-            return page_response(200, fragment(drawn))
+            return await redrawn(service, session)
         case Disposition.NEXT | Disposition.FORGET:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
             # next free turn and differ only in what that turn opens on. A forget never reaches
             # `send`, because a boundary between turns is the only place one can be.
             await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, asked)
-            return page_response(200, fragment(drawn))
+            return await redrawn(service, session)
         case Disposition.FORK | Disposition.ASIDE:
             # The parent's own choice, not a posted one: a fork from the composer offers no picker,
             # and `Service.fork` is what decides the repository either way. Forking the *end* carries
@@ -755,27 +886,7 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
                     422, refusal_page(LINKS, 422, f"session {session} has no files to run a command in")
                 )
             await service.run(session, sending.said)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, asked)
-            return page_response(200, fragment(drawn))
-        case Disposition.HANDOFF:
-            # Not a message going anywhere: what is delivered is the console's own ask, and whatever
-            # was typed rides along as the note saying what it should dwell on. The empty box is the
-            # ordinary case, which is why the boundary lets this one arm through without a message.
-            #
-            # A session nobody can answer is refused rather than asked, because a handoff nothing will
-            # ever write is a panel that waits for ever - the one state the stall sentence exists to
-            # prevent, reached from the other direction.
-            if stalled_by(found) is not None:
-                return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
-            await service.hand_off(session, sending.said)
-            asked = await service.read(session)
-            if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            drawn = transcript_region(LINKS, asked)
-            return page_response(200, fragment(drawn))
+            return await redrawn(service, session)
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot
@@ -791,28 +902,75 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             assert_never(unreachable)
 
 
-@post(t"/sessions/{session_id}/tending", session_id, tending, summary="Set what a session is tended with")
-async def tend(service: Service, session: str, wanted: Tending) -> Response:
+@post(t"/sessions/{session_id}/setup", session_id, setting_up, summary="Load the plugins a session runs")
+async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     """
-    Say whether this session hands itself off unasked, and how much room it keeps to do it in.
+    Answer the settings step: record the switches, say somebody pressed, and ask for a pass.
 
-    Answered with the card rather than with the transcript, which is the one thing separating this
-    from every other write here: nothing about the conversation changed, so swapping the transcript
-    would replace the whole region to show what is already in the rail. What the card comes back
-    holding is the value as it was recorded, which is what the reserve box being denominated in
-    thousands makes worth doing rather than leaving the browser's own state alone.
+    **This is the request that lets a plugin be executed at all, and that is what the step is for.**
+    Nothing before it has run one: the pass that planted the worktree read what each tier *declares*
+    out of files, and the switches on this form are drawn from that. So the press is the
+    confirmation, and the pass that follows is what it confirms.
 
-    Taken whatever the session's state, unlike `/handoff`: a session nobody can answer is exactly one
-    somebody might want to stop the console spending anything on, and refusing to record that would
-    be refusing the only useful thing left to do with it.
+    **Live while the session is still settling, and refused afterwards.** A tool definition leaving
+    the cached prefix invalidates everything under it exactly as one arriving late does, so a session
+    that has been set up is one whose set of plugins is settled, and forking is how a conversation
+    changes its mind. Asked of `settling`, which is the predicate the page's own shape is drawn from:
+    the step is answerable exactly while it is the thing being drawn. That is refused here rather
+    than in the service because what decides it is what the checkpoint holds, and the service holds
+    no page.
 
-    The session is read for the reason every write here reads one, which is that a URL naming nothing
-    must be a `404` rather than a silent write to a row that is not there.
+    Two buttons and one route, told apart by a field rather than by the shape of the post. `Try
+    again` asks for another *declaring* pass, which is the whole of what retrying a session whose
+    worktree or whose `.mainplate/mainplate.yaml` refused is. Anything else asks for the setup.
+
+    **One answer now, where there used to be two.** Both buttons end in a `303` to the session,
+    because the press no longer decides anything: what it does is record the switches and queue a
+    pass, and what that pass makes of them arrives on the page the redirect lands on. A setup that
+    will not finish is the step again with the reason above the switches, drawn from what the pass
+    recorded rather than from what this handler happened to see, so a reload says the same thing.
     """
-    if await service.read(session) is None:
+    found = await service.read(session)
+    if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    await service.tend(session, wanted)
-    return page_response(200, fragment(handoff_card(LINKS, session, wanted)))
+    if not settling(found):
+        return page_response(
+            422, refusal_page(LINKS, 422, f"session {session} has already loaded its plugins; fork it instead")
+        )
+    if wanted.again:
+        await service.setup_again(session)
+    else:
+        await service.settle(session, wanted.switches, found.attempts)
+    return seeing(LINKS.to_session(session))
+
+
+@post(t"/sessions/{session_id}/plugins", session_id, pressing, summary="Set one plugin's own settings")
+async def press(service: Service, session: str, pressed: Pressed) -> Response:
+    """
+    Save one plugin's card as it was posted, and answer with the card as it now stands.
+
+    Answered with the card for the reason the step is answered with itself: nothing about the
+    conversation changed, so swapping the transcript would replace the whole region to show what is
+    already in the rail.
+
+    Taken whatever the session's state, unlike a message: a session nobody can answer is exactly one
+    somebody might want to stop a plugin spending anything on, and refusing to record that would be
+    refusing the only useful thing left to do with it. What is settled for a session's life is *which*
+    plugins run, not what they are set to.
+    """
+    found = await service.read(session)
+    if found is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    enrolled = await service.press(session, found, pressed.plugin, pressed.posted)
+    if enrolled is None:
+        return page_response(422, refusal_page(LINKS, 422, f"session {session} runs no plugin {pressed.plugin!r}"))
+    # The two columns rather than the conversation, because that is what the press wrote and what
+    # the card draws: reading the checkpoint again would decode every recorded step of a session to
+    # answer a question about one row. It is read rather than assumed because a plugin's `action`
+    # handler may have written through `storing` while this was running.
+    tended = await read_tending(service.database, session)
+    settings = settings_of(enrolled.described, tended.of(enrolled.qualified))
+    return page_response(200, fragment(plugin_card(LINKS, session, enrolled, settings)))
 
 
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
@@ -825,7 +983,8 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     fork_form,
     fork,
     say,
-    tend,
+    setup,
+    press,
     request_record,
 )
 
@@ -840,6 +999,7 @@ LINKS = Links(
     workspace_branches=workspace_branches,
     fork_form=fork_form,
     fork=fork,
-    tend=tend,
+    setup=setup,
+    press=press,
     assets=ASSETS,
 )

@@ -45,15 +45,47 @@ under the reader's hand, and there would be one per turn.
 - **The base and the branch**, which is `settled(forked=True)`. A fork plants at the tree of the
   turn it re-asks, so a base beside that is a second answer to where its files come from, and `git
   worktree add -b` refuses a branch already in use. See [the workspace](workspace.md#where-in-it-and-on-what-branch).
-- **The auto-handoff settings**, which start on the defaults. A reserve is a decision about how much
-  room one conversation's context has left, and a branch's context is not that conversation's. See
-  [handing off without being asked](composer.md#handing-off-without-being-asked).
+- **What its plugins are set to**, which start on their own declared defaults. A reserve is a
+  decision about how much room one conversation's context has left, and a branch's context is not
+  that conversation's. See [handing off without being
+  asked](../plugins/handoff.md#handing-off-without-being-asked). The *switches* are the other column and are
+  inherited: which plugins run is not a fact about one conversation's context, and left behind, a
+  branch would set up and execute a program somebody had turned off in the session it branched from.
+- **What its plugins *are*, at every tier**, which a fork declares and sets up afresh. Nothing about
+  the parent's comes across, so describing them again is how a conversation picks up an edited one.
+  See [plugins](plugins.md#setup).
 - **A repository it does not have.** A fork may *attach* one and may not *swap* one; see [the
   workspace](workspace.md#a-fork-may-attach-a-repository-and-may-not-swap-one).
 
 What it *does* inherit, besides the turns, is the worktree state: a fork's worktree is checked out
 at the tree the forked turn originally saw, so a branch re-asks its question against the files that
 question was asked about.
+
+## A fork answers the settings step again
+
+**A branch holds a conversation and still owes an answer to that step**, which is the one place a
+fork is not simply a session with a past. It carries no declaration, no registration and no press, so
+its first pass reads what the tree it is planted at declares, its page draws the step over the turns
+it carries, and the press in the branch is what runs `setup`.
+
+That is read off the registration alone rather than off the turn count. What a cached prefix cannot
+survive is a plugin set changing under a request already made, and a branch has made none: it holds
+*recorded* turns, which is a different thing.
+
+**Editing `.mainplate/` and forking is therefore how a session iterates on its own plugins**,
+including [the one that installs its
+toolchain](plugins.md#getting-the-repository-ready-is-a-plugin-too) - which a branch has to run again
+anyway, since it plants a fresh worktree with a scratch of its own and neither carries what the
+parent installed.
+
+**And the press is asked for again rather than inherited**, because a branch is planted at a tree a
+model wrote, so what licenses running what it names is the decision to fork plus the confirmation in
+the branch. The parent's switches come across as the step's defaults. Why that is the boundary, and
+what a snapshot has to do with it, is
+[reading it once](plugins.md#read-once-and-never-from-a-tree-this-console-wrote).
+
+The cost, stated: **every fork stops at a screen before it answers anything**, a fork made only to
+re-ask one turn included, and its transcript is withheld until it does.
 
 ## There is no rewind
 

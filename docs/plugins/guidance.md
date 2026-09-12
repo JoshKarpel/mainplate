@@ -1,9 +1,25 @@
 # What a session is told
 
-`guidance.py` reads the words a session is answered under, and there are two scopes. **Console
-guidance** is the operator's own, every `.md` file under `<config home>/mainplate/guidance/`, sorted
-by path and concatenated. **Repository guidance** is the project's own `AGENTS.md`, read out of the
-worktree the session works in. Both go into the agent's `instructions`.
+The words a session is answered under, and there are two scopes. **Console guidance** is the
+operator's own, every `.md` file under `<config home>/mainplate/guidance/`, sorted by path and
+concatenated. **Repository guidance** is the project's own `AGENTS.md`, read out of the worktree the
+session works in. Both go into the agent's `instructions`.
+
+**All of it is a [plugin](../design/plugins.md)**, in `src/mainplate/plugins/bundled/guidance`, and it is the
+half of the protocol handoff does not exercise: `instructions` contributed at `setup`, and an
+`inject` at `before_request`. So what follows describes a script this console speaks to over a pipe,
+and everything below is that script's rather than the console's unless it says otherwise - what the
+console keeps is `instructing`, which is the one join that puts the operator's standing instructions,
+every running plugin's contribution and the note about this session's tools in that order.
+
+**Which means every word of it can be replaced.** Install your own `guidance` beside the bundled one
+and turn ours off with one switch on the settings step, or run both and let them sit alongside each
+other, which is the coherent reading of two guidance loaders in one session.
+
+**Nothing in it imports `mainplate`.** A bundled plugin runs on exactly the path a third-party
+plugin runs on, so what ships is a worked example rather than a privileged one. The price is stated:
+the frontmatter reader is a `description:` line rather than a YAML parser, because a plugin with no
+dependencies is worth more here than the general case of a field nothing else reads.
 
 **The repository is last, so it wins.** That is not a claim about trust: a repository is right about
 itself, which is the local-conventions rule one layer out, and it is why escapement puts the gains
@@ -37,17 +53,25 @@ it wrote.
 **A stretch of context and not a whole session, because a forget ends one.** That is a
 weaker-sounding promise that costs nothing: what recomposing spends is the requests that would have
 read the prefix from cache, and a forget has just thrown the whole prefix away. Composing again
-exactly there is therefore free, and it is the one moment a reader might reasonably expect edited
-guidance to be picked up. `history_began` asks the same `forgets` predicate `reached` clears history
-on, so the two cannot disagree about where a context starts.
+exactly there is therefore free.
+
+**What it recomposes is the join and not the guidance**, and that is the one thing the port to a
+plugin took away. A plugin is set up once per session, so what it contributed is settled from the
+moment its [settings step](../design/plugins.md#starting-a-session-takes-four-steps) was answered;
+a forget composes the stretch's own `instructions:{n}` again and every block in it says the same
+thing. So an edited `AGENTS.md` is picked up by [forking](../design/forking.md) rather than by
+forgetting, which is the answer this console gives to every other question about a session's terms.
+
+`history_began` asks the same `forgets` predicate `reached` clears history on, so the two cannot
+disagree about where a context starts.
 
 Five details there are decided:
 
 - **It is a `Run.step`**, so the first pass composes and every later one replays. That also means it
   cannot be composed twice under one key in a pass, which is why a pass answering two turns of one
   stretch memoises what it composed and a pass crossing a forget composes a second time.
-- **It records exactly what the model is sent**, the notes about this session's worktree and network
-  included, and `agent_for` speaks it verbatim. Composed out there instead, those notes would be a
+- **It records exactly what the model is sent**, every running plugin's contribution and the notes
+  about this session's worktree and network included, and `agent_for` speaks it verbatim. Composed out there instead, those notes would be a
   sentence the model carried that no record held, so a page could report only what a *turn's*
   messages held, which is nothing until a turn has landed, and they would be recomposed on every
   turn from live state, in front of a cached prefix they are supposed to sit still behind. The
@@ -136,7 +160,7 @@ things there are decided:
     are the same thing, and what separates them is where each sits in the request, which is what the
     *panel* around each says. The document's opening line is on the panel's row, which is what
     identifies it without opening it. See [every panel folds, from its own
-    row](console.md#every-panel-folds-from-its-own-row).
+    row](../design/console.md#every-panel-folds-from-its-own-row).
 
 The panel takes the person's hue, by the same rule as `command`: the axis is who produced the text,
 and what is in a system prompt was written by the operator and by whoever wrote the repository's
@@ -167,25 +191,34 @@ placement convention repositories already have, and two things carry it.
 a `description` from its own frontmatter where it has one. That `apps/web` has conventions is one
 line and what they are is a page, so the line rides in the prefix and the page is read when it is
 wanted. It also serves the goal path scoping never did, which is knowing a part of the repository
-*has* rules before reaching in and breaking them. Asked of git rather than walked, for the reason
-`list` asks: a walk descends a `.venv` looking for a file that is never in one.
+*has* rules before reaching in and breaking them. Walked with the noisy directories pruned rather
+than asked of git: a plugin runs in a namespace with git reachable, but the walk is what makes this
+work in a directory that is not a checkout at all, and the pruning is what keeps it affordable, since
+the directories that make a walk expensive are the ones a guidance file is never in.
 
-**And the file itself, handed over on approach.** `approaching` reads which paths the model has
-named to a file tool and hands over the guidance covering them, from the root down. Six things there
-are decided:
+**And the file itself, handed over on approach.** The plugin reads which paths the model has named to
+a file tool and asks for the guidance covering them to be injected, from the root down. Six things
+there are decided:
 
-- **It is delivered in `before_model_request`, not attached to a tool return.** A batch of calls and
+- **It is delivered at `before_request`, not attached to a tool return.** A batch of calls and
   the reply to them are one exchange, so there is no earlier moment: a tool return and the next
   request arrive together. Delivered here it needs no change to `Files` at all, it is the console's
   own voice rather than text smuggled into a tool's output, and it is where a tree diff would go if
   the `bash` hole ever needs closing.
-- **The history is the ledger.** `delivered_in` asks whether the block is already in what the model
-  will be handed, and that one question answers every case: the console delivered it, the model read
-  the file itself off the index, the model *wrote* the file, a fork carried it across in the copied
-  prefix, or a `forget` dropped it and it is delivered again. A set kept on the session would be
-  wrong rather than merely redundant, since it would survive a boundary and leave the model working
-  without guidance it can no longer see. `test_guidance.py` pins the forget case with a control, so
-  it cannot pass by comparing two empty answers.
+- **The history is the ledger**, which is why the whole message list is in the payload rather than a
+  summary of it. The plugin asks whether the block is already in what the model will be handed, and
+  that one question answers every case: it delivered it, the model read the file itself off the
+  index, the model *wrote* the file, a fork carried it across in the copied prefix, or a `forget`
+  dropped it and it is delivered again. A set kept on the session would be wrong rather than merely
+  redundant, since it would survive a boundary and leave the model working without guidance it can no
+  longer see - and a set kept in the plugin cannot exist at all, because a plugin is a process per
+  event.
+- **What was injected is recorded**, under `turn:{n}:injected:{i}`, and a resumed pass replays it.
+  `guiding` was safe unrecorded by being a pure function of the history it was handed; a plugin is
+  somebody else's program and cannot be trusted to be pure, so the same point offered to a plugin
+  writes down what it said. Without that a resumed pass could put a different sentence in front of a
+  recorded answer, which is the one disagreement between two passes this whole mechanism exists not
+  to have.
 - **A `SystemPromptPart` rather than a `UserPromptPart`.** Nobody typed it, so `interjected` tells
   the two apart by which part carried them and the transcript draws guidance as its own kind rather
   than as the person having said it. It is also what leaves the cached prefix alone, and *that* is

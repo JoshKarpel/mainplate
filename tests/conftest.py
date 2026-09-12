@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -27,8 +29,10 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.settings import ModelSettings
 from without_asgi import ASGIApp
+from without_durability.interfaces import claimed
 from without_durability.interfaces import inbox_key
 from without_durability.stepwise import Run
+from without_durability.stepwise import resume
 
 from mainplate import records
 from mainplate.agent import Choice
@@ -42,6 +46,8 @@ from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
 from mainplate.config import Config
 from mainplate.config import Endpoint
+from mainplate.conversation import PLUGINS_KEY
+from mainplate.conversation import REPOSITORY_PLUGINS_KEY
 from mainplate.conversation import Ended
 from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
@@ -51,7 +57,11 @@ from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
+from mainplate.plugins.asking import recorded_registration
+from mainplate.plugins.installed import Enrolled
 from mainplate.service import Service
+from mainplate.sessions import Session
+from mainplate.sessions import read_session
 from mainplate.snapshots import Worktree
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
@@ -443,6 +453,69 @@ def app(service: Service) -> ASGIApp:
     where it can be driven a pass at a time, in `test_conversation`.
     """
     return build_app(already(service))
+
+
+async def registered(service: Service, session: str, enrolled: Sequence[Enrolled] = ()) -> None:
+    """
+    What a pass writes when somebody answers a session's settings step.
+
+    **A registration is the whole of what takes a session past that step**, so a suite running without
+    a worker has to write one or every page it renders is the step rather than a transcript. Both keys,
+    because both are written together, and `enrolled` goes under the console's own: what these tests
+    want is a session whose rail draws a card, and which tier it came back under is the fork's question
+    rather than any reader's.
+
+    **Write-once, so this has to be the *first* registration a session gets.** The store keeps the
+    value a key was first given, so calling it after an empty one records nothing and leaves the rail
+    empty with no failure to point at.
+    """
+    await service.checkpointer.supply(session, PLUGINS_KEY, recorded_registration(tuple(enrolled)))
+    await service.checkpointer.supply(session, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
+
+
+async def started(
+    service: Service,
+    said: str,
+    chosen: Choice = DEFAULT_CHOICE,
+    title: str | None = None,
+    *,
+    enrolled: Sequence[Enrolled] = (),
+) -> Session:
+    """
+    A session on `chosen` with `said` in it, which is what creating one used to be in one call.
+
+    **Creating a session and saying the first thing in it are separate calls now**, because a
+    repository's plugins cannot be named until its worktree is planted and none of them is run until
+    the settings step is answered. Most tests here are about something else entirely and want a
+    session with a message in it, so the pair is written once rather than at every call site - and a
+    test that is about the split says so by calling `Service.start` itself.
+
+    It skips the step by recording what answering it on a console with nothing declared writes, which
+    is two empty registrations. Written rather than implied, because a registration is the whole of
+    what takes a session past that step: a session holding turns and no registration is one still
+    owing an answer, which is what a fork is and is not what these tests are about. A test that wants
+    plugins actually running presses the button, through `set_up` in `test_plugins.py` or `loaded` in
+    `test_app.py`, and both start from `Service.start` rather than from here for that reason.
+    """
+    session = await service.start(chosen, title)
+    await service.say(session.id, said)
+    await registered(service, session.id, enrolled)
+    found = await read_session(service.database, session.id)
+    return found if found is not None else session
+
+
+async def passing(service: Service, session: str, body: Any) -> Any:
+    """
+    One pass of a session, claimed and released, which the suites with no worker drive by hand.
+
+    Here rather than in one of them because two now want it: setting a session's plugins up happens
+    in a pass, so a test about the *press* has to be able to run the pass the press asked for.
+    """
+    holder = await claimed(service.checkpointer, session)
+    try:
+        return await resume(holder, service.checkpointer, body)
+    finally:
+        await service.checkpointer.release(holder)
 
 
 async def run(*arguments: str, cwd: Path) -> str:

@@ -21,7 +21,7 @@ only under crash-resume. A fresh namespace costs a couple of milliseconds agains
 hundreds, and leaves no process to supervise, reap, or reconstruct. The tool's own description says
 nothing persists, and `test_sandbox.py` asserts it.
 
-Five things about the policy are decided rather than incidental:
+Six things about the policy are decided rather than incidental:
 
 - **The clone is bound read-only, and that is the load-bearing half.** Every read still works,
   `ls-files`, `status`, `diff`, `log`, `blame`, while `add`, `commit`, `stash` and `checkout` fail
@@ -33,12 +33,22 @@ Five things about the policy are decided rather than incidental:
   careful is now one no tool can break, including tools that do not exist yet.
 - **The *common* directory is what is bound, not the worktree's own.** A linked worktree's `.git` is
   a file holding an absolute pointer into the clone, and the per-worktree directory sits inside the
-  clone with a `commondir` pointing back out at it for objects and refs. So `--git-common-dir`
-  reaches both and `--absolute-git-dir` reaches neither: bind the wrong one and there is no git in
-  the sandbox at all, which silently takes `list` with it.
+  clone with a `commondir` pointing back out at it for objects and refs. So the clone reaches both
+  and the per-worktree directory reaches neither: bind the wrong one and there is no git in the
+  sandbox at all, which silently takes `list` with it. `Worktree.common` derives the clone from the
+  git directory rather than asking git which it is, so the ordinary path runs no subprocess and reads
+  nothing out of the tree to decide what to bind; a tree that named no git directory is a bare clone,
+  and that one is asked.
 - **Both are bound at their own absolute paths**, never remapped to a tidy `/workspace`. That is
   forced by the same pointer being absolute. The alternative is a `GIT_COMMON_DIR` that every
   consumer has to carry and any subprocess is free to unset, bought for a shorter path.
+- **The worktree's `.git` is bound read-only back over the tree.** It is a one-line pointer at the
+  git directory, and it sits in the one place a session may write, so without this a command
+  replaces it with a repository of its own and every later git in that directory reads *that*
+  repository's configuration, which is allowed to name programs git runs. Bound over itself it
+  cannot be written, removed, moved, or unmounted from in there, and reading it still works. Order
+  is load-bearing for the same reason the tmpfs below is: it has to come *after* the tree.
+  `test_sandbox.py` runs the control in a sandbox built without it.
 - **The session binds come after `--tmpfs /tmp`.** bwrap applies arguments in order, so a workspace
   root that happens to live under `/tmp` is covered by the tmpfs and disappears if the binds come
   first, leaving a command that cannot change directory into its own worktree. That is not
@@ -56,6 +66,14 @@ decision as snapshots honouring a `.gitignore`, arrived at one level out: going 
 call should not uninstall what was installed since. The cost is the one an ignored path already
 carries, that what is in there goes stale while the source around it moves back.
 
+**It is `$HOME` for a session's commands**, rather than the tmpfs, because that is where every tool
+that fetches keeps what it fetched: a toolchain [a repository's plugin
+installs](plugins.md#getting-the-repository-ready-is-a-plugin-too) lands under `$HOME`, and a shell
+whose `$HOME` is anywhere else cannot find its own tools. `home_in` is
+where that is decided, and it retires the earlier reading that what a shell leaves in a home
+directory is scratch by accident - it is scratch by intent now, and the cost is that a stray dotfile
+survives the call. A session over the whole machine has no scratch and keeps the tmpfs.
+
 Outside the worktree rather than under it, and that is not tidiness. `list` passes `--others`, so a
 directory inside the worktree is in every listing and every `git status` until something excludes
 it, and the only place to write that exclusion is a git directory read-only wherever a command can
@@ -70,6 +88,17 @@ tree and therefore without any ignored file either.
 **`read`, `edit` and `create` reach it; `list` does not.** The point of extending them at all is a
 plan or a notes file kept across turns, which is the one thing in a scratch directory that wants a
 line editor; a build cache never does.
+
+**A plugin gets a different one, and `$HOME` points at it.** `workspaces/plugins/<session>/<tier>/
+<name>` is bound in place of the session's for a repository's plugin, because the session's is a
+place the *model* writes: a plugin that kept an executable in there would be running whatever the
+model last left at that path, at every turn boundary, and reporting the result into the conversation
+as this console's own. `$HOME` rather than only a bound path, for the reason a session's scratch is
+its commands' `$HOME`: that is where anything that fetches keeps what it fetched, so a `uv run
+--script` plugin resolves an interpreter at `setup` and finds it again at the next event, with the
+network shut. `Sandbox.argv`'s `home` argument is how each namespace is told which directory that
+is, and its `environment` argument is what a session's commands are additionally told, which nothing
+hands to a plugin's own namespace.
 
 ## Roots
 
@@ -115,6 +144,18 @@ of a round trip. Four things there are decided:
 - **What comes back names the root only where it is not the first.** A bare `notes.md` in a return
   is two different files once a session has two roots; a root named on every line stops being read.
   Same rule as `Reachable.labelled`.
+
+**A root also says what in it is out of reach**, which is `Root.sealed`, a property on each arm
+beside `name`. A `GitTracked` seals `.git`, because that is git's pointer at its own directory and
+rewriting it makes every later git in the tree read a repository the session picked; a `Scratch` and
+a `System` seal nothing, having no pointer to protect. `Files.resolved` refuses a sealed path after
+it has established the path is in reach, so being inside a root is necessary and no longer
+sufficient.
+
+That is the same guard as the read-only bind above, on the other path rather than written twice.
+The bind stops `bash`; these tools write from the parent and pass through no sandbox at all, so
+without both, closing one moves the vector to the other. It is a root's *top level* only: a
+`.gitignore`, a `.github/` and a fixture carrying a nested `.git` are ordinary files.
 
 In the sandbox the name is a `Bind` field, so an environment variable is only ever a name for a path
 that sandbox actually has. The clone gets none deliberately: it is bound so git works, not so
@@ -217,6 +258,15 @@ bound here is what stops a *tool* writing a history no panel shows, and `git com
 The authority it grants is what the paragraph above already grants a model, so what actually guards
 it is who can reach the console.
 
-One thing is deliberately still to come. `GitTracked.entries` runs `git ls-files` in the parent
-rather than through the sandbox, which is a narrower problem than arbitrary shell (its argv is ours;
-the exposure is a malicious repository's git configuration) and a good next step.
+## What the parent still runs
+
+The binds above say what a *command* reaches. They say nothing about the parent, which runs git
+against the same worktree to snapshot it and to answer `list`, and the worktree is bound read-write
+because a session has to be able to work in it. So git configuration is an input the parent takes
+from a directory the session writes, and several settings there name a program git runs.
+
+Neither of them does now: `Worktree.gitdir` names git's own directory, so both `snapshots.py` and
+`GitTracked.entries` read their configuration out of the read-only clone. What still discovers is
+any `git` a person types into [`Run`](composer.md#run), which is a shell and so not ours to pin.
+[What runs, and as whom](security.md) is the whole of it, and it is the page to read before adding
+anything to the parent that touches a worktree.

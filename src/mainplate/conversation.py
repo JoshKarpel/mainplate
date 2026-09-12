@@ -78,6 +78,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -99,6 +100,7 @@ from typing import Literal
 from typing import assert_never
 from typing import cast
 
+from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -110,11 +112,9 @@ from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
-from pydantic_ai.run import AgentRunResult
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_core import to_json
 from without_durability.interfaces import INBOX
-from without_durability.interfaces import Durable
 from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
 from without_durability.stepwise import StepKey
@@ -128,7 +128,11 @@ from mainplate.durability import TOOK
 from mainplate.durability import Allowance
 from mainplate.durability import AllowanceSpent
 from mainplate.durability import Draining
+from mainplate.durability import Gating
+from mainplate.durability import Injecting
 from mainplate.durability import RequestRefused
+from mainplate.durability import as_recorded
+from mainplate.durability import parse_injected
 from mainplate.durability import parse_model_response
 from mainplate.durability import parse_refused
 from mainplate.durability import parse_returned
@@ -136,24 +140,184 @@ from mainplate.durability import parse_took
 from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
-from mainplate.guidance import approaching
-from mainplate.guidance import guidance_under
-from mainplate.guidance import indexing
-from mainplate.guidance import instructing
-from mainplate.guidance import repository_guidance
+from mainplate.plugins.asking import Declaring
+from mainplate.plugins.asking import Live
+from mainplate.plugins.asking import ending
+from mainplate.plugins.asking import gating
+from mainplate.plugins.asking import injections
+from mainplate.plugins.asking import nowhere
+from mainplate.plugins.asking import opening_of
+from mainplate.plugins.asking import parse_declaration
+from mainplate.plugins.asking import parse_registration
+from mainplate.plugins.asking import recorded_declaration
+from mainplate.plugins.asking import recorded_registration
+from mainplate.plugins.asking import running
+from mainplate.plugins.asking import setting_up
+from mainplate.plugins.asking import stopping
+from mainplate.plugins.asking import unstored
+from mainplate.plugins.installed import ON
+from mainplate.plugins.installed import BadDeclaration
+from mainplate.plugins.installed import Collides
+from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.installed import refuse_collisions
+from mainplate.plugins.installed import repository_plugins
+from mainplate.plugins.protocol import PLAIN
+from mainplate.plugins.protocol import Opening
+from mainplate.plugins.protocol import Refused
+from mainplate.plugins.protocol import Tone
+from mainplate.plugins.protocol import toned
+from mainplate.plugins.running import PluginFailed
 from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.snapshots import Worktree
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
+from mainplate.tending import TENDED
 from mainplate.tending import Tending
-from mainplate.tending import standing
 from mainplate.thinking import BY_LEVEL
-from mainplate.tools import ASKING
-from mainplate.tools import Handing
 
 CHOICE_KEY: StepKey = "choice"
+
+PLUGINS_KEY: StepKey = "plugins:console"
+"""
+What the bundled plugins and the operator's own declared for this session, recorded on its first pass.
+
+**Not `turn:0:plugins`**, and the fork is what decides it, exactly as it decides `instructions:{n}`:
+`before` copies turn-prefixed keys by shape, so a turn-shaped name would carry a parent's
+registration into a branch. A fork must inherit neither half, so both are session-level keys and
+`Service.fork` copies neither.
+
+Described afresh by every session, this half and the other, so a fork picking up an edited plugin is
+the ordinary way a conversation changes its mind about one.
+"""
+
+REPOSITORY_PLUGINS_KEY: StepKey = "plugins:repository"
+"""
+What the session's repository declared about itself, read once from the tree it was planted at.
+
+**A key of its own because this half is read somewhere else and can fail on its own**, so a
+repository that will not be read leaves the console's half recorded rather than taking it down too.
+
+A fork reads it again, out of the tree the branch is planted at, which is a tree a model wrote: a
+snapshot is captured with `git add -A`, so a `.mainplate/` file the model created on turn 4 is *in*
+the tree recorded for turn 5. What makes running what that tree names legitimate is the press in the
+branch rather than the parent's; see `docs/design/plugins.md`.
+
+Empty for a session with no repository, for one whose grant was never given, and for a repository
+carrying no such file, which are three states with one meaning and no need to be told apart.
+"""
+
+DECLARED_KEY: StepKey = "plugins:declared:console"
+"""
+Which plugins the bundled set and the operator's `config.yaml` name, read without running any of them.
+
+**Declaring and loading are two moments, and the settings step is between them**, because running a
+plugin is executing a program somebody may not want executed. This half is files: a directory listing
+and a mapping in a YAML document, which say what a session *could* run. Nothing is spawned to record
+it, so a session reaches its settings step having invoked nothing.
+
+Recorded rather than re-read on every render for the reason the registration is: what a page draws a
+switch for has to be the same list the setup then runs, and the operator's files can be edited
+while a session sits on the step.
+"""
+
+REPOSITORY_DECLARED_KEY: StepKey = "plugins:declared:repository"
+"""
+The same for what the session's repository names about itself, read once from the tree it was planted
+at.
+
+Its own key rather than a half of the one above, for failure isolation rather than because a fork
+treats the two differently: the operator's files sit outside every worktree and a repository's is in
+one, so one can fail to read on its own and the other should stay recorded. A fork carries neither
+and reads both again, out of the tree it is planted at.
+
+Empty for a session with no repository, for one whose grant was never given, and for a repository
+carrying no such file, which are three states with one meaning and no need to be told apart.
+"""
+
+SETUP_ENVIRONMENT_KEY: StepKey = "setup:environment"
+"""
+What this session's repository plugins asked to have set for its commands, merged across them.
+
+Written on the pass that set them up, beside the two registrations and under the same rule - nothing
+is recorded until every setup has answered - so a session past its settings step always has it, empty
+where nothing asked for anything. Not turn-prefixed, for the reason the registrations are not:
+`before` copies turn-shaped keys by shape, and a fork sets up again and records its own.
+"""
+
+PLUGINS_REFUSED_KEY: StepKey = "plugins:refused"
+"""
+Why a session's plugins could not be *declared*, where they could not.
+
+About reading files rather than about running any of them, which is the whole of what this key is
+for: a worktree that would not plant or a `.mainplate/mainplate.yaml` that would not parse happens in
+a pass with nobody waiting on it, so it needs somewhere to be recorded and a `Try again` on the step.
+Setting up is the other half and is numbered per attempt, because it is a thing somebody retries by
+moving a switch; see `setup_refused_key`.
+
+Written and never read by any pass, which is what makes it safe in a write-once store: a later pass
+that succeeds writes the declaration and the page reads *that*, so this is a breadcrumb consulted
+only while there is no declaration to read instead.
+"""
+
+
+def setup_key(attempt: int) -> StepKey:
+    """
+    That somebody answered the settings step, for the nth time, which is what lets a pass set up.
+
+    **The trust boundary as a recorded fact.** A plugin is a program this console executes, so the
+    pass that plants a worktree reads what each tier declares and stops; what this says is that a
+    person has since looked at that list and pressed the button, and it is the only thing that lets
+    the next pass run any of it.
+
+    It carries no list of which plugins were left on, deliberately: that is the `enabled` column's,
+    and a copy here would be a copy that cannot be corrected. What makes the difference concrete is
+    the retry - a setup that failed is fixed by turning a plugin off and pressing again, and a
+    write-once list would have the second press load exactly what the first one did.
+
+    **Numbered, because pressing again is an ordinary thing to do.** A refusal is recorded against
+    the attempt it belongs to, so a press that follows one is a session with a new attempt open and
+    no refusal under it, which is what the page draws its spinner from. Unnumbered, the first
+    failure would be the sentence every later press showed.
+    """
+    return f"plugins:setup:{attempt}"
+
+
+def setup_refused_key(attempt: int) -> StepKey:
+    """Why the nth attempt at setting a session's plugins up did not finish, where it did not."""
+    return f"plugins:setup:{attempt}:refused"
+
+
+FAILED_PREFIX: Final = "failed:"
+"""
+Where a pass that raised says so, and the prefix `progress_in` counts around.
+
+Named rather than spelled at each of the three places that want it - the key builder, the counter
+that must not count these, and the reader that walks them - because a fourth spelling of one word is
+the kind of disagreement nothing reports.
+"""
+
+
+def failed_key(at: int) -> StepKey:
+    """
+    Why the pass that raised at this point raised, keyed by how far the session had got.
+
+    **Not numbered by attempt, which is the whole reason a retried failure does not fill the store.**
+    A pass that falls over at the same place on every delivery computes the same `at` and so claims
+    the same key, and the store keeps the value already there; one that gets further before falling
+    over has a different count and writes a new record. So a session broken for a week holds one of
+    these per point it actually reached rather than one per lease.
+
+    Not turn-prefixed either, and deliberately: a pass can fail before it has reached a turn at all -
+    planting a worktree, reading a declaration, running a setup - and a key naming a turn would have
+    had to invent one for those. Where it *did* get to is `at`, which is a number the page compares
+    rather than a name it parses.
+    """
+    return f"{FAILED_PREFIX}{at}"
+
 
 # What the thinking level is called inside the recorded choice. Named once here because the writer
 # and the reader are both in this file and must not drift, which is the same reason the keys are.
@@ -176,6 +340,15 @@ ISOLATION_FIELD: Final = "isolation"
 FILESYSTEM_FIELD: Final = "filesystem"
 NETWORK_FIELD: Final = "network"
 
+# Whether this session runs code the repository carries, inside the recorded choice and on the form
+# that answers it. Named here beside the repository it depends on, for the reason the base and the
+# branch are: the code that writes it and the code that reads it are both in this file.
+#
+# Absent reads as trusted, which is both the default and the honest reading of a record written
+# before there was anything for a repository to contribute: nothing of its ever ran, so nothing was
+# refused either.
+TRUSTED_FIELD: Final = "trusted"
+
 # Where the message in the box is going, which the composer posts and nothing ever records. It is
 # named here rather than in `console.py` because the page renders the control and the boundary parses
 # it, and `pages.py` cannot import the console without closing a ring.
@@ -185,6 +358,12 @@ DISPOSITION_FIELD: Final = "disposition"
 class Disposition(Enum):
     """
     Which session's checkpoint the message in the box lands in.
+
+    **The console's own answers, and not every answer the menu offers.** A session's plugins each
+    contribute their own, under a leader they claim, and those are not members here: this is a closed
+    set this console owns, where which leaders exist is a fact about one session. `handoff` used to
+    be a member and is now the bundled handoff plugin's leader, which is the whole shape of the
+    change - the menu did not lose a row, it stopped being the only place rows come from.
 
     A request-time instruction and never a recorded value, which is what separates it from
     everything else posted by the composer: a session records what was *said*, and where it was said
@@ -232,25 +411,6 @@ class Disposition(Enum):
     Continuing the conversation it closed is `fork` at that turn, which the rule already offers: the
     branch carries every turn above the boundary and leaves the marker behind, since `before` copies
     what is below the branch point and the record rides on the message that opens the turn."""
-
-    HANDOFF = "handoff"
-    """`Service.hand_off`, which asks this session to write down where it has got to and start again
-    from that document.
-
-    **The one answer where the box may be empty**, and that is what makes it an answer here at all
-    rather than a control of its own. What a handoff takes is an optional note saying what it should
-    dwell on, appended to the standing ask rather than replacing it, and the box is exactly where such
-    a note is written: `/handoff` on its own hands off, and `/handoff` with a paragraph hands off
-    pointed at what the paragraph says.
-
-    That the ordinary case types nothing is why the button carries `formnovalidate`. The box is
-    `required`, which is right for every other answer and would refuse the common case here, so this
-    is the browser's own way of saying that this submitter does not need it; the boundary allows an
-    empty message for this disposition and no other.
-
-    It is *not* a message going anywhere, which it shares with `RUN`: what gets sent is the console's
-    own ask, and the text rides along as guidance. Being in this field all the same is the menu's own
-    premise, that the question is what happens to what you typed."""
 
     FORK = "fork"
     """`Service.fork` at the end, carrying the whole conversation, with this message asked there.
@@ -571,6 +731,22 @@ def model_key(turn: int, at: int) -> StepKey:
     return f"{turn_prefix(turn)}:model:{at}"
 
 
+def end_key(turn: int, at: int) -> StepKey:
+    """
+    The `at`-th end of this turn: what the session's plugins said when it tried to end, and whether
+    it went on.
+
+    Numbered by how many times the turn has tried to end rather than by request, because that is
+    what it counts: a turn of five requests that was sent back once has `end:0` and `end:1`, the
+    second of which is empty and is the record of the plugins letting it go. Read by the page as well
+    as replayed by a pass, since what a plugin put to the model is worth seeing above the response it
+    shaped, as a steer is.
+
+    Built here and by `Stepping.key("end")` there, with the hazard `tree_key` names.
+    """
+    return f"{turn_prefix(turn)}:end:{at}"
+
+
 def refused_key(turn: int, at: int) -> StepKey:
     """
     Why the `at`-th model request of this turn will never be accepted, where one never was.
@@ -634,28 +810,6 @@ def recorded_steer(said: str) -> dict[str, object]:
     return records.Steer(said=said).recorded()
 
 
-def recorded_ask(guiding: str | None = None) -> dict[str, object]:
-    """
-    The message that opens a handoff turn, as the value the store's codec will take.
-
-    Composed here rather than at either of the two places that deliver it, and that is the point: a
-    person pressing the button in the rail and a pass finding its reserve crossed are asking for the
-    same thing, so the words have to be one string. Two writers, one composition; see `Service.hand_off`
-    and `readying`.
-
-    `guiding` is whatever a person wants this handoff pointed at, **appended** to the standing ask
-    rather than replacing it, because the two say different things: the base is what a handoff *is*
-    and has to be there whether or not anybody adds to it, where a note like "dwell on the parser" on
-    its own is an instruction to summarise a summary. Nothing at all is the automatic case, which is
-    also the ordinary one.
-
-    No boundary on it, which is the asymmetry that makes a handoff work: the context has to survive
-    long enough to be summarised, so it is the *document* that clears it - see `handing_through`.
-    """
-    said = ASKING if not (steer := (guiding or "").strip()) else f"{ASKING}\n\n{steer}"
-    return records.Handoff(said=said).recorded()
-
-
 def parse_delivered(recorded: object) -> records.Delivered:
     """
     One inbox entry, as whichever of the three things a person can put in a session it holds.
@@ -675,6 +829,22 @@ def recorded_messages(said: Sequence[ModelMessage]) -> dict[str, object]:
 
 def parse_messages(recorded: object) -> tuple[ModelMessage, ...]:
     return tuple(ModelMessagesTypeAdapter.validate_python(records.Messages.model_validate(recorded).messages))
+
+
+def parse_end(recorded: object) -> records.End:
+    """One end of a turn, read back as the record holding what the plugins said there."""
+    return records.End.model_validate(recorded)
+
+
+def ends_in(recorded: Mapping[str, object], turn: int) -> tuple[records.End, ...]:
+    """
+    Every time this turn tried to end and what the plugins said each time, in the order it happened.
+
+    One walk of the checkpoint in record order rather than lookups by number, for `drains_in`'s
+    reason: the order is the property being used and the store already guarantees it.
+    """
+    ending = f"{turn_prefix(turn)}:end:"
+    return tuple(parse_end(value) for key, value in recorded.items() if key.startswith(ending))
 
 
 def parse_thinking(recorded: object) -> ThinkingLevel | None:
@@ -759,6 +929,10 @@ def parse_choice(recorded: object) -> Choice:
         base=parse_commitish(text_at(recorded, BASE_FIELD)),
         branch=parse_branch(text_at(recorded, BRANCH_FIELD)),
         isolation=parse_isolation(recorded.get(ISOLATION_FIELD), repository),
+        # Anything but a literal `false` is trusted, which is the default said as a parse: a record
+        # holding something else under this key was never written by this console, and the reading
+        # that matters is that refusing is the thing somebody has to have actually said.
+        trusted=recorded.get(TRUSTED_FIELD) is not False,
         thinking=parse_thinking(recorded.get(THINKING_FIELD)),
     )
 
@@ -784,6 +958,7 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
         BASE_FIELD: chosen.base,
         BRANCH_FIELD: chosen.branch,
         ISOLATION_FIELD: {FILESYSTEM_FIELD: chosen.isolation.filesystem.value, NETWORK_FIELD: chosen.isolation.network},
+        TRUSTED_FIELD: chosen.trusted,
         THINKING_FIELD: chosen.thinking,
     }
 
@@ -848,6 +1023,23 @@ def forgets(recorded: Mapping[str, object], turn: int) -> bool:
     """
     said = opening(recorded, turn)
     return said is not None and records.forgets(said)
+
+
+def instructing(*blocks: str | None) -> str:
+    """
+    The instructions one request carries, composed from every scope that had something to say.
+
+    In order of increasing specificity, so the last word belongs to whatever is most local: the
+    operator's standing instructions, then whatever each running plugin contributed at `setup`,
+    then the note saying what this session's tools reach. Empty blocks are dropped rather than
+    joined, so a console with no plugins produces exactly what this console produced before there
+    were any.
+
+    Here rather than in a module of its own, because what used to be in that module is a plugin now:
+    reading a repository's `AGENTS.md` and handing over the guidance a directory carries are the
+    bundled `guidance` plugin's, and what was left beside them was this one join.
+    """
+    return "\n\n".join(block.strip() for block in blocks if block and block.strip())
 
 
 def instructions_key(began: int) -> StepKey:
@@ -982,19 +1174,21 @@ type Outcome = Literal["success", "failed", "denied", "interrupted"]
 # cached prefix, where this is a `SystemPromptPart` appended into the message history at a position.
 # Two mechanisms, two places in the request, two things a reader may want to quiet separately - so
 # two words, by the same rule that keeps `steer` apart from `prompt`. How each one reaches the model
-# differs too, and by more than the wire: see `docs/design/guidance.md`. It takes the
+# differs too, and by more than the wire: see `docs/plugins/guidance.md`. It takes the
 # person's hue for the reason `system-prompt` does.
 #
-# `handoff` is the one kind nobody wrote: the console asks for a handoff in a message of its own, and
-# what comes back opens the next turn on a cleared context. A reader has to be able to tell that at a
-# glance, which is the whole of why it is a kind rather than a `prompt` with a flag - the same
-# argument that keeps `steer` apart. It is on the person's side because the axis is who produced the
-# text, and what a handoff holds was produced by this session rather than by the model about to be
-# handed it; the `title` on its role is what says the console composed it, exactly as `command`'s says
-# no model was told.
-type Kind = Literal[
-    "prompt", "handoff", "steer", "command", "assistant", "thinking", "tool", "system-prompt", "guidance"
-]
+# `note` is the one kind nobody in the conversation wrote: a plugin asked for it and the console put
+# it in the inbox. A reader has to be able to tell that at a glance, which is the whole of why it is a
+# kind rather than a `prompt` with a flag - the same argument that keeps `steer` apart. It is on the
+# person's side because the axis is who produced the text, and a plugin's message was composed by this
+# console's own machinery with the model as the party about to be told.
+#
+# **It is the one kind whose role, hover text and ink are not fixed here**, because a pre-commit
+# failure and a handoff document are different things to meet halfway down a transcript. What a plugin
+# names is a `label`, a `title` and a `tone`, all optional and all carried on the panel; the tone is
+# weight *within* the person's side rather than a hue competing with it, which is the same answer the
+# forget rule reached.
+type Kind = Literal["prompt", "note", "steer", "command", "assistant", "thinking", "tool", "system-prompt", "guidance"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1178,6 +1372,25 @@ class Panel:
     is ever asked.
     """
 
+    role: str | None = None
+    """
+    The word on this panel's role where a plugin named one, and nothing at all everywhere else.
+
+    Only a note ever carries one, and it is resolved here rather than at render time: what a plugin
+    said, or the plugin's own name where it said nothing. The page draws a `Panel`, and this is the
+    last place that knows who asked.
+    """
+
+    title: str | None = None
+    """The hover text saying what a reader is looking at, where a plugin said, as most kinds have none."""
+
+    tone: Tone = PLAIN
+    """
+    Which of the console's inks a note takes, which is weight within a side rather than a hue.
+
+    The plain one on every other kind, which is not a claim about them: only a note is ever asked.
+    """
+
     asked: int | None = None
     """
     Which model request of the turn produced these blocks, and nothing where a person did.
@@ -1196,14 +1409,17 @@ class Panel:
         return f"panel-{self.turn}-{self.at}"
 
     @property
-    def label(self) -> str:
+    def address(self) -> str:
         """
-        What a panel is called where somebody reads it, which is its whole position and not half.
+        Where a panel is, where somebody reads it, which is its whole position and not half.
 
         The turn alone names four things in a turn that reasoned, called a tool, and answered, so a
         reader following one permalink out of four had no way to tell which they were looking at
         and no way to say which they meant. `at` is already what makes the anchor unique; this is
         the same pair, said out loud.
+
+        Named `address` rather than `label`, because `label` is the word a plugin puts on a note's
+        role and one word may name one thing. This is a position and never a name.
         """
         return f"{self.turn}.{self.at}"
 
@@ -1861,6 +2077,102 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
     return tuple(responses)
 
 
+def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None:
+    """
+    Everything a session loaded, or nothing at all where nobody has answered its settings step.
+
+    The two halves read as one list, because nothing downstream cares which key a plugin came back
+    under: the tiers are told apart by what each plugin *is*, which it carries, and the keys exist
+    for the fork rather than for any reader.
+
+    `None` and not an empty tuple, and here the difference is the trust boundary rather than a
+    loading state: a session that has loaded nothing is one nobody has confirmed, and a session that
+    loaded an empty set is one somebody confirmed with every switch off. The console's own half is
+    what decides, since both are written together and only one of them can be empty for a reason.
+    """
+    console = recorded.get(PLUGINS_KEY)
+    if console is None:
+        return None
+    held = recorded.get(REPOSITORY_PLUGINS_KEY)
+    return (*parse_registration(console), *(() if held is None else parse_registration(held)))
+
+
+def declared_in(recorded: Mapping[str, object]) -> tuple[Installed, ...] | None:
+    """
+    Every plugin this session may run, or nothing at all where its worktree is still being planted.
+
+    The two halves read as one list, exactly as the registration's do: which key a plugin came back
+    under is the fork's question and no reader's, and what tells the tiers apart is what each plugin
+    carries.
+
+    `None` and not an empty tuple, because the difference is what the settings step draws: a session
+    that has declared nothing is one whose first pass has not finished, and a session that declared an
+    empty set is a console with no plugins at all. The console's own half decides, since it is written
+    first and is a directory listing rather than anything a repository can affect.
+    """
+    console = recorded.get(DECLARED_KEY)
+    if console is None:
+        return None
+    held = recorded.get(REPOSITORY_DECLARED_KEY)
+    return (*parse_declaration(console), *(() if held is None else parse_declaration(held)))
+
+
+def environment_in(recorded: Mapping[str, object]) -> dict[str, str]:
+    """
+    What this session's commands run under beyond what the sandbox sets, as its setup recorded.
+
+    Empty where nothing asked for anything, which is every session whose repository carries no plugin
+    that sets one up and every session recorded before there was such a thing: a command then runs
+    exactly as it always did.
+    """
+    held = recorded.get(SETUP_ENVIRONMENT_KEY)
+    return {} if held is None else parse_environment(held).values
+
+
+def parse_environment(recorded: object) -> records.Environment:
+    return records.Environment.model_validate(recorded)
+
+
+def plugins_refused_in(recorded: Mapping[str, object]) -> records.Refused | None:
+    """
+    Why this session's plugins could not be declared, where they could not.
+
+    Read only where there is no declaration to read instead, which is what makes a write-once
+    breadcrumb sound: a later pass that succeeds writes the declaration, and the page reads that.
+    """
+    said = recorded.get(PLUGINS_REFUSED_KEY)
+    return None if said is None else parse_refused(said)
+
+
+def setups_in(recorded: Mapping[str, object]) -> int:
+    """
+    How many times somebody has answered this session's settings step, which is zero until they have.
+
+    Counted by walking the keys rather than held as a number, which is what every other count here
+    does: `refusal_in` walks turns and `reached` walks the same way. There is nothing to keep in step,
+    and a session that has been pressed once and failed once is a `1` with a refusal under it.
+    """
+    attempt = 0
+    while setup_key(attempt) in recorded:
+        attempt += 1
+    return attempt
+
+
+def setup_refused_in(recorded: Mapping[str, object]) -> records.Refused | None:
+    """
+    Why the latest attempt at setting this session's plugins up did not finish, where it did not.
+
+    Asked of the last attempt and of no earlier one, which is what makes the numbering worth having:
+    a refusal against an attempt somebody has already pressed past is history, and what the page has
+    to say is whether the *current* attempt is still working or has stopped with a reason.
+    """
+    attempts = setups_in(recorded)
+    if attempts == 0:
+        return None
+    said = recorded.get(setup_refused_key(attempts - 1))
+    return None if said is None else parse_refused(said)
+
+
 def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
     """
     Why this conversation stopped and will not start again on its own, or nothing where it has not.
@@ -1880,6 +2192,48 @@ def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
         turn += 1
     said = recorded.get(refused_key(turn, len(responded(recorded, turn))))
     return None if said is None else parse_refused(said)
+
+
+def parse_failed(recorded: object) -> records.Failed:
+    """Why one pass raised, read back as the record holding the reason and where it had got to."""
+    return records.Failed.model_validate(recorded)
+
+
+def progress_in(recorded: Mapping[str, object]) -> int:
+    """
+    How far this session has got, as the one number a failure is keyed by and compared against.
+
+    Every record but the failures themselves, because a failure has to be able to say "and nothing
+    has happened since". Counted with them in, the record a failing pass writes would move the number
+    it was just keyed by, so the next delivery would find its own key taken by a different count, and
+    a session broken for a week would hold a record per lease instead of one.
+
+    A count and not a hash, for `Service.token`'s reason: what it is asked is whether anything moved,
+    and a checkpoint is append-only, so nothing else can move it.
+    """
+    return sum(1 for key in recorded if not key.startswith(FAILED_PREFIX))
+
+
+def failure_in(recorded: Mapping[str, object]) -> records.Failed | None:
+    """
+    Why the last pass at this session raised, where one did and nothing has happened since.
+
+    **The liveness test is the whole of this function.** A failure whose `at` is still what the
+    session holds is why the session is stopped right now; one recorded before something later landed
+    is a pass that has since got past it, which is history, and history is what the transcript is
+    for. That is `refusal_in`'s rule said against a count rather than against a turn, and it has to be
+    a count because a pass can fail somewhere no turn names.
+
+    One walk of the records in store order, `ends_in`'s way: the order is the property being used and
+    the store already guarantees it, so the newest failure is the last one this sees.
+    """
+    latest: records.Failed | None = None
+    for key, value in recorded.items():
+        if key.startswith(FAILED_PREFIX):
+            latest = parse_failed(value)
+    if latest is None or latest.at != progress_in(recorded):
+        return None
+    return latest
 
 
 def called_in(responses: Sequence[ModelResponse]) -> Iterator[str]:
@@ -1964,6 +2318,11 @@ def blocks_from(
     the one a redirect took at the end of a run. That is its right place while it is pending, since
     nothing has been said since; a redirected one moves above its answer when that answer lands,
     which is the one reorder this reading performs.
+
+    What a plugin said to keep the turn going is drawn the same way, by the response count the record
+    carries: above the response it shaped once that has landed, and at the end while it is still
+    out. It goes in the console's voice, because that is what carried it, and the settled reading
+    draws the same part the same way.
     """
     # One walk of the recorded calls, read twice: what each came back with and how long it took. Two
     # walks would eventually disagree about which calls a turn has heard from.
@@ -1971,11 +2330,14 @@ def blocks_from(
     returned = {call: returned_step(said) for call, said in called.items()}
     took = {call: said.took for call, said in called.items() if said.took is not None}
     told = told_in(recorded, held, turn)
+    ends = ends_in(recorded, turn)
     taking, _ = unread_in(recorded, held, turn, listening=True)
     blocks: list[Sourced] = []
     for at, response in enumerate(responses):
+        blocks.extend((Guidance(text=text), None) for each in ends if each.at == at for text in each.said)
         blocks.extend((Steering(text=text), None) for text in (told[at] if at < len(told) else ()))
         blocks.extend((block, at) for block in blocks_in(response, returned, took))
+    blocks.extend((Guidance(text=text), None) for each in ends if each.at == len(responses) for text in each.said)
     blocks.extend((Steering(text=text), None) for text in taking)
     return tuple(blocks)
 
@@ -2049,13 +2411,20 @@ def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Pane
     produced the text, and what a handoff holds was produced by this session rather than by the model
     about to be handed it.
     """
+    noted = said if isinstance(said, records.Note) else None
     return Panel(
         turn=turn,
         at=0,
-        kind="handoff" if isinstance(said, records.Handoff) else "prompt",
+        kind="prompt" if noted is None else "note",
         blocks=(Prose(text=said.said),),
         tree=tree,
         forget=records.forgets(said),
+        # What the plugin said about how its panel is drawn, or nothing at all for a message somebody
+        # typed. The label falls back to the plugin's own name here rather than at render time,
+        # because the page draws a `Panel` and this is the only place that still knows who asked.
+        role=None if noted is None else (noted.label or noted.plugin),
+        title=None if noted is None else noted.title,
+        tone=PLAIN if noted is None else toned(noted.tone),
     )
 
 
@@ -2160,19 +2529,88 @@ def requested_at(recorded: Mapping[str, object], turn: int, at: int) -> object |
     return recorded.get(model_key(turn, at))
 
 
-def recording(answered: AgentRunResult[str]) -> Callable[[], Awaitable[object]]:
+def recording(said: Sequence[ModelMessage]) -> Callable[[], Awaitable[object]]:
     """
     What a finished turn writes into the checkpoint, as the effect `Run.step` takes.
 
-    A function of the result rather than a closure written at the call site, so the value it
+    A function of the messages rather than a closure written at the call site, so the value it
     reads is the one passed in: a closure built inside the conversation's loop would capture the
     loop's variable and read whatever it holds when the step gets around to calling it.
     """
 
     async def record() -> object:
-        return recorded_messages(answered.new_messages())
+        return recorded_messages(said)
 
     return record
+
+
+type Keeping = Callable[[int, int], Awaitable[Sequence[str]]]
+"""
+What the session's plugins say when the turn tries to end, by which attempt at ending this is and
+how many responses the turn has made, taken under the key that records it.
+
+A function for `Injecting`'s reason: what answers it runs somebody else's script, and injecting the
+one question keeps the loop that carries a turn ignorant of what a plugin is.
+"""
+
+
+def keeping_through(run: Run, live: Live, turn: int, opened_on: Opening) -> Keeping | None:
+    """
+    What a session's plugins want put to the model when it tries to stop, recorded per attempt.
+
+    A step, for `injecting_through`'s reason: a plugin is somebody else's program and cannot be
+    trusted to answer the same way twice, so what it said is recorded and a resumed pass replays it
+    rather than asking again. Written whether or not anything was said, because an empty answer is
+    the record of the turn being let go: a replay that found no record would have to ask.
+
+    `None` where no plugin asked, so a session whose plugins want nothing of this records nothing
+    and its keys are exactly what they were before the event existed.
+    """
+    if not live.wanting("before_turn_end"):
+        return None
+
+    async def keep(attempt: int, at: int) -> Sequence[str]:
+        async def asking() -> object:
+            return records.End(said=await stopping(live, turn, opened_on, attempt), at=at).recorded()
+
+        return (await run.step(end_key(turn, attempt), asking, parse_end)).said
+
+    return keep
+
+
+async def answering_turn(
+    agent: Agent[None, str], asked: str, history: Sequence[ModelMessage], keeping: Keeping | None
+) -> tuple[ModelMessage, ...]:
+    """
+    One turn's worth of messages: the run, and every run after it that a plugin kept going.
+
+    **The gate in front of the turn ending, which is what a Claude Code `Stop` hook is.** The model has
+    answered and would stop; the session's plugins are asked; what any of them injected is put to the
+    model in the console's voice and the model is asked again, in the same turn, until it tries to
+    stop and nothing keeps it. Each run after the first carries no prompt of its own, because what
+    it carries is the request the injection made, appended to the history it continues from.
+
+    A `SystemPromptPart` and not a `UserPromptPart`, for `before_model_request`'s reason: nobody typed
+    it, and `interjected` draws the two apart by which part carried them. One request rather than
+    one per plugin, so what several plugins said arrives as one thing to answer.
+
+    The messages are composed here rather than read off the last result, because a run's
+    `new_messages` are the ones it made and the request that kept it going was made by this: a
+    turn's record is every run's messages with the requests between them, in the order the model
+    saw them.
+
+    `keeping` absent is a session none of whose plugins asked, and it runs exactly as it did before
+    the event existed: one run, and no record of it having been let go.
+    """
+    said: list[ModelMessage] = list((await agent.run(asked, message_history=list(history))).new_messages())
+    if keeping is None:
+        return tuple(said)
+    attempt = 0
+    while injected := await keeping(attempt, sum(1 for each in said if isinstance(each, ModelResponse))):
+        attempt += 1
+        said.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
+        said.extend((await agent.run(None, message_history=[*history, *said])).new_messages())
+    return tuple(said)
 
 
 class NoSuchRepository(LookupError):
@@ -2220,7 +2658,7 @@ def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> W
     """
     if workspaces is None or chosen.repository is None:
         return None
-    return workspaces.worktree(session)
+    return workspaces.worktree(session, chosen.repository)
 
 
 def taken(entries: Sequence[Entry]) -> tuple[records.Delivered, ...]:
@@ -2254,87 +2692,28 @@ async def opening_turn(run: Run, turn: int) -> records.Delivered:
     return taken(took)[-1]
 
 
-type Handoffs = Callable[[str], Handing]
-"""
-Where a session's handoffs go, as a function from the session to the tool's own hook.
-
-Injected into `conversing` rather than built inside it, symmetric with `Pricer`, `Draining` and
-`Guiding` and for a plainer reason than a cycle: writing a handoff means *queueing* the session, and
-a pass holds a checkpoint rather than the scheduler in front of it.
-"""
-
-
-def handing_through(durable: Durable, session: str) -> Handing:
-    """
-    Where a handoff written inside a pass goes, which is this session's own inbox.
-
-    **Delivered and not appended**, which is the whole of what the queue is for here. An entry
-    appended mid-pass is invisible to the pass that appended it - `receive` reads the snapshot loaded
-    at the top, which is what makes a drain replayable - and an append queues nothing, so a handoff
-    written that way leaves the session `Blocked` on a message already sitting in its inbox, with
-    nothing that will ever wake it. Delivering makes the session ready again, and the pass that takes
-    it reads a fresh snapshot with the document in it.
-
-    The cost, stated: a handoff always crosses a pass boundary. That is the same bargain a steer
-    already takes, one direction along, and it costs a claim rather than a round trip.
-
-    The write is an *effect inside a step*, since `wrap_tool_execute` records what the tool returned:
-    a resumed pass replays the return and does not write a second entry. That is what stops a crash
-    between the delivery and the record leaving a conversation with two handoffs in it.
-
-    `forget=True` is why this is worth a mechanism at all. A handoff that did not clear the context
-    would be a summary of the conversation appended to the conversation, which is the one shape that
-    costs tokens and buys nothing.
-    """
-
-    async def hand(document: str) -> None:
-        await durable.deliver(session, records.Handoff(said=document, forget=True).recorded())
-
-    return hand
-
-
 type Tendings = Callable[[str], Awaitable[Tending]]
 """
-What this console is doing for a session unasked, as a function from the session to its settings.
+What a session's plugins are set to, as a function from the session to its settings.
 
-Injected rather than reached for, symmetric with `Handoffs`, `Pricer`, `Draining` and `Guiding`, and
-for the plainest reason of the five: a pass holds a checkpoint, and these live on the session index,
-which is a table it has no business knowing the shape of.
+Injected rather than reached for, symmetric with `Pricer`, `Draining` and `Injecting`, and for the
+plainest reason of the four: a pass holds a checkpoint, and these live on the session index, which is
+a table it has no business knowing the shape of.
 
-`None` is a console that was never given a way to read them, and such a console tends nothing. That
-is the same reading `prices` and `handoffs` already take - a capability absent is the feature absent -
-and it is what keeps the arithmetic inert in every test that does not ask for it, by construction
-rather than by the accident of some other value being missing.
+`None` is a console that was never given a way to read them, and such a console runs every plugin on
+its declared defaults. That is the same reading `prices` already takes - a capability absent is the
+feature absent - and it is what keeps a test that is not about settings from having to supply any.
 """
 
 
-def crossed(asked: records.Delivered, said: Sequence[ModelMessage], window: int | None, tended: Tending) -> bool:
-    """
-    Whether the turn that just ended is the one that should be followed by a handoff.
+type Storings = Callable[[str, str, Mapping[str, object]], Awaitable[None]]
+"""
+Where a plugin's `set` is written, as a function from the session and the plugin to the write.
 
-    **Read at the boundary that crosses the reserve, rather than at the start of the next turn**, and
-    that is about the cache rather than about promptness: the conversation's prefix is warm right now,
-    where by the time somebody comes back and types it may not be, and a handoff run is several
-    requests over the whole window. The same argument that makes a handoff cheap in-session makes it
-    cheap *here*.
-
-    **A turn that opened on a handoff never triggers another**, which is the whole of what stops this
-    recursing. The reserve is crossed for as long as the context stays large, so without it the ask
-    turn - whose own context is the conversation it is summarising - would cross it again the instant
-    it ended, and so would the one after that. Asking about the message the turn opened on is enough
-    for both cases: the ask carries no boundary and the document carries one, and neither should be
-    followed by a second ask. A model that answered the ask in prose rather than by calling the tool
-    is therefore not asked again until a person says something, which is a retry per human action
-    rather than one per turn - the rule a refusal already follows.
-
-    The context is this turn's *last* request rather than a sum, by `Spent.context`'s own rule: every
-    request carries the whole conversation, so what says how much of the window is gone is where the
-    turn left it.
-    """
-    if isinstance(asked, records.Handoff):
-        return False
-    context = spent_on(responses_in(said)).context
-    return standing(context, window, tended.reserve) == "due"
+The other half of `Tendings`, and separate from it because reading is a pass's own business and
+writing crosses back out to the index. A console given neither has plugins that cannot remember
+anything between events, which is a console that never wrote a settings column.
+"""
 
 
 def draining_inbox(run: Run, turn: int) -> Draining:
@@ -2347,8 +2726,8 @@ def draining_inbox(run: Run, turn: int) -> Draining:
     turn opens on it.
 
     **It stops at a message that must open a turn**, which is the one thing this has to get right: a
-    `Prompt` is one somebody asked to be answered on its own and a `Handoff` is one this console
-    wrote to end a stretch of context, so folding either into the turn already running would be
+    `Prompt` is one somebody asked to be answered on its own and a `Note` is one a plugin asked for,
+    so folding either into the turn already running would be
     answering a question nobody put. Which records those are is `records.opens`'s to say rather than
     this function's, so a fifth kind of entry is answered in one place. Everything up to that point is
     taken, including the commands in between, which are passed over rather than told.
@@ -2388,14 +2767,16 @@ class Stalled:
     """
     What a pass that hit an unanswerable request comes back with: the session is owed nothing.
 
-    The other way this body returns, and the opposite instruction to `Progressed`. A pass that
-    refuses to go on must not be made ready again, because the next one would ask the identical
-    question of the identical recorded history and be refused identically - which, left to the
-    worker's own redelivery, is a session retried once per lease for ever with nothing saying so.
+    One of the two ways this body declines to go on, and the opposite instruction to `Progressed`. A
+    pass that refuses to go on must not be made ready again, because the next one would ask the
+    identical question of the identical recorded history and be refused identically - which, left to
+    the worker's own redelivery, is a session retried once per lease for ever with nothing saying so.
 
-    The reason is already in the checkpoint by the time this is returned, under
-    `refused_key(turn, at)`, so this carries none: what the page draws it reads for itself, and a
-    value passed back through the worker would be a second copy of it that no restart survives.
+    **This one is a fault, and `Unconfirmed` is the other**, which asks for the same silence over a
+    session that has nothing wrong with it. The reason is already in the checkpoint by the time this
+    is returned, under `refused_key(turn, at)`, so this carries none: what the page draws it reads for
+    itself, and a value passed back through the worker would be a second copy of it that no restart
+    survives. That a refusal *is* recorded is what the two arms are told apart by.
 
     A person can still ask again, and that is the point rather than a gap: writing a message queues
     the session, so a refusal costs one attempt per human action instead of one per lease. What gets
@@ -2405,40 +2786,188 @@ class Stalled:
 
 
 @dataclass(frozen=True, slots=True)
-class Crossed:
+class Unconfirmed:
     """
-    What a pass whose session reached its reserve comes back with: it is owed a handoff, then a turn.
+    What a pass that reached a session still on its settings step comes back with: wait for the press.
+
+    **`Stalled`'s instruction without `Stalled`'s claim.** Both say do not make this session ready
+    again, and for the same reason: another pass would read the identical recorded history and stop
+    in the identical place. What separates them is what is in the checkpoint. A stalled session has a
+    refusal under `refused_key` saying why nothing can be asked; this one has recorded *nothing at
+    all*, because there is nothing wrong with it - somebody has simply not pressed the button yet.
+
+    Told apart rather than folded together because the worker logs what it is handed, and a fork's
+    first pass ends here: every branch of every session on a console with plugins would otherwise
+    report a fault at the one moment the console is working exactly as designed.
+
+    What makes the session ready again is the press, which `Service.settle` queues a pass for. So the
+    waiting costs one pass, not one per lease.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Noting:
+    """
+    What a pass whose plugins want something said comes back with: those notes, then another turn.
 
     The third instruction, and the one that is not about this pass at all. `Progressed` and `Stalled`
-    both say what to do with a conversation that is where the pass left it; this says the conversation
-    has run far enough into its model's window that the next thing it should be asked is to write down
-    where it has got to.
+    both say what to do with a conversation that is where the pass left it; this says a plugin asked
+    at the turn boundary for something to be put to the session.
 
-    **A value rather than a delivery made from inside the loop**, which is the same split `Progressed`
-    already makes and for a stronger reason. Asking for a handoff means putting a message in the
-    session's inbox, and putting a message in an inbox *queues* the session: that is a fact about the
+    **A value rather than a delivery made from inside the loop**, and that is the split this design
+    generalises from `Crossed`. Delivering a message *queues* the session, which is a fact about the
     queue in front of a pass rather than about answering one, so it belongs where `make_ready` already
-    is. It is also what makes the decision testable as a value - a test drives one pass and reads what
-    came back, with no store and no scheduler anywhere near the arithmetic.
+    is. It is also what makes the decision testable as a value: a test drives one pass and reads what
+    came back, with no store and no scheduler anywhere near it.
 
-    It carries nothing, because there is nothing here that the composition root does not already have.
-    What the ask says is `recorded_ask`'s, so a person pressing the button in the rail and this cannot
-    come to ask for two different things.
+    It carries the notes rather than a flag, because what to say is the plugin's and the console has
+    no composition of its own to fall back on. Several plugins answering one turn boundary is not a
+    conflict needing a tiebreak: each note is one inbox entry, and the inbox is already a queue that
+    orders them and opens a turn per message.
     """
 
+    notes: tuple[records.Note, ...]
 
-type Ended = Progressed | Stalled | Crossed
+
+type Ended = Progressed | Stalled | Unconfirmed | Noting
 """
 What one pass ends as, and the whole of what the worker owes each.
 
 Arms rather than a boolean, so `readying` reads what happened rather than a flag saying what to do
-about it, and so a fourth answer is a type error at the match rather than a session that quietly
+about it, and so a fifth answer is a type error at the match rather than a session that quietly
 stops being woken.
 
+**Two arms ask for the same thing and are still two.** `Stalled` and `Unconfirmed` both say leave
+this session alone, and the worker does the same nothing with each; what they do not share is what
+the checkpoint holds and therefore what an operator should be told. Folding them together would
+buy one branch and cost the log its only way to tell a dead session from a waiting one.
+
 Named for the pass rather than `Outcome`, which in this module already means how one tool call went
-and in `without-durability` already means what the mechanism made of a pass. Three things, three
-words.
+and in `without-durability` already means what the mechanism made of a pass.
 """
+
+
+async def declaring_plugins(
+    run: Run, declaring: Declaring, chosen: Choice, worktree: Worktree | None
+) -> tuple[Installed, ...]:
+    """
+    Which plugins this session *may* run, read out of files on its first pass and never run here.
+
+    **Nothing is executed by this**, and that is the point rather than an implementation note. A
+    plugin is a program, so the console asks somebody which programs to run before it runs any: this
+    half is a directory listing, a mapping in `config.yaml`, and a mapping in the repository's own
+    `.mainplate/mainplate.yaml`. What each of them *is* comes back from `setup`, which the pass after
+    the settings step runs. See `setting_plugins_up`.
+
+    **Two steps, one per tier group**, for failure isolation rather than because a fork treats them
+    differently: the console's own scripts are read from files outside every worktree and a
+    repository's from a file in one, so one of the two can fail on its own, and a declaration that
+    would not parse should leave the other half recorded. A fork carries neither and reads both
+    afresh, which is what lets a branch pick up an edited `.mainplate/`.
+
+    **Without trust nothing is read**, and the recorded set is empty for that session's life.
+    Trusting afterwards reaches sessions started after it and none before, which is the answer
+    `Choice` gives to every other question; forking is how a session changes its mind.
+
+    **Both steps are taken even where there is nothing declared**, which is what makes an empty
+    declaration mean "this session has looked" rather than "nobody has looked". A console with no
+    plugins at all records two empty sets and its sessions reach the settings step exactly as a
+    console with six do; without the write there would be no way to tell a console with none from a
+    session whose worktree is still being planted.
+    """
+    where = None if worktree is None else worktree.root
+
+    async def console() -> object:
+        return recorded_declaration(declaring.console)
+
+    async def repository() -> object:
+        if where is None or not declaring.runs(chosen.repository, chosen.trusted):
+            return recorded_declaration(())
+        return recorded_declaration(repository_plugins(where))
+
+    return (
+        *await run.step(DECLARED_KEY, console, parse_declaration),
+        *await run.step(REPOSITORY_DECLARED_KEY, repository, parse_declaration),
+    )
+
+
+async def setting_plugins_up(
+    run: Run,
+    declaring: Declaring,
+    declared: Sequence[Installed],
+    tended: Tending,
+    worktree: Worktree | None,
+) -> tuple[Enrolled, ...] | None:
+    """
+    Set up exactly the plugins somebody left switched on, and record what each of them contributed.
+
+    **The one place a plugin is executed on somebody's say-so, and the whole of why the settings step
+    exists.** Nothing before this has run one: the pass that planted the worktree read what each tier
+    *declares* out of files, and `setup_key` says a person has since looked at that list and pressed
+    the button. What runs is exactly the set the switches left on, so a plugin turned off is not
+    merely contributing nothing, it was never launched.
+
+    **In a pass rather than in the request handler that took the press**, which is the argument this
+    console already made about the clone: a setup fetches and builds, which is minutes on a cold
+    cache, and a request somebody is waiting on is the wrong place for minutes. So the press records
+    the switches and asks for a pass, and this is what the pass does before it opens a turn.
+
+    `None` where the step has not been answered, which is the state the first pass of every session
+    is in, and which `opening_turn` then holds on an empty inbox.
+
+    **Both tiers at once, and every plugin within a tier at once**, because they are independent
+    processes and the session waits on all of them. Nothing is written until every one has answered,
+    so a tier that failed does not leave the other one recorded: the store keeps the value a key was
+    first given, and a half-written registration could never be corrected.
+
+    Only under a key nothing has recorded yet, which is what a resumed pass turns on: the keys are
+    written one after the other, so a pass that died between them comes back with one recorded, and
+    launching that tier's processes again to throw the answer away is work nobody asked for.
+
+    **What the repository's plugins asked to have set for the session's commands is recorded here
+    too**, under `SETUP_ENVIRONMENT_KEY` and before either registration, so a session past its step
+    always has an answer there. It is written even where nothing asked for anything, which is what
+    keeps a missing key from meaning two different things. See `asking.asked_to_set`.
+    """
+    if setups_in(run.recorded) == 0:
+        return None
+    speaking = declaring.speaking
+    if speaking is None:
+        # A console with no way to run a plugin loads none and says so by recording two empty sets,
+        # which is what takes such a session past the step exactly as a full setup does.
+        return (
+            *await run.step(PLUGINS_KEY, partial(recorded_plugins, ()), parse_registration),
+            *await run.step(REPOSITORY_PLUGINS_KEY, partial(recorded_plugins, ()), parse_registration),
+        )
+    on = [each for each in declared if tended.on(each.qualified, ON)]
+    # By tier, because that is the question the two keys answer: failure isolation between what was
+    # read from files outside every worktree and what was read from one. Confinement happens to
+    # draw the same line today and is a different question.
+    asking = [
+        (key, [each for each in on if (each.tier is Tier.REPOSITORY) is repository])
+        for key, repository in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
+    ]
+    unrecorded = [(key, asked) for key, asked in asking if key not in run.recorded]
+    said = await asyncio.gather(*(setting_up(asked, speaking, run.workflow, worktree) for _, asked in unrecorded))
+    ready = dict(zip((key for key, _ in unrecorded), (enrolled for enrolled, _ in said), strict=True))
+    # Across both tiers, which costs nothing and asks for no rule about which of them may set a
+    # variable: only a plugin inside the namespace is offered the file, so a plugin outside a worktree
+    # contributes an empty mapping here by construction rather than by being excluded.
+    environment = {name: value for _, asked in said for name, value in asked.items()}
+
+    async def recorded_environment() -> object:
+        return records.Environment(values=environment).recorded()
+
+    await run.step(SETUP_ENVIRONMENT_KEY, recorded_environment, parse_environment)
+    settled: list[Enrolled] = []
+    for key, _ in asking:
+        settled.extend(await run.step(key, partial(recorded_plugins, ready.get(key, ())), parse_registration))
+    return tuple(settled)
+
+
+async def recorded_plugins(enrolled: Sequence[Enrolled]) -> object:
+    """One tier's set, as the value its registration key takes - the empty set included."""
+    return recorded_registration(enrolled)
 
 
 def conversing(
@@ -2448,8 +2977,10 @@ def conversing(
     bwrap: str | None = None,
     prices: Prices | None = None,
     allowance: int | None = None,
-    handoffs: Handoffs | None = None,
     tendings: Tendings | None = None,
+    storings: Storings | None = None,
+    declaring: Declaring | None = None,
+    delivering: Callable[[str, records.Note], Awaitable[None]] | None = None,
 ) -> Callable[[Run], Awaitable[Ended]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -2482,6 +3013,14 @@ def conversing(
     value: a switch turned while a turn was being answered would have that turn answered under one
     answer and judged under another, which is precisely the escaping mutation a value is for. What it
     costs is that a change takes effect on the next pass, which is the next turn.
+
+    **The first pass of a session answers nothing, and that is the shape rather than an accident.**
+    It plants the worktree and asks every plugin what it is, records both, and then reaches
+    `opening_turn` with an empty inbox and comes back `Blocked`. Nothing about that is a new
+    mechanism: `opening_turn` already suspends a pass on the inbox, so "set up, then stop and wait"
+    is `planting` moving above it plus a session that is queued by `make_ready` rather than by a
+    delivery. A session nobody types into holds no lease and no worker slot, because a blocked pass
+    has released its claim.
     """
 
     async def converse(run: Run) -> Ended:
@@ -2518,62 +3057,127 @@ def conversing(
         # turn boundary would be a place two writers share, so a switch flicked while a turn was in
         # flight would have that turn answered under one answer and judged under another. `None` is a
         # console that was given no way to read these at all, and such a console tends nothing.
-        tended = None if tendings is None else await tendings(run.workflow)
+        tended = TENDED if tendings is None else await tendings(run.workflow)
         at = reached(run.recorded)
+        # Cloning and checking out happen *here* rather than when the session was created, because
+        # creating one is a request somebody is waiting on and a clone is a network fetch that can
+        # take minutes. A pass is where slow work already lives and where a lease already covers it.
+        # Both halves are idempotent, so every later pass reaches this and does nothing.
+        #
+        # It is an effect outside a step, and that is sound rather than an exception: what it does is
+        # make a directory exist, which is the same on every pass, so there is no result to record
+        # and nothing for a replay to disagree with.
+        #
+        # **Above `opening_turn` rather than below it**, which is the whole of what makes a settings
+        # step possible: a repository's plugins cannot be *named* until its worktree is planted, and
+        # the worktree is planted by a pass. So the first pass of a session plants, reads what is
+        # declared, and then blocks with an empty inbox.
+        await planting(workspaces, run, chosen, at.turn)
+        # Settled once, so the three readers below cannot come to differ over what a console given no
+        # `Declaring` runs: no scripts, no way to speak to one, and nothing a repository may add.
+        sourcing = declaring or Declaring()
+        try:
+            declared = await declaring_plugins(run, sourcing, chosen, worktree)
+        except (Refused, BadDeclaration) as raised:
+            # **A failure ends the pass with nothing declared**, and the reason is written where the
+            # page can say which file and why. `Stalled` rather than a raise, because the next pass
+            # would ask the identical question of the identical files and be told the identical
+            # thing - which, left to the worker's own redelivery, is a session retried once per lease
+            # for ever with only a log line to show for it.
+            failed = records.Refused(why=str(raised))
+            await run.step(PLUGINS_REFUSED_KEY, partial(as_recorded, failed), parse_refused)
+            return Stalled()
+        # What this session runs, set up here on the pass that follows the settings step being
+        # answered: `setup` executes a program, so it happens once somebody has said which programs
+        # to execute, and never on the pass that merely reads what is declared. `None` is a session
+        # still sitting on that step, and the guard below is what keeps it there.
+        enrolled = registered_in(run.recorded)
+        if enrolled is None:
+            try:
+                enrolled = await setting_plugins_up(run, sourcing, declared, tended, worktree)
+            except (PluginFailed, Refused, BadDeclaration) as raised:
+                # **Recorded against the attempt it belongs to**, which is what makes the step
+                # somebody can act on: turning the plugin off and pressing again opens a new attempt
+                # with no refusal under it, and the page draws that as working rather than as the
+                # sentence it just showed. `Stalled` for `declaring_plugins`' reason - the next pass
+                # would ask the identical question of the identical scripts.
+                stopped = records.Refused(why=str(raised))
+                against = setup_refused_key(setups_in(run.recorded) - 1)
+                await run.step(against, partial(as_recorded, stopped), parse_refused)
+                return Stalled()
+        on = running(enrolled or (), tended)
+        live = Live(
+            session=run.workflow,
+            enrolled=on,
+            tending=tended,
+            speaking=sourcing.speaking,
+            worktree=worktree,
+            delivering=(lambda note: delivering(run.workflow, note)) if delivering is not None else nowhere,
+            storing=(
+                (lambda plugin, values: storings(run.workflow, plugin, values)) if storings is not None else unstored
+            ),
+        )
         while True:
             asked = await opening_turn(run, at.turn)
+            # A session that declares plugins and has loaded none has nothing to answer with, and
+            # answering anyway would put a turn in the cached prefix under a harness nobody chose. So
+            # this pass stops here, having recorded nothing: the page draws the settings step, and the
+            # press that answers it asks for the pass that picks this message up.
+            #
+            # **Stopped rather than refused, because a branch reaches here holding a message.** A fork
+            # carries none of its parent's plugins and queues the turn it re-asks, so `opening_turn`
+            # hands that message over while the step is still unanswered - which is waiting for a
+            # press rather than anything having gone wrong. An ordinary session waits further up,
+            # blocked on an empty inbox, and a refusal recorded here would have made every branch with
+            # something to re-ask a session that says it cannot be answered.
+            #
+            # Asked of what was *declared*, so a console with no plugins at all needs no confirmation:
+            # what the step confirms is executing somebody's program, and there is none to execute.
+            if enrolled is None and declared:
+                return Unconfirmed()
             # Read off the message this pass just parked on rather than by asking the store again,
             # which is the whole reason the boundary rides on the message itself: a pass carries its
             # history forward between turns, so a marker delivered beside the message while it was
             # waiting here would be invisible to it and seen by the pass that resumed.
             if records.forgets(asked):
                 at = Reached(turn=at.turn, history=())
-            # Cloning and checking out happen *here* rather than when the session was created,
-            # because creating one is a request somebody is waiting on and a clone is a network
-            # fetch that can take minutes. A pass is where slow work already lives and where a
-            # lease already covers it. Both halves are idempotent, so every later pass reaches this
-            # and does nothing.
-            #
-            # It is an effect outside a step, and that is sound rather than an exception: what it
-            # does is make a directory exist, which is the same on every pass, so there is no
-            # result to record and nothing for a replay to disagree with.
-            await planting(workspaces, run, chosen, at.turn)
+            # Asked here rather than at registration, because a collision is about what is actually
+            # *on* and the settings step is where somebody turns one off. Held up at the first
+            # message rather than at the step, so the screen still draws, still lists the two plugins,
+            # and still has the switch that fixes it.
+            try:
+                refuse_collisions(live.enrolled)
+            except Collides as raised:
+                clashed = records.Refused(why=str(raised))
+                await run.step(refused_key(at.turn, 0), partial(as_recorded, clashed), parse_refused)
+                return Stalled()
 
-            # Built here rather than once per pass, because what a session is answered under includes
-            # the repository's own `AGENTS.md` and the worktree holding it is planted directly above:
-            # read any earlier, a session's first turn would be answered having been told nothing the
-            # project says about itself. It costs one `Agent` per turn, which is tens of microseconds
-            # against a turn that costs seconds, and the connection pool it reaches through belongs to
-            # the endpoint and is not rebuilt.
+            # Composed here rather than once per pass, because a forget composes a second time. It
+            # costs one `Agent` per turn, which is tens of microseconds against a turn that costs
+            # seconds, and the connection pool it reaches through belongs to the endpoint and is not
+            # rebuilt.
             #
-            # **A step, so it is composed once for the session's life and replayed after that.**
+            # **A step, so it is composed once per stretch of context and replayed after that.**
             # Instructions sit in front of the cached prefix, so composing them again on a later turn
-            # would re-price every remaining request the moment the repository's own `AGENTS.md`
-            # moved - and a session working on a repository's guidance moves it constantly. Reading
-            # it again buys nothing against that, because the thing most likely to have edited the
-            # file is the model, which knows what it wrote.
+            # would re-price every remaining request the moment anything under them moved.
             #
             # **It holds exactly what the model is sent**, which is what lets the page draw the
             # system prompt from the moment a turn opens rather than only once one has landed.
             # `agent_for` speaks this string verbatim, so the note about this session's worktree and
-            # network is composed in here beside the guidance instead of being appended out there:
+            # network is composed in here beside the plugins' own instead of being appended out there:
             # appended, it would be a sentence the model carried that no record held, recomposed on
             # every turn in front of a cached prefix it is supposed to sit still behind.
             #
-            # The repository's own guidance, and an index of what the rest of it carries. The index
-            # is one line per file rather than their contents, which is what makes it affordable on
-            # every request in a repository with fifty of them: that a directory *has* rules is what
-            # a model needs before it reaches in, and what they are is a `read` away.
-            async def composing() -> object:
-                elsewhere = () if worktree is None else await guidance_under(worktree)
-                return recorded_instructions(
-                    instructing(
-                        instructions,
-                        None if worktree is None else repository_guidance(worktree.root),
-                        None if worktree is None else indexing(worktree.root, elsewhere),
-                        reaching(chosen.isolation, worktree, scratch, bwrap).note,
-                    )
-                )
+            # What every plugin contributed is already settled: `setup` ran above this loop, on this
+            # pass or an earlier one, and its answer is recorded - so this reads a value.
+            said_under = (
+                instructions,
+                *live.instructions(),
+                reaching(chosen.isolation, worktree, scratch, bwrap).note,
+            )
+
+            async def composing(blocks: Sequence[str] = said_under) -> object:
+                return recorded_instructions(instructing(*blocks))
 
             # Memoised for the pass as well as recorded, because `Run.step` refuses a key it has
             # already used: a pass answering two turns of one context would otherwise claim the same
@@ -2590,7 +3194,10 @@ def conversing(
                 worktree=worktree,
                 scratch=scratch,
                 bwrap=bwrap,
-                handing=None if handoffs is None else handoffs(run.workflow),
+                plugins=live,
+                # What the repository's setup asked to have set for this session's commands, read
+                # off the record the setup pass wrote: a value, settled for the session's life.
+                environment=environment_in(run.recorded),
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
@@ -2604,14 +3211,18 @@ def conversing(
             # a rewind to this turn puts back, and each later one records what the previous batch
             # of calls left behind.
             draining = draining_inbox(run, at.turn)
-            # What the parts of the repository this turn reaches into say about themselves, handed
-            # over on the request after it reaches. Closed over the worktree rather than given the
-            # index above, so a directory whose guidance the model has only just written is covered
-            # by the same walk as one that was there all along.
-            guiding = None if worktree is None else partial(approaching, worktree.root)
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, guiding):
+            # What the session's plugins want appended to each request, recorded per request so a
+            # resumed pass replays the sentence rather than asking a script that may not be pure.
+            injecting = injecting_through(run, live)
+            # Whether each tool call may run, asked inside the step that records the call, so the
+            # refusal is in the same record the return would have been.
+            gating = gating_through(live)
+            # What the plugins say each time the model tries to stop, recorded per attempt under this
+            # turn, so a resumed pass replays the turn being kept going rather than asking again.
+            keeping = keeping_through(run, live, at.turn, opening_of(asked))
+            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating):
                 try:
-                    answered = await agent.run(asked.said, message_history=list(at.history))
+                    answered = await answering_turn(agent, asked.said, at.history, keeping)
                 except AllowanceSpent:
                     # Caught out here rather than anywhere inside the agent, because what it ends is
                     # the pass and not the request: every step this turn has taken is recorded, so
@@ -2624,15 +3235,71 @@ def conversing(
                     # say what happened without this carrying anything back.
                     return Stalled()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
-            at = Reached(turn=at.turn + 1, history=(*at.history, *said))
-            # After the turn is recorded rather than before, so the context this is read against is
-            # the one the turn actually left behind, and so a crash between the two loses nothing: the
-            # pass that resumes replays the step, reaches here, and asks the same question of the same
-            # numbers. The window is asked for now rather than at the top of the pass because the
-            # reference under it is reloadable configuration, exactly as the rates are.
-            if tended is not None and tended.hands_off:
-                facts = None if prices is None else prices.facts(chosen)
-                if crossed(asked, said, facts.context if facts is not None else None, tended):
-                    return Crossed()
+            ended, at = at.turn, Reached(turn=at.turn + 1, history=(*at.history, *said))
+            # After the turn is recorded rather than before, so the numbers this is asked against are
+            # the ones the turn actually left behind, and so a crash between the two loses nothing:
+            # the pass that resumes replays the step, reaches here, and asks the same question of the
+            # same numbers. The window is asked for now rather than at the top of the pass because
+            # the reference under it is reloadable configuration, exactly as the rates are.
+            #
+            # `opened_on` is what stops a plugin firing on its own delivery for ever while the
+            # condition that fired it stays true: a plugin is told what opened the turn and which
+            # plugin, if any, asked for it.
+            facts = None if prices is None else prices.facts(chosen)
+            notes = await ending(
+                live,
+                ended,
+                opening_of(asked),
+                spent_on(responses_in(said)).context,
+                facts.context if facts is not None else None,
+            )
+            if notes:
+                return Noting(notes)
 
     return converse
+
+
+def injecting_through(run: Run, live: Live) -> Injecting:
+    """
+    What a session's plugins want appended to one request, recorded under that request's own key.
+
+    A step, because a plugin is somebody else's program and cannot be trusted to be pure: asked again
+    on a resumed pass it could put a different sentence in front of a recorded answer, which is the
+    one disagreement between two passes this whole mechanism exists not to have.
+
+    The messages are lowered to Pydantic AI's own JSON on the way out, because that is the shape a
+    plugin can read tool calls and system parts out of without this console deciding on its behalf
+    what is worth summarising.
+    """
+
+    async def inject(key: StepKey, messages: Sequence[ModelMessage]) -> Sequence[str]:
+        if not live.wanting("before_request"):
+            return ()
+
+        async def asking() -> object:
+            said = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
+            return records.Injected(said=await injections(live, said)).recorded()
+
+        return await run.step(key, asking, parse_injected)
+
+    return inject
+
+
+def gating_through(live: Live) -> Gating:
+    """
+    Whether a tool call may run, asked of a session's plugins from inside the step that records it.
+
+    Not a step of its own, and that is the difference from `injecting_through`: the durability layer
+    asks this inside `wrap_tool_execute`'s own step, so the refusal is written into the call's
+    `Returned` and replayed with it. A second key would be a second record of one call.
+
+    A session none of whose plugins asked about `before_tool` spawns nothing here: the gate is
+    checked against what was declared before any process is started.
+    """
+
+    async def gate(tool: str, args: Mapping[str, object]) -> str | None:
+        if not live.wanting("before_tool"):
+            return None
+        return await gating(live, tool, args)
+
+    return gate

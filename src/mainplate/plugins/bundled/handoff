@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+# A conversation that has run far enough into its model's window writes down where it has got to,
+# and starts again from that document.
+#
+# **This is the plugin the protocol was read off**, so it is worth knowing what it exercises: a tool
+# with a schema, a correctable refusal, a delivery carrying a boundary and a tone, a value back to
+# the model, a turn-boundary condition decided on numbers the payload carries, a card whose two
+# controls are its two settings, and an answer in the composer under its own leader. Everything but
+# `before_request`, `inject` and `instructions`, which is what `guidance` is for.
+#
+# It reads one JSON object on stdin and prints one on stdout. Nothing here imports mainplate, and
+# that is the point rather than an inconvenience: a bundled plugin runs on exactly the path a
+# third-party plugin runs on, so what ships is a worked example rather than a privileged one.
+
+from __future__ import annotations
+
+import json
+import sys
+from typing import Any
+
+LEAST = 200
+"""
+How short a handoff may be before it is refused as one somebody will not be able to work from.
+
+A number rather than a judgement, because there is no judgement available here: what this can tell
+apart is a document from an acknowledgement, and two hundred characters is comfortably below any real
+handoff and comfortably above "Done, I have written the handoff." A model that trips it is told so
+and writes a real one, which is a `retry` doing exactly what retries are for.
+"""
+
+THOUSAND = 1_000
+"""
+What the reserve control is denominated in, because a reserve is only ever chosen in round thousands.
+
+The stored value is thousands and the arithmetic is in tokens, so the multiplication happens here and
+the console draws the number with a `K` beside it. Six digits is a number to count the zeroes of
+rather than one to read.
+"""
+
+RESERVE = 40
+"""
+How much room a session keeps free for writing its own handoff, in thousands of tokens.
+
+**Tokens and never a percentage**, because what has to be true is that the handoff run has room to do
+its work: the ask, a few tool calls, the returns they bring back, and the document. That is an
+absolute quantity, and the same one on every model. A fifth of the window is 40k on a 200k model and
+200k on a 1M one, which is the same setting needing to be re-tuned per model.
+
+Forty thousand is what a thorough handoff costs measured in what it *adds to the history* rather than
+in what it is charged: a listing, four or five reads of real source files, and a document of a couple
+of thousand tokens. It is deliberately generous, because being late costs a handoff that cannot be
+written and being early costs one turn.
+"""
+
+LEAST_ROOM = 8
+"""
+The smallest headroom a handoff run can be expected to finish in, in thousands of tokens.
+
+The other end of the window the reserve opens, and a constant rather than a setting because it is not
+a preference: it is roughly what the ask, one look at the tree and a short document come to, so below
+it a handoff is a request nobody should pay for. What it is *for* is the turn that crosses the
+reserve and overshoots it, which one large tool return is enough to do.
+
+Below this the plugin stops asking rather than reaching for something smaller. A cheaper non-agentic
+summariser would be a second path that only ever runs when the first is already failing, so nothing
+would exercise it and its bugs would surface during the one moment a conversation is least able to
+absorb them; saying nothing and leaving the person to `/forget` or to fork costs nothing and cannot
+be wrong.
+"""
+
+ASKING = (
+    "Hand this conversation off. Summarise where the work has got to, what was decided and why, and "
+    "what to do next, and pass that to `hand_off`. Check the working tree rather than trusting your "
+    "recollection of it."
+)
+"""
+The message that opens a handoff turn, which is the other half of the tool's contract.
+
+Beside the tool rather than in whatever delivers it, because the two are one thing said twice: what a
+handoff is *for* is the tool's description, and this is the instruction to go and write one. Split
+across two places they would drift, and the drift would be a turn that produced prose instead of a
+call.
+
+**Deliberately not a template.** It says what a handoff is about and stops, because what somebody
+picking up a refactor needs and what somebody picking up an investigation needs are not the same
+document, and a fixed set of headings would have every session filling in the ones it has nothing to
+say under. A person who disagrees can say so: `/handoff` with a paragraph appends it to this.
+
+**Short, because the tool's description is the other half.** A long ask in the message and a long
+description on the tool would be two sets of instructions about one document, and a model reconciling
+them writes to neither.
+"""
+
+DESCRIPTION = """Write down what the next agent needs, and start this conversation's context again.
+
+What you pass becomes the whole of what the model after you is told. Everything said before it stays
+in the transcript for a person to read and none of it is in the context, so the test for the document
+is whether somebody who has read only it, plus the repository, can carry on without asking a question
+you already know the answer to.
+
+**Pass the document and nothing else.** No preamble, no "here is the handoff", no question at the
+end. What you pass is stored verbatim and read as though it had always been the opening of the
+conversation, so a sentence addressed to whoever asked for it is a sentence the next model has to
+work out the meaning of.
+
+Check rather than recall before you write. The files are in front of you and the context you are
+summarising is the part you are least able to trust; a path, a command, or a state you assert from
+memory is the thing most likely to be wrong, and it is cheap to look. What is already written down
+does not need repeating - name a file rather than quoting it.
+
+How to shape it is yours. What a refactor needs handed over and what an investigation needs are
+different documents, and you have read the conversation."""
+
+DESCRIBED: dict[str, Any] = {
+    "events": ["tool", "after_turn", "compose"],
+    "tools": [
+        {
+            "name": "hand_off",
+            "description": DESCRIPTION,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "document": {
+                        "type": "string",
+                        "description": "The handoff itself, as Markdown, and nothing around it.",
+                    }
+                },
+                "required": ["document"],
+            },
+        }
+    ],
+    "answers": [
+        {
+            "leader": "handoff",
+            "saying": ("Have it write down where it has got to and carry on from that, dwelling on anything you typed"),
+            # The one answer whose box may be empty: what a handoff takes is an optional note saying
+            # what it should dwell on, and the ordinary one has nothing typed into it.
+            "demands": False,
+        }
+    ],
+    "card": {
+        "heading": "handoff",
+        "rows": [
+            # `auto at reserve` and not `by itself`, which reads as the console choosing or, worse,
+            # as the model having decided to wrap up. Nothing decides anything: a recorded number is
+            # crossed and a message is delivered, and naming the trigger is also the more useful half.
+            {"switch": {"name": "hands_off", "label": "auto at reserve", "default": True}},
+            {"number": {"name": "reserve", "label": "reserve", "unit": "K", "default": RESERVE, "least": LEAST_ROOM}},
+        ],
+    },
+}
+
+
+def standing(context: int, window: int | None, reserve: int) -> str | None:
+    """
+    Where a conversation carrying `context` tokens sits against its own reserve, if anything says.
+
+    Three answers because there are three, and the middle one is the whole reason this is not a
+    threshold: `room` is a conversation with talking left in it, `due` is one whose reserve is
+    crossed *and* which can still write the document, and `gone` is one that overshot between two
+    turns and now cannot. Only the middle one is something to act on, which is what keeps this from
+    spending a request on a handoff that will not fit.
+
+    Nothing at all where the question cannot be put. A model the reference database has never heard
+    of has no window; and a reserve at least as large as the window, or smaller than the room a
+    handoff needs at all, describes no interval - the first would have every session due from its
+    first turn, and the second would open a stretch that is already shut.
+    """
+    if window is None:
+        return None
+    opens, shuts = window - reserve, window - LEAST_ROOM * THOUSAND
+    if opens <= 0 or opens > shuts:
+        return None
+    if context < opens:
+        return "room"
+    if context <= shuts:
+        return "due"
+    return "gone"
+
+
+def asked(guiding: str) -> dict[str, Any]:
+    """
+    The note that opens a handoff turn, with whatever a person wants it pointed at appended.
+
+    **Appended rather than replacing**, because the two say different things: the base is what a
+    handoff *is* and has to be there whether or not anybody adds to it, where a note like "dwell on
+    the parser" on its own is an instruction to summarise a summary.
+
+    No boundary on it, which is the asymmetry that makes a handoff work: the context has to survive
+    long enough to be summarised, so it is the *document* that clears it.
+    """
+    said = ASKING if not guiding.strip() else f"{ASKING}\n\n{guiding.strip()}"
+    return {
+        "said": said,
+        "label": "handoff",
+        "title": "This session was asked to write down where it has got to.",
+        "tone": "quiet",
+    }
+
+
+def answer(payload: dict[str, Any]) -> dict[str, Any]:
+    """What this plugin wants done about one event, which for most events is nothing."""
+    event = payload.get("event")
+    settings = payload.get("settings") or {}
+    if event == "setup":
+        # Nothing to install: everything this needs is in the standard library, so setting up is
+        # saying what it contributes and no more. That is the ordinary case for a plugin, and the
+        # reason the event carries both jobs rather than being two.
+        return DESCRIBED
+    if event == "tool":
+        return handing(payload)
+    if event == "compose":
+        return {"deliver": [asked(str(payload.get("said") or ""))]}
+    if event == "after_turn":
+        return crossing(payload, settings)
+    return {}
+
+
+def handing(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Three effects out of one call: a correctable refusal, a delivery, and a value back to the model.
+
+    `forget` is why this is worth a mechanism at all. A handoff that did not clear the context would
+    be a summary of the conversation appended to the conversation, which is the one shape that costs
+    tokens and buys nothing.
+    """
+    written = str((payload.get("args") or {}).get("document") or "").strip()
+    if len(written) < LEAST:
+        return {
+            "retry": (
+                f"a handoff of {len(written)} characters is an acknowledgement rather than a document; "
+                f"write what the next agent needs in order to carry on, and pass that"
+            )
+        }
+    return {
+        "deliver": [
+            {
+                "said": written,
+                "forget": True,
+                "label": "handoff",
+                "title": "This is where the conversation's context starts again.",
+                "tone": "strong",
+            }
+        ],
+        "return": (
+            "Recorded. This conversation's context starts again from that document, and everything "
+            "said before it stays in the transcript for a person to read."
+        ),
+    }
+
+
+def crossing(payload: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    """
+    Whether the turn that just ended is the one that should be followed by a handoff.
+
+    **Read at the boundary that crosses the reserve, rather than at the start of the next turn**, and
+    that is about the cache rather than about promptness: the conversation's prefix is warm right
+    now, where by the time somebody comes back and types it may not be, and a handoff run is several
+    requests over the whole window.
+
+    **A turn this plugin opened never triggers another**, which is the whole of what stops it
+    recursing. The reserve is crossed for as long as the context stays large, so without this the ask
+    turn - whose own context is the conversation it is summarising - would cross it again the instant
+    it ended, and so would the one after that. The payload says what opened the turn and which plugin
+    asked for it, and this plugin's own name is in the payload beside it, so the two can be compared
+    rather than guessed at.
+
+    A model that answered the ask in prose rather than by calling the tool is therefore not asked
+    again until a person says something, which is a retry per human action rather than one per turn.
+    """
+    if not settings.get("hands_off", True):
+        return {}
+    opened = payload.get("opened_on") or {}
+    if opened.get("plugin") == payload.get("plugin"):
+        return {}
+    reserve = int(settings.get("reserve", RESERVE)) * THOUSAND
+    context = int(payload.get("context") or 0)
+    window = payload.get("window")
+    if standing(context, int(window) if window is not None else None, reserve) != "due":
+        return {}
+    return {"deliver": [asked("")]}
+
+
+def main() -> int:
+    json.dump(answer(json.load(sys.stdin)), sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

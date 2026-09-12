@@ -37,12 +37,26 @@ wrong.
 
 **`transcript_region` takes a whole `Conversation` rather than the things drawn out of one**,
 because every caller had one in hand and was taking it apart the same way. What the region needs is
-the session, what was said, whether it is stalled, the model's window and where its reserve falls,
-and five arguments derived from one value are five chances for a caller to pair a transcript with
-another session's window.
+the session, what was said, whether it is stalled and the model's window, and four arguments derived
+from one value are four chances for a caller to pair a transcript with another session's window.
 
-**One connection drives two regions**, which is what `partial` was always for: the transcript, and
-[the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in the composer.
+**One connection drives whichever regions the page's shape has**, which is what `partial` was always
+for. A session past [its settings step](plugins.md#starting-a-session-takes-four-steps) is the
+transcript and [the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in
+the composer; a session still on that step is the step, which has neither of those and is the only
+region there is. One predicate, `settling`, decides both which shape the page is drawn in and which
+partials the stream sends, so the two cannot disagree - and they must not, because a partial naming a
+target that is not there is dropped in silence, which is a spinner that never resolves.
+
+**The page states its shape when it connects, and the stream says once when that shape is over.** A
+page drawn as the step whose session has since loaded is exactly the case above: the checkpoint's
+shape is the conversation and the page has nowhere to put one. So the step's stream URL carries
+`shape=settling`, the stream compares that against the checkpoint on every tick, and the moment they
+differ it sends one *named* event, `loaded`, and ends. htmx hands a named event to the element holding
+the connection rather than to a target, the element closes on it, and the script reloads the page,
+which opens a connection of its own in the new shape. The page states it rather than the stream
+remembering it, because a connection re-opened after the change has to be answered the same way. The
+cost, stated: one full reload at the step's end, over a page with nothing on it worth keeping.
 
 Three things about that connection are decided rather than incidental:
 
@@ -56,9 +70,12 @@ Three things about that connection are decided rather than incidental:
   thing a stream sends is the current state: what a page that has just connected needs and what one
   connected for an hour needs are the same thing.
 - **The server notices by polling a change token**, not by being told. `Service.token` counts a
-  session's recorded steps, which is sound because a checkpoint is append-only and cheap because it
-  decodes none of them. The two halves of the process stay joined only by the store, exactly as they
-  would be if the worker were elsewhere.
+  session's recorded steps and reads where it stands with the worker, which is cheap because it
+  decodes no value and is three rows by primary key. The two halves of the process stay joined only
+  by the store, exactly as they would be if the worker were elsewhere. The worker's standing is in
+  there because a pass that falls over records *nothing*, so a token made of the count alone holds
+  still while the page sits under a spinner; see
+  [what the worker is doing about a session](durability.md#what-the-worker-is-doing-about-a-session).
 
 The transcript swaps with **`outerMorph`**, and that is what lets a turn be watched: a turn records
 several times while it runs, so a replacement would shut a call the reader opened to watch, over and
@@ -87,7 +104,8 @@ scrolled, and re-entered by sending a message. `land` therefore has to route its
 bottom and the scroll listener switches following back on at the very moment they asked to be
 somewhere in particular.
 
-The rail (search, key, dock, shelf, handoff, theme) lives **outside** the region that swaps, so no
+The rail (search, key, dock, shelf, a card per running plugin, theme) lives **outside** the region
+that swaps, so no
 control is rebuilt under a reader's finger. What it projects back *onto* the transcript, the search
 marks, the panel landed on, which kinds are muted, what is folded, cannot live in the markup either,
 so `assets/mainplate.js` holds it as values and reapplies it after every swap. That projection is
@@ -148,13 +166,20 @@ emergent from the `Origin` on each row rather than from anything inside a checkp
 
 ## The picker
 
-**Ordered widest-first: workspace, network, endpoint, model, thinking, handoff**, and then the name
-and the message box, which are the composer's rather than the picker's. What files a session has is
-the broadest thing about it and is one question rather than two, so it leads; the network follows
-because it is the other thing deciding what the agent can do at all, where the endpoint and the
-model only decide who answers; the endpoint and the model are adjacent because they are a pair, the
-list being whatever the endpoint above it offers; the thinking level is a setting *on* the model, so
-it sits under it; and the handoff reserve is measured *against* the model, so it comes after both.
+**Ordered widest-first: workspace, network, repository code, endpoint, model, thinking**, and then
+the name. What files a session has is the broadest thing about it and is one question rather than
+two, so it leads; the network follows because it is the other thing deciding what the agent can do at
+all; whether the repository's own code runs is the third question about that same subject, so it
+sits with them and is drawn only where a repository is picked; the endpoint and the model are
+adjacent because they are a pair, the list being whatever the endpoint above it offers; the thinking
+level is a setting *on* the model, so it sits under it. The name comes last because it is the one
+question here that decides nothing about how the session runs.
+
+**There is no message box on this page, and its button says `Create session`.** A repository's
+plugins cannot even be named until its worktree is planted, which a pass does, and none of them may
+be run until somebody has seen the list. So this page decides what a session *is*, the settings step
+decides what it loads, and the box is on the session's own page once there is a conversation to type
+into. See [the settings step](plugins.md#starting-a-session-takes-four-steps).
 
 **Every question the picker asks with a closed set of answers is one component.** `choosing` in
 `pages.py` takes a legend, a toggle id, the names on offer and a body of cards, and gives back a
@@ -166,9 +191,10 @@ one, nor the fold. Having two kinds of control answering versions of one questio
 remove.
 
 **Two questions here are deliberately not cards, and both for the same reason**: `starting_at` asks
-for a commit-ish and `tending_group` asks for a number of tokens, and neither has a set to draw.
-Behind `choosing` they would be a card per ref a repository has, or a card that is really a text
-box.
+for a commit-ish and `naming` asks for a line of prose, and neither has a set to draw. Behind
+`choosing` they would be a card per ref a repository has, or a card that is really a text box. The
+name takes the *message box's* rules rather than a setting's, because the palette runs on one axis
+and a name is text the person writes, where a base and a branch narrow a choice.
 
 Another question with a closed set of answers is a `choosing` call and nothing else. The script
 names none of the card classes, since it finds a card structurally, as a `<label>` with a radio in
@@ -230,17 +256,16 @@ down twice. It sets a window narrower than the suite's own, because at 1400 the 
 its `max-width` with room to spare and the clipping, which is every narrower window and so the
 common case, does not happen at all.
 
-The picker's controls are **associated with their form by name, not by nesting**, and that is
-load-bearing on the start page. There the choosing fills `main`'s growing row and the box is pinned
-under it, so every radio in every group is a *sibling* of the form that posts them;
-`form="choosing"` (`CHOOSING_ID` in `pages.py`) is the whole of what makes them submit, and without
+The picker's controls are **associated with their form by name, not by nesting**, and what makes
+that worth doing is that half of them are also *fragments*. `model_cards` and `starting_at` are
+served both as part of a page and as the answer to a swap, and a fragment is markup with no ancestor
+at all until it lands; `form="choosing"` (`CHOOSING_ID` in `pages.py`) makes a control's association
+a property of the control rather than of wherever it was put, so one component serves both. Without
 it the console refuses its own page with a 422 saying a message needs an endpoint and a model. The
-fork page nests its picker inside a form of the same name, so `model_cards` can carry one attribute
-and serve both the pages and the `/fragments/models` swap. The fold's own checkbox is the one
-control that deliberately carries *neither* a `name` nor a `form`: it is how a group is looked at,
-not part of what a session is decided by. A markup assertion cannot see any of this, which is why
-`TestWhatAFormPosts` asks a browser what `form.elements` holds and `TestFoldingAGroupOfCards` asks
-what a shut group still posts.
+fold's own checkbox is the one control that deliberately carries *neither* a `name` nor a `form`: it
+is how a group is looked at, not part of what a session is decided by. A markup assertion cannot see
+any of this, which is why `TestWhatAFormPosts` asks a browser what `form.elements` holds and
+`TestFoldingAGroupOfCards` asks what a shut group still posts.
 
 ## The message box
 
@@ -317,7 +342,7 @@ in, which reads worse than no colour. The palette is the console's own hues in `
 an imported Pygments theme with its own opinion about light and dark.
 
 The two converters, and why a message's newlines are treated differently from a document's, are in
-[what a session is told](guidance.md#the-system-prompt-is-drawn-as-a-panel).
+[what a session is told](../plugins/guidance.md#the-system-prompt-is-drawn-as-a-panel).
 
 ## Panels and rules
 
@@ -366,7 +391,7 @@ under the last panel of the turn before it, so a bare row of figures there reads
 summarising what is *above* it, which is the opposite of what it says. The `#1` against the `#1.0`
 on the panels below settles the direction, and doubles as the permalink to the boundary the fork
 acts on. A rule inside a turn names its request the same way, as `r1.1`, which is also what opens
-the record: the whole address rather than the index within the turn, for `Panel.label`'s reason one
+the record: the whole address rather than the index within the turn, for `Panel.address`'s reason one
 level along, since a rule inside a turn draws no `#N` and a bare `r1` said which request without
 saying of what. The `r` is what keeps it from being read as a panel, which numbers a different axis:
 `#3.1` is turn 3's second *panel* and `r3.1` is its second *request*.
@@ -461,6 +486,25 @@ it of the turn being answered rather than of the last panel on the page, because
 while a reply is coming and what is at the bottom may be their message. A *command* running is not
 this: it runs outside the conversation and no model was told about it, so it says nothing about
 whether one is answering.
+
+**The dots are the answer only where nothing is wrong, and where something is there is a line
+instead.** A reply being written and a session no worker will ever pick up drew the same three dots,
+for as long as the second lasted, which made a broken pass a thing nobody could see. So the end of a
+transcript draws one of three things and never two: [a refusal](durability.md#a-pass-that-falls-over),
+which outranks the rest because it is the only one nothing is waiting on; the `.attention` line,
+saying why nothing is happening where something should be; or the dots, which is what a reply being
+written actually looks like.
+
+`waiting_for` speaks on a **recorded failure** rather than on the worker's standing, which is what
+keeps it quiet: a held-back delivery is ordinary for a store round trip on every pass, so a line drawn
+on that alone would talk through healthy turns. The one exception is a session nothing is scheduled
+for at all, which no race produces. The reason is set apart from the prose either side of it, in the
+monospace face with a copy button of its own, because an exception's `repr` is the one thing in the
+box a reader has to work through and is neither a sentence nor centred text. The countdown beside it
+is the [cache note's](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) bargain one
+field along: the server renders the figure and `data-due` lets the script keep it current, since the
+stream sends this region when the worker's standing *changes* and counting down is exactly the
+interval where it does not.
 
 **A panel whose default would otherwise move carries the working dots on its own row instead.** The
 panel saying a reply is being written, and a stretch of context whose instructions no pass has
@@ -579,12 +623,11 @@ reader scrolling down watches the line lengthen and warm. Four things there are 
 - **The server computes fractions and nothing else.** The colours, the geometry and the cap are
   decisions, so they live in the stylesheet; a fraction is a fact about one request, and there is
   nowhere else it could come from. They are the only inline styles this console writes.
-- **`rule__reserve` is the second mark on that scale**, a short bar standing across the rule where
-  the session's reserve opens, drawn only where auto-handoff is on. On the same scale as the fill,
-  so the two are read against one another: the fill says how far this request got and the mark says
-  where a handoff would be asked for. See [handing off without being
-  asked](composer.md#handing-off-without-being-asked) for why it is an element rather than a second
-  pseudo.
+- **The fill is the only mark on that scale.** A second one used to stand where the session's
+  handoff reserve opened, and it went when the reserve became a plugin's own setting: [the console
+  has no vocabulary for a plugin drawing in the transcript
+  region](plugins.md#what-is-structurally-out-for-three-separate-reasons), and stretching the card
+  language that far would be inventing an axis in order to have a cross-product.
 - **The window comes from the reference and not from the checkpoint.** `Conversation.window` is
   `facts_of` asked about the session's own choice, which is the same lookup that prices a turn, so a
   database that learns a model's window shows it on every session already running on that model.

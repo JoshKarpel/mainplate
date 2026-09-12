@@ -15,8 +15,13 @@ One package per tool, as `tools/{name}/{module}.py`. **Only the constructor reac
 `agent.py` can ask for the tools a workspace affords without knowing that editing is anchored, that
 a worktree root has to be resolved against, or how a command is confined.
 
-A further tool is a new package beside `files/`, `bash/` and `handoff/` and one more name in that
-list. It is not an edit to anything that already imports them.
+A further tool is a new package beside `files/` and `bash/` and one more name in that list. It is not
+an edit to anything that already imports them.
+
+**A tool that acts on the conversation rather than on the machine does not belong here at all**: it
+belongs in a [plugin](../plugins/AGENTS.md), which is where `hand_off` lives. What is left in this
+package is the tools whose subject is a file or a command, which is what makes the table below the
+whole of the rule.
 
 ## Which tools a session gets
 
@@ -31,11 +36,35 @@ Read off `Choice.isolation`, not off whether the session picked a repository:
 `NOTHING` gets none rather than four that can only fail, because a tool that cannot work still costs
 its description on every request.
 
-**`hand_off` is outside that table and is in every session**, `NOTHING` included. It is not an
-exception to the rule but a different subject: what it reaches is the conversation, and every
-session has one. Do not condition it on the isolation, and do not add it only when a handoff is
-wanted, since a tool definition sits above the cached prefix and introducing one late invalidates
-the whole conversation beneath it.
+**A plugin's tools are outside that table**, and a session with `NOTHING` still gets them: what a
+plugin reaches is decided by its own tier rather than by what the *model* may touch. They are settled
+at `describe` and never added mid-conversation, because a tool definition sits above the cached
+prefix and introducing one late invalidates the whole conversation beneath it.
+
+## `list` runs a program in the parent
+
+`GitTracked.entries` runs `git ls-files` in this process, over the worktree, which is the one
+directory a session may write. `ls-files` refreshes the index, so a call that let git find its own
+directory would run whatever the tree's configuration named. See
+[`docs/design/security.md`](../../../docs/design/security.md).
+
+**So it holds a `Worktree` and goes through `Worktree.git`**, which is the only place that knows how
+to run git safely: named git directory, built environment. Do not build a git subprocess here out of
+`addressed` and `environment`, which is a second copy of that answer and drifts silently. What
+`entries` needs beyond the default is `at=` and `Ran.stdout`, and anything else should be one more
+argument there rather than a subprocess of its own.
+
+## These tools do not pass through the sandbox
+
+`read`, `edit` and `create` write from the parent, so **no bind protects anything from them**. The
+sandbox binds the worktree's `.git` read-only and that stops `bash` replacing the pointer; it does
+nothing here, which is why `GitTracked.sealed` names `.git` and `Files.resolved` refuses it. The two
+are one decision in two places because the two paths are genuinely different, not a check written
+twice: remove either and the vector is open again through the other.
+
+`sealed` is a property on each root arm, beside `name`, so a new kind of place brings its own answer
+rather than needing an entry in `resolved`. Keep the refusal to a root's *top level*: a `.gitignore`,
+a `.github/`, and a fixture with a nested `.git` are ordinary files.
 
 ## Two things not to undo
 

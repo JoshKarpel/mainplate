@@ -1,0 +1,321 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["pre-commit>=4.4"]
+# ///
+# This repository's own plugin: `pre-commit` over what a session has changed, whenever the model
+# tries to stop.
+#
+# It is a port of a Claude Code `Stop` hook, and it keeps that hook's shape. That hook ran
+# `pre-commit` each time Claude tried to end its turn and, where anything failed, blocked the stop
+# and handed the output back, so the model went on fixing what it had broken while it still
+# remembered writing it. That is `before_turn_end` here: the model has answered and would stop, this runs
+# the hooks, and an `inject` of what is still failing is what sends the model back inside the same
+# turn. Everything below is that idea meeting a console that runs the script in a mount namespace
+# and pays for every request.
+#
+# **What changed on the way across, and why:**
+#
+# - **It cannot stage anything.** A session's clone is bound read-only, so `git add` fails on a
+#   read-only `index.lock`. That is not in the way: `pre-commit run --files ...` does not stash, so
+#   the file list comes from `git status` and no write to git is needed at all. The hook staged
+#   because it was on the path to a commit; this is not.
+# - **It installs itself, and the shebang is most of how.** The namespace has `/usr` and nothing of
+#   the machine's, so there is no `pre-commit` here and no interpreter but the system one. The block
+#   above is what fixes both: `setup` is the one event with a network, and `$HOME` is this plugin's
+#   own scratch, so the first run resolves the interpreter *this project pins* and the dependency
+#   below, and every event after it runs from that with the network shut. What is left for `setup`
+#   to do is the hook environments, which are `pre-commit`'s own business and not `uv`'s.
+# - **It knows when to stop.** The hook read `stop_hook_active` and mostly ignored it, because a
+#   person was sitting there. Here every time the model is sent back is another model request, so
+#   `most` bounds how many times in one turn it will do that before letting the model stop, and the
+#   count arrives on the payload as `attempt` rather than being remembered here, since a plugin's own
+#   writes reach the next pass and not the turn they were made in.
+#
+# Nothing here imports mainplate, and nothing here is privileged: it is spoken to over a pipe exactly
+# as the bundled plugins are, and `echo '{"event":"setup",...}' | .mainplate/pre-commit` is the whole
+# of how to try it by hand.
+#
+# `--quiet`, because `uv` narrates a resolve on stderr and the console logs a plugin's stderr as its
+# diagnostics. A first run saying "Installed 10 packages" in the log of every new session is noise
+# about something working.
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+CONFIG = ".pre-commit-config.yaml"
+"""
+The file whose presence is the whole of whether this plugin has anything to do.
+
+Read at `setup` and nowhere else: a repository that does not use `pre-commit` gets a plugin that
+contributes no tool, no card and no events, which costs one process at the start of a session and
+nothing after it.
+"""
+
+MOST = 3
+"""
+How many times in one turn this will send the model back before it lets the model stop.
+
+**The number that is here because a console is not a terminal.** The hook this came from blocked
+every stop for as long as anything failed, and that was free, since the thing it interrupted was a
+person. Here every time the model is sent back is another model request, so a hook the model cannot
+satisfy - a type error it does not know how to fix, a linter it disagrees with - would otherwise be
+a turn that bills for itself until somebody notices.
+
+Three, because two is not enough to tell "the fix did not work" from "the fix worked and uncovered
+the next thing", and beyond three the model is not converging. It is per turn, because `attempt` is:
+the next thing a person says opens a turn the count starts over in.
+"""
+
+TOOL = """Run this repository's `pre-commit` hooks over the files this session has changed.
+
+Hooks that fix files do so in place, so a run can change the working tree; what comes back is what is
+still failing after that. Call it when you think you are finished, rather than after every edit: it
+is the same check that runs whenever you try to stop, and calling it is how you see the result
+without being sent back."""
+
+
+def said(payload: dict[str, Any], name: str) -> str:
+    """One string off the payload, or the empty string where there is not one."""
+    found = payload.get(name)
+    return found if isinstance(found, str) else ""
+
+
+def ran(argv: list[str], where: Path) -> subprocess.CompletedProcess[bytes]:
+    """
+    One command in the worktree, with its output kept and its failure left to the caller to read.
+
+    Nothing is added to the environment, which is worth saying because an earlier draft added two
+    variables to point `uv` and `pre-commit` at somewhere that survives. Neither is needed: the
+    console puts `$HOME` in this plugin's own scratch, so every cache either of them keeps is already
+    somewhere that outlives the process and is reachable by nobody else.
+    """
+    return subprocess.run(
+        argv,
+        cwd=str(where),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
+def hooks(*arguments: str) -> list[str]:
+    """
+    A `pre-commit` command, run through the interpreter this script is already running under.
+
+    `sys.executable` and not a `pre-commit` on the path: the one that exists is the one `uv` put in
+    the environment it built for this script, and naming the interpreter is how a dependency
+    declared in the block at the top is reached without knowing where that environment ended up.
+    """
+    return [sys.executable, "-m", "pre_commit", *arguments]
+
+
+def changed_in(where: Path) -> list[str]:
+    """
+    Every path this session has touched, as git sees it, or nothing where git will not say.
+
+    `-z` rather than the readable format, because the readable one quotes and escapes paths with
+    spaces or non-ASCII in them and this would have to unpick that; with `-z` a path is whatever lies
+    between two NULs. A rename carries its old path as a second field, and both are here: the old one
+    is a deletion and hooks have things to say about neither, but leaving it out would make the
+    parse depend on the status letter for no gain.
+
+    Untracked files are included, because a file the model just wrote is exactly the one worth
+    checking and it is untracked until somebody stages it - which, in a session, nobody does.
+    """
+    done = ran(["git", "status", "--porcelain", "-z", "--untracked-files=all"], where)
+    if done.returncode != 0:
+        return []
+    found = []
+    fields = done.stdout.decode("utf-8", errors="replace").split("\0")
+    at = 0
+    while at < len(fields):
+        entry = fields[at]
+        at += 1
+        if len(entry) < 4:
+            continue
+        found.append(entry[3:])
+        # A rename or a copy carries the path it came from in the next field, which is a field this
+        # walk has to consume whether or not it is wanted - otherwise it is read as a status line.
+        if entry[0] in ("R", "C") and at < len(fields):
+            found.append(fields[at])
+            at += 1
+    return [path for path in found if path]
+
+
+PASSES = "`pre-commit` passes over the files this session has changed."
+
+FIXED = (
+    "`pre-commit` fixed some of the files this session has changed, in place, and everything passes "
+    "now. The working tree has edits you did not write; read them before you carry on."
+)
+
+
+def failing(output: str) -> str:
+    """What the model is told about a run that is still failing after a hook had its chance to fix it."""
+    return (
+        "`pre-commit` is failing on the files this session has changed, so you are not finished yet. "
+        "Anything a hook could fix has been fixed in place already, so what is below needs your "
+        "judgement rather than another run:\n\n```\n" + output + "\n```"
+    )
+
+
+def checking(payload: dict[str, Any]) -> tuple[bool, str]:
+    """
+    Run the hooks over what has changed: whether everything passed, and what to tell the model.
+
+    **Twice where the first run fails**, which is what the shell version's autofix loop did and for
+    the same reason: most of what `pre-commit` reports is a hook that has already fixed the file, so
+    a single run's output is mostly noise about work that is now done. The second run is what
+    separates the two, and what it says is the only thing worth putting in front of a model.
+
+    A clean tree passes without either run, because there is nothing to pass hooks over and running
+    them all against a repository nobody touched is the slow way to say so.
+
+    **The sentence is composed here rather than by a reader of the pair.** Three outcomes and three
+    sentences, and the third - passed, but only because a hook rewrote somebody's files - is not
+    recoverable from a boolean. Carrying it as a token in the output slot meant one word spelled the
+    same way in two functions, sharing a slot with real hook output, and a mistyped copy would have
+    told the model the wrong thing with nothing to report it.
+
+    The tool and the composer answer with the sentence whatever it says; `before_turn_end` reads the
+    boolean, because what it decides is whether the model may stop.
+    """
+    where = said(payload, "worktree")
+    if not where:
+        return True, PASSES
+    at = Path(where)
+    changed = changed_in(at)
+    if not changed:
+        return True, PASSES
+    argv = hooks("run", "--files", *changed)
+    if ran(argv, at).returncode == 0:
+        return True, PASSES
+    again = ran(argv, at)
+    if again.returncode == 0:
+        return True, FIXED
+    return False, failing(again.stdout.decode("utf-8", errors="replace").strip())
+
+
+def delivery(said_to_model: str) -> dict[str, Any]:
+    """One run somebody asked for as the note it becomes, in the quiet ink because it is a report."""
+    return {
+        "said": said_to_model,
+        "label": "pre-commit",
+        "title": "This repository's own hooks, run over what this session has changed.",
+        "tone": "quiet",
+    }
+
+
+def setting_up(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Build this repository's hook environments, and say what this plugin contributes.
+
+    **The one event with a network, and everything that has to be fetched is fetched here.** Every
+    later event runs with the network shut, so a hook environment that is not built by the time this
+    returns is one that never will be.
+
+    **Most of the fetching is already done by the time this runs**, which is the shebang: `uv` has
+    resolved the interpreter and `pre-commit` itself in order to start this script at all. What is
+    left is the environment each hook in the config wants, which is `pre-commit`'s own business and
+    the one thing it will not do lazily on a machine with no network.
+
+    A repository with no `.pre-commit-config.yaml` gets an inert plugin rather than a failure: this
+    file is committed to one repository, but a fork of it, or a branch part way through adding
+    `pre-commit`, is an ordinary thing and not a session that should refuse to start.
+
+    **Idempotent, which is the constraint this event carries**: a setup that fails leaves the
+    session's registration unwritten, so pressing the button again runs all of it a second time.
+    `install-hooks` builds only what is missing, so the second attempt is as cheap as the failure
+    left it.
+    """
+    where = said(payload, "worktree")
+    if not where:
+        return {}
+    at = Path(where)
+    if not (at / CONFIG).is_file():
+        return {}
+    done = ran(hooks("install-hooks"), at)
+    if done.returncode != 0:
+        # **Loudly, and never as an empty contribution.** There is no effect for "I could not set
+        # up", and answering `{}` would be this plugin quietly declaring itself to have nothing to
+        # offer - which is a session that runs without the checks this repository asked for and says
+        # so nowhere. A non-zero exit is how the event fails, and what goes to stderr is the sentence
+        # the console puts on the settings step, beside the switch that turns this off.
+        sys.stderr.write(done.stdout.decode("utf-8", errors="replace"))
+        raise SystemExit(1)
+    return {
+        "events": ["tool", "before_turn_end", "compose"],
+        "tools": [{"name": "run", "description": TOOL, "schema": {"type": "object", "properties": {}}}],
+        "answers": [{"leader": "run", "saying": "run this repository's hooks over what has changed", "demands": False}],
+        "card": {
+            "heading": "pre-commit",
+            "rows": [
+                {"switch": {"name": "checks", "label": "before stopping", "default": True}},
+                {"number": {"name": "most", "label": "attempts", "unit": "per turn", "default": MOST, "least": 1}},
+            ],
+        },
+    }
+
+
+def stopping(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Check what the model is about to stop having done, and send it back where anything is failing.
+
+    **An `inject` is what sends it back.** What is still failing is put to the model in the
+    console's voice and the model is asked again inside the same turn, so it fixes what it broke
+    while it still remembers writing it - which is the whole of what the hook this ports did. An
+    empty answer lets the turn end.
+
+    `attempt` is how many times this turn has already been sent back, and `most` is where that stops:
+    past it the model is let go with the hooks still failing, quietly, because a sentence saying so
+    would itself be another request and the transcript already shows what was said the last time.
+    The next thing a person says opens a turn the count starts over in.
+
+    **A run that only fixed things says nothing**, which is the shell hook's own behaviour and is
+    right here for one more reason. Sending the model back is a request, so announcing work that is
+    already done costs one to say "carry on"; and a model that goes on to edit a file this rewrote
+    finds out anyway, because `edit` is anchored on what was read and a stale anchor is refused. What
+    was fixed is still worth a sentence when somebody *asks* - see `compose` - just not worth a
+    request.
+    """
+    settings = payload.get("settings") or {}
+    if not settings.get("checks", True):
+        return {}
+    if int(payload.get("attempt") or 0) >= int(settings.get("most", MOST)):
+        return {}
+    passed, told = checking(payload)
+    if passed:
+        return {}
+    return {"inject": [told]}
+
+
+def answer(payload: dict[str, Any]) -> dict[str, Any]:
+    """What this plugin wants done about one event, which for most events is nothing."""
+    event = payload.get("event")
+    if event == "setup":
+        return setting_up(payload)
+    if event == "before_turn_end":
+        return stopping(payload)
+    if event == "tool":
+        # A value back to the model and no delivery: the model asked, so the answer belongs in the
+        # call it made rather than as a message somebody has to read in the transcript.
+        return {"return": checking(payload)[1]}
+    if event == "compose":
+        # Asked by a person, so it answers whether or not anything is failing.
+        return {"deliver": [delivery(checking(payload)[1])]}
+    return {}
+
+
+def main() -> int:
+    json.dump(answer(json.load(sys.stdin)), sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+# A plugin that stands in front of every tool call and turns some of them away.
+#
+# It is here as a **test fixture**, and it is the one that exercises `before_tool` and `refuse`,
+# which neither bundled plugin has a reason to: what it proves is that a refusal is a value the
+# console records in the call's place, that the model is told who refused and why, and that a
+# resumed pass replays the refusal rather than asking again.
+#
+# What it refuses is deliberately dumb - any call whose arguments mention the word `forbidden` - so
+# that a test can make a call be refused or let through by what it puts in the arguments and nothing
+# else. A real policy plugin would look at `tool` and at the shape of `args`; this one is about the
+# mechanism and not the judgement.
+#
+# It appends the tool's name to the file named in `GATEKEEPER_ASKED` each time it is asked, where
+# that variable is set, which is how a test tells a replayed refusal from a second asking: the
+# process table has forgotten, and the record looks the same either way.
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+
+def answer(payload: dict[str, Any]) -> dict[str, Any]:
+    event = payload.get("event")
+    if event == "setup":
+        return {"events": ["before_tool"]}
+    if event != "before_tool":
+        return {}
+    asked = os.environ.get("GATEKEEPER_ASKED")
+    if asked:
+        with Path(asked).open("a", encoding="utf-8") as log:
+            log.write(f"{payload.get('tool')}\n")
+    if "forbidden" in json.dumps(payload.get("args") or {}):
+        return {"refuse": f"{payload.get('tool')} may not be called with that; use something allowed"}
+    return {}
+
+
+def main() -> int:
+    json.dump(answer(json.load(sys.stdin)), sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

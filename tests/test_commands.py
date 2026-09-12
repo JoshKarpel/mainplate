@@ -14,6 +14,7 @@ from conftest import ran_at
 from conftest import recorded_turn
 from conftest import run
 from conftest import said_at
+from conftest import started
 from pydantic import ValidationError
 from without_asgi import ASGIApp
 from without_durability.interfaces import inbox_key
@@ -76,7 +77,7 @@ async def planted(service: Service, workspaces: Workspaces, chosen: Choice) -> s
     happens in the worktree and not how it came to exist: a pass would bring a stand-in provider, an
     agent and a whole turn along with it to produce one directory.
     """
-    session = await service.start("hello", chosen)
+    session = await started(service, "hello", chosen)
     await workspaces.plant(session.id, FIXTURE)
     return session.id
 
@@ -228,7 +229,7 @@ class TestHowACommandIsDrawn:
     """
 
     async def test_the_output_is_open_rather_than_folded_away(self, app: ASGIApp, service: Service) -> None:
-        session = await service.start("have a look", DEFAULT_CHOICE)
+        session = await started(service, "have a look", DEFAULT_CHOICE)
         entry = await service.checkpointer.append(session.id, recorded_command("git status --short"))
         await service.checkpointer.supply(
             session.id,
@@ -245,7 +246,7 @@ class TestHowACommandIsDrawn:
     async def test_a_command_that_said_nothing_says_so_rather_than_drawing_an_empty_box(
         self, app: ASGIApp, service: Service
     ) -> None:
-        session = await service.start("have a look", DEFAULT_CHOICE)
+        session = await started(service, "have a look", DEFAULT_CHOICE)
         entry = await service.checkpointer.append(session.id, recorded_command("git diff --quiet"))
         await service.checkpointer.supply(
             session.id,
@@ -264,7 +265,7 @@ class TestHowACommandIsDrawn:
         Nothing to say either way yet: `said nothing` is a claim about a finished command, and a
         console that made it about a running one would be reporting an absence it cannot know about.
         """
-        session = await service.start("have a look", DEFAULT_CHOICE)
+        session = await started(service, "have a look", DEFAULT_CHOICE)
         await service.checkpointer.append(session.id, recorded_command("just test"))
 
         async with calling(app) as caller:
@@ -387,7 +388,7 @@ class TestRunningOne:
         so between creating one and its first reply there is a repository, a `Run` on offer, and
         nowhere yet to run in. What that must not be is a `FileNotFoundError` repr.
         """
-        session = await running.start("hello", on_fixture)
+        session = await started(running, "hello", on_fixture)
 
         came = await ran(running, session.id, "git status")
 
@@ -396,7 +397,7 @@ class TestRunningOne:
 
     async def test_a_session_with_no_files_has_nowhere_to_run_one(self, running: Service) -> None:
         """`None` rather than a raise: it is a state the page can explain, not a fault."""
-        session = await running.start("hello", replace(DEFAULT_CHOICE, repository=None))
+        session = await started(running, "hello", replace(DEFAULT_CHOICE, repository=None))
 
         assert await running.run(session.id, "echo nowhere") is None
 
@@ -472,7 +473,7 @@ class TestThroughTheConsole:
         A command that vanished would be indistinguishable from one that ran and did nothing, which
         is the state nobody can diagnose.
         """
-        session = await running.start("hello", replace(DEFAULT_CHOICE, repository=None))
+        session = await started(running, "hello", replace(DEFAULT_CHOICE, repository=None))
 
         async with calling(app) as caller:
             answer = await caller.post(
@@ -485,7 +486,7 @@ class TestThroughTheConsole:
         self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         with_files = await planted(running, workspaces, on_fixture)
-        without = await running.start("hello", replace(DEFAULT_CHOICE, repository=None))
+        without = await started(running, "hello", replace(DEFAULT_CHOICE, repository=None))
 
         async with calling(app) as caller:
             offered = await caller.get(f"/sessions/{with_files}")

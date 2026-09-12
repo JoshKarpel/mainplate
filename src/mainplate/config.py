@@ -205,6 +205,30 @@ class Config(BaseModel):
     a picker quietly showing something else.
     """
 
+    plugins: Mapping[str, Path] = {}
+    """
+    The operator's own plugins, as the name each is installed under and the executable to run.
+
+    **The key is the whole of the plugin's name**, and a plugin declares none of its own. That is
+    what makes two people's plugins installable side by side: both may call themselves `guidance`, so
+    you install `alice-guidance` and `bob-guidance` and neither file is touched. A rule tying the key
+    to a declared name would make that pair uninstallable together, and their next release would undo
+    whichever file you edited.
+
+    ```yaml
+    plugins:
+      handoff: ~/.config/mainplate/plugins/handoff        # runs beside the bundled one
+      alice-guidance: ~/.config/mainplate/plugins/alice
+    ```
+
+    Nothing here shadows a bundled plugin of the same name and nothing turns one off: a bundled
+    `handoff` and an operator's `handoff` are two plugins, both on, both listed on a session's
+    settings step with a switch apiece. Installing one is the decision, and this console does not
+    second-guess it by turning something else off out of view.
+
+    Empty by default, which is the console as it ships: the bundled plugins and nothing else.
+    """
+
     model_reference: ModelReference | None = None
     """
     Where to look up cost, context windows, and capabilities, or nothing at all to look nowhere.
