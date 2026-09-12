@@ -230,8 +230,8 @@ Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installe
 Every command runs in a mount namespace of its own holding exactly what that session reaches and a
 read-only system, so your home directory and the console's configuration are not in it, and the
 network is off unless the session asked for it. What a command does get as its home is the session's
-own scratch directory, which is where a repository's `.mainplate/setup` script installs whatever a
-session needs to run its tests, once, before the first message. Inside a worktree the repository's git objects go in
+own scratch directory, which is where a repository's own setup plugin installs whatever a session
+needs to run its tests, once, before the first message. Inside a worktree the repository's git objects go in
 read-only: `status`, `diff`, `log` and `blame` all answer, while `commit` and `stash` fail. That is
 deliberate, because the conversation is how work is recorded here and committing is yours to do.
 **Run** in the composer is where you do it: the same command from there runs outside all of this, as

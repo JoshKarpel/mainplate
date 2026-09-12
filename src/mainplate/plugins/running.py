@@ -89,6 +89,32 @@ word for it, and two spellings of that word is two places that answer to differe
 on which of them was edited last.
 """
 
+ENV_FILE_NAMED: Final = "MAINPLATE_ENV"
+"""
+The variable naming the file a plugin appends `KEY=value` lines to, one per line, at `setup`.
+
+Spelled rather than derived through `environment_named`, which is deliberate: that function names a
+bound *place*, and this names a file this console made rather than a directory anybody reaches for.
+
+GitHub Actions' `GITHUB_ENV`, and the right shape here for two reasons kept apart. It is **an
+allowlist by construction**: only what the plugin writes crosses, so whatever else was in the setup
+environment stays where it was and there is no filter to maintain. And it **keeps the console
+language-agnostic**: the plugin writes its own `PATH` line with a shims directory on the front, and
+nothing here learns what a shim is or where mise keeps them.
+
+A file rather than a field on the answer, so a plugin that only needs to *do* something stays a shell
+script with no JSON in it. See `Spoke`.
+"""
+
+ENV_FILE: Final = ".mainplate-env"
+"""
+Where that file is, under the plugin's own scratch, which is bound and writable at every event.
+
+One per plugin, so what each asked for is attributed by construction rather than by two of them
+appending to one file. Under its own rather than under the session's, because this is the console's
+bookkeeping and the session's scratch is what a later `just test` looks in. Removed once read.
+"""
+
 SCRATCH_NAMED: Final[RootName] = "plugin_scratch"
 """
 What a confined plugin's own directory is called inside its namespace.
@@ -119,7 +145,49 @@ class PluginFailed(RuntimeError):
     """
 
 
-type Speaking = Callable[[Installed, Payload, Worktree | None], Awaitable[object]]
+@dataclass(frozen=True, slots=True)
+class Spoke:
+    """
+    What one plugin answered, which is two things because they crossed by two routes.
+
+    `said` came back on stdout and is the JSON the protocol is written in. `environment` was appended
+    to the file `ENV_FILE_NAMED` names and is what this plugin asked to have set for the session's
+    commands, which is empty for every event but `setup` and for every plugin that wrote nothing.
+
+    Two fields rather than one, and the second not folded into the first: `said` is the plugin's own
+    words and is parsed against a closed vocabulary, where this is a file this console handed out and
+    read back. Merging them would put a name into that vocabulary that no plugin may write and every
+    plugin could.
+    """
+
+    said: object
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+
+def environment_of(plugin: str, text: str) -> dict[str, str]:
+    """
+    The `KEY=value` lines one environment file holds, or a failure naming the line that is not one.
+
+    Blank lines and `#` comments are passed over, since a plugin that echoes a heading into the file
+    has done nothing wrong. Anything else that is not `KEY=value` fails the setup rather than being
+    skipped: a line meant to set `PATH` that quietly set nothing is a session whose tools are not on
+    it, discovered one command at a time.
+
+    **Read as a value and never as a program.** It is parsed into a mapping here and nothing sources
+    it, which is the line [the security page](../../docs/design/security.md) draws everywhere else.
+    """
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        name, separator, value = line.partition("=")
+        if not separator or not name.strip():
+            raise PluginFailed(f"{plugin} wrote a line to {ENV_FILE_NAMED} that is not KEY=value: {line!r}")
+        found[name.strip()] = value
+    return found
+
+
+type Speaking = Callable[[Installed, Payload, Worktree | None], Awaitable[Spoke]]
 """
 How this console says one thing to one plugin, injected rather than reached for.
 
@@ -186,6 +254,14 @@ class Invocation:
     where: str | None
     payload: Mapping[str, object]
 
+    environment_file: Path | None = None
+    """
+    The file this run may append `KEY=value` lines to, where the event is one that offers one.
+
+    Here rather than recomputed by the caller for `payload`'s reason one field along: what decides
+    the path is what set the variable naming it, so there is no second derivation of it to drift.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class Spawned:
@@ -215,6 +291,16 @@ class Spawned:
     config_home: Path | None = None
     environ: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
 
+    session_scratch: Callable[[str], Path] | None = None
+    """
+    Where one session's own scratch is, which is a derivation rather than a root.
+
+    The workspace's own, passed rather than rebuilt, so the directory a plugin installs into at
+    `setup` and the directory the session's `bash` gets as `$HOME` cannot be two spellings of one
+    path. Nothing on a console that cannot confine a plugin, since there is then nothing to bind it
+    into.
+    """
+
     def scratch_for(self, plugin: Installed, session: str) -> Path:
         """
         Where one plugin of one session may keep what it installed, and nobody else may write.
@@ -234,6 +320,18 @@ class Spawned:
     def allowed(self, event: Event) -> timedelta:
         """How long this event has to answer, which for setting up is longer than for anything else."""
         return self.setting_up if event == SETUP else self.patience
+
+    def preparing(self, event: Event) -> bool:
+        """
+        Whether this event is the one a plugin may get the repository ready at, which is `setup`.
+
+        The same question `venue` asks and the same answer, written separately because what turns on
+        it is different: that one decides a network, and this decides whether the session's own
+        scratch is bound and an environment file is named. Three consequences of one rule rather than
+        three rules, and keyed on the event for the reason the network is - before the conversation,
+        over the commit the repository supplied, with nothing the model wrote anywhere yet.
+        """
+        return event == SETUP
 
     def venue(self, event: Event) -> Venue:
         """
@@ -257,7 +355,7 @@ class Spawned:
         """
         return Venue.CONNECTED if event == SETUP else Venue.CONFINED
 
-    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> object:
+    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Spoke:
         """
         Say one thing to one plugin and read its answer, or fail naming the plugin.
 
@@ -265,6 +363,13 @@ class Spawned:
         JSON value. `stderr` is kept apart rather than folded in, unlike a command a person runs:
         what a plugin prints there is its own diagnostics, and mixing it into the answer would make
         a `print` left in while debugging into a protocol error.
+
+        **An answer of nothing at all is an answer.** Empty output reads as `{}`, every field of a
+        registration is optional, and a plugin that named no events is asked nothing again - so a
+        plugin whose whole job is to install something is a shell script with no JSON in it.
+
+        At `setup` the environment file is read back beside that answer and removed, whatever the
+        plugin wrote or did not.
         """
         sending = await self.invocation(plugin, payload, worktree)
         allowed = self.allowed(payload.event)
@@ -307,9 +412,24 @@ class Spawned:
         if said:
             logger.info(f"{plugin.qualified} said: {said}")
         try:
-            return json.loads(out.decode(errors="replace") or "{}")
+            answered = json.loads(out.decode(errors="replace") or "{}")
         except json.JSONDecodeError as broken:
             raise PluginFailed(f"{plugin.qualified} printed something that is not JSON: {broken}") from broken
+        return Spoke(said=answered, environment=await self.asked_for(plugin, sending.environment_file))
+
+    async def asked_for(self, plugin: Installed, file: Path | None) -> dict[str, str]:
+        """
+        What one plugin asked to have set for its session's commands, read back off disk and removed.
+
+        Nothing where the event named no file, which is every event but `setup`. A file left behind by
+        a run that failed is not cleaned up here and does not need to be: `invocation` truncates it
+        before every run, so what a retry reads is only ever what that attempt wrote.
+        """
+        if file is None:
+            return {}
+        text = await asyncio.to_thread(lambda: file.read_text(encoding="utf-8"))
+        await asyncio.to_thread(lambda: file.unlink(missing_ok=True))
+        return environment_of(plugin.qualified, text)
 
     async def invocation(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Invocation:
         """
@@ -331,6 +451,12 @@ class Spawned:
 
         The network is shut for every event but the one that happens before the conversation does,
         and never because of anything the session chose. See `venue`.
+
+        **At `setup` a repository's plugin gets two more things, and at no other event either of
+        them**: the session's own scratch bound read-write under the name a command finds it by, so
+        what it installs is where the session's commands look, and a file to name what those commands
+        should run under. `$HOME` stays its own scratch throughout, so the directory it may *fill* and
+        the directory it *runs out of* are never the same one. See `preparing`.
         """
         where = None if worktree is None else str(worktree.root)
         if not plugin.confined:
@@ -358,14 +484,25 @@ class Spawned:
             raise PluginFailed(f"{plugin.qualified} is a repository's, and this session has no worktree")
         scratch = self.scratch_for(plugin, payload.session)
         await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
+        prepares = self.preparing(payload.event)
+        session_scratch = await self.preparing_in(payload.session) if prepares else None
+        file = scratch / ENV_FILE if prepares else None
+        if prepares:
+            # Truncated rather than appended to, so what this run reads back is only ever what this
+            # run wrote: a setup that failed part-way through leaves its lines behind, and the
+            # attempt after it must not inherit them.
+            await asyncio.to_thread(lambda: (scratch / ENV_FILE).write_text("", encoding="utf-8"))
         # The worktree as this console knows it, git directory and all, rather than one rebuilt from
         # the path on the payload: an unnamed directory is one git discovers by reading the pointer
         # file at the tree's root, which is the single thing in there the session can replace.
         #
         # `plugin_scratch` and not `scratch`, which is the name a model's own `bash` finds the
         # *session's* directory under. One word for two places would have a repository's plugin and
-        # the model it is running beside reading the same variable and reaching different disks.
-        confinement = InAWorktree(worktree=worktree, scratch=scratch, scratch_named=SCRATCH_NAMED)
+        # the model it is running beside reading the same variable and reaching different disks - and
+        # at `setup`, where both are bound, it would be one word for two binds in one namespace.
+        confinement = InAWorktree(
+            worktree=worktree, scratch=scratch, scratch_named=SCRATCH_NAMED, session_scratch=session_scratch
+        )
         sandbox = await confined_by(confinement)
         argv = (
             self.bwrap,
@@ -377,10 +514,31 @@ class Spawned:
                 # keeps what it fetched under `$HOME`, so a `uv run --script` shebang resolves an
                 # interpreter and a package tree once, at the one event with a network, and finds
                 # them there on every event after it.
+                #
+                # The plugin's own at `setup` too, where the session's scratch is also bound: a
+                # plugin fills that directory and must never be the thing running out of it.
                 home=str(scratch),
+                environment={} if file is None else {ENV_FILE_NAMED: str(file)},
             ),
             str(plugin.path),
         )
         return Invocation(
-            argv=argv, environment={}, where=None, payload=payload.model_copy(update={"scratch": str(scratch)}).spoken()
+            argv=argv,
+            environment={},
+            where=None,
+            payload=payload.model_copy(update={"scratch": str(scratch)}).spoken(),
+            environment_file=file,
         )
+
+    async def preparing_in(self, session: str) -> Path:
+        """
+        One session's own scratch, made if it is not there yet, for a plugin about to install into it.
+
+        Made here rather than left to the first command, because a bind of a directory that does not
+        exist is a `bwrap` that will not start, and at `setup` no command has run yet by construction.
+        """
+        if self.session_scratch is None:  # pragma: no cover - a confining console is given one
+            raise PluginFailed("this console was given no way to find a session's own scratch")
+        where = self.session_scratch(session)
+        await asyncio.to_thread(lambda: where.mkdir(parents=True, exist_ok=True))
+        return where

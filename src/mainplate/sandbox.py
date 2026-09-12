@@ -161,6 +161,20 @@ class InAWorktree:
     `Spawned.scratch_for`.
     """
 
+    session_scratch: Path | None = None
+    """
+    The session's own scratch, bound beside a plugin's own where a plugin is being set up.
+
+    Nothing for a session's commands, whose `scratch` above already *is* this directory, and nothing
+    for a plugin at any event but `setup`. What it is for is a plugin getting the repository ready:
+    what it installs is for the session's commands, so it has to land in the directory they get as
+    their `$HOME`.
+
+    **Bound is not `$HOME`.** `home` stays the plugin's own scratch at every event, so a plugin
+    *fills* this directory and never *runs out of* it, which is the whole of why the grant is safe.
+    See `Spawned.invocation`.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class OverEverything:
@@ -181,8 +195,8 @@ at all, so there is no confinement to describe rather than an empty one to carry
 async def confined_by(confinement: Confinement) -> Sandbox:
     """The sandbox one confinement means, asked of git where that is what decides the paths."""
     match confinement:
-        case InAWorktree(worktree=worktree, scratch=scratch, scratch_named=named):
-            return await Sandbox.around(worktree, scratch, named)
+        case InAWorktree(worktree=worktree, scratch=scratch, scratch_named=named, session_scratch=session):
+            return await Sandbox.around(worktree, scratch, named, session)
         case OverEverything():
             return Sandbox.everywhere()
         case _ as unreachable:
@@ -254,9 +268,20 @@ class Sandbox:
     places: tuple[Bind, ...]
 
     @classmethod
-    async def around(cls, worktree: Worktree, scratch: Path, scratch_named: RootName = "scratch") -> Sandbox:
+    async def around(
+        cls,
+        worktree: Worktree,
+        scratch: Path,
+        scratch_named: RootName = "scratch",
+        session_scratch: Path | None = None,
+    ) -> Sandbox:
         """
         A worktree, its clone read-only, and a scratch directory: what a `WORKTREE` session reaches.
+
+        `session_scratch` adds a second writable directory under the name a command finds the
+        session's own under, which is what a plugin getting the repository ready is given at `setup`.
+        Absent everywhere else, including for the session's own commands, whose `scratch` is already
+        that directory: naming one path twice would put two binds of it in one namespace.
 
         The clone and not the per-worktree directory: the latter sits *inside* the former and its
         `commondir` points back out at it for objects and refs, so binding the common one covers both
@@ -287,6 +312,7 @@ class Sandbox:
                 Bind(path=worktree.pointer, writable=False),
                 Bind(path=common, writable=False),
                 Bind(path=scratch, writable=True, name=scratch_named),
+                *(() if session_scratch is None else (Bind(path=session_scratch, writable=True, name="scratch"),)),
             )
         )
 

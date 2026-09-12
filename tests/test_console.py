@@ -67,6 +67,7 @@ from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.protocol import Payload
 from mainplate.plugins.running import PluginFailed
+from mainplate.plugins.running import Spoke
 from mainplate.reference import Cost
 from mainplate.reference import Facts
 from mainplate.reference import Reference
@@ -1806,11 +1807,11 @@ class Answering:
     refusing: str | None = None
     asked: list[str] = field(default_factory=list)
 
-    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> object:
+    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Spoke:
         self.asked.append(plugin.qualified)
         if self.refusing == plugin.qualified:
             raise PluginFailed(f"{plugin.qualified} exited 1: saying nothing")
-        return {"events": ["after_turn"]}
+        return Spoke(said={"events": ["after_turn"]})
 
 
 class TestLoadingASessionsPlugins:
@@ -1873,34 +1874,28 @@ class TestLoadingASessionsPlugins:
         assert 'class="rail"' not in page.text
         assert answering.asked == [], "and nothing has been run to draw it"
 
-    async def test_a_repositorys_setup_script_gets_a_switch_under_its_tier(self, service: Service) -> None:
+    async def test_a_repositorys_own_plugin_gets_a_switch_under_its_tier(self, service: Service) -> None:
         """
-        The one switch on the step that is not a plugin's, drawn with the repository's plugins
-        because it is the repository's code and answered by the same press: the same hidden `off`,
-        the same field shape, under a key no qualified name can be.
+        Every tier draws the same control, which is what makes the step one thing rather than three.
+
+        A repository's plugin that gets the repository ready is drawn exactly as the one that runs its
+        checks is, and as the operator's own are: the same hidden `off`, the same field shape, keyed
+        by the qualified name, and nothing is run to draw any of it.
         """
         answering = Answering()
         app, running = await self.console(service, answering)
         session = await running.start(DEFAULT_CHOICE)
+        setting_up = Installed(tier=Tier.REPOSITORY, name="setup", path=Path("/tree/.mainplate/setup"))
         await running.checkpointer.supply(session.id, DECLARED_KEY, recorded_declaration(DECLARES))
-        await running.checkpointer.supply(session.id, REPOSITORY_DECLARED_KEY, recorded_declaration((), setup=True))
+        await running.checkpointer.supply(session.id, REPOSITORY_DECLARED_KEY, recorded_declaration((setting_up,)))
         async with calling(app) as caller:
             page = await caller.get(f"/sessions/{session.id}")
 
         assert page.status == 200
-        assert 'type="hidden" name="on:setup" value="off"' in page.text
-        assert 'type="checkbox" name="on:setup" checked' in page.text
-        assert ".mainplate/setup" in page.text
-        assert answering.asked == []
-
-    async def test_a_repository_carrying_no_setup_script_draws_no_switch_for_one(self, service: Service) -> None:
-        answering = Answering()
-        app, running = await self.console(service, answering)
-        session = await self.declared(running)
-        async with calling(app) as caller:
-            page = await caller.get(f"/sessions/{session}")
-
-        assert 'name="on:setup"' not in page.text
+        assert 'type="hidden" name="on:repository:setup" value="off"' in page.text
+        assert 'type="checkbox" name="on:repository:setup" checked' in page.text
+        assert ".mainplate/setup" in page.text, "the path, which is the whole of what there is to go on"
+        assert answering.asked == [], "and nothing has been run to draw it"
 
     async def test_the_press_itself_runs_nothing_and_the_pass_runs_what_was_left_on(self, service: Service) -> None:
         """

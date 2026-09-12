@@ -125,10 +125,11 @@ by the pass that follows that step being answered. A fork carries none of the fo
 runs both tiers again, out of the tree it is planted at.
 
 `setup:environment` is written on that same pass, before the two registrations and under the same
-rule that nothing is recorded until every setup has answered: it holds what the repository's
-[`.mainplate/setup`](setup.md) asked to have set for the session's commands, and it is empty where
-that script was not run. Session-level for the reason the four above are, and its switch is the
-`enabled` column's under the key `setup`.
+rule that nothing is recorded until every setup has answered: it holds what this session's repository
+plugins [asked to have set](plugins.md#getting-the-repository-ready-is-a-plugin-too) for its
+commands, merged across them. Session-level for the reason the four above are, and written even where
+nothing asked for anything, so a session past its step always has an answer there rather than a
+missing key that means two different things.
 
 **`plugins:setup:{n}` is numbered where those four are not**, and the retry is what decides it. It
 records that somebody answered the step for the `n`th time, which is the only thing that lets a pass

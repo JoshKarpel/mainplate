@@ -46,6 +46,7 @@ from mainplate.conversation import transcript
 from mainplate.durability import parse_returned
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
+from mainplate.plugins.asking import asked_to_set
 from mainplate.plugins.asking import running
 from mainplate.plugins.installed import BUNDLED_ROOT
 from mainplate.plugins.installed import BadDeclaration
@@ -82,16 +83,16 @@ from mainplate.plugins.protocol import refusing
 from mainplate.plugins.protocol import settings_of
 from mainplate.plugins.protocol import state_of
 from mainplate.plugins.protocol import toned
+from mainplate.plugins.running import ENV_FILE
 from mainplate.plugins.running import PluginFailed
 from mainplate.plugins.running import Spawned
-from mainplate.preparing import SCRIPT
-from mainplate.preparing import has_setup
+from mainplate.plugins.running import Spoke
+from mainplate.plugins.running import environment_of
 from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
-from mainplate.tending import SETUP_SWITCH
 from mainplate.tending import TENDED
 
 # Where the fixture plugins live. A directory of real executables rather than strings written into
@@ -188,7 +189,7 @@ async def asked(plugin: Path, payload: Payload) -> Any:
     around, and the worktree such a plugin reads is the one named on the payload.
     """
     installed = Installed(tier=Tier.USER, name=plugin.name, path=plugin)
-    return await Spawned(environ={})(installed, payload, None)
+    return (await Spawned(environ={})(installed, payload, None)).said
 
 
 class TestTheVocabulary:
@@ -585,6 +586,61 @@ class TestRunningOne:
         )
 
 
+class TestReadingWhatASetupAskedToHaveSet:
+    """The file a plugin appends to, parsed as a value and never sourced as a program."""
+
+    def test_key_value_lines_are_what_the_session_gets(self) -> None:
+        assert environment_of("repository:setup", "PATH=/a/bin:/usr/bin\nGREETING=hi there\n") == {
+            "PATH": "/a/bin:/usr/bin",
+            "GREETING": "hi there",
+        }
+
+    def test_blank_lines_and_comments_are_passed_over(self) -> None:
+        """A plugin that echoes a heading into the file has done nothing wrong."""
+        assert environment_of("repository:setup", "\n# what it set\nONE=1\n\n") == {"ONE": "1"}
+
+    def test_a_value_may_hold_an_equals_sign(self) -> None:
+        assert environment_of("repository:setup", "QUERY=a=b\n") == {"QUERY": "a=b"}
+
+    @pytest.mark.parametrize("line", ["just words", "=nothing", "   =blank name"])
+    def test_a_line_that_is_not_key_value_fails_naming_it(self, line: str) -> None:
+        """
+        Refused rather than skipped: a line meant to set `PATH` that quietly set nothing is a session
+        whose tools are not on it, discovered one command at a time.
+        """
+        with pytest.raises(PluginFailed, match="not KEY=value"):
+            environment_of("repository:setup", f"FINE=1\n{line}\n")
+
+
+class TestWhenTwoPluginsAskToSetOneName:
+    """
+    Refused, naming both: two `PATH` lines cannot both be whole, so taking the later one would leave
+    the earlier plugin's toolchain unreachable in a way nothing reports.
+    """
+
+    def installed(self, name: str) -> Installed:
+        return Installed(tier=Tier.REPOSITORY, name=name, path=Path(f"/tree/.mainplate/{name}"))
+
+    def test_different_names_merge(self) -> None:
+        """A repository splitting its setup across two plugins is ordinary."""
+        asked = asked_to_set(
+            [
+                (self.installed("toolchain"), Spoke(said={}, environment={"PATH": "/shims:/usr/bin"})),
+                (self.installed("cargo"), Spoke(said={}, environment={"CARGO_HOME": "/cargo"})),
+            ]
+        )
+        assert asked == {"PATH": "/shims:/usr/bin", "CARGO_HOME": "/cargo"}
+
+    def test_one_name_twice_is_refused_naming_both_and_the_name(self) -> None:
+        with pytest.raises(Refused, match="repository:toolchain and repository:cargo both asked to set PATH"):
+            asked_to_set(
+                [
+                    (self.installed("toolchain"), Spoke(said={}, environment={"PATH": "/shims:/usr/bin"})),
+                    (self.installed("cargo"), Spoke(said={}, environment={"PATH": "/cargo/bin"})),
+                ]
+            )
+
+
 class TestWhereARepositorysPluginRuns:
     """
     The namespace one is given, which differs from a command's in the three ways a plugin needs.
@@ -596,7 +652,12 @@ class TestWhereARepositorysPluginRuns:
 
     @pytest.fixture
     def spawned(self, tmp_path: Path) -> Spawned:
-        return Spawned(bwrap="/usr/bin/bwrap", scratch=tmp_path / "plugins", environ={})
+        return Spawned(
+            bwrap="/usr/bin/bwrap",
+            scratch=tmp_path / "plugins",
+            session_scratch=lambda session: tmp_path / "scratch" / session,
+            environ={},
+        )
 
     def installed(self) -> Installed:
         return Installed(tier=Tier.REPOSITORY, name="checks", path=Path("/tree/.mainplate/checks"))
@@ -675,12 +736,52 @@ class TestWhereARepositorysPluginRuns:
         A model's `bash` finds the *session's* scratch under `MAINPLATE_SCRATCH`, and a plugin's
         directory is a different place with a different owner. Under one name the two would be told
         apart only by which process read the variable, which is precisely what a shared vocabulary of
-        place names exists to stop.
+        place names exists to stop - and at `setup`, where both are bound, it would be one word for
+        two binds in one namespace.
         """
+        argv = await self.invocation(spawned, "setup", worktree)
+        own = str(spawned.scratch_for(self.installed(), "a-session"))
+
+        assert argv[argv.index("MAINPLATE_PLUGIN_SCRATCH") + 1] == own
+        assert argv[argv.index("MAINPLATE_SCRATCH") + 1] != own
+
+    async def test_the_sessions_own_scratch_is_reached_at_setup_and_at_no_other_event(
+        self, spawned: Spawned, worktree: Any, tmp_path: Path
+    ) -> None:
+        """
+        What a plugin getting the repository ready installs is *for* the session's commands, so it has
+        to land in the directory they get as their `$HOME`. Every event after it is a plugin that has
+        read whatever the model has been writing, and gets none of this.
+        """
+        argv = await self.invocation(spawned, "setup", worktree)
+        assert argv[argv.index("MAINPLATE_SCRATCH") + 1] == str(tmp_path / "scratch" / "a-session")
+        for event in ("tool", "before_tool", "before_request", "before_turn_end", "after_turn", "compose", "action"):
+            assert "MAINPLATE_SCRATCH" not in await self.invocation(spawned, event, worktree), event
+
+    async def test_home_is_the_plugins_own_even_where_the_sessions_is_bound(
+        self, spawned: Spawned, worktree: Any
+    ) -> None:
+        """
+        The whole of why the grant is safe. A plugin *fills* the session's scratch and never *runs out
+        of* it, so the thing this console executes at a turn boundary is never a path the model can
+        rewrite - which is what a shared `$HOME` would have made it.
+        """
+        argv = await self.invocation(spawned, "setup", worktree)
+
+        assert argv[argv.index("HOME") + 1] == str(spawned.scratch_for(self.installed(), "a-session"))
+
+    async def test_an_environment_file_is_named_at_setup_and_at_no_other_event(
+        self, spawned: Spawned, worktree: Any
+    ) -> None:
+        """Under the plugin's own scratch, so what each of them asked for is attributed by itself."""
         payload = spoken(event="setup", worktree=str(worktree.root))
         sending = await spawned.invocation(self.installed(), payload, worktree)
+        own = spawned.scratch_for(self.installed(), "a-session")
 
-        assert "MAINPLATE_SCRATCH" not in sending.argv
+        assert sending.environment_file == own / ENV_FILE
+        assert sending.argv[sending.argv.index("MAINPLATE_ENV") + 1] == str(own / ENV_FILE)
+        for event in ("tool", "after_turn", "compose", "action"):
+            assert "MAINPLATE_ENV" not in await self.invocation(spawned, event, worktree), event
 
     async def test_a_plugin_outside_a_worktree_is_handed_no_scratch_at_all(self, tmp_path: Path) -> None:
         """
@@ -694,6 +795,122 @@ class TestWhereARepositorysPluginRuns:
 
         assert "scratch" not in sending.payload
         assert sending.environment["HOME"] == "/home/operator"
+
+
+class TestWhatASetupActuallyReaches:
+    """
+    A repository plugin run at `setup` behind the real sandbox, which is where the grants are proved.
+
+    Over `bwrap` rather than against its arguments, unlike the class above: what is under test is not
+    what this console asks for but what a plugin can actually do from in there - write the session's
+    scratch, have only the environment file cross back, and still not write a history.
+    """
+
+    @pytest.fixture
+    def bwrap(self) -> str:
+        return sandbox_command()
+
+    @pytest.fixture
+    def spawned(self, tmp_path: Path, bwrap: str) -> Spawned:
+        return Spawned(
+            bwrap=bwrap,
+            scratch=tmp_path / "plugins",
+            session_scratch=lambda session: tmp_path / "scratch" / session,
+            environ={},
+        )
+
+    async def setting_up(self, spawned: Spawned, worktree: Worktree, tmp_path: Path, script: str) -> Spoke:
+        """
+        One repository plugin, written into the tree and run at `setup` as the console runs one.
+
+        In the tree because that is the only place a repository's plugin can be: the namespace binds
+        the worktree, its clone and two scratches, so a script anywhere else is one `bwrap` cannot
+        find - which is the first thing this arrangement proves.
+        """
+        at = worktree.root / ".mainplate" / "setup"
+        at.parent.mkdir(exist_ok=True)
+        at.write_text(script)
+        at.chmod(0o755)
+        installed = Installed(tier=Tier.REPOSITORY, name="setup", path=at)
+        return await spawned(installed, spoken(event="setup", worktree=str(worktree.root)), worktree)
+
+    async def test_what_it_installs_lands_in_the_sessions_own_scratch(
+        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+    ) -> None:
+        """
+        Which is what a session's own commands get as their `$HOME`, so everything fetched under it is
+        exactly where a later command looks.
+        """
+        await self.setting_up(
+            spawned,
+            worktree,
+            tmp_path,
+            '#!/bin/sh\nmkdir -p "$MAINPLATE_SCRATCH/.local/bin"\necho installed > "$MAINPLATE_SCRATCH/.local/bin/tool"\n',
+        )
+
+        assert (tmp_path / "scratch" / "a-session" / ".local" / "bin" / "tool").read_text() == "installed\n"
+
+    async def test_only_what_it_writes_to_the_file_crosses_back(
+        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+    ) -> None:
+        """
+        An allowlist by construction: the plugin's own environment holds more than this, and none of
+        it is the session's unless the plugin said so.
+        """
+        spoke = await self.setting_up(
+            spawned,
+            worktree,
+            tmp_path,
+            '#!/bin/sh\nexport SECRET=hidden\necho "PATH=$MAINPLATE_SCRATCH/bin:/usr/bin" >> "$MAINPLATE_ENV"\n',
+        )
+
+        assert spoke.environment == {"PATH": f"{tmp_path / 'scratch' / 'a-session'}/bin:/usr/bin"}
+
+    async def test_one_that_writes_nothing_sets_nothing_and_registers_nothing(
+        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+    ) -> None:
+        """
+        The three-line shell script case, which is the one most repositories want.
+
+        Its progress goes to stderr, because stdout is the answer and that is true at `setup` as it is
+        at every other event: a setup that echoed onto stdout would be a plugin that printed something
+        this console cannot read, which is why a script with nothing to say sends its noise the other
+        way.
+        """
+        spoke = await self.setting_up(spawned, worktree, tmp_path, "#!/bin/sh\necho getting ready >&2\n")
+
+        assert spoke.environment == {}
+        assert parse_described("repository:setup", spoke.said).events == ()
+
+    async def test_the_environment_file_is_gone_afterwards(
+        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+    ) -> None:
+        """It is this console's bookkeeping, and a plugin's scratch is what it keeps between events."""
+        await self.setting_up(spawned, worktree, tmp_path, "#!/bin/sh\ntrue\n")
+
+        assert not (tmp_path / "plugins" / "a-session" / "repository" / "setup" / ENV_FILE).exists()
+
+    async def test_a_malformed_environment_line_fails_the_setup(
+        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+    ) -> None:
+        with pytest.raises(PluginFailed, match="not KEY=value"):
+            await self.setting_up(
+                spawned, worktree, tmp_path, '#!/bin/sh\necho "this is not a variable" >> "$MAINPLATE_ENV"\n'
+            )
+
+    async def test_the_clone_is_still_read_only_in_there(
+        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+    ) -> None:
+        """The same namespace every other event gets, so a setup cannot write a history either."""
+        spoke = await self.setting_up(
+            spawned,
+            worktree,
+            tmp_path,
+            "#!/bin/sh\nif git commit -qam nothing >/dev/null 2>&1; then echo COMMIT=DID; else echo COMMIT=DENIED; fi "
+            '>> "$MAINPLATE_ENV"\n',
+        )
+
+        assert spoke.environment == {"COMMIT": "DENIED"}
 
 
 class TestTheBundledHandoff:
@@ -1546,7 +1763,9 @@ class TestARepositorysOwnPlugin:
         return sandbox_command()
 
     @pytest.fixture
-    async def declaring_repository(self, worktree: Any, tmp_path: Path, bwrap: str) -> Declaring:
+    async def declaring_repository(
+        self, worktree: Any, workspaces: Workspaces, tmp_path: Path, bwrap: str
+    ) -> Declaring:
         """The fixture repository, carrying a declaration and the script it names, both committed."""
         root = worktree.root
         (root / ".mainplate").mkdir()
@@ -1558,7 +1777,12 @@ class TestARepositorysOwnPlugin:
         await run("git", "commit", "-qm", "carry a plugin", cwd=root)
         return Declaring(
             console=(),
-            speaking=Spawned(bwrap=bwrap, scratch=tmp_path / "scratch", environ={}),
+            speaking=Spawned(
+                bwrap=bwrap,
+                scratch=tmp_path / "scratch",
+                session_scratch=workspaces.scratch_at,
+                environ={},
+            ),
             confining=True,
         )
 
@@ -1616,14 +1840,17 @@ class TestARepositorysOwnPlugin:
         assert registered_in(await planting.checkpointer.load(session.id)) == ()
 
 
-class TestARepositorysSetupScript:
+class TestAPluginThatSetsTheRepositoryUp:
     """
-    `.mainplate/setup`, which is not a plugin: the console runs it itself, on the setup pass, behind
-    the sandbox with the session's scratch as `$HOME`, and records what it asked to have set.
+    The plugin a repository declares to get itself ready, which is an ordinary repository-tier one.
 
-    Its switch is the step's like any plugin's, and that is what most of these are about: declared
-    but not run until the press, not run at all when the switch is off, and never even read where
-    the repository is not trusted.
+    What it has that no other event gets is the session's own scratch, bound read-write, and a file
+    to say what that session's commands should run under. Everything else about it is the tier's: it
+    is declared but not run until the press, not run at all when its switch is off, and never even
+    read where the repository is not trusted.
+
+    It also prints nothing, which is what these hold as much as the grants: it declares no events, so
+    it registers with nothing in it and is asked nothing again.
     """
 
     @pytest.fixture
@@ -1631,17 +1858,30 @@ class TestARepositorysSetupScript:
         return sandbox_command()
 
     @pytest.fixture
-    async def declaring_setup(self, worktree: Any, tmp_path: Path, bwrap: str) -> Declaring:
-        """The fixture repository carrying a setup script that installs a marker and sets one variable."""
+    async def declaring_setup(self, worktree: Any, workspaces: Workspaces, tmp_path: Path, bwrap: str) -> Declaring:
+        """
+        The fixture repository declaring a setup plugin, which installs a marker and sets one
+        variable.
+
+        Into `$MAINPLATE_SCRATCH` and never into its own `$HOME`, which is the distinction the grant
+        rests on: the session's commands read the first and cannot see the second.
+        """
         root = worktree.root
         (root / ".mainplate").mkdir()
+        (root / ".mainplate" / "mainplate.yaml").write_text("plugins:\n  setup: .mainplate/setup\n")
         script = root / ".mainplate" / "setup"
-        script.write_text('#!/bin/sh\ntouch "$HOME/installed"\necho "GREETING=hello" >> "$MAINPLATE_ENV"\n')
+        script.write_text(
+            '#!/bin/sh\ntouch "$MAINPLATE_SCRATCH/installed"\necho "GREETING=hello" >> "$MAINPLATE_ENV"\n'
+        )
         script.chmod(0o755)
         await run("git", "add", "-A", cwd=root)
-        await run("git", "commit", "-qm", "carry a setup script", cwd=root)
+        await run("git", "commit", "-qm", "carry a setup plugin", cwd=root)
         return Declaring(
-            console=(), speaking=Spawned(bwrap=bwrap, scratch=tmp_path / "scratch", environ={}), confining=True
+            console=(),
+            speaking=Spawned(
+                bwrap=bwrap, scratch=tmp_path / "scratch", session_scratch=workspaces.scratch_at, environ={}
+            ),
+            confining=True,
         )
 
     async def loaded(
@@ -1676,7 +1916,7 @@ class TestARepositorysSetupScript:
     async def test_it_is_declared_and_drawn_before_it_is_run(
         self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
     ) -> None:
-        """Read on the declaring pass beside the plugins, and run by nothing until the press."""
+        """Read on the declaring pass like any plugin, and run by nothing until the press."""
         planting = replace(service, workspaces=workspaces)
         session = await planting.start(replace(DEFAULT_CHOICE, repository=FIXTURE))
         body = conversing(
@@ -1684,11 +1924,12 @@ class TestARepositorysSetupScript:
         )
         await passing(planting, session.id, body)
 
-        shown = await replace(planting, declaring=declaring_setup).read(session.id)
-        assert shown is not None
-        assert shown.setup_script, "the step has a switch to draw"
+        recorded = await planting.checkpointer.load(session.id)
+        declared = declared_in(recorded)
+        assert declared is not None
+        assert [each.qualified for each in declared] == ["repository:setup"], "a switch to draw"
         assert not (workspaces.scratch_at(session.id) / "installed").exists(), "and nothing has run it"
-        assert environment_in(await planting.checkpointer.load(session.id)) == {}
+        assert environment_in(recorded) == {}
 
     async def test_the_setup_pass_runs_it_and_records_what_it_asked_for(
         self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
@@ -1700,21 +1941,40 @@ class TestARepositorysSetupScript:
         recorded = await service.checkpointer.load(session.id)
         assert environment_in(recorded) == {"GREETING": "hello"}
         assert (workspaces.scratch_at(session.id) / "installed").exists(), "it installed into the session's scratch"
-        assert registered_in(recorded) == (), "and registered as no plugin, because it is not one"
+
+    async def test_a_plugin_that_printed_nothing_registers_with_nothing_in_it(
+        self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
+    ) -> None:
+        """
+        Which is what lets a setup be a shell script with no JSON in it: empty output reads as an
+        answer, and a plugin that named no events is never asked about one again.
+        """
+        session = await self.loaded(
+            service, declaring_setup, workspaces, replace(DEFAULT_CHOICE, repository=FIXTURE), {}
+        )
+
+        enrolled = registered_in(await service.checkpointer.load(session.id))
+        assert enrolled is not None
+        assert [each.qualified for each in enrolled] == ["repository:setup"]
+        assert enrolled[0].described.events == (), "so nothing asks it anything again"
 
     async def test_switched_off_it_never_runs_and_the_session_still_opens(
         self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
     ) -> None:
         session = await self.loaded(
-            service, declaring_setup, workspaces, replace(DEFAULT_CHOICE, repository=FIXTURE), {SETUP_SWITCH: False}
+            service,
+            declaring_setup,
+            workspaces,
+            replace(DEFAULT_CHOICE, repository=FIXTURE),
+            {"repository:setup": False},
         )
 
         recorded = await service.checkpointer.load(session.id)
         assert environment_in(recorded) == {}
         assert not (workspaces.scratch_at(session.id) / "installed").exists()
-        assert registered_in(recorded) is not None, "past the step all the same"
+        assert registered_in(recorded) == (), "past the step all the same"
 
-    async def test_an_untrusted_repositorys_script_is_not_even_read(
+    async def test_an_untrusted_repositorys_plugin_is_not_even_read(
         self, service: Service, workspaces: Workspaces, declaring_setup: Declaring
     ) -> None:
         planting = replace(service, workspaces=workspaces)
@@ -1724,23 +1984,31 @@ class TestARepositorysSetupScript:
         )
         await passing(planting, session.id, body)
 
-        shown = await replace(planting, declaring=declaring_setup).read(session.id)
-        assert shown is not None
-        assert not shown.setup_script
+        assert declared_in(await planting.checkpointer.load(session.id)) == ()
 
-    async def test_a_script_that_fails_puts_the_session_back_on_the_step(
+    async def test_one_that_fails_puts_the_session_back_on_the_step(
         self, service: Service, workspaces: Workspaces, worktree: Any, tmp_path: Path, bwrap: str
     ) -> None:
-        """With the reason above the switches, where the thing to do about it is a line away."""
+        """
+        With the reason above the switches, where the thing to do about it is a line away.
+
+        Loudly, because there is no quiet version: a session that opened over a repository whose
+        dependencies never arrived would find out one command at a time.
+        """
         root = worktree.root
         (root / ".mainplate").mkdir()
+        (root / ".mainplate" / "mainplate.yaml").write_text("plugins:\n  setup: .mainplate/setup\n")
         script = root / ".mainplate" / "setup"
         script.write_text("#!/bin/sh\necho the toolchain is not there >&2\nexit 2\n")
         script.chmod(0o755)
         await run("git", "add", "-A", cwd=root)
-        await run("git", "commit", "-qm", "carry a broken setup script", cwd=root)
+        await run("git", "commit", "-qm", "carry a broken setup plugin", cwd=root)
         declaring = Declaring(
-            console=(), speaking=Spawned(bwrap=bwrap, scratch=tmp_path / "scratch", environ={}), confining=True
+            console=(),
+            speaking=Spawned(
+                bwrap=bwrap, scratch=tmp_path / "scratch", session_scratch=workspaces.scratch_at, environ={}
+            ),
+            confining=True,
         )
 
         session = await self.loaded(service, declaring, workspaces, replace(DEFAULT_CHOICE, repository=FIXTURE), {})
@@ -1750,16 +2018,6 @@ class TestARepositorysSetupScript:
         refused = setup_refused_in(recorded)
         assert refused is not None
         assert "the toolchain is not there" in refused.why
-
-    def test_this_repositorys_own_is_one_a_session_can_actually_run(self) -> None:
-        """
-        A worktree is planted from the clone, so the file has exactly the mode git recorded: a script
-        committed without its executable bit is one every session's `bwrap` refuses with a permission
-        error, and nothing here would have said so before a session did.
-        """
-        here = Path(__file__).parent.parent
-        assert has_setup(here)
-        assert os.access(here / SCRIPT, os.X_OK), "and a script that is not executable is one nothing can run"
 
 
 class TestThisRepositorysOwnPlugin:
@@ -1842,7 +2100,7 @@ class TestThisRepositorysOwnPlugin:
             "HOME": os.environ["HOME"],
             "PYTHONPATH": str(repository.parent / "stub"),
         }
-        return await Spawned(environ=environ)(installed, payload, None)
+        return (await Spawned(environ=environ)(installed, payload, None)).said
 
     async def test_a_repository_with_no_config_gets_a_plugin_that_contributes_nothing(
         self, plugin: Path, repository: Path
@@ -1983,13 +2241,18 @@ class TestThisRepositorysOwnPlugin:
         assert await self.stopping(plugin, repository, attempt=1, most=2) != {}, "one short of the bound"
         assert await self.stopping(plugin, repository, attempt=2, most=2) == {}, "at it, the model is let go"
 
-    async def test_this_repository_declares_it_at_the_path_it_is_actually_at(self) -> None:
+    async def test_this_repository_declares_both_of_its_own_at_the_paths_they_are_actually_at(self) -> None:
         """
         The one thing a rename breaks silently: the declaration and the file are two places, and a
         session on this repository would fail its own setup rather than say so here.
+
+        The executable bit for the same reason one moment later. A worktree is planted from the clone,
+        so a file has exactly the mode git recorded, and one committed without it is a plugin every
+        session's `bwrap` refuses with a permission error.
         """
-        here = Path(__file__).parent.parent
-        declared = repository_plugins(here)
-        assert [each.name for each in declared] == ["pre-commit"]
-        assert declared[0].path.is_file()
-        assert os.access(declared[0].path, os.X_OK), "and a plugin that is not executable is one nothing can run"
+        declared = repository_plugins(Path(__file__).parent.parent)
+
+        assert [each.name for each in declared] == ["pre-commit", "setup"], "by name, as a declaration is sorted"
+        for each in declared:
+            assert each.path.is_file(), f"{each.name} is declared at a path with no file at it"
+            assert os.access(each.path, os.X_OK), f"{each.name} is not executable, so nothing can run it"

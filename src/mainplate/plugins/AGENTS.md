@@ -105,11 +105,16 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
   so that is where the two must stay apart and `test_app.py` is what fails when they do not. It is
   `$MAINPLATE_PLUGIN_SCRATCH` inside and never `$MAINPLATE_SCRATCH`, which is the name a model's own
   `bash` finds the *session's* directory under.
-- **The session's scratch is never a plugin's `$HOME`, and the one program that does get it is not a
-  plugin.** `.mainplate/setup` is run by `preparing.py`, in the console, once, before anything is
-  unattended, and what it installs is for the session's commands. Do not route it through this
-  package: it was a bundled plugin once and needed five exceptions for one name, which is what
-  `docs/design/setup.md` records.
+- **The session's scratch is bound at `setup` and at no other event, and it is never `$HOME`.** A
+  plugin getting the repository ready installs a toolchain for the session's own commands, so it
+  reaches `$MAINPLATE_SCRATCH` at that one event. Its `$HOME` stays its own scratch throughout, which
+  is what keeps the bullet above true: the hazard needs a plugin *executing* at a turn boundary out of
+  a path the model can rewrite, and no event grants both halves of that.
+- **`$MAINPLATE_ENV` is `setup`'s too, and what it names is read as a value.** The lines a plugin
+  appends there are set for the session's commands and for no plugin's namespace, this console parses
+  them and never sources them, and a line that is not `KEY=value` fails the setup naming the plugin.
+  Two plugins writing the same name is refused naming both, because two `PATH` lines cannot both be
+  whole.
 - **A plugin outside a worktree is handed no scratch, and that is a decision.** What a scratch answers
   is having nowhere to write, which only the namespace creates; such a plugin has the operator's
   `$HOME`, their caches, their `/tmp` and their other scripts, and may need all four. Giving it one

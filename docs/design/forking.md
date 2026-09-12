@@ -73,7 +73,8 @@ survive is a plugin set changing under a request already made, and a branch has 
 *recorded* turns, which is a different thing.
 
 **Editing `.mainplate/` and forking is therefore how a session iterates on its own plugins**,
-including [the setup script](setup.md) that installs its toolchain - which a branch has to run again
+including [the one that installs its
+toolchain](plugins.md#getting-the-repository-ready-is-a-plugin-too) - which a branch has to run again
 anyway, since it plants a fresh worktree with a scratch of its own and neither carries what the
 parent installed.
 

@@ -132,12 +132,10 @@ change:
   sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
   executes a plugin before somebody presses the button on that step**, which is a trust boundary and
   not a loading order. **Handoff and what a session is told are both plugins**, so a change to either
-  is a change to a script in `src/mainplate/plugins/bundled/` rather than to the console. **And this
-  repository carries one of its own**, in `.mainplate/`, described below.
-- [`docs/design/setup.md`](docs/design/setup.md): `.mainplate/setup`, the script a repository
-  carries to get itself ready, run by the console once per session behind the sandbox with the
-  session's scratch as `$HOME`. **It is not a plugin, and this repository carries one**, described
-  below.
+  is a change to a script in `src/mainplate/plugins/bundled/` rather than to the console. **Getting a
+  repository ready to work in is a plugin too**, which is where the two grants a repository's plugin
+  has at `setup` and at no other event are written down. **And this repository carries two of its
+  own**, in `.mainplate/`, described below.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
@@ -160,13 +158,17 @@ a browser, and `scripts/` for the gallery and the seeder.
 the file beside `anchors.py` says do not make it three, so write a new constraint beside the code
 and its reasoning on the page, rather than either in both.
 
-## This repository runs a plugin of its own
+## This repository runs two plugins of its own
 
-`.mainplate/mainplate.yaml` declares `.mainplate/pre-commit`, so **a mainplate session working on
-mainplate runs this project's own hooks whenever the model tries to stop** and is sent back with
-what is still failing, inside the same turn, up to a number of times its card says. It is a
-repository-tier plugin like anybody else's: it runs behind the sandbox, with a network only at
-`setup`, out of a scratch directory nothing else can write.
+`.mainplate/mainplate.yaml` declares both, and they are repository-tier plugins like anybody else's:
+they run behind the sandbox, with a network only at `setup`, out of a scratch directory nothing else
+can write.
+
+### `pre-commit`, which runs the checks
+
+`.mainplate/pre-commit` means **a mainplate session working on mainplate runs this project's own
+hooks whenever the model tries to stop** and is sent back with what is still failing, inside the same
+turn, up to a number of times its card says.
 
 Two things follow for anybody changing it:
 
@@ -180,25 +182,28 @@ Two things follow for anybody changing it:
 Try it by hand rather than by starting a session:
 `echo '{"event":"setup","session":"x","plugin":"repository:pre-commit","worktree":"'$PWD'","scratch":"/tmp/x"}' | .mainplate/pre-commit`.
 
-## And a setup script, which is not a plugin
+### `setup`, which fetches the toolchain
 
 `.mainplate/setup` is what a mainplate session runs, once, to be able to run `just test` here: it
 installs mise into the session's scratch, `mise install`s the tools `mise.toml` pins, and runs `just
-dependencies` under them. The console runs it itself, behind the sandbox, with the network on and the
-session's scratch as `$HOME`, and what the script appends to `$MAINPLATE_ENV` is set for the
-session's commands. [`docs/design/setup.md`](docs/design/setup.md) is the whole of it.
+dependencies` under them. It is the plugin that uses [the two grants a `setup`
+has](docs/design/plugins.md#getting-the-repository-ready-is-a-plugin-too): the session's own scratch
+bound read-write, so what it installs is where the session's commands look for it, and
+`$MAINPLATE_ENV`, whose `KEY=value` lines are what those commands then run under. It declares no
+events and **prints nothing**, so nothing asks it anything again.
 
-Two things follow for anybody changing it:
+Three things follow for anybody changing it:
 
 - **`just dependencies` and never `just setup`**, because the other half of `setup` installs a git
   hook into the clone's common directory, which is shared by every worktree of it and bound read-only
   in a session. A step that has to write git belongs in the composer's `Run`, as the person.
 - **The `PATH` it writes is the session's whole `PATH`.** Leave the system directories on the end,
   or the session's commands lose `sh`.
+- **It installs into `$MAINPLATE_SCRATCH` and never `$HOME`.** `$HOME` inside it is the plugin's own
+  directory, which the session's commands cannot see; the two names are different on purpose and
+  [the table](docs/design/plugins.md#what-is-in-the-environment) is which is which.
 
-It is not run by the suite, since what it does is fetch a toolchain. `tests/test_preparing.py` runs
-scripts of its own through the same mechanism, and the switch and the record are
-`tests/test_plugins.py`'s to prove.
+It is not run by the suite, since what it does is fetch a toolchain.
 
 ## Dependencies
 

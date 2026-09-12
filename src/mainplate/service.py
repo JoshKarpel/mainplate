@@ -50,7 +50,6 @@ from mainplate.conversation import recorded_steer
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
 from mainplate.conversation import requested_at
-from mainplate.conversation import setup_declared_in
 from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
@@ -376,16 +375,6 @@ class Conversation:
     happened in a pass with nobody waiting on it, so it had to be written down.
     """
 
-    setup_script: bool = False
-    """
-    Whether this session's repository carries a `.mainplate/setup`, which the step draws a switch for.
-
-    Off the repository's declaration, so it is false for a session that does not trust its
-    repository, has none, or has not planted its worktree yet. It is not a plugin and never appears
-    in `declared` or `plugins`: the console runs it itself, and what it asked for is a record of its
-    own rather than a registration.
-    """
-
     attempts: int = 0
     """
     How many times somebody has answered this session's settings step.
@@ -562,7 +551,6 @@ class Service:
             # breadcrumb is about: a pass that failed to read the files wrote it, and a later pass
             # that succeeded wrote the declaration, which is the authoritative answer.
             refused_plugins=None if declared is not None else plugins_refused_in(recorded),
-            setup_script=setup_declared_in(recorded),
             # Whether a pass is out setting this session's plugins up right now, which is one press
             # answered and nothing recorded against it yet. Two facts rather than one, because the
             # third state is the one worth drawing: pressed and still working, pressed and stopped
@@ -841,9 +829,9 @@ class Service:
         # declaration, no registration and no press, so its first pass reads what the tree it is
         # planted at declares, its page draws the settings step over the turns it carries, and the
         # press that answers the step is what runs `setup` again. Editing `.mainplate/` and forking is
-        # therefore how a conversation iterates on its own plugins, the setup script that installs its
-        # toolchain included - which a fork *has* to run again, since it plants a fresh worktree and an
-        # ignored directory does not come across in a recorded tree.
+        # therefore how a conversation iterates on its own plugins, the one that installs its toolchain
+        # included - which a fork *has* to run again, since it plants a fresh worktree and an ignored
+        # directory does not come across in a recorded tree.
         #
         # **The press being asked for again is the trust boundary rather than a papercut.** A fork
         # plants at a *recorded tree*, which is a tree a model wrote: a snapshot is `git add -A`, so a

@@ -48,26 +48,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an
   interpreter and its dependencies there, and a plugin that wants a toolchain in the worktree fetches
   it there. That directory is one plugin's alone in one session, named on every payload as `scratch`
-  and in the environment as `$MAINPLATE_PLUGIN_SCRATCH`, and it is `$HOME` inside the namespace; it is
-  nowhere the session's own scratch reaches, because the model writes that one. Every event after it runs with the network shut, because what makes a connected run safe
+  and in the environment as `$MAINPLATE_PLUGIN_SCRATCH`, and it is `$HOME` inside the namespace at
+  every event - never the session's own scratch, which the model writes, because a plugin must not
+  execute out of a path the model can rewrite. Every event after it runs with the network shut, because what makes a connected run safe
   is that it happens before the first message - over the commit the repository supplied, with nothing
   the model wrote in the tree yet. It runs in a pass rather than in the press, so a repository whose
   plugin builds a toolchain shows a page that says it is working instead of a button that hangs; a
   setup that will not finish is recorded against that attempt, so turning the plugin off and pressing
   again is a fresh one.
-- **A repository sets itself up with a script.** `.mainplate/setup`, where a repository carries one,
-  runs once per session on the pass that answers the settings step: behind the same namespace
-  `bash` gets, with the network on, starting in the worktree, and with the session's own scratch as
-  `$HOME`, which is now what every command in a session gets as its `$HOME` too. So `uv sync` in a
-  three-line script is what it takes for a session to be able to run `just test`, and nothing in the
-  console knows what a Python is. What the script appends to the file `$MAINPLATE_ENV` names, as
-  `KEY=value` lines, is set for the session's commands and for nothing else; a `PATH` written there is
-  the `PATH`. It is not a plugin, and it has a switch of its own on the settings step under the
-  repository's tier, so a session reading a repository rather than working in it can leave it off.
-  Off, the session opens as it would over a repository carrying no script; failing, the session comes
-  back to the step with the last lines the script printed. This repository carries one, which installs
-  mise, the tools `mise.toml` pins, and `just dependencies` - the half of `just setup` a session can
-  run, split out because the other half installs a git hook into a clone bound read-only.
+- **A repository gets itself ready with a plugin of its own.** Every command in a session now runs
+  with the session's own scratch as its `$HOME`, and a repository's plugin has two things at `setup`
+  that it has at no other event: that scratch bound read-write, so what it installs is where those
+  commands look for it, and `$MAINPLATE_ENV`, a file whose `KEY=value` lines are then set for those
+  commands and for nothing else. So `uv sync` in a three-line script that prints nothing is what it
+  takes for a session to be able to run `just test`, nothing in the console knows what a Python is,
+  and a `PATH` written there is the `PATH`. It is an ordinary repository-tier plugin in every other
+  respect, with a switch on the settings step, so a session reading a repository rather than working
+  in it can leave it off and open exactly as it would over a repository carrying no such plugin. This
+  repository carries one, which installs mise, the tools `mise.toml` pins, and `just dependencies` -
+  the half of `just setup` a session can run, split out because the other half installs a git hook
+  into a clone bound read-only.
 - **A plugin may stand in front of a turn ending.** A plugin that asks for `before_turn_end` is told each
   time the model has answered and would stop, and an `inject` from it keeps the turn going: what it
   said is put to the model in the console's voice and the model is asked again inside the same turn,
@@ -77,8 +77,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   been sent back, so a plugin can bound itself; what was said is recorded per attempt and drawn
   above the answer it shaped. The cost: every time the model is sent back is a model request, on the
   largest context the turn has had, and the console sets no bound of its own.
-- **This repository carries a plugin of its own**, in `.mainplate/`, so a mainplate session working on
-  mainplate runs the project's own `pre-commit` hooks over what it has changed whenever the model
+- **This repository carries a `pre-commit` plugin too**, in `.mainplate/`, so a mainplate session
+  working on mainplate runs the project's own hooks over what it has changed whenever the model
   tries to stop, and sends it back with what is still failing. Ported from a Claude Code `Stop` hook,
   keeping its shape, and different from it in the three ways a console is different from a terminal:
   it stages nothing, because the clone is read-only and `--files` needs no index; it installs itself

@@ -152,8 +152,9 @@ them:
 
 ## What a plugin gets that a command does not, and why each is safe
 
-A repository's plugin and a session's `bash` run behind the same namespace, and then differ in three
-places. Each difference is deliberate and each is narrow.
+A repository's plugin and a session's `bash` run behind the same namespace, and then differ in five
+places. Each difference is deliberate and each is narrow, and **three of the five are `setup`'s
+alone**: they are gone at every event that runs during the conversation.
 
 - **A network, at `setup` and never again.** A plugin that needs a program has to fetch one, so the
   event that runs before the first message is connected and every event during the conversation is
@@ -173,20 +174,34 @@ places. Each difference is deliberate and each is narrow.
   for both would be the same confusion in the environment that the shared root was on disk.
 - **`$HOME` pointing at that directory**, rather than at a tmpfs. It is what lets a plugin keep what
   it fetched, and it is per plugin per session, so nothing one plugin caches is readable by another.
+  It stays pointed there at `setup` as well, which is what keeps the bullet below from undoing this
+  one.
+- **The *session's* scratch bound read-write, at `setup` and never again.** A plugin that gets the
+  repository ready installs a toolchain for the session's own commands, and that has to land where
+  they look for it, which is their `$HOME`. What makes it safe is the same *when* as the network, plus
+  one more thing: it is a directory the plugin **fills** rather than one it **runs out of**, since its
+  own `$HOME` is still its own scratch. The laundering the bullet above describes needs a plugin
+  executing at a turn boundary out of a path the model can rewrite, and there is no event at which
+  both halves of that are true. It is `$MAINPLATE_SCRATCH`, which is the name a command finds the same
+  directory under, because it is the same directory.
+- **`$MAINPLATE_ENV`, naming a file of `KEY=value` lines, at `setup` and never again.** Those lines
+  are set for the session's commands and for nothing else, no plugin's namespace included. **The
+  parent reads that file as a value and never as a program**, which is the line this page draws
+  everywhere else: it is parsed into a mapping, and a line that is not `KEY=value` fails the setup
+  loudly rather than being passed over. What crosses is only what the plugin wrote, so it is an
+  allowlist by construction rather than a filter somebody maintains.
 
-**The trust switch still governs all three**, because it governs whether the plugin runs at all. What
+**The trust switch still governs all five**, because it governs whether the plugin runs at all. What
 it does not do is scale with them: a session that says no gets none of this, and a session that says
 yes gets all of it. There is deliberately no finer control, for [the reason there is no per-repository
 grant](plugins.md#the-control-is-the-refusal-not-the-permission).
 
-**A repository's `.mainplate/setup` is the fourth thing that runs behind the namespace, and it is the
-console that runs it.** The same namespace, the network on for the same reason a plugin's `setup`
-has it, and the *session's* scratch as `$HOME` rather than a directory of its own, because what it
-installs is for the session's commands and runs once before anything is unattended. What crosses
-back to the parent is a file of `KEY=value` lines the parent reads as a value and never as a
-program, and those lines reach the session's commands and no plugin's namespace. It has a switch of
-its own on the settings step, under the trust switch. [Setting a repository up](setup.md) is the
-whole of it.
+**What the last two amount to, said plainly: any repository plugin left on can stage the environment
+its session's commands run under.** The answer to that is not a check. It is that the same
+repository's code already runs in that session's `bash`, that two switches stand in front of it, and
+that the staging happens over the commit the repository supplied rather than over anything the model
+wrote. [Getting the repository ready is a plugin
+too](plugins.md#getting-the-repository-ready-is-a-plugin-too) is the whole of it.
 
 **This is why `Run` needs no defence.** It stays a shell, unsandboxed, in the worktree, with the
 console's environment, and that is what it is for. The problem was never that `Run` is trusted; it

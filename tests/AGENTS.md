@@ -154,16 +154,20 @@ module goes on `PYTHONPATH` and the two runs it makes are driven by exit codes. 
 shebang still resolves the plugin's own dependency, so a cold machine pays for that once, like the
 browsers.
 
-**`test_preparing.py` runs setup scripts of its own through the real sandbox, and never this
-repository's.** What `.mainplate/setup` here does is fetch a toolchain; what the suite asserts is the
-mechanism - `$HOME` is the session's scratch, the worktree is where it starts, only the environment
-file crosses back, a failure is loud. `TestARepositorysSetupScript` in `test_plugins.py` is the
-switch and the record, driven through a real pass, and it needs `tendings` for the reason above.
+**`TestWhatASetupActuallyReaches` runs setup plugins of its own through the real sandbox, and never
+this repository's.** What `.mainplate/setup` here does is fetch a toolchain; what the suite asserts
+is the mechanism - what it installs lands in the *session's* scratch, only the environment file
+crosses back, a malformed line is loud, and the clone is still read-only in there.
+`TestAPluginThatSetsTheRepositoryUp` is the switch and the record, driven through a real pass, and it
+needs `tendings` for the reason above. Both write their plugin **into the worktree**, which is not
+incidental: the namespace binds the tree, its clone and two scratches, so a script anywhere else is
+one `bwrap` cannot find.
 
 **What that stub cannot cover is asserted against arguments instead.**
 `TestWhereARepositorysPluginRuns` reads the `bwrap` argv this console builds - the network on `setup`
-and shut everywhere else, `$HOME` in the plugin's own scratch, a scratch per plugin per session -
-because running it to find out would be the same assertions made slowly and over a network.
+and shut everywhere else, the session's scratch and the environment file on `setup` and nowhere else,
+`$HOME` in the plugin's own scratch at every event including that one, a scratch per plugin per
+session - because running it to find out would be the same assertions made slowly and over a network.
 
 `test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
 fixtures there hand an absolute workspace root and so would never notice a path resolved against the

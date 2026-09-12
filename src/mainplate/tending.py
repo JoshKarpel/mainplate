@@ -53,17 +53,6 @@ SETTLED: Final = "settled"
 PLUGIN_FIELD: Final = "plugin"
 """Which plugin a posted control belongs to, by qualified name."""
 
-SETUP_SWITCH: Final = "setup"
-"""
-The switch on the settings step that is not a plugin's: whether the repository's `.mainplate/setup`
-runs.
-
-It lives in the same `enabled` column as the plugins' switches, keyed by this word, and cannot
-collide with one of theirs because a plugin's key is a *qualified* name and every qualified name
-holds a colon. The same column rather than a second one because it is the same question, answered
-on the same step, by the same press, and carried across a fork the same way.
-"""
-
 
 @dataclass(frozen=True, slots=True)
 class Tending:

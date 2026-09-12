@@ -19,6 +19,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ from mainplate.plugins.protocol import Event
 from mainplate.plugins.protocol import Gating
 from mainplate.plugins.protocol import Opening
 from mainplate.plugins.protocol import Payload
+from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Requesting
 from mainplate.plugins.protocol import Setting
 from mainplate.plugins.protocol import SettingUp
@@ -59,6 +61,7 @@ from mainplate.plugins.protocol import refusing
 from mainplate.plugins.protocol import settings_of
 from mainplate.plugins.protocol import state_of
 from mainplate.plugins.running import Speaking
+from mainplate.plugins.running import Spoke
 from mainplate.snapshots import Worktree
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
@@ -217,7 +220,8 @@ class Live:
         """
         if self.speaking is None:  # pragma: no cover - a `Live` with plugins always has one
             raise RuntimeError("this console was given no way to run a plugin")
-        answered = parse_answer(plugin.qualified, await self.speaking(plugin.installed, payload, self.worktree))
+        spoke = await self.speaking(plugin.installed, payload, self.worktree)
+        answered = parse_answer(plugin.qualified, spoke.said)
         refusing(plugin.qualified, payload.event, answered)
         return answered
 
@@ -287,9 +291,13 @@ def opening_of(said: records.Delivered) -> Opening:
 
 async def setting_up(
     installed: Sequence[Installed], speaking: Speaking, session: str, worktree: Worktree | None
-) -> tuple[Enrolled, ...]:
+) -> tuple[tuple[Enrolled, ...], dict[str, str]]:
     """
     Set every declared plugin up, all at once, and fail naming whichever one will not answer.
+
+    Two things come back, because a setup produces two: what each plugin contributes, and what they
+    asked to have set for the session's own commands. The second is empty for every plugin that is
+    not a repository's, since the file it is written to is offered only inside the namespace.
 
     **The first call to a plugin sets it up and asks what it is**, and everything it contributes
     comes back from that one call. Concurrent because the plugins are independent and each is a cold
@@ -307,33 +315,51 @@ async def setting_up(
     half set up, and being run twice is what an install is already built to survive.
     """
     where = None if worktree is None else str(worktree.root)
-    said = await asyncio.gather(
+    spoke = await asyncio.gather(
         *(
             speaking(each, SettingUp(session=session, plugin=each.qualified, worktree=where), worktree)
             for each in installed
         )
     )
-    return tuple(
-        Enrolled(installed=each, described=parse_described(each.qualified, answered))
-        for each, answered in zip(installed, said, strict=True)
+    enrolled = tuple(
+        Enrolled(installed=each, described=parse_described(each.qualified, answered.said))
+        for each, answered in zip(installed, spoke, strict=True)
     )
+    return enrolled, asked_to_set(zip(installed, spoke, strict=True))
 
 
-def recorded_declaration(installed: Sequence[Installed], setup: bool = False) -> dict[str, object]:
+def asked_to_set(spoke: Iterable[tuple[Installed, Spoke]]) -> dict[str, str]:
+    """
+    What a set of plugins asked to have set for their session's commands, or a refusal naming two.
+
+    **Two plugins writing one name is refused, naming both and the name.** A repository splitting its
+    setup across two plugins is ordinary and the two sets merge; two `PATH` lines cannot both be
+    whole, so this says so rather than taking the later one and leaving the earlier plugin's toolchain
+    unreachable in a way nothing reports. It is the answer [two colliding tools already
+    get](../../docs/design/plugins.md#two-namespaces-stay-shared-and-they-need-an-answer), and the
+    recovery is the same: both are on the settings step, with a switch apiece.
+    """
+    asked: dict[str, str] = {}
+    wrote: dict[str, str] = {}
+    for plugin, said in spoke:
+        for name, value in said.environment.items():
+            if name in wrote:
+                raise Refused(f"{wrote[name]} and {plugin.qualified} both asked to set {name}")
+            asked[name] = value
+            wrote[name] = plugin.qualified
+    return asked
+
+
+def recorded_declaration(installed: Sequence[Installed]) -> dict[str, object]:
     """
     What one tier's declaring file named, as the JSON-native value the store's codec will take.
 
     The counterpart of `recorded_registration` one moment earlier, and the pair is the trust boundary
     made structural: this is written by reading files and that is written by running programs, so a
     session sitting on its settings step has one and not the other.
-
-    `setup` is the repository's half saying it carries a `.mainplate/setup`, which is not a plugin
-    and is read on the same pass for the same reason: the step draws a switch for it, and nothing
-    that draws a switch may have run anything.
     """
     return records.Declared(
-        plugins=tuple(records.Named(name=each.name, tier=each.tier.value, path=str(each.path)) for each in installed),
-        setup=setup,
+        plugins=tuple(records.Named(name=each.name, tier=each.tier.value, path=str(each.path)) for each in installed)
     ).recorded()
 
 

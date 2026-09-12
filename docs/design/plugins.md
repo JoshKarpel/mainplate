@@ -116,6 +116,18 @@ including which events it wants:
      {"number": {"name": "reserve", "label": "reserve", "unit": "K", "default": 40}}]}}
 ```
 
+**A plugin that exits 0 having printed nothing has registered nothing**, and that is an answer rather
+than a failure. Empty output reads as `{}`, every field of the answer is optional, and a plugin that
+named no events is never asked about one again. So a plugin whose whole job is to *do* something once
+is a shell script with no JSON anywhere in it, and the protocol is a thing it may reach for rather
+than a thing it has to learn.
+
+**Printing nothing means printing nothing on stdout**, which is where an answer goes at every event
+including this one. Diagnostics go to stderr, where the console logs them and a `print` left in while
+debugging is not a protocol error. A setup that fetches is the case where this bites, since the
+things it shells out to are chatty: `exec 1>&2` at the top of a script that answers nothing is the
+whole of the fix, and this repository's own carries it.
+
 A plugin may also return **`instructions`**, which are composed into what the session is answered
 under. Those are a `setup` contribution rather than an event for the reason tools are: they sit
 in front of the cached prefix, so they have to be settled for the session or every request under
@@ -136,10 +148,9 @@ more moment every plugin author has to learn about.
 
 **And it is named after the stage rather than after the answer**, because a plugin is not the only
 thing being set up. Starting a session on a repository means getting that repository ready, and this
-is the stage where that happens: the repository's own `.mainplate/setup` runs on the same pass,
-beside the plugins, and it is [not a plugin](setup.md#why-it-is-not-a-plugin). A plugin that fetches
-its own toolchain at this event is still the way a *plugin* gets ready; a repository that wants its
-dependencies fetched once for the session writes the script.
+is the stage where that happens: a plugin fetching its own dependencies and [a plugin fetching the
+*session's* toolchain](#getting-the-repository-ready-is-a-plugin-too) are one moment, told apart by
+which directory each of them writes.
 
 The cost, stated: the name says less about what comes *back* than `describe` did, and a plugin author
 reading only the event name would not guess that the answer is the whole registration.
@@ -229,6 +240,89 @@ needs it and cannot work it out: a plugin answering a turn boundary has to be ab
 turn opened on *its own* delivery, or it fires again for as long as the condition that fired it stays
 true. `opened_on.plugin` and `plugin` are compared, and that is the whole of what stops a handoff
 recursing.
+
+### Getting the repository ready is a plugin too
+
+**A repository that wants its dependencies fetched once per session declares a plugin that fetches
+them**, in the same `.mainplate/mainplate.yaml` as everything else it declares, with a switch of its
+own on the same step. There is no second mechanism, no manifest and no reserved filename: `uv sync`
+in a shell script that prints nothing is the whole of it, and it generalises past Python without
+changes, since `npm ci`, `cargo fetch` and `go mod download` all want the same moment.
+
+What such a plugin needs beyond what any other gets is two things, and **both are granted at `setup`
+and at no other event**, which is the rule [the network already
+follows](#before-the-conversation-connected-during-it-never):
+
+- **`$MAINPLATE_SCRATCH`, the session's own scratch, bound read-write.** That is where a toolchain
+  has to land, because it is `$HOME` for [the session's own
+  commands](sandbox.md#the-scratch-directory) and everything that fetches keeps what it fetched under
+  `$HOME`. A `uv sync` whose interpreter landed anywhere else is a later `just test` that cannot find
+  it.
+- **`$MAINPLATE_ENV`, naming a file of `KEY=value` lines the plugin appends to.** Those lines are what
+  the session's commands are then run under. It is GitHub Actions' `GITHUB_ENV`, and it is **an
+  allowlist by construction**: only what the plugin writes crosses, so whatever else the setup
+  environment held stays where it was, there is no filter to maintain, and the console never learns
+  what a shim is or where mise keeps them. Set **whole and last**, after everything the sandbox sets
+  itself, so a `PATH` written there is the `PATH` rather than a fragment spliced into one by a rule
+  somebody has to learn. The cost, stated: a plugin that leaves `/usr/bin` off breaks its own
+  session's commands, and the fork is where that is corrected.
+
+  The file is under the plugin's **own** scratch, one apiece, so what each of them asked for is
+  attributed by construction rather than by two plugins appending to one file. It is truncated before
+  every run and read back once, so a setup that failed part-way through leaves nothing for the attempt
+  after it to inherit.
+
+**`$HOME` is still the plugin's own scratch**, and that is the line rather than a detail. What a
+plugin *executes out of* stays somewhere the model cannot write, so the laundering [the split
+closes](#a-scratch-of-its-own-which-is-not-the-sessions) stays closed; what it *populates* is the
+directory the session's commands read. Filling a directory and running out of one are different
+questions, and only the second is the hazard.
+
+**Both grants are gone at every later event**, so a plugin that also answers a turn boundary finds no
+session scratch bound and no environment file named. That is one rule with three consequences rather
+than three rules: `setup` is connected, reaches the session's scratch, and names the environment
+file; every event after it is shut, alone and silent.
+
+**What reaches the session's commands reaches no plugin's namespace**, the namespace of the plugin
+that wrote it included. A repository's `PATH` set for every plugin would redirect what that
+repository's own `pre-commit` plugin executes whenever the model tries to stop, which is the hazard
+[a private scratch](#a-scratch-of-its-own-which-is-not-the-sessions) exists to close, arriving
+through a new door.
+
+**Two plugins may each write the file, and two plugins writing the same name is refused, naming both
+and the name.** A repository splitting its setup across two plugins is ordinary and the two sets
+merge; two `PATH` lines cannot both be whole, so the console says so rather than picking one and
+leaving the other's toolchain unreachable in a way nothing reports. It is the rule [two colliding
+tools already take](#two-namespaces-stay-shared-and-they-need-an-answer), and the recovery is the
+same: both are on the step, with a switch apiece.
+
+**Building it into the console instead is the tempting alternative, and it costs five exceptions for
+one name**: a function that runs the script, a reserved path, a key in the `enabled` column that is
+not a plugin's, a field on the repository's declaration saying whether the tree carries one, and a
+checkpoint written by none of the machinery that writes the others.
+
+What argues for paying that is the observation that a *bundled* plugin cannot do this job. It would
+have to be confined where the rest of its tier is not, left off sessions with no worktree where the
+rest of its tier is declared for every session, registered by tier while being confined, and known to
+the console by name. Every one of those is true, and **not one of them is about the tier this
+actually belongs to**: a repository's plugin is confined already, refused on a session with no
+worktree already, registered by tier already, and named by the repository rather than by us already.
+The session's scratch is the one real exception left, and a grant keyed on an event is a smaller
+thing than a mechanism.
+
+The cost, stated: **every repository plugin left on may write the model's `$HOME` and set what its
+commands run under.** Three things bound that and none removes it. It is behind the trust switch and
+a switch of its own, so nothing runs unattended without two answers. It happens before the first
+message, over the commit the repository supplied. And what a plugin can leave in that directory, the
+repository's own code could leave there from the session's first `bash` anyway. What the grant really
+buys is the *moment*: a plugin stages the environment before the model has run at all, which is what
+a setup is for and is why the whole thing cannot wait until a command asks for it.
+
+**A plugin outside a worktree gets neither grant**, because both ride on the namespace: such a plugin
+has the operator's own `$HOME` and environment already. So an operator who wants a variable set for
+every session's commands still has no way to say so, since those commands are `--clearenv`'d. That is
+a gap rather than a decision, and it is a narrow one: what knows which toolchain a session's commands
+need is the repository they run in.
 
 ## Starting a session takes four steps
 
@@ -929,11 +1023,12 @@ a command gets, a `uv run --script` shebang resolves an interpreter and a packag
 finds neither at the next event, with the network shut and no way to fetch them again. Pointing
 `$HOME` at the scratch makes the ordinary case work with no environment variable in any plugin.
 
-**The one program a repository supplies that does get the session's scratch as `$HOME` is not a
-plugin.** [Its setup script](setup.md) runs once, before anything is unattended, and what it installs
-is *for* the session's commands to run, so landing it where they look is the point rather than the
-hazard. That is the difference between a program that populates the directory and one that executes
-out of it.
+**The session's scratch is nevertheless reachable at `setup`, and `$HOME` is what stays apart.** A
+plugin [getting the repository ready](#getting-the-repository-ready-is-a-plugin-too) has it bound
+read-write at that one event, because what it installs is *for* the session's commands and landing it
+where they look is the point. What it runs out of is still its own directory, at every event
+including that one, which is the whole of the distinction: populating a directory is not executing
+out of one.
 
 **A plugin outside a worktree is handed none of this, and giving it one would be symmetry for its own
 sake.** What a scratch answers is having nowhere to write, which is a problem the namespace creates:
@@ -955,6 +1050,40 @@ Two costs, both real:
 - **Nothing removes it.** Neither this nor a session's worktree is collected today, so the disk a
   session takes is the disk it keeps. This is a new line item on a bill that already exists rather
   than a new bill, and whatever eventually answers for worktrees answers for these.
+
+### What is in the environment
+
+Every name this console puts in an environment, in one place, because the alternative is four
+paragraphs that have to be read together to answer one question. The last column is the session's own
+commands rather than a plugin at all, and it is here because half the point of the table is that
+`scratch` means two directories depending on who is reading it.
+
+| | Plugin outside a worktree | Repository plugin at `setup` | Repository plugin, any later event | A session's own commands |
+|---|---|---|---|---|
+| `PATH` | the console's own | `/usr/local/bin:/usr/bin:/bin` | the same | the same, then whatever `$MAINPLATE_ENV` said |
+| `HOME` | the operator's own | the plugin's scratch | the plugin's scratch | the session's scratch |
+| `TERM` | the console's own | `dumb` | `dumb` | `dumb` |
+| `MAINPLATE_WORKTREE` | the tree, where the session has one | the tree | the tree | the tree |
+| `MAINPLATE_PLUGIN_SCRATCH` | not set | the plugin's scratch | the plugin's scratch | not set |
+| `MAINPLATE_SCRATCH` | not set | the session's scratch | not set | the session's scratch |
+| `MAINPLATE_ENV` | not set | a file to append `KEY=value` to | not set | not set |
+| `MAINPLATE_CONFIG_HOME` | where the operator's files are | not set | not set | not set |
+| anything else | the console's whole environment | nothing, `--clearenv` | nothing, `--clearenv` | nothing, `--clearenv` |
+
+Four things the table is not able to say:
+
+- **A `MAINPLATE_` name is a place, and [the vocabulary](sandbox.md#the-scratch-directory) is one
+  list.** `worktree`, `scratch` and `plugin_scratch` are bound paths and are named here by the thing
+  that binds them, so a name in an environment is a name for a path that namespace actually has.
+  `machine` is the fourth name in that list and appears in no environment: it is what a file tool
+  calls the root of a session over the whole machine, which has no bind to name.
+- **A session over the whole machine gets neither root variable**, because `/` is bound under no
+  name, and its `$HOME` is the tmpfs. Such a session has no scratch to be handed.
+- **The network is not in here**, and it is the third thing that turns on which event this is. See
+  [before the conversation, connected](#before-the-conversation-connected-during-it-never).
+- **The payload says most of this again**, on purpose. `worktree` and `scratch` are fields a plugin
+  parses; these are what a plugin that is a line of shell reads without parsing anything. It costs
+  two variables and buys a five-line plugin.
 
 ### The control is the refusal, not the permission
 
@@ -1049,10 +1178,10 @@ pass reads what the tree it is planted at declares, its page draws the settings 
 it carries, and the press that answers the step is what runs `setup`.
 
 **Which means editing `.mainplate/` and forking is how a session iterates on its own plugins.** That
-is the flow rather than a hole in the one above, and the setup script that installs a session's
-toolchain is why it has to be: a branch plants a fresh worktree, an ignored directory does not come
-across in a recorded tree, and a fork that inherited a registration would hold tools it has no
-installation for.
+is the flow rather than a hole in the one above, and [the plugin that installs a session's
+toolchain](#getting-the-repository-ready-is-a-plugin-too) is why it has to be: a branch plants a fresh
+worktree, an ignored directory does not come across in a recorded tree, and a fork that inherited a
+registration would hold tools it has no installation for.
 
 **The press being asked for again is what keeps this a trust boundary.** A branch is planted at a
 tree a model wrote, so what makes running what that tree names legitimate is not that the parent was
@@ -1163,7 +1292,7 @@ the call's place and replayed without a second asking are claims the suite makes
 page. Nor `before_turn_end`, which `tests/plugins/stickler` exercises the same way: a plugin that sends the
 model back until `attempt` reaches a number it is told, so that the turn going on inside itself, the
 count on the payload, and a replay asking nothing are the suite's claims too. [This repository's
-own plugin](#and-this-repository-carries-one-which-is-the-rest-of-the-proof) is the one that wants
+own plugin](#and-this-repository-carries-two-which-is-the-rest-of-the-proof) is the one that wants
 it for real.
 
 Neither of them installs anything, which is the ordinary case and worth saying: a plugin whose
@@ -1178,7 +1307,7 @@ own tiers, so it proves three claims that would otherwise only be asserted in pr
 reaches nothing it was not handed, and a repository's own script can contribute to what a session is
 told.
 
-### And this repository carries one, which is the rest of the proof
+### And this repository carries two, which is the rest of the proof
 
 `.mainplate/pre-commit` runs this project's own hooks over what a session has changed whenever the
 model tries to stop, and sends it back with what is still failing. It is a port of a Claude Code
@@ -1206,6 +1335,20 @@ Three things it does *not* do, each because the console already answers them: it
 things, since `edit` is anchored on what was read and a stale anchor is refused; and it remembers
 nothing between attempts, since `attempt` carries the count and a `set` would not reach the turn it was
 made in anyway.
+
+**And `.mainplate/setup` beside it, which is the worked example of the other half.** It installs mise
+into the session's scratch, runs `mise install` for the tools `mise.toml` pins, runs `just
+dependencies` under them, appends one `PATH` line to `$MAINPLATE_ENV` putting mise's shims first,
+then mise's own directory, then the system's, and **prints nothing**. So it declares no events and is
+never asked anything again, and nothing in the console knows what a shim is, where mise keeps them,
+or that Python has an interpreter directory. `just dependencies` and not `just setup`, because the
+other half of that recipe installs a git hook into the clone's common directory, which is shared by
+every worktree of it and bound read-only in a session: that step is a person's to run once per clone,
+from [the composer's `Run`](composer.md#run).
+
+Between them the two cover the tier: one installs into the session's scratch and goes quiet, the
+other installs into its own and answers a turn boundary for the rest of the session, and neither
+needed a word of console added for it.
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
 ours and turns ours off with one switch on the settings step. The two are separate plugins with

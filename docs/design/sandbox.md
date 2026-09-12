@@ -67,8 +67,9 @@ call should not uninstall what was installed since. The cost is the one an ignor
 carries, that what is in there goes stale while the source around it moves back.
 
 **It is `$HOME` for a session's commands**, rather than the tmpfs, because that is where every tool
-that fetches keeps what it fetched: a toolchain a repository's `.mainplate/setup` installs lands
-under `$HOME`, and a shell whose `$HOME` is anywhere else cannot find its own tools. `home_in` is
+that fetches keeps what it fetched: a toolchain [a repository's plugin
+installs](plugins.md#getting-the-repository-ready-is-a-plugin-too) lands under `$HOME`, and a shell
+whose `$HOME` is anywhere else cannot find its own tools. `home_in` is
 where that is decided, and it retires the earlier reading that what a shell leaves in a home
 directory is scratch by accident - it is scratch by intent now, and the cost is that a stray dotfile
 survives the call. A session over the whole machine has no scratch and keeps the tmpfs.

@@ -112,7 +112,6 @@ from mainplate.plugins.protocol import Number
 from mainplate.plugins.protocol import Setting
 from mainplate.plugins.protocol import Switch
 from mainplate.plugins.protocol import settings_of
-from mainplate.preparing import SCRIPT
 from mainplate.reference import Cost
 from mainplate.reference import Described
 from mainplate.reference import Reference
@@ -132,7 +131,6 @@ from mainplate.tending import ENABLED_FIELD
 from mainplate.tending import PLUGIN_FIELD
 from mainplate.tending import SETTLE_FIELD
 from mainplate.tending import SETTLED
-from mainplate.tending import SETUP_SWITCH
 from mainplate.tending import Tending
 from mainplate.thinking import THINKING_CHOICES
 from mainplate.thinking import name_of_thinking
@@ -3393,41 +3391,7 @@ def plugin_switch(plugin: Installed, on: bool, form: str | None = None) -> Eleme
     )
 
 
-SETUP_SAYS_OF_ITSELF: Final = (
-    "Runs once, with a network, before the first message, and what it installs is what this session's commands run."
-)
-"""
-The line under the setup script's switch, which says what pressing on with it on will do.
-
-The one switch on the step that is not a plugin's, drawn beside the repository's plugins because it
-is the repository's code and answered by the same press. What a reader needs to know is the two
-things that make it different from the switches around it: it runs once rather than at every turn
-boundary, and it has a network.
-"""
-
-
-def setup_switch(on: bool, form: str) -> Element:
-    """
-    The switch for the repository's `.mainplate/setup`, drawn where its plugins' switches are.
-
-    The same shape as a plugin's, hidden `off` and all, because it posts into the same column and is
-    read back by the same parser: `SETUP_SWITCH` is a key no qualified name can be, so nothing here
-    needs telling apart. What it says is the path, since that is the whole of what there is to go on
-    before it has run, and one line on what running it means.
-    """
-    named = f"{ENABLED_FIELD}:{SETUP_SWITCH}"
-    return label(
-        cls=SWITCH_CLASS,
-        children=[
-            input_(attrs={"type": "hidden", "name": named, "value": "off", "form": form}),
-            input_(attrs={"type": "checkbox", "name": named, "checked": on, "form": form}),
-            span(cls="plugin__name", children=SETUP_SWITCH),
-            span(cls="plugin__says", children=f"{SCRIPT}. {SETUP_SAYS_OF_ITSELF}"),
-        ],
-    )
-
-
-def tier_group(tier: Tier, plugins: Sequence[Installed], tending: Tending, form: str, setup: bool = False) -> Element:
+def tier_group(tier: Tier, plugins: Sequence[Installed], tending: Tending, form: str) -> Element:
     """
     One tier's plugins, under a heading whose switch sets every switch below it.
 
@@ -3439,17 +3403,10 @@ def tier_group(tier: Tier, plugins: Sequence[Installed], tending: Tending, form:
     Every tier is drawn, empty ones included, so the step is the same shape on every session and the
     flow can be learned and tested as one thing rather than as however many lists a repository
     happens to produce.
-
-    `setup` is the repository's `.mainplate/setup`, drawn under its tier with a switch of its own
-    and counted by the heading like any of them: it is the repository's code, answered by the same
-    press, and a heading that turned the tier off but left it running would be a switch that lies.
     """
     named, saying = TIER_NAMES[tier]
     states = [tending.on(plugin.qualified, ON) for plugin in plugins]
     switches = [plugin_switch(plugin, on, form=form) for plugin, on in zip(plugins, states, strict=True)]
-    if setup:
-        states.append(tending.on(SETUP_SWITCH, ON))
-        switches.append(setup_switch(states[-1], form=form))
     on = sum(states)
     return div(
         cls="tier",
@@ -3609,13 +3566,7 @@ def setup_step(links: Links, showing: Conversation) -> Element:
                     else (p(cls="setup__failed", children=showing.refused_setup.why),)
                 ),
                 *(
-                    tier_group(
-                        tier,
-                        plugins,
-                        showing.session.tending,
-                        form=settling,
-                        setup=showing.setup_script and tier is Tier.REPOSITORY,
-                    )
+                    tier_group(tier, plugins, showing.session.tending, form=settling)
                     for tier, plugins in by_tier(showing.declared)
                 ),
                 button(

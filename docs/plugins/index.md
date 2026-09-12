@@ -27,10 +27,11 @@ Between them the pair exercises nearly every event, effect and contribution the 
 is [what makes them a test of it rather than two examples](
 ../design/plugins.md#both-are-ported-and-that-is-the-test).
 
-**This repository carries a third worked example that is not bundled.** `.mainplate/pre-commit` is
-a repository-tier plugin, declared by `.mainplate/mainplate.yaml`, that runs this project's own hooks
+**This repository carries two more worked examples that are not bundled**, both repository-tier and
+both declared by `.mainplate/mainplate.yaml`. `.mainplate/pre-commit` runs this project's own hooks
 over what a session has changed whenever the model tries to stop, and sends it back with what is
-still failing. It is the one that installs something at
-`setup` and runs confined for the rest of the session, so it is [the example to copy](
-../design/plugins.md#and-this-repository-carries-one-which-is-the-rest-of-the-proof) for a plugin
-that needs a toolchain rather than a plugin that needs nothing.
+still failing; `.mainplate/setup` fetches the toolchain a session needs to run those hooks at all,
+and prints nothing. Between them they are [the examples to copy](
+../design/plugins.md#and-this-repository-carries-two-which-is-the-rest-of-the-proof): one installs
+into its own scratch and answers events for the rest of the session, the other installs into the
+session's and is never asked anything again.

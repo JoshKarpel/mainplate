@@ -1,9 +1,15 @@
 # What this repository asks a mainplate session working on it to run.
 #
-# One plugin, and its path is relative to the worktree root. The key is the whole of its name: a
-# session running this one calls it `repository:pre-commit`, prefixes its tool to
+# Two plugins, and each path is relative to the worktree root. The key is the whole of a plugin's
+# name: a session running the second calls it `repository:pre-commit`, prefixes its tool to
 # `repo_pre-commit_check` and its leader to `/pre-commit:check`, and holds its settings under that
 # qualified name. Nothing here can name an endpoint, a credential or an isolation level, because the
 # type this is read into has no field for one.
+#
+# `setup` fetches the toolchain the session's own commands need and answers nothing after that;
+# `pre-commit` runs this project's checks whenever the model tries to stop. Both are repository-tier
+# plugins with nothing special about them, and the order here means nothing either way: a declaration
+# is read into a mapping and sorted by name, and every plugin left on is set up at once.
 plugins:
+  setup: .mainplate/setup
   pre-commit: .mainplate/pre-commit

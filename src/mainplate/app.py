@@ -275,6 +275,11 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
             # anywhere under it would be `$HOME` for a program the model can overwrite - and this
             # console then runs that program, unattended, at every turn boundary.
             scratch=settings.workspace_root / "plugins",
+            # And the session's own, by the workspace's own derivation, because a plugin getting the
+            # repository ready installs into it at `setup`. The two roots above and this are named
+            # here and nowhere else, which is what keeps them apart: `Spawned` is handed one and
+            # `Workspaces` is handed the other, and neither can see what the other was given.
+            session_scratch=workspaces.scratch_at,
             config_home=settings.config_home,
         ),
         # A repository's plugin runs behind the namespace `bash` already uses, so a console without

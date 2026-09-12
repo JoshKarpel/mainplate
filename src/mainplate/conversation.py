@@ -169,16 +169,12 @@ from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Tone
 from mainplate.plugins.protocol import toned
 from mainplate.plugins.running import PluginFailed
-from mainplate.preparing import PreparationFailed
-from mainplate.preparing import has_setup
-from mainplate.preparing import prepared
 from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
 from mainplate.snapshots import Worktree
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
-from mainplate.tending import SETUP_SWITCH
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
 from mainplate.thinking import BY_LEVEL
@@ -239,18 +235,16 @@ one, so one can fail to read on its own and the other should stay recorded. A fo
 and reads both again, out of the tree it is planted at.
 
 Empty for a session with no repository, for one whose grant was never given, and for a repository
-carrying no such file, which are three states with one meaning and no need to be told apart. It is
-also where the repository says whether it carries a `.mainplate/setup`, since that is read on the
-same pass and drawn on the same step.
+carrying no such file, which are three states with one meaning and no need to be told apart.
 """
 
 SETUP_ENVIRONMENT_KEY: StepKey = "setup:environment"
 """
-What the repository's `.mainplate/setup` asked to have set for this session's commands.
+What this session's repository plugins asked to have set for its commands, merged across them.
 
-Written on the pass that ran the script, beside the two registrations and under the same rule -
-nothing is recorded until every setup has answered - so a session past its settings step always has
-it, empty where the script was not run. Not turn-prefixed, for the reason the registrations are not:
+Written on the pass that set them up, beside the two registrations and under the same rule - nothing
+is recorded until every setup has answered - so a session past its settings step always has it, empty
+where nothing asked for anything. Not turn-prefixed, for the reason the registrations are not:
 `before` copies turn-shaped keys by shape, and a fork sets up again and records its own.
 """
 
@@ -2123,25 +2117,13 @@ def declared_in(recorded: Mapping[str, object]) -> tuple[Installed, ...] | None:
     return (*parse_declaration(console), *(() if held is None else parse_declaration(held)))
 
 
-def setup_declared_in(recorded: Mapping[str, object]) -> bool:
-    """
-    Whether this session's repository carries a `.mainplate/setup`, as its declaring pass recorded.
-
-    Off the repository's declaration and nowhere else, so a session that does not trust its
-    repository, or has none, or has not planted its worktree yet, reads as carrying none - which is
-    the right answer to "should the step draw a switch for it" in all three.
-    """
-    held = recorded.get(REPOSITORY_DECLARED_KEY)
-    return held is not None and records.Declared.model_validate(held).setup
-
-
 def environment_in(recorded: Mapping[str, object]) -> dict[str, str]:
     """
     What this session's commands run under beyond what the sandbox sets, as its setup recorded.
 
-    Empty where nothing recorded any, which is every session whose repository carries no setup
-    script and every session recorded before there was one: a command then runs exactly as it
-    always did.
+    Empty where nothing asked for anything, which is every session whose repository carries no plugin
+    that sets one up and every session recorded before there was such a thing: a command then runs
+    exactly as it always did.
     """
     held = recorded.get(SETUP_ENVIRONMENT_KEY)
     return {} if held is None else parse_environment(held).values
@@ -2901,24 +2883,12 @@ async def declaring_plugins(
     async def repository() -> object:
         if where is None or not declaring.runs(chosen.repository, chosen.trusted):
             return recorded_declaration(())
-        # Whether the repository carries a setup script, read here beside its plugins because the
-        # settings step draws a switch for it and nothing that draws a switch may have run anything.
-        return recorded_declaration(repository_plugins(where), setup=has_setup(where))
+        return recorded_declaration(repository_plugins(where))
 
     return (
         *await run.step(DECLARED_KEY, console, parse_declaration),
         *await run.step(REPOSITORY_DECLARED_KEY, repository, parse_declaration),
     )
-
-
-type Preparing = Callable[[str, Worktree], Awaitable[Mapping[str, str]]]
-"""
-Running a session's repository setup script, by session and worktree, injected like `Speaking` is.
-
-A function for the reason `Speaking` is one: what answers it builds a sandbox, needs `bwrap` and the
-workspace's scratch, and a pass given none of that simply runs no script - which is what every test
-that is not about setup wants.
-"""
 
 
 async def setting_plugins_up(
@@ -2927,7 +2897,6 @@ async def setting_plugins_up(
     declared: Sequence[Installed],
     tended: Tending,
     worktree: Worktree | None,
-    preparing: Preparing | None = None,
 ) -> tuple[Enrolled, ...] | None:
     """
     Set up exactly the plugins somebody left switched on, and record what each of them contributed.
@@ -2955,11 +2924,10 @@ async def setting_plugins_up(
     written one after the other, so a pass that died between them comes back with one recorded, and
     launching that tier's processes again to throw the answer away is work nobody asked for.
 
-    **The repository's own setup script runs here too, beside the plugins and under the same rule.**
-    It is not a plugin: the console runs it itself, in the session's own namespace with a network,
-    and what it asked to have set is recorded under `SETUP_ENVIRONMENT_KEY` before either
-    registration, so a session past its step always has an answer there. Its switch is the step's
-    like any plugin's, keyed `SETUP_SWITCH` in the same column. See `preparing.py`.
+    **What the repository's plugins asked to have set for the session's commands is recorded here
+    too**, under `SETUP_ENVIRONMENT_KEY` and before either registration, so a session past its step
+    always has an answer there. It is written even where nothing asked for anything, which is what
+    keeps a missing key from meaning two different things. See `asking.asked_to_set`.
     """
     if setups_in(run.recorded) == 0:
         return None
@@ -2980,27 +2948,15 @@ async def setting_plugins_up(
         for key, repository in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
     ]
     unrecorded = [(key, asked) for key, asked in asking if key not in run.recorded]
-    prepares = (
-        preparing is not None
-        and worktree is not None
-        and SETUP_ENVIRONMENT_KEY not in run.recorded
-        and setup_declared_in(run.recorded)
-        and tended.on(SETUP_SWITCH, ON)
-    )
-
-    async def preparation() -> Mapping[str, str]:
-        if not prepares or preparing is None or worktree is None:
-            return {}
-        return await preparing(run.workflow, worktree)
-
-    said, environment = await asyncio.gather(
-        asyncio.gather(*(setting_up(asked, speaking, run.workflow, worktree) for _, asked in unrecorded)),
-        preparation(),
-    )
-    ready = dict(zip((key for key, _ in unrecorded), said, strict=True))
+    said = await asyncio.gather(*(setting_up(asked, speaking, run.workflow, worktree) for _, asked in unrecorded))
+    ready = dict(zip((key for key, _ in unrecorded), (enrolled for enrolled, _ in said), strict=True))
+    # Across both tiers, which costs nothing and asks for no rule about which of them may set a
+    # variable: only a plugin inside the namespace is offered the file, so a plugin outside a worktree
+    # contributes an empty mapping here by construction rather than by being excluded.
+    environment = {name: value for _, asked in said for name, value in asked.items()}
 
     async def recorded_environment() -> object:
-        return records.Environment(values=dict(environment)).recorded()
+        return records.Environment(values=environment).recorded()
 
     await run.step(SETUP_ENVIRONMENT_KEY, recorded_environment, parse_environment)
     settled: list[Enrolled] = []
@@ -3120,9 +3076,6 @@ def conversing(
         # Settled once, so the three readers below cannot come to differ over what a console given no
         # `Declaring` runs: no scripts, no way to speak to one, and nothing a repository may add.
         sourcing = declaring or Declaring()
-        # How the repository's own setup script is run, where this console can run one at all: it
-        # needs the sandbox and the workspace's scratch, and a console with neither runs no script.
-        preparing = None if workspaces is None or bwrap is None else preparing_through(workspaces, bwrap)
         try:
             declared = await declaring_plugins(run, sourcing, chosen, worktree)
         except (Refused, BadDeclaration) as raised:
@@ -3141,8 +3094,8 @@ def conversing(
         enrolled = registered_in(run.recorded)
         if enrolled is None:
             try:
-                enrolled = await setting_plugins_up(run, sourcing, declared, tended, worktree, preparing)
-            except (PluginFailed, PreparationFailed, Refused, BadDeclaration) as raised:
+                enrolled = await setting_plugins_up(run, sourcing, declared, tended, worktree)
+            except (PluginFailed, Refused, BadDeclaration) as raised:
                 # **Recorded against the attempt it belongs to**, which is what makes the step
                 # somebody can act on: turning the plugin off and pressing again opens a new attempt
                 # with no refusal under it, and the page draws that as working rather than as the
@@ -3330,20 +3283,6 @@ def injecting_through(run: Run, live: Live) -> Injecting:
         return await run.step(key, asking, parse_injected)
 
     return inject
-
-
-def preparing_through(workspaces: Workspaces, bwrap: str) -> Preparing:
-    """
-    Running a session's repository setup script in that session's own scratch, behind the sandbox.
-
-    The scratch by the workspace's own derivation, so the directory the script installs into and the
-    directory the session's `bash` gets as `$HOME` cannot be two spellings of one path.
-    """
-
-    async def prepare(session: str, worktree: Worktree) -> Mapping[str, str]:
-        return await prepared(worktree, workspaces.scratch_at(session), bwrap)
-
-    return prepare
 
 
 def gating_through(live: Live) -> Gating:
