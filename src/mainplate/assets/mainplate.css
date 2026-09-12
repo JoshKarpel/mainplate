@@ -103,6 +103,8 @@
 
     --gap: var(--space-5);
     --radius: 0.5rem;
+    /* What lifts a card off the page: the rail's cards, and on a phone the session list's. */
+    --lift: 0 2px 12px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
     --sidebar: 17rem;
     --rail: 11rem;
     --measure: 46rem;
@@ -214,7 +216,8 @@ body {
 
    - over 78rem, three columns, the rail standing beside the conversation;
    - 48rem to 78rem, two columns, the rail lying over the page and drawn shut;
-   - under 48rem, one column, with the session list a strip across the top.
+   - under 48rem, one column, with the session list lying off the left edge and drawn shut the
+     way the rail is off the right.
 
    The queries overlap, so the order they are written in is what picks between them: both match on
    a phone, and whichever comes last wins. Every rule for the narrow shape is therefore in one
@@ -236,6 +239,12 @@ body {
     padding: var(--gap);
     border-right: 1px solid var(--edge);
     overflow-y: auto;
+}
+
+/* Drawn only where the list lies off the edge of the page, which is the phone block at the end of
+   this file. Everywhere wider the list is a column of the shell and there is nothing to unclasp. */
+.sessions__clasp {
+    display: none;
 }
 
 .sessions ul {
@@ -334,7 +343,7 @@ main > * {
        and the "more air above a turn" a rule asked for was never drawn.
 
        The room above the first thing is padding, since a gap has nothing to stand between there. */
-    gap: 1.4rem;
+    gap: var(--space-5);
     width: 100%;
     max-width: var(--measure);
     margin: 0 auto;
@@ -2576,7 +2585,7 @@ pre > .copy {
     border: 1px solid var(--edge);
     border-radius: 0.75rem;
     background: var(--raised);
-    box-shadow: 0 2px 12px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
+    box-shadow: var(--lift);
     font-family: var(--mono);
     font-size: 0.7rem;
 }
@@ -2634,8 +2643,22 @@ pre > .copy {
         pointer-events: auto;
     }
 
+    /* Out, the rail is taller than a short window once a session has a few plugins' cards, and a
+       fixed box is scrolled by nothing else, so it scrolls itself. Only while it is out: parked
+       cards keep their height, and a window with classic scrollbars would draw one beside the clasp
+       for cards that are off the edge. `auto` on this axis turns the `clip` on the other into
+       `hidden`, which is the same promise about what is past the box. */
+    .rail[data-open] {
+        overflow-y: auto;
+    }
+
+    /* Pinned to the head of the box while the cards scroll under it, so the press that shuts the
+       rail is never the one that scrolled away. */
     .rail__clasp {
         display: grid;
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
 
     /* The clasp lies over the top-right corner of whatever is under it, which costs a panel nothing
@@ -3688,113 +3711,136 @@ main:has(> .forking) {
            be hit rather than pointed at. What sets it is the key and the theme, which are words
            laid out in columns and cannot give way; the dock's three arrows fit well inside that. */
         --rail: 12.5rem;
+        /* A clasp on a phone is pressed rather than pointed at, so it is about 44px square. Named
+           once, because the band `main` clears at the top of the page is this tall for the two
+           clasps standing in it, and the three cannot be allowed to disagree. */
+        --clasp: 2.8rem;
     }
 
     /* The sidebar's 17rem is two thirds of a phone, spent on navigation somebody reaches for once
-       a session. So the list stops being a column and becomes a strip across the top: one row of
-       chips that scrolls sideways, which is the switcher a phone already reads without being
-       taught one and costs the conversation about a twentieth of its height.
+       a session. So the list lies off the left edge of the page and is drawn shut, exactly as the
+       rail lies off the right: the clasp is left at the top-left corner and the rest slides out
+       from under it when pressed. One mechanism, one script, and the two shut each other, since a
+       phone has room for one of them across it at a time.
 
-       A strip rather than a shorter band, and it is the axis that decides it: a band is a second
-       vertical scroller stacked on the transcript's own. Sideways over downwards means a swipe
-       says one thing wherever it lands.
+       A drawer rather than the strip of chips this was, and what decided against the strip is
+       what a chip had given up to fit in one: the date, the repository, the tree's indentation and
+       the archive control, which are the facts a list of sessions is for. Slid out, this is the
+       column a wide window draws, facts and all, and a swipe down it reads the way every other
+       list on a phone does.
 
-       What a chip gives up is the date, the repository and the tree's indentation - facts for
-       telling sessions apart, where a strip is for getting back to one. The fork marker stays,
-       because "a branch at turn 2" is what distinguishes two chips of the same conversation. */
+       The cost, stated: the two clasps stand in a band at the top of the page that everything
+       else starts under, which is about the height the strip took. Floating them over the corners
+       instead, as the rail's floats between 48rem and 78rem, would put this one over the picker's
+       first legend and the role of whichever panel scrolled under it - text, where the corner the
+       rail's covers is a copy button. */
     .shell,
     .shell:has(> .rail) {
         grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: 1fr;
     }
 
     .sessions {
-        flex-direction: row;
-        align-items: center;
-        gap: var(--space-2);
-        /* A grid item's minimum is its content's, and a row of session names is far wider than a
-           phone: without this the strip floors the column and takes the document sideways with
-           it, which is the one thing every page here must never do. */
-        min-width: 0;
-        padding: var(--space-3) var(--space-4);
-        border-right: none;
-        border-bottom: 1px solid var(--edge);
-        overflow-x: auto;
-        overflow-y: hidden;
-        overscroll-behavior-x: contain;
-    }
-
-    /* Held at the head of the strip while the sessions scroll under it: starting one is what
-       somebody comes to this list to do most often, and swiping back for it is a step. */
-    .sessions .start {
-        position: sticky;
-        left: 0;
-        z-index: 1;
-        flex: none;
-        padding: var(--space-3) var(--space-5);
-        /* A sticky box holds still against the *padding* box, so the strip's own inline padding is
-           a gutter the chips keep scrolling through beside a button that cannot reach it: half a
-           centimetre of somebody else's session, permanently, at the left edge. The shadow is the
-           ground painted over that gutter, offset by exactly the padding it has to cover, with
-           enough spread that the button's rounded corners leave nothing showing at the ends. */
-        box-shadow: calc(-1 * var(--space-4)) 0 0 var(--space-2) var(--ground);
-    }
-
-    .sessions ul {
-        flex-direction: row;
-        align-items: center;
-    }
-
-    .sessions li,
-    .sessions li[data-depth] {
-        flex: none;
-        /* The tree is drawn by stepping a branch in under what it came from, and a row of chips
-           has no under. What is on the chip is what survives. */
-        padding-left: 0;
-    }
-
-    .session {
-        flex-direction: row;
-        align-items: baseline;
+        position: fixed;
+        top: var(--space-5);
+        left: var(--space-5);
+        bottom: var(--space-5);
+        z-index: 10;
+        /* The column a wide window draws, held short of the far edge on a phone narrower than that
+           so a list slid out still leaves the page it lies over showing at the side. */
+        width: min(var(--sidebar), calc(100vw - 3.5rem));
         gap: var(--space-3);
-        max-width: 13rem;
-        padding: var(--space-3) var(--space-4);
-        border-color: var(--edge-soft);
-        white-space: nowrap;
+        padding: 0;
+        border-right: none;
+        /* For the rail's reason: what is parked off the edge by a transform still contributes
+           scrollable overflow, and `clip` says past this box there is nothing. */
+        overflow-x: clip;
+        overflow-y: visible;
+        /* The button and the cards are what a reader presses; the box around them is nothing, and
+           a fixed box with no background still swallows every press over it. */
+        pointer-events: none;
     }
 
-    .session .name {
-        min-width: 0;
+    .sessions > * {
+        pointer-events: auto;
     }
 
-    .session .meta {
-        flex: none;
+    /* The rail's clasp, drawn from the other corner. The rail's takes its card look from being in
+       the rail; this one carries its own, since what else is in the list is not a card. */
+    .sessions__clasp {
+        display: grid;
+        place-items: center;
+        align-self: flex-start;
+        width: var(--clasp);
+        height: var(--clasp);
+        padding: 0;
+        border: 1px solid var(--edge);
+        border-radius: 50%;
+        background: var(--raised);
+        box-shadow: var(--lift);
+        color: var(--ink-soft);
+        font-family: var(--mono);
+        font-size: 1.2rem;
+        line-height: 1;
+        cursor: pointer;
     }
 
-    .session .when,
-    .session .footprint,
-    .session .where {
-        display: none;
+    .sessions__clasp[aria-expanded="true"] {
+        background: var(--sunk);
+        color: var(--mark);
     }
 
-    /* A chip has no corner to lay an action over and nothing hovers on a phone; a session is
-       opened and closed from its rail. */
+    .sessions .start {
+        padding: var(--space-3) var(--space-5);
+    }
+
+    /* The list is one card that scrolls inside itself, on the page's own ground rather than raised,
+       so a row looks exactly as it does in the wide column: the current one is the raised row, and
+       raised on raised would be no row at all. */
+    .sessions ul {
+        min-height: 0;
+        padding: var(--space-3);
+        border: 1px solid var(--edge);
+        border-radius: 0.75rem;
+        background: var(--ground);
+        box-shadow: var(--lift);
+        overflow-y: auto;
+    }
+
+    .sessions > :not(.sessions__clasp) {
+        visibility: hidden;
+        transform: translateX(calc(-100% - 1.6rem));
+        transition:
+            transform 0.2s ease,
+            visibility 0.2s;
+    }
+
+    .sessions[data-open] > :not(.sessions__clasp) {
+        visibility: visible;
+        transform: none;
+    }
+
+    /* Nothing hovers on a phone, so a control revealed by hovering is one that is never reached; a
+       session is opened and closed from its rail. */
     .session__archive {
         display: none;
     }
 
     /* --- The conversation --- */
 
-    /* A little room at the top, which with no banner over the pane is the only thing between the
-       session strip and the first panel - and the strip needs a line under it that is not somebody's
-       message. It is also what the rail's clasp hangs in, so the first panel's own controls are not
-       under it. */
+    /* The band the two clasps stand in, and then the room a wide window leaves above the first
+       panel. With no banner over the pane this is the whole of what is between the top of the
+       screen and the conversation, and the clasps are fixed to the viewport rather than laid out
+       in it, so this is the one place that knows they are there. */
     main {
-        padding: var(--space-5) var(--space-4) 0;
+        padding: calc(var(--space-5) + var(--clasp) + var(--space-3)) var(--space-4) 0;
     }
 
-    .transcript {
-        gap: var(--space-6);
+    /* The setup step's sentence keeps clear of the rail's clasp only while the clasp floats over
+       it, and in the band it does not. */
+    .setup__says,
+    .setup__working {
+        padding-inline-end: 0;
     }
 
     .panel {
@@ -3890,14 +3936,11 @@ main:has(> .forking) {
 
     /* --- The rail --- */
 
-    /* The rail is fixed to the viewport rather than laid out in the shell, so it knows nothing
-       about the session strip and the clasp lands on top of the last chip in it. Started below the
-       strip instead, which is one row of chips and their padding and comes to a little over three
-       rems. Bottom-anchoring it would put the clasp under a thumb, which is the better place for
-       it on a phone and is taken: that corner is the Send button's. */
-    .rail {
-        top: var(--space-9);
-    }
+    /* Where the rail hangs is the same corner as on a window between 48rem and 78rem; what changes
+       is that it stands in the band `main` clears for it, beside the session list's clasp in the
+       other corner, rather than over the first panel. Bottom-anchoring it would put the clasp under
+       a thumb, which is the better place for it on a phone and is taken: that corner is the Send
+       button's. */
 
     /* Everything in here is pressed rather than read, so it is sized for a thumb: the cards keep
        their proportions and the targets in them grow. */
@@ -3907,8 +3950,8 @@ main:has(> .forking) {
     }
 
     .rail__clasp {
-        width: 2.8rem;
-        height: 2.8rem;
+        width: var(--clasp);
+        height: var(--clasp);
         padding: 0;
         font-size: 1.2rem;
     }

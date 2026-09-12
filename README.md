@@ -326,8 +326,8 @@ not sent, when this session hands itself off, and a light/dark/system theme. Eve
 enhancement: with JavaScript off the console still renders, still posts messages, still hands off,
 and every panel is still a fold that opens.
 
-**It reads on a phone.** The rail folds away behind a clasp, and the session list becomes a strip of
-chips across the top so the conversation gets all but about a twentieth of the height.
+**It reads on a phone.** The rail folds away off the right edge behind a clasp and the session list
+off the left behind one of its own, so the conversation gets the screen.
 
 ### What you can do with what you typed
 

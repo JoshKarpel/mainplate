@@ -288,17 +288,16 @@
       });
     };
 
-    // The session being read, brought into the list of them. On a narrow window that list is a
-    // strip scrolling sideways, so the conversation on screen can be off one end of it; on a wide
-    // one it is a column long enough to put the current session below the fold. One call answers
-    // both, and nothing here knows which shape it is looking at: `nearest` scrolls the list on
-    // whichever axis it actually scrolls on, and does nothing when the session is already showing.
+    // The session being read, brought into the list of them, which is a column long enough to put
+    // the current session below the fold. On a phone that column lies shut off the edge of the
+    // page, and it still scrolls: a hidden box keeps its layout, so the session is in view when the
+    // list slides out. `nearest` does nothing when it is already showing.
     //
     // Not through `scrolling`, unlike every other scroll this file performs: the listener that
     // guard exists for watches the transcript, and this moves a different box entirely.
     const toCurrentSession = () => {
       const current = document.querySelector(".sessions .session.current");
-      if (current) current.scrollIntoView({ block: "nearest", inline: "center" });
+      if (current) current.scrollIntoView({ block: "nearest" });
     };
 
     // --- Projection ------------------------------------------------------
@@ -1298,21 +1297,33 @@
     };
 
     // Where the rail has room to stand beside the conversation there is nothing to unclasp, and
-    // the stylesheet does not draw this at all. Where it has not, the rail would lie over the very
-    // text it exists to navigate, so it is held shut and this is the press that lets it out.
-    // Nothing here measures the window, so the two cannot disagree about where the rail fits.
-    const wireClasp = () => {
-      const rail = document.querySelector(".rail");
-      const clasp = rail && rail.querySelector(".rail__clasp");
-      if (!rail || !clasp) return;
-      const open = (wanted) => {
-        if (wanted) rail.dataset.open = "";
-        else delete rail.dataset.open;
-        clasp.setAttribute("aria-expanded", String(wanted));
+    // the stylesheet does not draw its clasp at all. Where it has not, the rail would lie over the
+    // very text it exists to navigate, so it is held shut and the clasp is the press that lets it
+    // out. The session list is the same thing from the other edge on a phone. Nothing here measures
+    // the window, so the script and the stylesheet cannot disagree about where either fits.
+    //
+    // Opening one shuts the other: a phone has room for one of them across it at a time, and the
+    // two slid out together would cross in the middle.
+    const wireClasps = () => {
+      const folds = [".sessions", ".rail"]
+        .map((selector) => {
+          const box = document.querySelector(selector);
+          return { box, clasp: box && box.querySelector(":scope > [aria-expanded]") };
+        })
+        .filter(({ clasp }) => clasp);
+      const open = (fold, wanted) => {
+        if (wanted) fold.box.dataset.open = "";
+        else delete fold.box.dataset.open;
+        fold.clasp.setAttribute("aria-expanded", String(wanted));
       };
-      clasp.addEventListener("click", () => open(clasp.getAttribute("aria-expanded") !== "true"));
+      folds.forEach((fold) => {
+        fold.clasp.addEventListener("click", () => {
+          const wanted = fold.clasp.getAttribute("aria-expanded") !== "true";
+          folds.forEach((other) => open(other, other === fold && wanted));
+        });
+      });
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") open(false);
+        if (event.key === "Escape") folds.forEach((fold) => open(fold, false));
       });
     };
 
@@ -1753,7 +1764,7 @@
     wireFolds();
     wireShutting();
     wireTheme();
-    wireClasp();
+    wireClasps();
     wireFolding();
     wireFilter();
     wireNumbers();

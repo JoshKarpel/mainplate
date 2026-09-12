@@ -717,8 +717,8 @@ class TestTheShapeOfANarrowWindow:
     @pytest.mark.parametrize("name", EVERY_PAGE)
     async def test_no_page_pushes_the_document_sideways(self, phone: Page, gallery: str, name: str) -> None:
         await phone.goto(f"{gallery}/{name}", wait_until="load")
-        # The transcript may scroll its own wide blocks and the session strip scrolls itself; what
-        # must never move is the document, which has nowhere to overflow to.
+        # The transcript may scroll its own wide blocks and the session list scrolls inside its own
+        # card; what must never move is the document, which has nowhere to overflow to.
         room = await phone.evaluate(
             "() => ({ document: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth })"
         )
@@ -733,6 +733,57 @@ class TestTheShapeOfANarrowWindow:
         # goes to the conversation. A count alone is satisfied by `none`, which is what a shell that
         # had stopped being a grid at all would report.
         assert columns.split() == [f"{PHONE['width']}px"]
+
+
+class TestTheSessionListOnAPhone:
+    """
+    The session list lies off the left edge of a phone until its clasp is pressed, as the rail does
+    off the right, and only one of the two is out at a time.
+
+    A browser because both states are correct markup: the list is on the page whether it is parked
+    or slid out, and what changes is a transform and a visibility that only a rendering resolves.
+    """
+
+    async def test_the_list_is_shut_until_its_clasp_is_pressed(self, phone: Page, gallery: str) -> None:
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        start = phone.locator(".sessions .start")
+        await expect(start).to_be_hidden()
+        await phone.locator(".sessions__clasp").click()
+        # In the viewport rather than merely visible, because visibility flips at the start of the
+        # slide and the list is still off the edge for a fifth of a second after it.
+        await expect(start).to_be_in_viewport()
+
+    async def test_opening_the_list_shuts_the_rail(self, phone: Page, gallery: str) -> None:
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await phone.locator(".rail__clasp").click()
+        await expect(phone.locator(".search")).to_be_visible()
+        await phone.locator(".sessions__clasp").click()
+        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await expect(phone.locator(".search")).to_be_hidden()
+        assert await phone.get_attribute(".rail__clasp", "aria-expanded") == "false"
+
+    async def test_escape_shuts_the_list(self, phone: Page, gallery: str) -> None:
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await phone.locator(".sessions__clasp").click()
+        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await phone.keyboard.press("Escape")
+        await expect(phone.locator(".sessions .start")).to_be_hidden()
+
+    async def test_the_rail_scrolls_itself_while_out(self, phone: Page, gallery: str) -> None:
+        # The rail is fixed to the viewport, so nothing else can scroll it, and on a phone it is
+        # taller than the window: shut, its cards were cut off at the bottom with no way to them.
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await phone.locator(".rail__clasp").click()
+        await expect(phone.locator(".search")).to_be_visible()
+        scrolled = await phone.evaluate(
+            "() => { const rail = document.querySelector('.rail'); rail.scrollTop = 10000; return rail.scrollTop; }"
+        )
+        assert scrolled > 0
+
+    async def test_a_wide_window_draws_no_clasp(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(page.locator(".sessions__clasp")).to_be_hidden()
+        await expect(page.locator(".sessions .start")).to_be_visible()
 
 
 # Short enough that the choosing with a group open is longer than the window, which is the whole

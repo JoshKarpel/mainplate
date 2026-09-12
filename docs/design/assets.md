@@ -21,7 +21,8 @@ idempotent `repaint()` serving the first render, every swap, and every press.
 
 Over 78rem the shell is three columns and the rail stands beside the conversation; between 48rem and
 78rem it is two, with the rail lying over the page and drawn shut behind its clasp; under 48rem it
-is one, and the session list becomes a strip of chips across the top.
+is one, and the session list lies off the left edge behind a clasp of its own, the way the rail
+lies off the right.
 
 **Every phone rule is in one block at the *end* of `mainplate.css`, and that is not tidiness:** the
 queries overlap, so the narrow one wins only by coming later. Split up, the rail's own `max-width:
@@ -30,13 +31,18 @@ the conversation about a hundred pixels to render in, a bug invisible in either 
 with both in one list. So a rule that changes shape on a phone goes in that block; a rule that
 applies at two widths, such as the rail's overlay, stays with the thing it is about.
 
-A strip rather than a shorter band, and the axis is what decides it: a band is a second *vertical*
-scroller stacked on the transcript's own, and two of those on one axis is what feels broken under a
-thumb. What a chip gives up is the date, the repository and the tree's indentation, which are for
-telling sessions apart where a strip is for getting back to one; the fork marker stays.
-`toCurrentSession` brings the session being read into that list and is deliberately shape-blind:
-`nearest` scrolls the list on whichever axis it actually scrolls on, so one call serves the strip
-and the full-height column both.
+The session list on a phone is the rail's mechanism from the other edge: fixed to the viewport,
+`pointer-events: none` on the box and back on its children, the clasp left in place and everything
+else parked off the edge by a transform until the clasp is pressed. One script wires both clasps and
+opening either shuts the other, since a phone has room for one of them across it at a time. Slid
+out, the list is the column a wide window draws, with the date, the repository and the tree's
+indentation that a strip of chips across the top had to give up; the strip was tried first and was
+one more scroller, sideways, to learn. The cost, stated: the two clasps stand in a band at the top
+of the page that `main` clears for them, about the height the strip took, because floating them
+over the corners as the rail's clasp floats between 48rem and 78rem would put the left one over the
+picker's first legend and the role of whichever panel scrolled under it. `toCurrentSession` brings
+the session being read into the list whether it is parked or out, since a hidden box keeps its
+layout and still scrolls.
 
 Two more things change on a phone, and both follow from it having one column of room. **Nested
 same-axis scrollers go away**: the wide picker has the models scrolling inside a block that scrolls

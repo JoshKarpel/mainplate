@@ -28,8 +28,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   right of that row, on a phone and a wide window alike; the buttons used to stand beside the box
   and wrap under it on a phone. The row is one line of the box tall and a press on its empty part
   puts the cursor in the box. The transcript spaces its panels and rules with a gap rather than a
-  margin on each, so the last panel ends where the box begins, where a margin under every panel put
-  one more under the last and left a strip of nothing at the foot of every scroll to the end.
+  margin on each, and a tighter one, so the last panel ends where the box begins, where a margin
+  under every panel put one more under the last and left a strip of nothing at the foot of every
+  scroll to the end.
 - **The shell makes room for a phone's keyboard.** The viewport meta asks the browser to shrink the
   page under the keyboard (`interactive-widget=resizes-content`), which Chrome and Firefox do, and on
   Safari, which does not, the script sizes the shell to the visual viewport when a keyboard is up, so
@@ -267,6 +268,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- On a phone the session list folds away off the left edge behind a clasp, the way the rail folds
+  away off the right, and opening either shuts the other. Slid out it is the column a wide window
+  draws, dates, repositories and the tree's indentation included; it used to be a strip of chips
+  across the top that scrolled sideways and had given those up to fit. The two clasps stand in a
+  band at the top of the page rather than over the corners of what is under them.
 - The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
   this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
   rather than multiplied, since the pitches on either side of the answer are a pixel apart.

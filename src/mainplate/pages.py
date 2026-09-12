@@ -673,10 +673,20 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
     Every row of a session still open carries `archive_action`, so a list that has grown can be
     closed down from the list. An archived row carries nothing: the press is write-once, and a
     control that would do it again is a control that does nothing.
+
+    The clasp comes first for the rail's reason: on a phone the list lies off the left edge of the
+    page and this is left where its head was, so the rest can slide out from under it. Which width
+    that is stays the stylesheet's to say, and everywhere wider it is not drawn at all.
     """
     return aside(
         cls="sessions",
+        attrs={"aria-label": "Sessions"},
         children=[
+            button(
+                cls="sessions__clasp",
+                attrs={"type": "button", "aria-expanded": "false", "aria-label": "Sessions"},
+                children="\N{IDENTICAL TO}",
+            ),
             a(cls="start", attrs={"href": links.to_home()}, children=NEW_SESSION),
             ul(
                 children=[

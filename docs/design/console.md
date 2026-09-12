@@ -177,8 +177,8 @@ buttons, and what the list is for is telling sessions apart. It is the rail's ow
 sentence and then the press, so a mis-press on a row is exactly as impossible as one in the rail,
 and the redirect lands on the session it closed, which is the page saying what just happened. The
 cost, stated: it covers the tail of a long name while it shows, which is the corner every row action
-lives in, and the whole name is in the title. It is not drawn on a phone, where the list is a strip of
-chips with no corner and nothing hovers; a session is opened and closed from its rail there.
+lives in, and the whole name is in the title. It is not drawn on a phone, where nothing hovers; a
+session is opened and closed from its rail there.
 
 ## The picker
 
