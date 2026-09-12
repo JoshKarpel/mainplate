@@ -9,6 +9,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A row in the session list says `new`** when its session has recorded something since anybody
+  looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
+  message of your own. Opening the session clears it, and so does watching the answer arrive on a
+  page already open, which the page reports itself once it has drawn it. The mark is the console's
+  rather than any one browser's, so reading an answer on a phone clears it on the laptop too. A
+  console upgraded onto this starts with nothing marked.
+- **The session list is live.** It rides the same connection the transcript does, on every page
+  including the start page, so a session answered while you were reading another one shows `new` in
+  the list at once and a session written to moves up it without a reload. A tab in the background
+  lets the connection go and picks it up again when shown, so a hidden page costs nothing and is
+  current the moment you come back to it.
+- **Archiving a session**, from a card in the rail, under the settings step, or from its row in the
+  session list, where the control shows as the pointer or the focus reaches the row: nothing more is
+  said in it, the message box is gone from its page and the row is muted at once, and a reconciler
+  takes its worktree, scratch and plugins' scratches off the disk in the background, once no pass or
+  command holds it. The conversation stays, and the rule under its last turn forks from the end, so
+  an archived session comes back as a live one with every turn and a fresh worktree at the files it
+  ended with.
+- **What a session is on stands in the rail**, on the session's own card: the endpoint and model,
+  the thinking level where one was chosen, the repository and the branch it is on, and what it takes
+  on disk, a key and a value to a row, with a value that does not fit beside its key dropped whole
+  to the line under it rather than broken mid-word. An archived session says so in one such row,
+  the date, where it was a paragraph. Nothing sits under the message box any more, and what
+  sits above it is only what the next press depends on: whether the cache is warm and what
+  re-sending costs, and the sentence saying what the press will do. The sentence over a command box
+  names the repository and branch a command runs in, which is where somebody about to `git push`
+  reads it. The session's total is no longer drawn beside the box, since the running total on the
+  last rule is the same figure and moves with the transcript.
+- **The message box is one card**, the text with a row of tools along its bottom and Send at the
+  right of that row, on a phone and a wide window alike; the buttons used to stand beside the box
+  and wrap under it on a phone. The row is one line of the box tall and a press on its empty part
+  puts the cursor in the box. The transcript spaces its panels and rules with a gap rather than a
+  margin on each, and a tighter one, so the last panel ends where the box begins, where a margin
+  under every panel put one more under the last and left a strip of nothing at the foot of every
+  scroll to the end.
+- **The shell makes room for a phone's keyboard.** The viewport meta asks the browser to shrink the
+  page under the keyboard (`interactive-widget=resizes-content`), which Chrome and Firefox do, and on
+  Safari, which does not, the script sizes the shell to the visual viewport when a keyboard is up, so
+  the box and its Send button sit on the keys rather than under them. Untested on a device.
+- A fork from the end of a conversation plants at the newest tree the parent recorded, which for an
+  archived session is the worktree as the reconciler found it; it used to plant at the repository's
+  head, which is files the conversation never saw.
+- What a session takes on disk, on its row in the sidebar and on its card in the rail:
+  its worktree, git's directory for it, its scratch and its plugins' scratches, counted as `du`
+  counts them. Measured by a sweep on a timer (`measure_every`, five minutes by default) rather than
+  when a page is drawn, since a session that fetched a toolchain holds tens of thousands of files;
+  the figure's title says when it was measured. `Places.of` is the one list of which directories are
+  a session's, which is what taking a session off the disk will read.
+- `just shots` drives the same Python Playwright the suite does, so a checkout pins one Chromium and
+  needs no Node: `package.json` and `scripts/shoot.mjs` are gone, `scripts/shoot.py` is the driver,
+  and it shoots whatever `gallery.pages()` renders rather than a list of its own.
 - **Plugins**: somebody adds to this console without editing it. A plugin is a single executable,
   spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
   written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
@@ -151,10 +202,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the reference database's answer about the session's model, so a console with none configured draws
   the counts and no fraction, exactly as it did before.
 - What the conversation has cost so far, on every rule beside what that turn or request cost. One
-  turn's price is only readable against the running total, and the total under the message box is at
-  the bottom of a conversation somebody is reading the middle of. It follows the same rule the session
-  total does: the first unpriced turn takes it off every rule below, because a total quietly missing a
-  turn reads as the whole and understates it.
+  turn's price is only readable against the running total, and a total at the bottom of the page is
+  at the bottom of a conversation somebody is reading the middle of. The first unpriced turn takes it
+  off every rule below, because a total quietly missing a turn reads as the whole and understates it.
 - **Handoff**: ask a session to write down where it has got to, and carry on from that document with
   everything above it out of the model's context. The summariser is the session itself, with the
   tools it already had, so it checks the working tree rather than recalling it - which is the failure
@@ -202,6 +252,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The fork page's `Fork and ask` button wears the same face as `Create session`, which is the same
+  press one page over; it had the browser's own.
 - **A session whose pass fell over says so.** A pass that raises is left unanswered by the worker and
   redelivered once per lease for as long as it keeps raising, which is the right answer to a fault
   somebody can fix - but the whole account of it was a line in the log, so the page drew the same
@@ -231,13 +283,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A window too narrow for three columns takes the phone's shape at once**: the session list and
+  the rail both fold away behind the two clasps in the row across the top, at the width where the
+  three stop fitting. There used to be a shape between, with the rail folded behind a glyph floating
+  over the conversation while the list kept its column; it was a third state with a folding mechanism
+  of its own, and a half-width laptop window now gets the conversation alone with both panels a press
+  away. What a phone needs beyond the fold, a rule's parts stacked and its running total dropped,
+  fields that do not zoom on focus, targets sized for a thumb, stays a phone's.
+- **The session list is ordered by when a session was last written to**, so the conversation being
+  worked in sits at the top however long ago it was started; it used to be ordered by when each was
+  made. The row is dated by the same moment, and hovering the date says when the last message was
+  and when the session was made. The order is still the tree's: a branch sits under what it came
+  from, and the moment orders siblings. Nothing new is recorded for it, since the store already stamps
+  every message as it files it.
+- On a phone the session list folds away off the left edge behind a clasp, the way the rail folds
+  away off the right, and opening either shuts the other. Slid out it is the column a wide window
+  draws, dates, repositories and the tree's indentation included; it used to be a strip of chips
+  across the top that scrolled sideways and had given those up to fit. What slides out is one sheet
+  that scrolls itself, so a thumb between two rows or two cards moves the list and not the
+  conversation under it. The two clasps stand in a row at the top of the page rather than over the
+  corners of what is under them, say `Sessions` and `Controls` rather than a glyph apiece, and the
+  console's name stands between them.
+- The rail is three kinds of card: one for reading the conversation, which holds the search, the
+  key and the dock as sections; a card per running plugin; and one for the session, its facts with
+  archiving as the last section. Every row on them is words at the left and a value or a control at
+  the right. A switch is a checkbox drawn in the page's own chrome, on the settings step too. A
+  number's `Set` is a mark against its own box, drawn only while the box holds something
+  unrecorded; the card-wide button is gone. The rail is 16rem at every shape, held short of a
+  phone's far edge, where a wide window's column was 11rem. A number's box drops to the line under
+  a label too long to share one rather than breaking the label beside it. This repository's `pre-commit` card says `attempts per turn` beside its box, where it said
+  `attempts` before the box and `per turn` after it.
 - The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
   this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
   rather than multiplied, since the pitches on either side of the answer are a pixel apart.
 - A rule's input figure is the *context* the request carried rather than the sum of what the turn's
   requests were charged for. Every request of a turn carries the whole conversation again, so the sum
   says the same tokens several times over and would draw a turn of four round trips as four times as
-  full as it is. What the session was charged for is still under the message box.
+  full as it is.
 - A rule's figures are symbols rather than words: `↑` and `↓` for the tokens sent and returned, `▣`
   for how much of the first came out of the cache, and `Δ` against `Σ` for what one exchange cost
   against what the conversation has. The cached count is inside the context figure as `↑96K (▣45K)`,
@@ -280,6 +362,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind
   choices are stored under those values, so a kind that was quieted comes back once and is quieted
   again.
+
+### Removed
+
+- The composer's `fork` and `aside` answers, and the `/fork` and `/aside` leaders with them. Both
+  forked the end of a live conversation, which is typing into it with extra steps, and what they
+  planted the branch at depended on whether a turn was running at the time, where the `fork` link on
+  a rule always plants at that turn's own tree. Forking is that link, at a turn boundary, and the
+  one end worth forking, an archived session's, carries the same link on the rule under its last
+  turn. `Parent` stays, from any fork. Sessions recorded as asides are still drawn as they were.
 
 ## [0.0.1]
 

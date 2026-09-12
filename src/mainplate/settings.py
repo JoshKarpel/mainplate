@@ -107,6 +107,28 @@ class Settings(BaseSettings):
     spend real bandwidth re-learning a value that changes a few times a month.
     """
 
+    archive_every: timedelta = Field(default=timedelta(minutes=1), gt=timedelta())
+    """
+    How often archived sessions still holding directories are taken off the disk.
+
+    A minute, because the press that archives a session only records that it is archived, and this
+    is the loop that acts on it: what the interval decides is how long a session pressed archived
+    keeps its files, and a minute is short against the walk that measures them and long against the
+    query that finds nothing to do. A session a pass still holds is left for the next round, so the
+    interval is also how soon after a turn ends its files go.
+    """
+
+    measure_every: timedelta = Field(default=timedelta(minutes=5), gt=timedelta())
+    """
+    How often every session's directories are walked to say what it takes on disk.
+
+    Minutes, because what moves the figure is a turn or a command finishing and those are minutes
+    apart, and because the walk is real I/O: a session that fetched a toolchain into its scratch
+    holds tens of thousands of files, and this is every session's, every interval, in a thread the
+    requests never wait on. What the interval decides is only how stale the figure beside a row can
+    be, and the row says when it was measured.
+    """
+
     watching: timedelta = Field(default=DEFAULT_WATCHING, gt=timedelta())
     """
     How often a page's live connection asks whether its session has recorded anything new.

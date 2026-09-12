@@ -39,6 +39,7 @@ from mainplate.pages import BASIS_ID
 from mainplate.pages import BRANCHES_ID
 from mainplate.service import Service
 from mainplate.snapshots import Worktree
+from mainplate.snapshots import branch_named
 
 # Nothing here is slow on purpose, so a bound well under the suite's own is what a runaway command
 # hits rather than the test timeout.
@@ -494,6 +495,9 @@ class TestThroughTheConsole:
 
         assert 'value="run"' in offered.text
         assert 'value="run"' not in plain.text
+        # The sentence over a command box is where the branch a `git push` lands on is read, now
+        # that nothing under the box names it.
+        assert f"Run it in {running.repository_of(on_fixture)} @ {branch_named(with_files)}, as you" in offered.text
 
 
 class TestStartingSomewhereThroughTheForm:

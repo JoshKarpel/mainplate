@@ -70,8 +70,10 @@ from mainplate.snapshots import Worktree
 WHEN = datetime(2031, 3, 14, 15, 9, 26, tzinfo=UTC)
 
 # How far the test clock moves between reads. It advances rather than standing still because two
-# sessions created in one test have to be distinguishable *by time*, which is what the list is
-# ordered by: a frozen clock would leave the order to the tiebreak on a random id.
+# sessions created in one test have to be distinguishable *by time*: the list is ordered by when a
+# session was last written to and then by when it was made, and two started within one millisecond
+# of each other tie on the first, so a frozen clock would leave the order to the tiebreak on a
+# random id.
 TICK = timedelta(seconds=1)
 
 

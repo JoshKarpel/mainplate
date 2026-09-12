@@ -1,7 +1,7 @@
 # The console
 
 The page: how it is rendered, how a second render reaches a browser nobody reloaded, and the
-controls around the conversation. What *draws* it, the three shapes, the one value that scales
+controls around the conversation. What *draws* it, the two shapes, the one value that scales
 everything, and the monospace grid, is [the stylesheet and the grid](assets.md).
 
 ## htmx 4
@@ -43,10 +43,16 @@ from one value are four chances for a caller to pair a transcript with another s
 **One connection drives whichever regions the page's shape has**, which is what `partial` was always
 for. A session past [its settings step](plugins.md#starting-a-session-takes-four-steps) is the
 transcript and [the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in
-the composer; a session still on that step is the step, which has neither of those and is the only
-region there is. One predicate, `settling`, decides both which shape the page is drawn in and which
-partials the stream sends, so the two cannot disagree - and they must not, because a partial naming a
-target that is not there is dropped in silence, which is a spinner that never resolves.
+the composer; a session still on that step is the step, which has neither of those. One predicate,
+`settling`, decides both which shape the page is drawn in and which partials the stream sends, so the
+two cannot disagree - and they must not, because a partial naming a target that is not there is
+dropped in silence, which is a spinner that never resolves. **The session list rides every message
+on every page**, the start page included, because it is a region of every page and it moves when any
+session does: the token the stream polls has a half for the list, three aggregates over the store,
+beside the session's own. So the start page holds a connection too, sent the list alone, where it
+used to hold none. What is redrawn is the `<ul>` and not the sidebar around it, because what holds
+the list slid out on a phone is an attribute the script put on the sidebar, and a morph of the
+sidebar would take it off and snap the sheet shut under a thumb every time any session moved.
 
 **The page states its shape when it connects, and the stream says once when that shape is over.** A
 page drawn as the step whose session has since loaded is exactly the case above: the checkpoint's
@@ -76,6 +82,23 @@ Three things about that connection are decided rather than incidental:
   there because a pass that falls over records *nothing*, so a token made of the count alone holds
   still while the page sits under a spinner; see
   [what the worker is doing about a session](durability.md#what-the-worker-is-doing-about-a-session).
+- **A hidden tab lets the connection go, and takes it up again when shown.** That is htmx's own
+  `pauseOnBackground`, pinned by `TestLettingGoOfTheConnectionWhileHidden` rather than anything this
+  console wrote: a page nobody can see costs the console no polling, and coming back to the tab
+  reconnects, where the first message is the whole current state, so the page is current at once.
+  It is also what makes the seen mark below honest.
+
+**The page acknowledges what it has shown, and that is what marks a session as looked at while it is
+open.** The stream deliberately marks nothing. The server learns that a tab has gone dark only when a
+write to it fails, and the first write after that lands in a socket the browser has already left, so
+a mark made on send would land on exactly the answer that arrived while nobody was looking - and
+`without-http`'s HTTP/1.1 path reads the socket only while the request is being read, so there is no
+earlier signal to have. The page, which lets go of the connection while hidden and so is only ever
+sent what it can show, posts to `/fragments/seen` after it has swapped a message in, coalesced over a
+short beat because a running turn is several messages a second and the mark says "as it now stands".
+The address rides on the stream element as `data-seen`, so the thing acknowledging is the thing that
+was sent to. With the script absent, serving the page is the one mark there is. The cost, stated: one
+small request per beat of a running turn on every open page, which is a row update and no render.
 
 The transcript swaps with **`outerMorph`**, and that is what lets a turn be watched: a turn records
 several times while it runs, so a replacement would shut a call the reader opened to watch, over and
@@ -104,9 +127,10 @@ scrolled, and re-entered by sending a message. `land` therefore has to route its
 bottom and the scroll listener switches following back on at the very moment they asked to be
 somewhere in particular.
 
-The rail (search, key, dock, shelf, a card per running plugin, theme) lives **outside** the region
-that swaps, so no
-control is rebuilt under a reader's finger. What it projects back *onto* the transcript, the search
+The rail (one card for reading the conversation, which is the search, the key and the dock; the
+shelf; a card per running plugin; one card for the session, which is what it is and archiving it;
+and the theme) lives **outside** the region that swaps, so no control is rebuilt under a reader's
+finger. What it projects back *onto* the transcript, the search
 marks, the panel landed on, which kinds are muted, what is folded, cannot live in the markup either,
 so `assets/mainplate.js` holds it as values and reapplies it after every swap. That projection is
 one idempotent `repaint()` serving the first render, every swap, and every press.
@@ -155,6 +179,35 @@ take it over, so a page rendered with the script absent still has it flush right
 
 ## The session list
 
+**The list is ordered by when a session was last written to, not by when it was started**, because
+the conversation somebody is in is the one they are looking for, and a creation date puts a session
+worked in all week under everything started since. The moment is read rather than recorded: the
+store stamps every checkpoint row as it files it, so the newest stamp on a session's inbox is the
+last thing said to it, and a session nobody has written to yet is dated from its making. The row
+prints the moment it is ordered by, with both moments in its title, since a list sorted by one date
+and labelled with another reads as unsorted. The cost is that the order is the tree's: a branch
+worked in this morning sits under what it branched from rather than at the top, and siblings are
+what the moment orders. The clock is the store's and not the console's, which is why the two are
+compared and never subtracted, and why a test about the order writes the stamps rather than racing
+them. An answer arriving moves no row, since nobody said anything; what says an answer arrived is the
+word below.
+
+**A row says `new` when its session has recorded something since anybody looked at it.** "Recorded
+something" is the newest row in the session's checkpoint that is not in its inbox - an answer, a
+refusal, a command's result, a plugin setting itself up - because a person's own message is not news
+to them. "Looked at" is `seen_seq` on the session's row in the index, the highest row the store had
+filed for it when a page showing it was last served or last acknowledged a message, which is [the
+index's other mutable column](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies)
+and earns it the way `Tending` does: a fact nothing else records. It is the console's mark and not
+any one reader's, because this console has no accounts, which is right for one person on several
+devices - the phone that read the answer has read it for the laptop too - and becomes a table keyed
+by reader the day there are readers to key it by. The word and not a dot, for the archived word's
+reason: a dot alone reads as a styling accident. In the console's own mark hue, because it is about
+the console's bookkeeping and not about who spoke. Never on an archived row, since nothing more is
+said in one, and never on the row being read, because serving that page is what marks it. A console
+upgraded onto the column has it filled to where every session stood, since `NULL` reads as never
+looked at and lighting every session at once would tell the reader nothing.
+
 Each row names the repository its session works in, which is what tells two conversations apart
 once there is more than one. It reads `owner/repo` while a forge still reaches the repository and
 the recorded id once none does, so a detached integration leaves the row saying where the session is
@@ -163,6 +216,23 @@ rather than saying nothing. That is `SELECTION` reading the repository straight 
 
 A fork is drawn nested under what it came from and labelled with the turn it left at, which is
 emergent from the `Origin` on each row rather than from anything inside a checkpoint.
+
+Each row also says what its session takes on disk, read off [a holder a sweep
+fills](workspace.md#what-a-session-takes-on-disk), and an [archived](workspace.md#archiving) row
+is muted with the word beside its date: the same join that reaches the repository reaches the
+`archived` key, so neither is a column.
+
+**Every live row carries the archive control, shown on hover and on focus, laid over the row's
+corner.** A console that has been used for a while is closed down from the list, and opening each
+session to reach its rail is a step per session. Laid over rather than added to the row, because a
+control that took a line of its own would move every row beneath it as the pointer passed down the
+list; hidden until reached, because a list of sessions with a button on every row is a list of
+buttons, and what the list is for is telling sessions apart. It is the rail's own disclosure, the
+sentence and then the press, so a mis-press on a row is exactly as impossible as one in the rail,
+and the redirect lands on the session it closed, which is the page saying what just happened. The
+cost, stated: it covers the tail of a long name while it shows, which is the corner every row action
+lives in, and the whole name is in the title. It is not drawn on a phone, where nothing hovers; a
+session is opened and closed from its rail there.
 
 ## The picker
 
@@ -305,10 +375,51 @@ reached the model, so the box belongs on the same side of it as the panel a mess
 the ground Send is painted in. The gold in a screenshot is the focus ring (`--mark`) over that
 border, not the border.
 
-**The Send control takes its own height rather than the box's**, and the row's `flex-end` puts it
-level with the bottom of the box, which is where its menu hangs from anyway. Stretched to a box that
-now reaches fourteen lines, it would be a slab of person-hue reading as a panel rather than a
-button.
+**The box is one card: the text, and under it a row of what to do with it.** The edge, the ground
+and the focus ring are the card's rather than the textarea's, so Send and its menu read as the box's
+own tools and not as a button beside a field, and a phone and a wide window draw one shape: the row
+under the box used to be a phone rule that wrapped the buttons under a box they no longer fitted
+beside, and buttons that wrapped read as buttons that fell off. It is also the shape every chat
+composer a reader already knows takes, so there is nothing to learn. Send stands at the right of
+that row, where a thumb and a pointer both already are, and the room to its left is what anything a
+message may one day be sent with would take. The row is exactly one line of the box tall, so a box
+at rest is two equal rows, and it is the box's `<label>`: a press on the part of it where no tool is
+puts the cursor in the box, which is the browser's own rule for a label rather than a listener, and
+a press on a tool is the tool's. The cost, stated: a wide window spends a row on Send that used to
+sit beside the box, and the menu, which opens upward from the caret, now opens over the text rather
+than beside it.
+
+**Nothing sits under the box, and what sits above it is only what the next press depends on.** The
+line saying [whether the cache is still warm and what re-sending
+costs](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth), the sentence saying what
+the box will do while it is in [a mode](composer.md#leaders), and `sending…` for the length of a
+round trip; each appears above the box so that what grows is the composer's top edge and the box
+stays under the cursor. What the session *is* - the endpoint and model, the thinking level, the
+repository and branch, what it takes on disk - used to be a line under the box and is a card in the
+rail, among the cards about the session as a whole. The move is a grouping and not a saving:
+whatever stands against the box is read as being about the act of sending, and none of those is;
+they were settled when the session was made and took a row on every window and three on a phone to
+say so every turn. The rail is where facts about the whole session already stand, and on a phone it
+is behind the clasp, which is right for facts that never change. The one of them the box still needs
+is the branch, which somebody about to type `git push` has to be able to read, and the sentence over
+a command box names it. The session's total went with the line, because the running total on the
+last rule is the same figure and moves with the transcript where a card in the rail sits stale until
+a reload. The cost, stated: the counts behind that total, tokens in and out over the whole session,
+are drawn nowhere now.
+
+That the box is the last thing on the page is also what a phone needs: the keyboard comes up under
+whatever is focused, and a row under the composer is a row the keyboard covers or the browser has to
+scroll past to show the box. [How the shell makes room for the
+keyboard](assets.md#the-document-never-scrolls-and-every-box-between-has-to-say-so) is the
+stylesheet's and the script's.
+
+**An archived session has no box at all**, rather than one that refuses. A disabled control is
+honest only where something on the page could enable it, and [nothing un-archives a
+session](workspace.md#archiving): the box would be a promise the page cannot keep, and the cache
+note over it would price a request nobody can make. The transcript ends in the sentence saying why,
+and the rule under the last turn is the way on. A session stalled on a missing endpoint keeps its
+refusing box, because a configuration put back *does* enable it, and that is the whole difference
+between the two stops.
 
 **And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
 button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
@@ -578,7 +689,8 @@ one is deciding that for them.
 page. Every request of a turn carries the whole conversation again, so a summed input says what the
 provider charged for, several times over about the same tokens; what a reader wants off a rule is
 how much of the window is gone, which is where the turn's *last* request left it. The summed figure
-is still true and still drawn, under the message box, as what the session has been charged for.
+is still true and is not drawn: the money on the rule already says what the provider charged for,
+and a second count that disagrees with the first by design would be a page arguing with itself.
 
 **A symbol per figure, and the words in the titles.** A rule is one line that must not wrap and it
 now carries six figures where it carried three. `↑` and `↓` are a count of tokens going up to the

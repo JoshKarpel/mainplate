@@ -70,6 +70,28 @@ the switches said. A test asserting that a plugin left off was never launched mu
 was constructed, so a fixture without one is the moment the test ran, and an assertion over a whole
 `Transcript` becomes a comparison against the wall clock.
 
+**The store stamps an inbox row off its own clock, and the suite's clock does not turn it.** The
+session list is ordered by that stamp, so two sessions written to in one test are stamped within a
+millisecond of each other and ordered by the tiebreak, and a session nobody has written to is dated
+from the suite's 2031 clock while a written one is dated from the real one. A test about the order
+says the stamps with `said_to_at` in `test_console.py` rather than racing the clock.
+
+**A stream message carries the session list beside whatever the page is watching**, and the list
+carries every session's title, so an assertion that a message does not contain some text is measuring
+the list's escaped copy of it. `watched` in `test_console.py` hands back the message with the list
+taken out, and `region_in` picks one partial out by its target for a test about the list itself.
+
+**A session nobody has opened is `new`**, because it recorded its choice and nobody looked. A test
+about the word has to look first, with a `GET` of the session's page, or every row it asserts on is
+new for a reason the test did not set up.
+
+**A hidden tab is driven by the event, not by hiding anything.** Playwright cannot background a tab,
+so `shown` in `test_browser.py` sets what `document.hidden` answers and fires `visibilitychange`,
+which is what a real switch fires; what is under test is how the page answers it. The one wait in
+that test is a bound on nothing happening, stated in the stream's own poll interval, because "the
+server was not told" has no event to synchronise on; everything positive there waits on the
+acknowledgement request the page makes, which is the signal.
+
 ## The browser tests
 
 `test_browser.py` asks a different kind of question from the screenshots, mostly over the same
@@ -83,7 +105,7 @@ So does a missing `bwrap` in `test_sandbox.py`, where every assertion is about w
 namespace actually does and a skipped one catches nothing.
 
 **Sideways scroll is asserted here rather than in the shots, and that is the same lesson again.**
-`shoot.mjs` prints it beside the screenshot it is measuring and fails nothing, which is a diagnostic
+`shoot.py` prints it beside the screenshot it is measuring and fails nothing, which is a diagnostic
 for somebody already looking; `TestTheShapeOfANarrowWindow` fails a build.
 
 Its `console` fixture is the one thing there that leaves the gallery, and it has to. The gallery

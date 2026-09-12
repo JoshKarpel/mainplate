@@ -22,7 +22,8 @@ output, so a static server renders what the console renders.
 Every shot also prints whether the document scrolls sideways, which is how the `:target` rule that
 widened a panel past its container was found. It fails nothing, deliberately: it is a diagnostic for
 somebody already looking, and the build-failing version of that question is
-`TestTheShapeOfANarrowWindow` in the suite.
+`TestTheShapeOfANarrowWindow` in the suite. Which pages it shoots it asks of `pages()`, so a page
+added here is shot without being listed anywhere else.
 
 `tests/test_browser.py` renders this same gallery, through `pythonpath = ["."]`, rather than through
 a second set of fixtures that resembles it.
@@ -54,7 +55,10 @@ whole reason `settled` is a method on `Choice` rather than a line in each of its
 choice: the fixtures in `gallery.py` write every kind directly, so a shape change lands here as a
 database full of values nothing can parse.
 
-## `shoot.mjs`
+## `shoot.py`
 
-The Node half of the screenshots, and the only reason `package.json` exists. A checkout therefore
-pins two Chromiums: Playwright's Python and Node bindings each fetch their own.
+The browser half of the screenshots, on the same Playwright the suite drives, so a checkout pins one
+Chromium and `just dependencies` fetches it once. It serves the gallery itself on a port the kernel
+hands it, so a shoot beside a running console needs nothing stopped. It uses the sync binding, which
+the suite cannot: this runs on its own with no event loop to collide with, and `tests/AGENTS.md`
+says why the suite's choice is forced the other way.

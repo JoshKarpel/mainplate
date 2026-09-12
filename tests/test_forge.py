@@ -200,7 +200,7 @@ class TestOfferingOneBack:
 
 
 class TestCallingOneByItsName:
-    """The one rule a sidebar row and the note under a message box both ask, so neither can drift."""
+    """The one rule a sidebar row and the session's card in the rail both ask, so neither can drift."""
 
     def test_a_repository_a_forge_reaches_is_called_what_a_person_calls_it(self) -> None:
         assert Reachable(repositories=(ONE, TWO)).readable("there:two") == "me/two"

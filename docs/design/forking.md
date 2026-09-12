@@ -40,6 +40,27 @@ The confirm page is a page rather than a control in the transcript, because the 
 re-rendered every time a turn in flight records anything: a picker per person panel would be rebuilt
 under the reader's hand, and there would be one per turn.
 
+## Forking the end
+
+**A fork at `turns` carries every turn and re-asks none**, so the branch opens on an empty box. The
+one control that offers it is the rule under the last turn of an [archived
+session](workspace.md#archiving), because that is the one end worth forking: carrying on a live
+session is typing into it, and an archived one can only be carried on this way. The composer offered
+the same fork with a message typed, for a while, and it went for that reason; the route still accepts
+`at == turns`, so the end of a live session is reachable by URL and offered by nothing.
+
+**It plants at the tree the conversation ended with.** A turn's own opening tree is the state before
+the turn did anything, which is right for re-asking it and wrong for carrying on after the last one;
+with no turn to re-ask there is no opening tree to carry, and planting at the repository's head would
+hand the branch files the conversation never saw. So `latest_tree` decides: the tree the reconciler
+captured on the way to archiving the worktree, which holds everything, what a person ran after the
+last request and what a plugin fixed at the turn's end included; and the last request's tree of the
+last turn where there is none, which is the end reached by URL on a live session. The cost, stated:
+that second case predates both of those, because snapshots are taken before model requests and
+nothing captures after the last one. A capture in the fork request would close it, and was built and
+taken out again, since a control that captured while nothing held the session and fell back while
+something did was two behaviours behind one word, which is what took the composer's fork out too.
+
 ## What a fork does not inherit
 
 - **The base and the branch**, which is `settled(forked=True)`. A fork plants at the tree of the
@@ -105,13 +126,14 @@ can never disagree; making the prefix mutable is what that rests on.
 
 pi.dev reaches the same place from a different design: its sessions are trees inside one file
 (`id`/`parentId`, the active leaf is the position), and even there `/tree` navigation branches
-rather than destructively editing a path. Its three operations map onto ours: `/fork` is
-`fork(at=turn)`, `/clone` is `fork(at=turns)`, and `/tree` is the sidebar, which already draws
-branches nested under their parent labelled with the turn they left at.
+rather than destructively editing a path. Its three operations map onto ours: `/fork` is the link on
+a turn's rule, `fork(at=turn)`; `/clone` is the link on an archived session's last rule,
+`fork(at=turns)`; and `/tree` is the sidebar, which already draws branches nested under their parent
+labelled with the turn they left at.
 
-## Merging an aside is a disposition, not a merge
+## Sending back is a disposition, not a merge
 
-Splicing an aside's turns into its parent is the appealing reading and the wrong one. Those turns
+Splicing a branch's turns into its parent is the appealing reading and the wrong one. Those turns
 were asked against the history at the branch point, so a parent that has advanced would end up
 holding request parts whose context never existed, durably and invisibly, because `messages` records
 the request as well as the answer.

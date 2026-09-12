@@ -38,6 +38,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from datetime import timedelta
 from typing import Annotated
 from typing import Literal
@@ -73,6 +74,7 @@ type StepKind = Literal[
     "injected",
     "end",
     "environment",
+    "archived",
 ]
 """
 What a record says it is, and what a turn's keys are named by.
@@ -373,6 +375,27 @@ class Refused(Record):
 
     why: str
     status: int | None = None
+
+
+class Archived(Record):
+    """
+    That somebody archived this session: nothing more is said in it, and its files come off the disk.
+
+    **A settled fact and not a state**, which is what lets it live in a write-once store: a session
+    is archived once, by a press, and nothing un-archives it. What brings a conversation back is a
+    fork, which is a new session carrying these turns, so the record here never has to change.
+
+    It carries *when* and nothing else. Which directories go is derived from the session, and whether
+    they have gone yet is what the disk says; the reconciler reads both rather than being told, so a
+    console that died halfway through taking a session off the disk finishes the job on its next
+    pass. The tree the worktree held at the end goes under a key of its own, `archived:tree`, written
+    by that reconciler when it is about to uproot the worktree, since the press cannot know it: a
+    pass may still be writing files when the button is pressed.
+    """
+
+    kind: Literal["archived"] = "archived"
+
+    at: datetime
 
 
 class Failed(Record):

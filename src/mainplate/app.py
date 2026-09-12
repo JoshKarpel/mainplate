@@ -57,6 +57,7 @@ from without_web import static_files
 from mainplate import records
 from mainplate.agent import Wires
 from mainplate.agent import build_wires
+from mainplate.archive import reconciling
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import discover
 from mainplate.catalogue import refreshing
@@ -70,6 +71,7 @@ from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
 from mainplate.console import page_response
 from mainplate.console import recover
+from mainplate.conversation import Archived
 from mainplate.conversation import Ended
 from mainplate.conversation import Noting
 from mainplate.conversation import Progressed
@@ -81,6 +83,9 @@ from mainplate.conversation import parse_failed
 from mainplate.conversation import progress_in
 from mainplate.durability import as_recorded
 from mainplate.exe import ExeDevGitHub
+from mainplate.footprint import Footprints
+from mainplate.footprint import Places
+from mainplate.footprint import measuring
 from mainplate.forge import Clones
 from mainplate.forge import Forge
 from mainplate.forge import Reaching
@@ -160,6 +165,7 @@ async def open_store(
     watching: timedelta = DEFAULT_WATCHING,
     patience: timedelta = DEFAULT_PATIENCE,
     declaring: Declaring | None = None,
+    footprints: Footprints | None = None,
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -189,6 +195,9 @@ async def open_store(
                 # different state from one whose database would not load and the state a card must
                 # not report.
                 references=references if references is not None else References(),
+                # And a third, for the same reason: an empty one is a console nothing has measured,
+                # whose rows say nothing, and no page has to ask whether there is a sweep.
+                footprints=footprints if footprints is not None else Footprints(),
                 watching=watching,
                 # How to run a plugin, for the two events a request handler fires rather than a pass:
                 # a leader somebody typed and a control somebody pressed. Absent is a console with no
@@ -265,16 +274,17 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     #
     # Nothing here is a name stack: an operator's `handoff` and the bundled `handoff` are two
     # plugins, both on, both listed on a session's settings step. See `Config.plugins`.
+    # `plugins` and not `scratch`, and the two roots being different is the whole of what
+    # `Spawned.scratch` promises. The session's scratch is bound read-write into the model's own
+    # namespace and is a root its file tools reach, so a plugin whose directory sat anywhere under it
+    # would be `$HOME` for a program the model can overwrite - and this console then runs that
+    # program, unattended, at every turn boundary.
+    plugin_scratches = settings.workspace_root / "plugins"
     declaring = Declaring(
         console=(*bundled(), *installed_by(Tier.USER, config.plugins)),
         speaking=Spawned(
             bwrap=bwrap,
-            # `plugins` and not `scratch`, and the two roots being different is the whole of what
-            # `Spawned.scratch` promises. The session's scratch is bound read-write into the model's
-            # own namespace and is a root its file tools reach, so a plugin whose directory sat
-            # anywhere under it would be `$HOME` for a program the model can overwrite - and this
-            # console then runs that program, unattended, at every turn boundary.
-            scratch=settings.workspace_root / "plugins",
+            scratch=plugin_scratches,
             # And the session's own, by the workspace's own derivation, because a plugin getting the
             # repository ready installs into it at `setup`. The two roots above and this are named
             # here and nowhere else, which is what keeps them apart: `Spawned` is handed one and
@@ -289,6 +299,11 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         confining=bwrap is not None,
     )
     logger.info(f"plugins installed: {', '.join(each.qualified for each in declaring.console) or 'none'}")
+    # The one object that sees both roots, because it is what says where *all* of a session's
+    # directories are, for the figure on its row today and for taking them away later. It binds
+    # nothing, which is what the two being kept apart above is about; see `Places`.
+    places = Places(workspaces=workspaces, plugins=plugin_scratches)
+    footprints = Footprints()
     async with open_store(
         settings.database,
         settings.lease,
@@ -298,6 +313,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         settings.watching,
         settings.patience,
         declaring,
+        footprints,
     ) as service:
         answering = work(
             service.durable,
@@ -343,6 +359,12 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         async with AsyncExitStack() as running:
             await running.enter_async_context(background_task(answering))
             await running.enter_async_context(background_task(keeping_current))
+            await running.enter_async_context(
+                background_task(measuring(footprints, places, service.database, settings.measure_every))
+            )
+            await running.enter_async_context(
+                background_task(reconciling(service, places, footprints, settings.archive_every))
+            )
             if config.model_reference is not None:
                 await running.enter_async_context(
                     background_task(refreshing_reference(references, config.model_reference, settings.reference_every))
@@ -468,6 +490,8 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
                 logger.warning(f"{run.workflow} stalled on a request no pass can make; not waking it again")
             case Unconfirmed():
                 logger.info(f"{run.workflow} is waiting on its settings step; the press is what wakes it")
+            case Archived():
+                logger.info(f"{run.workflow} is archived; a fork is what carries it on")
             case Noting(notes=notes):
                 for note in notes:
                     logger.info(f"{run.workflow}: {note.plugin} asked for a message to be put to it")

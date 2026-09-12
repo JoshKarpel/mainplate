@@ -262,3 +262,87 @@ trusting what the form posted, which is what stops a form with no repository fie
 branch out of its repository, the bug that shape of trust actually produced.
 
 [There is no rewind](forking.md#there-is-no-rewind), and that is settled rather than pending.
+
+## What a session takes on disk
+
+**Every directory that is one session's is named in one place, `Places.of`**, and derived from the
+session id and the roots the console started with rather than found by looking. The worktree and
+git's own directory for it inside the clone, where the session works in a repository; the scratch
+and [the plugins' scratches](sandbox.md#the-scratch-directory) either way. Not the clone, which every
+session on that repository shares, and not the snapshots, which are objects in the clone's store
+under a ref of their own. That last exclusion is what the list is for: what is on it is what taking
+a session off the disk removes, and what is not on it is what keeps the checkpoint forkable
+afterwards.
+
+It is the one object handed both the workspaces and the plugins root, which the sandbox keeps apart
+so a plugin's `$HOME` can never sit under a directory the model writes. Seeing both is not the
+confusion that separation prevents: what decides where each namespace's `$HOME` is, is which root it
+is *bound*, and this binds nothing. It reads what the others made, and the cost is one more object
+that has to be handed the roots at startup rather than deriving them.
+
+**The figure on a row is measured on a timer, not walked when the page is drawn.** A warm walk over
+a toolchain came out at about a hundred milliseconds per thirty thousand files on this machine (a
+`.venv` of this repository is twenty-eight thousand; a mise directory with a few tools in it is
+sixteen thousand), and a session that ran `just setup` into its scratch holds both. The sidebar draws
+every session on every page, so a walk per row would put seconds on the request path of a console
+with a few working sessions. `footprint.py` walks every session the index knows, in a thread, once
+per `measure_every`, and rebinds a holder the page reads by id, the way the catalogue is read. The
+cost is that the figure is as old as the interval, and the row says when it was measured rather than
+letting a size read as current.
+
+It counts what `du` counts: blocks allocated rather than apparent size, a file linked twice counted
+once across the whole set (`uv` links a worktree's venv to the cache in the scratch, and both are
+the session's), and a symbolic link counted as itself and never followed, so a link out to the
+machine cannot make a session look like the machine. A directory that is not there is nothing, which
+is every one of them for a session that has not worked yet, and the page draws nothing for nothing
+rather than a zero.
+
+**It is not a column**, and the argument is the [catalogue's](../philosophy.md) rather than the
+index's: a reading of the disk that changes under a reader, refreshed by a task that answers no
+requests, and not a word of anything said. A column would be a copy of that reading kept in step by
+hand, which is the second copy this console is built to refuse, one level down from the checkpoint.
+
+## Archiving
+
+**Archiving a session keeps its conversation and takes its directories away.** The checkpoint stays,
+so the session is still readable and still forkable; what goes is everything `Places.of` names, which
+is the space a session holds once it is over. It is the answer to a console that has been used for a
+while: every session ever started holds a worktree and a scratch, and the one thing a finished
+session needs from the disk is nothing.
+
+**The press records a fact and a reconciler acts on it.** `Service.archive` writes one key,
+`archived`, and redirects; from that moment [the page has no message box](console.md#the-message-box),
+the transcript says why, the rail's card says when, the row is muted, and the routes that would
+write to the session answer `422`. The press is offered in three places, the rail's card, under the
+settings step, and [on the session's row in the list](console.md#the-session-list), and all three
+are one disclosure over one form. Taking
+the directories away is `archive.py`'s, on a timer: each round reads the key off every row, finds the
+sessions still holding something on disk, and takes it off. A reconciler rather than a job the press
+queues, because what it does is diff a desired state against an actual one and converge, so a
+console that died halfway through, or was pressed while a pass still held the session, finishes on
+its next round with nothing to be told. The cost, stated: a session pressed archived keeps its files
+for up to `archive_every`, and a console with nothing to do reads its index once a minute.
+
+**It refuses to take a worktree from under a pass.** A pass reads the checkpoint at its top and never
+sees a key written after it started, so a session the worker holds is left for the next round, and
+the pass that follows reads the key at its own top and stops - `Archived` is its own arm of `Ended`,
+so the log says a session was closed rather than that one stalled. A command a person is still
+running is the same case from the other side. Both are read off live state, since both are true only
+at the instant they are read.
+
+**The worktree's last tree is captured on the way out**, under `archived:tree`, because the press
+cannot know it: files may still be being written when the button goes down, and the reconciler waits
+until nothing holds the session. It is what a fork from the end of an archived session plants at, so
+the branch carries on with the files the conversation actually ended with, snapshots the worktree
+never captured included - what a person ran in it after the last request, and what a plugin fixed
+at the turn's end. The worktree goes through `git worktree remove` rather than `rmtree`, since git
+keeps its own directory for a linked worktree inside the clone and its own list of them; the
+snapshots live in the clone's object store under a ref of their own and outlive the worktree, which
+is what keeps every earlier fork point reachable too.
+
+**Nothing un-archives a session, and that is the design rather than a gap.** The key is write-once,
+and what a person wants back is the conversation with somewhere to work, which is exactly what
+[forking from the end](forking.md#forking-the-end) is: a live session carrying every turn, with a
+fresh worktree at the archived tree and a scratch of its own. Putting the archived session itself
+back would mean reconstructing a scratch that was deliberately not snapshotted, which is a second
+mechanism to keep for a state a fork already reaches.

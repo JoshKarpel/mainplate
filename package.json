@@ -1,9 +1,0 @@
-{
-  "name": "mainplate",
-  "private": true,
-  "description": "Screenshot-only JS toolchain: the console's own script is served from the package and depends on nothing.",
-  "type": "module",
-  "devDependencies": {
-    "playwright": "1.61.1"
-  }
-}

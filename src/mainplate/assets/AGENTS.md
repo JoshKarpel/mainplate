@@ -12,14 +12,23 @@ An edit is only visible to a *new* process, since the assets are inventoried onc
 serve` restarts on any change under `src/mainplate`; `just shots` is how a styling change gets
 looked at rather than argued about.
 
-## A phone rule goes in the block at the end of `mainplate.css`
+## A narrow rule goes in the block at the end of `mainplate.css`
 
-The queries overlap, so the narrow one wins **only by coming later**. A shape rule written beside
-the thing it is about, above that block, is silently overridden: that is how the 17rem sidebar
-column came back on every phone and left the conversation a hundred pixels wide.
+There are two shapes and one width between them, 78rem, and every rule for the narrow shape is in
+the one `max-width` block at the end of the file. **Do not add a second top-level width.** There
+used to be a shape between, with the rail folded and the list not, and its query overlapped the
+narrow one so that whichever came later won: a shape rule written beside the thing it is about,
+above the narrow block, was silently overridden, which is how the 17rem sidebar column came back on
+every phone and left the conversation a hundred pixels wide. One block has no order to get wrong.
 
-A rule that applies at *two* widths, such as the rail's overlay, stays with the thing it is about.
-`TestTheShapeOfANarrowWindow` is what fails when this goes.
+**What a phone needs beyond the fold goes in the `48rem` query nested at the end of that block**:
+room on a line, a pointer that hovers, a height a whole picker fits in, a thumb to press with. The
+fold is about columns and fires on half a laptop; a rule that stacks a line or hides half of it
+fires there too if it is written in the outer block, which is how a 1200px window came to draw its
+rules the way a phone does. Nested, it comes after everything it refines and needs no ordering.
+
+`TestTheShapeOfANarrowWindow` is what fails when this goes, and it also pins that the narrow shape
+begins exactly where three columns stop fitting.
 
 ## `--mono-size` and `--mono-line` are measured, in pixels, and do not scale
 

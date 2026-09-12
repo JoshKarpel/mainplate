@@ -89,6 +89,10 @@ tree and therefore without any ignored file either.
 plan or a notes file kept across turns, which is the one thing in a scratch directory that wants a
 line editor; a build cache never does.
 
+It is also most of [what a session takes on disk](workspace.md#what-a-session-takes-on-disk), which
+is the figure on the session's row: a toolchain fetched in here is tens of thousands of files, where
+a worktree is a checkout.
+
 **A plugin gets a different one, and `$HOME` points at it.** `workspaces/plugins/<session>/<tier>/
 <name>` is bound in place of the session's for a repository's plugin, because the session's is a
 place the *model* writes: a plugin that kept an executable in there would be running whatever the

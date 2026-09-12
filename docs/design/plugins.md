@@ -816,14 +816,20 @@ half-written for as long as somebody is writing it, so a `change` on that box wo
 was in it when they tabbed away. The form's `hx-trigger` is `submit, change from:.plugin__switch`
 for exactly that, and `submit` stays beside it because `Set` is what the number is sent with and
 what the form does with no script at all. Either way the whole form posts, so a number typed and
-then a switch flicked saves both rather than losing the typing.
+then a switch flicked saves both rather than losing the typing. Each number carries its own `Set`,
+a mark against its box, and there is none for the card: a card-wide button on a row of its own spent
+a line on every card whether anything was pending or not, and beside the last control it read as
+that control's alone.
 
-**Which leaves `Set` to say there is something to press.** `data-dirty` is the mark, set by
-comparing the box against its own `defaultValue`, which is exactly the `value` the server rendered,
-so nothing is kept anywhere and a swap needs no repaint: the box that comes back is a new element
-carrying the new default and no mark. Undoing a change unmarks it, because it is a comparison rather
-than a flag the first keystroke sets. `--mark` is the gold every control here draws its focus ring
-in, and the border alone rather than a fill, since a filled button reads as pressed.
+**Which leaves the mark to say there is something to press, and to be drawn only then.** The script
+marks every number row `data-clean` or `data-dirty` by comparing the box against its own
+`defaultValue`, which is exactly the `value` the server rendered, so nothing is kept anywhere; a
+clean row hides its `Set`, a dirty one draws it in `--mark`, the gold every control here draws its
+focus ring in, and the border alone rather than a fill, since a filled button reads as pressed.
+Undoing a change unmarks it, because it is a comparison rather than a flag the first keystroke sets.
+Marking is part of `repaint()`, so the row that comes back from a swap is marked clean the moment it
+lands. The clean mark is what keeps the form working with the script absent: nothing marks anything,
+so the button is simply always drawn, plain.
 
 **No spinner on the box, because no increment is right**: a step of 1 is a hundred presses to move a
 number anywhere worth moving it, and any larger one is a value this console would have to invent on a

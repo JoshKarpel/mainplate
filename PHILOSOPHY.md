@@ -34,11 +34,18 @@ value, and both tables are in the one file, so `SELECTION` reads a session's rep
 of its `choice` with a `LEFT JOIN` and `json_extract`: one small row per session, and no word of any
 conversation. That is the shape any further "what is this session on" question should take. A column
 would be the second copy this console is built to avoid, and unlike the title it would be a copy of
-something recorded elsewhere and already authoritative.
+something recorded elsewhere and already authoritative. When a session was last written to is the
+same reach one step further: the store stamps every row it files, so the newest stamp on a session's
+inbox is when somebody last said something to it, and the list is ordered by that without a column
+that would have to be kept in step with every message.
 
-The two columns that *are* there for presentation earn it by being facts nothing else records:
-`Origin.aside` is what somebody meant by a fork, and `Tending` is what is being done to a running
-session. Neither is written anywhere else, so neither is a copy.
+The columns that *are* there for presentation earn it by being facts nothing else records:
+`Origin.aside` is what somebody meant by a fork, `Tending` is what is being done to a running
+session, and `seen_seq` is how far into a session somebody has looked. None is written anywhere else,
+so none is a copy. The last two move, and the same argument carries both: a setting has to be
+mutable to be a setting, and a look is a new fact every time, and the two places this console
+otherwise keeps things refuse them - a checkpoint key keeps its first value for ever, and
+`localStorage` is one browser's, where a look is the reader's on every device they read from.
 
 ### The catalogue is configuration that lives at the far end of a request
 
@@ -46,6 +53,12 @@ session. Neither is written anywhere else, so neither is a copy.
 in it is anything anybody said. It is configuration that happens to live behind an HTTP request
 rather than on disk, so it is handled the way reloadable configuration is. The test for a change
 there is the same one: does it keep a second copy of what was *said*?
+
+What a session takes on disk is the same kind and passes the same test. `footprint.py` walks every
+session's directories on a timer and holds the figures the way the catalogue holds the models: a
+reading of an environment that changes under a reader, refreshed off the request path, and never a
+word of the conversation. What it is *not* is a column beside the title, since a column would be
+that reading copied and kept in step by hand.
 
 ### `localStorage` holds what a reader decided
 
@@ -92,8 +105,9 @@ other way, because a second word always feels like it is adding a distinction; u
 a synonym, and a synonym is a thing to keep in step for ever.
 
 **The test is whether a second *thing* exists, not whether a second word reads well.** Two controls
-that call the same function with different arguments are one thing with two labels: the composer's
-fork and a rule's fork are both `Service.fork`, differing in `at`, so they are both called `fork`.
+that call the same function with different arguments are one thing with two labels: the fork on a
+turn's rule and the fork on the rule under an archived session's last turn are both `Service.fork`,
+differing in `at`, so they are both called `fork`.
 Where the distinction is real the words stay apart, and `endpoint`, `wire` and `provider` are the
 worked example: one is a line in `config.yaml`, one is a built object that speaks an API format, and
 one is whoever made a model. Three things, three words, none of them interchangeable.

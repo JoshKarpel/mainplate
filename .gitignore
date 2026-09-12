@@ -1,7 +1,3 @@
-# The screenshot toolchain, which is a dev tool rather than part of the package: the console's own
-# script is served from `src/mainplate/assets` and depends on nothing.
-node_modules/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

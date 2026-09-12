@@ -39,7 +39,7 @@ the cross-cutting rules the pages cite rather than restate.
   ready to work in is a third.
 - **[The console](console.md)** is the page: the live connection, the transcript, panels and rules,
   and the controls around them.
-- **[The stylesheet and the grid](assets.md)** is what draws it: the three shapes, the one value
+- **[The stylesheet and the grid](assets.md)** is what draws it: the two shapes, the one value
   that scales the page, and the vendored monospace face box drawing depends on.
 - **[Running it as a service](deployment.md)** is the systemd unit `mainplate install` renders, and
   why the service is not itself confined.

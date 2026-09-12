@@ -264,6 +264,28 @@ only while there is no declaration to read instead.
 """
 
 
+ARCHIVED_KEY: StepKey = "archived"
+"""
+That somebody archived this session, and when. See `records.Archived`.
+
+Session-level rather than turn-shaped, and that is the whole of what makes a fork of an archived
+session a live one: `before` copies turn-prefixed keys by shape and leaves this behind, so the branch
+starts un-archived with every turn the parent had. It is also read at the top of every pass, before
+anything is planted or run, so a message queued before the press is passed over rather than answered.
+"""
+
+ARCHIVED_TREE_KEY: StepKey = "archived:tree"
+"""
+What the worktree held when it was taken off the disk, captured by the reconciler just before.
+
+Its own key rather than a field on `archived`, because the two are written at two moments by two
+parties: the press records the fact, and the reconciler, which waits until no pass holds the session,
+records the tree. That wait is what makes the tree a quiescent one rather than a mixture a pass was
+still writing. `latest_tree` is what reads it, so a fork from the end of an archived session plants
+at the files the conversation actually ended with.
+"""
+
+
 def setup_key(attempt: int) -> StepKey:
     """
     That somebody answered the settings step, for the nth time, which is what lets a pass set up.
@@ -412,19 +434,6 @@ class Disposition(Enum):
     branch carries every turn above the boundary and leaves the marker behind, since `before` copies
     what is below the branch point and the record rides on the message that opens the turn."""
 
-    FORK = "fork"
-    """`Service.fork` at the end, carrying the whole conversation, with this message asked there.
-    The turns are settled by definition, since the branch point is past all of them.
-
-    The same word the rule above every turn uses, because it is the same call with a different `at`.
-    A second name for it would be a synonym to keep in step, not a distinction."""
-
-    ASIDE = "aside"
-    """The same call, recorded as a step out that is meant to come back.
-
-    Nothing mechanical differs, and saying so is better than inventing a difference: what it buys is
-    that the sidebar can draw a digression as one, and that the session knows to offer a way back."""
-
     RUN = "run"
     """`Service.run`, which runs the text as a command in this session's own worktree.
 
@@ -443,13 +452,12 @@ class Disposition(Enum):
     Recorded and not told, so nothing here reaches the model. See the key scheme."""
 
     PARENT = "parent"
-    """`Service.say` into the session this one was forked from, which is how an aside comes back.
+    """`Service.say` into the session this one was forked from, which is how a branch reports back.
 
-    A *message* and not a merge. Splicing an aside's turns into its parent would leave the parent
+    A *message* and not a merge. Splicing a branch's turns into its parent would leave the parent
     holding requests whose context never existed, since those turns were asked against the history at
     the branch point; a message whose text happens to have been written elsewhere falsifies nothing.
-    Offered from any fork rather than only an aside, because `Origin.session` is what it needs and
-    every fork has one."""
+    Offered from any fork, because `Origin.session` is what it needs and every fork has one."""
 
 
 def parse_disposition(named: str) -> Disposition | None:
@@ -2194,6 +2202,44 @@ def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
     return None if said is None else parse_refused(said)
 
 
+def parse_archived(recorded: object) -> records.Archived:
+    return records.Archived.model_validate(recorded)
+
+
+def archived_in(recorded: Mapping[str, object]) -> records.Archived | None:
+    """That this session was archived, and when, or nothing at all for one still being answered."""
+    said = recorded.get(ARCHIVED_KEY)
+    return None if said is None else parse_archived(said)
+
+
+def latest_tree(recorded: Mapping[str, object]) -> object | None:
+    """
+    The newest tree this session recorded, as the record holding it, or nothing where none was.
+
+    What a fork from the *end* of a conversation plants at. A turn's own opening tree is the state
+    before it did anything, which is right for re-asking that turn and wrong for carrying on after
+    the last one. The end the console offers is an archived session's, and the reconciler captured
+    that worktree on the way to taking it off the disk, so the archived tree wins where there is one:
+    it holds everything, what a person ran after the last request and what a plugin fixed at the
+    turn's end included. The last request's tree of the last turn is the answer for an end reached by
+    URL on a live session, which no control offers, and it predates both of those.
+    """
+    if (held := recorded.get(ARCHIVED_TREE_KEY)) is not None:
+        return held
+    turn = 0
+    while messages_key(turn) in recorded:
+        turn += 1
+    newest: object | None = None
+    for behind in range(turn, -1, -1):
+        at = 0
+        while (tree := recorded.get(tree_key(behind, at))) is not None:
+            newest = tree
+            at += 1
+        if newest is not None:
+            return newest
+    return None
+
+
 def parse_failed(recorded: object) -> records.Failed:
     """Why one pass raised, read back as the record holding the reason and where it had got to."""
     return records.Failed.model_validate(recorded)
@@ -2806,6 +2852,19 @@ class Unconfirmed:
 
 
 @dataclass(frozen=True, slots=True)
+class Archived:
+    """
+    What a pass that reached an archived session comes back with: leave it alone.
+
+    The same silence as `Unconfirmed` for a third reason. Nothing is wrong and nobody is going to
+    press anything: the session was archived, so a message queued before the press is passed over,
+    and the pass records nothing and plants nothing, since what it would plant is what the reconciler
+    is taking off the disk. Its own arm so the worker's log says what happened rather than reporting
+    a stall on a session somebody deliberately closed.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class Noting:
     """
     What a pass whose plugins want something said comes back with: those notes, then another turn.
@@ -2829,7 +2888,7 @@ class Noting:
     notes: tuple[records.Note, ...]
 
 
-type Ended = Progressed | Stalled | Unconfirmed | Noting
+type Ended = Progressed | Stalled | Unconfirmed | Archived | Noting
 """
 What one pass ends as, and the whole of what the worker owes each.
 
@@ -3027,6 +3086,10 @@ def conversing(
         chosen = choice_of(run.recorded)
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no endpoint, so it was never started by this console")
+        # Before anything is planted, declared or run: an archived session's worktree is on its way
+        # off the disk, and a pass that planted it again would be racing the reconciler for it.
+        if archived_in(run.recorded) is not None:
+            return Archived()
         # One value for the session's files, used twice: the agent's tools are bound to it, and
         # every snapshot inside a turn is taken of it. A session with no repository has none, and
         # gets an agent with no file tools rather than tools that refuse every call.

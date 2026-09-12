@@ -91,11 +91,15 @@ of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # parameter for the reason the endpoint is one: htmx sends a triggering input's own value, so the
 # card needs no interpolation and no script to build a URL.
 of_workspace = query_param(WORKSPACE_FIELD, once(str), schema={"type": "string"})
-# Which conversation a watching page is showing. A query parameter rather than a path segment
+# Which conversation a watching page is showing, if any. A query parameter rather than a path segment
 # because the stream belongs to the page: this narrows what one connection reports on, where a path
-# segment would say the connection is a thing *of* that session. It is what lets a second region
-# join the same connection later without the path becoming a lie.
-watched = query_param("session", once(str), schema={"type": "string"})
+# segment would say the connection is a thing *of* that session. It is what let a second region join
+# the same connection without the path becoming a lie, and what lets the start page, which shows no
+# conversation, hold the same connection for the session list alone.
+watched = query_param("session", optional(str), schema={"type": "string"})
+# Which conversation a page has just been shown, which unlike `watched` is never absent: a page with
+# no session has nothing to acknowledge and is given nowhere to do it.
+acknowledged = query_param("session", once(str), schema={"type": "string"})
 
 
 def parse_shape(value: str) -> bool:
@@ -745,11 +749,14 @@ async def show_session(service: Service, session: str) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    # Serving the page is showing it to somebody, which is what the mark means; before the list is
+    # read, so the row for this session is drawn as looked at. See `Service.saw`.
+    await service.saw(session)
     return page_response(200, session_page(LINKS, await service.listed(), found, service.reachable))
 
 
 @get("/fragments/stream", watched, shaped, summary="What a page is watching, sent as it changes")
-async def stream(service: Service, session: str, on_step: bool | None) -> Reply:
+async def stream(service: Service, session: str | None, on_step: bool | None) -> Reply:
     """
     The live connection a page holds open, carrying whatever it is watching as that changes.
 
@@ -757,7 +764,8 @@ async def stream(service: Service, session: str, on_step: bool | None) -> Reply:
     a path segment: this does not pick a conversation out of the resource tree, it tells a
     page-level connection which one that page is showing. What comes back is `<hx-partial>`
     elements naming their own targets, so a second region joins the same connection rather than
-    opening another.
+    opening another. A page showing no session, which is the start page, names none and is sent
+    the session list, which is the region every page has.
 
     The page says which shape it was drawn in, for the same reason it says which session: the stream
     sends what that shape has somewhere to put, and says once when the shape is over. See
@@ -771,10 +779,29 @@ async def stream(service: Service, session: str, on_step: bool | None) -> Reply:
     refusal: an event stream that opened and immediately ended would be reconnected by the client
     forever, where a `404` is an answer it can act on.
     """
-    found = await service.read(session)
-    if found is None:
+    if session is not None and await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return event_stream(with_heartbeat(watching(service, LINKS, session, service.watching, on_step=bool(on_step))))
+
+
+@post("/fragments/seen", acknowledged, summary="A page has shown what its connection just sent")
+async def seen(service: Service, session: str) -> Response:
+    """
+    The other direction of the live connection: the page saying it has shown the conversation as the
+    last message carried it, which is what marks a session as looked at while it is open.
+
+    The page's to say rather than the stream's to assume, and the reason is the one `Links.to_seen`
+    gives: the server cannot tell a reading page from one whose tab has gone dark. Nothing comes back
+    but the status, since the page asked nothing; the list on every open page redraws on its own,
+    because the mark is part of the list's token.
+
+    The session is checked for the reason the stream checks it: a page acknowledging a session nobody
+    started is a stale page, and a `404` is an answer it can act on where a silent `204` is not.
+    """
+    if await service.read(session) is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    await service.saw(session)
+    return Response(status=204)
 
 
 @get(
@@ -817,14 +844,24 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
     answers rather than leaving a message to appear whenever the stream next looks, and the
     connection then sends the same thing, which morphs to nothing.
 
-    `FORK` cannot do that, because what it makes is a *different* session and the reader has to
-    end up there. A `303` would be followed by htmx and swapped into the transcript, which would
-    leave somebody reading the branch at the parent's URL, so this answers `HX-Redirect` and the
+    `PARENT` cannot do that, because the message goes into a *different* session and the reader has
+    to end up there. A `303` would be followed by htmx and swapped into the transcript, which would
+    leave somebody reading the parent at the branch's URL, so this answers `HX-Redirect` and the
     browser navigates for real.
+
+    Nothing here forks. A fork is made from a rule, at a turn boundary, through the fork page, and
+    the composer offered one at the end of the conversation until it did not: carrying on a live
+    session is typing into it, and an archived one carries the same link on the rule under its last
+    turn.
     """
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    # Every arm, before any of them: an archived session takes nothing more, whichever way it was
+    # addressed and whoever posted it. The page's own controls are disabled, so reaching this is a
+    # caller that is not this page, and a message on the floor is the state the key exists to end.
+    if found.session.archived is not None:
+        return page_response(422, refusal_page(LINKS, 422, f"session {session} is archived; fork it instead"))
     # A plugin's own answer, before the console's, because it is not a `Disposition` at all: what
     # happens to what you typed is the plugin's to decide, and the effects it asks for are performed
     # by the service exactly as they are inside a pass.
@@ -860,22 +897,6 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             # `send`, because a boundary between turns is the only place one can be.
             await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
             return await redrawn(service, session)
-        case Disposition.FORK | Disposition.ASIDE:
-            # The parent's own choice, not a posted one: a fork from the composer offers no picker,
-            # and `Service.fork` is what decides the repository either way. Forking the *end* carries
-            # every turn, so nothing is left behind and nothing is re-asked.
-            if found.chosen is None:
-                return page_response(422, refusal_page(LINKS, 422, f"session {session} records no endpoint"))
-            forked = await service.fork(
-                session,
-                at=found.said.turns,
-                chosen=found.chosen,
-                said=sending.said,
-                aside=sending.where is Disposition.ASIDE,
-            )
-            if forked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
-                return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-            return navigating(LINKS.to_session(forked.id))
         case Disposition.RUN:
             # Not a message at all: the text is run in this session's worktree, as the person, and
             # the record of it is never told to a model. Refused rather than silently ignored where
@@ -933,6 +954,8 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    if found.session.archived is not None:
+        return page_response(422, refusal_page(LINKS, 422, f"session {session} is archived; fork it instead"))
     if not settling(found):
         return page_response(
             422, refusal_page(LINKS, 422, f"session {session} has already loaded its plugins; fork it instead")
@@ -973,11 +996,33 @@ async def press(service: Service, session: str, pressed: Pressed) -> Response:
     return page_response(200, fragment(plugin_card(LINKS, session, enrolled, settings)))
 
 
+@post(t"/sessions/{session_id}/archive", session_id, summary="Archive a session, keeping its conversation")
+async def archive(service: Service, session: str) -> Response:
+    """
+    Close the session, and go back to it as the archived thing it now is.
+
+    An ordinary form post answered with a `303`, because what changes is not one region: the box
+    goes, the rail's card says when, the transcript says why, and the row in the sidebar is muted.
+    The live connection carries only the transcript, so a fragment would leave three of those as they
+    were until a reload, and a reload is what the redirect is. It is also why the press on a sidebar
+    row lands on the session it closed rather than back where the row was: the page that opens is
+    the one saying what just happened.
+
+    A `303` to the same page is also what makes pressing it twice harmless: the key is write-once, so
+    the second press is the first one again, and the page it lands on is the same page.
+    """
+    archived = await service.archive(session)
+    if archived is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    return seeing(LINKS.to_session(session))
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
     start,
     show_session,
     stream,
+    seen,
     endpoint_models,
     workspace_branches,
     fork_form,
@@ -985,6 +1030,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     say,
     setup,
     press,
+    archive,
     request_record,
 )
 
@@ -994,6 +1040,7 @@ LINKS = Links(
     session=show_session,
     say=say,
     stream=stream,
+    seen=seen,
     request_record=request_record,
     endpoint_models=endpoint_models,
     workspace_branches=workspace_branches,
@@ -1001,5 +1048,6 @@ LINKS = Links(
     fork=fork,
     setup=setup,
     press=press,
+    archive=archive,
     assets=ASSETS,
 )

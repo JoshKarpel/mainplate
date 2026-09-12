@@ -27,6 +27,7 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
+from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import PLUGINS_KEY
@@ -67,7 +68,9 @@ def planted() -> tuple[tuple[Session, Choice, dict[str, object]], ...]:
     The branch relationships are the ones `LISTED` already declares, so the tree the sidebar draws
     here is the tree the screenshots show.
     """
-    parent, branch, deeper, other, detached = LISTED
+    parent, branch, deeper, other, detached, archived = LISTED
+    if archived.archived is None:  # pragma: no cover - the fixture says it is, and this is what reads it
+        raise ValueError("the gallery's last session is the archived one, and it records no time")
     return (
         (parent, ON_SONNET, recorded(CONVERSATION, TOOL_IN_FLIGHT)),
         # Branched at turn 1 and answered on a different model, so it carries turn 0 and nothing
@@ -79,6 +82,14 @@ def planted() -> tuple[tuple[Session, Choice, dict[str, object]], ...]:
         (other, ON_SONNET, recorded(CONVERSATION)),
         # On a repository nothing reaches, so a demo console has the row that renders a bare id.
         (detached, ON_SONNET, recorded(CONVERSATION)),
+        # Archived, with the key the press writes rather than only the row's field, because the row's
+        # field is *read* out of that key: seeding the field alone would be a session the sidebar
+        # draws as open. The reconciler finds nothing on disk for it and leaves it be.
+        (
+            archived,
+            ON_SONNET,
+            {**recorded(CONVERSATION), ARCHIVED_KEY: records.Archived(at=archived.archived).recorded()},
+        ),
     )
 
 

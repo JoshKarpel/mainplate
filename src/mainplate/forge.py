@@ -119,7 +119,7 @@ class Reachable:
 
         Not a fallback but the honest reading: the session is still on that repository, and the id
         is all anybody knows about it now. One function rather than the rule written twice, because
-        the sidebar and the note under a message box are asking exactly the same question.
+        the sidebar and the session's card in the rail are asking exactly the same question.
         """
         found = self.offers(identifier)
         return found.name if found is not None else identifier

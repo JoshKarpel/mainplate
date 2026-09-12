@@ -17,26 +17,59 @@ transcript, the search marks, the panel landed on, which kinds are muted, what i
 live in the markup, so the script holds it as values and reapplies it after every swap through one
 idempotent `repaint()` serving the first render, every swap, and every press.
 
-## The three shapes, and one place that decides between them
+## The two shapes, and one width that decides between them
 
-Over 78rem the shell is three columns and the rail stands beside the conversation; between 48rem and
-78rem it is two, with the rail lying over the page and drawn shut behind its clasp; under 48rem it
-is one, and the session list becomes a strip of chips across the top.
+Over 78rem the shell is three columns, the session list and the rail standing either side of the
+conversation. Under it the shell is one column, and both lie off their edges of the page behind a
+clasp apiece in a row across the top, which is the shape a phone has and is also the shape a
+half-width laptop window has.
 
-**Every phone rule is in one block at the *end* of `mainplate.css`, and that is not tidiness:** the
-queries overlap, so the narrow one wins only by coming later. Split up, the rail's own `max-width:
-78rem` block sat below the narrow one and put the 17rem sidebar column back on every phone, leaving
-the conversation about a hundred pixels to render in, a bug invisible in either rule and obvious
-with both in one list. So a rule that changes shape on a phone goes in that block; a rule that
-applies at two widths, such as the rail's overlay, stays with the thing it is about.
+**Two shapes and not three, and that is a decision rather than a default.** There was a shape
+between, from 48rem to 78rem, with the rail folded behind a glyph floating over a corner of the
+conversation and the list keeping its column. It was a third state to keep right, with a folding
+mechanism of its own and a clasp face of its own, and the two queries it took overlapped, so the
+narrow one won only by coming later: split up, the rail's own block sat below the narrow one and
+put the 17rem sidebar column back on every phone, leaving the conversation about a hundred pixels
+to render in, a bug invisible in either rule and obvious with both in one list. The cost of going
+without it, stated: a window too narrow for three columns but wide enough for two gets the
+conversation alone with both panels a press away, where it used to get the list beside it. That is
+the trade for one mechanism, one script and one block to read, and **every narrow rule is in that
+one block at the end of `mainplate.css`**, with nothing for its order against another query to
+matter.
 
-A strip rather than a shorter band, and the axis is what decides it: a band is a second *vertical*
-scroller stacked on the transcript's own, and two of those on one axis is what feels broken under a
-thumb. What a chip gives up is the date, the repository and the tree's indentation, which are for
-telling sessions apart where a strip is for getting back to one; the fork marker stays.
-`toCurrentSession` brings the session being read into that list and is deliberately shape-blind:
-`nearest` scrolls the list on whichever axis it actually scrolls on, so one call serves the strip
-and the full-height column both.
+The fold is not the whole of what a phone needs, and the rest is a query nested at the end of that
+block, at 48rem: the rule under a turn stacks its parts and drops its running total because a phone
+has no room on a line for them, fields are held at 16px so a phone does not zoom on focus, targets
+grow to a thumb, the picker stops scrolling inside a box that scrolls, and nothing is revealed by
+hover. None of that is about columns. Written in the outer block it fired on half a laptop, which
+has every bit of the room a wide window has on a line, and a 1200px window drew its rules the way
+a phone does. Nested rather than a second top-level query, so it comes after everything it refines
+and there is still no order between blocks to get wrong.
+
+The session list in that shape is the rail's mechanism from the other edge: fixed to the viewport,
+`pointer-events: none` on the box and back on its children, the clasp left in place and everything
+else parked off the edge by a transform until the clasp is pressed. One script wires both clasps and
+opening either shuts the other, since there is room for one of them across the page at a time. Slid
+out, the list is the column a wide window draws, with the date, the repository and the tree's
+indentation that a strip of chips across the top had to give up; the strip was tried first and was
+one more scroller, sideways, to learn.
+
+**What slides is one sheet, and the sheet is what a finger lands on.** Everything but the clasp is
+in a box of its own with the page's ground, a border and a lift, and that box is the scroller at
+every width, wide included, where it is simply the column. Loose cards over a bare box were tried
+first and read the same in a screenshot; what they cost was every touch that landed between two of
+them, which fell through to the conversation showing in the gap and scrolled that instead. The
+sheet takes the touch and scrolls itself, so a thumb anywhere on it moves the list and never the
+conversation. The rail is the same shape at both widths its overlay applies at.
+
+The cost, stated: the two clasps stand in a row at the top of the page that everything else starts
+under, about the height the strip took, because floating them over the corners would put the left
+one over the picker's first legend and the role of whichever panel scrolled under it. The row is a
+track of the shell rather than padding `main` clears, and since it is spent either way the clasps
+say their words rather than a glyph apiece and the console's name stands between them, which is the
+one place the name is drawn: a wide window has no banner, for the reason in `shell`.
+`toCurrentSession` brings the session being read into the list whether it is parked or out, since a
+hidden box keeps its layout and still scrolls.
 
 Two more things change on a phone, and both follow from it having one column of room. **Nested
 same-axis scrollers go away**: the wide picker has the models scrolling inside a block that scrolls
@@ -50,10 +83,11 @@ override: the branch link used to appear on a person's panel under the pointer, 
 forking did not exist until a media query put it back. On the rule it is simply always drawn, and
 there is no pointer question left to answer.
 
-`TestTheShapeOfANarrowWindow` is the guard, and it asks two things because overflow can be right for
-the wrong reason: whether any page pushes the document sideways on a phone, and whether a page
-carrying a rail is still *one* grid track there. The second is the direct guard on the breakpoint
-ordering above, and it reports the sidebar track coming back rather than one of the ways that shows.
+`TestTheShapeOfANarrowWindow` is the guard, and it asks three things because overflow can be right
+for the wrong reason: whether any page pushes the document sideways on a phone, whether a page
+carrying a rail is still *one* grid track there, and whether the narrow shape begins exactly where
+three columns stop fitting. The second is the direct guard on a sidebar track coming back, which a
+second query would reintroduce, and it reports that rather than one of the ways it shows.
 
 ## The document never scrolls, and every box between has to say so
 
@@ -78,6 +112,36 @@ under them: on the fork page, seventeen pixels of list and then nothing with fiv
 bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on into
 the block around it, which is what a reader who kept flicking asked for.
 
+**A phone's keyboard is the one thing `100dvh` does not know about.** `dvh` is the window less the
+browser's own bars; a keyboard is laid *over* the page, so the visual viewport shrinks to what is
+left and the layout viewport, which `dvh` and so the shell are sized by, stays where it was. The
+shell then runs on under the keys with the message box at the bottom of it, and what a browser does
+about that is scroll the page so that the *focused* element is in view: the textarea, and not the
+row under it holding Send, which on a phone is the one control a message can be sent with, since
+Shift-Enter does not exist there. Two things cover it, and they are one mechanism each side of a
+browser split:
+
+- **The viewport meta asks for the layout viewport to shrink too**, with
+  `interactive-widget=resizes-content`. Chrome and Firefox honour it, and there the shell's `100dvh`
+  ends where the keyboard begins and nothing else is needed. Safari does not honour it in any shipped
+  release, though WebKit carries the implementation.
+- **`wireKeyboard` covers Safari**, from the visual viewport: where it is shorter than the window at
+  scale one, which is a keyboard and nothing else, the script sets `--visible-height` to what is
+  left, the shell is that tall, and the page is put back at its top, since Safari will already have
+  scrolled it to show the textarea. On the resize of the visual viewport and never its scroll: the
+  shell is then exactly what can be seen, so there is nothing to scroll, and following the visual
+  viewport as a thumb drags it is what makes a layout jitter. At any other scale the visual viewport
+  is a pinch zoom, and shrinking the page to the part being looked at would be wrong, so
+  `keyboardLeaves` answers nothing and the property is taken off. On a browser that honoured the
+  meta both viewports shrank together, so the same test answers nothing there and the two cannot
+  fight.
+
+The cost, stated: **this is written against what the two viewports are documented to do and against
+nothing measured**, because neither Playwright nor the suite can raise a keyboard, and no device it
+was tried on is a claim this page can make. What it must not do it cannot do: with the script
+absent the property is never set and the shell is `100dvh` as before, and on a browser that resizes
+its content the test never fires.
+
 ## One value scales the whole page
 
 **And it is `html { font-size }`.** Everything except the monospace grid is sized in `rem`, the
@@ -87,7 +151,7 @@ the page was better at a browser zoom of 110%, which is the same scaling asked f
 visit, and a stylesheet that needs a zoom is a stylesheet with a number in the wrong place.
 
 Deliberately *not* the breakpoints, which resolve `rem` against the browser's own default rather
-than against this: the three shapes are about how much screen there is, and a shape should change
+than against this: the two shapes are about how much screen there is, and the shape should change
 where the window runs out of room and not where the text got bigger.
 
 ## Monospace is a grid, and it is vendored because a grid cannot be borrowed
@@ -161,6 +225,5 @@ tag deciding which actually register. Why one file rather than core plus separat
 extensions is on [the console's page](console.md#htmx-4), because what reads the allowlist is
 `EXTENSIONS` in `pages.py` rather than anything here.
 
-`mainplate.js` itself depends on nothing. `package.json` at the repository root exists only for
-`scripts/shoot.mjs`, so a checkout pins two Chromiums: Playwright's Python and Node bindings each
-fetch their own.
+`mainplate.js` itself depends on nothing, and nothing in the repository needs Node: `just shots`
+drives the same Python Playwright the suite does, so a checkout pins one Chromium.
