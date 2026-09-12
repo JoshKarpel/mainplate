@@ -16,9 +16,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   command holds it. The conversation stays, and the rule under its last turn forks from the end, so
   an archived session comes back as a live one with every turn and a fresh worktree at the files it
   ended with.
-- **What a session is on stands in the rail**, as a card among the cards about the session as a
-  whole: the endpoint and model, the thinking level where one was chosen, the repository and the
-  branch it is on, and what it takes on disk. Nothing sits under the message box any more, and what
+- **What a session is on stands in the rail**, on the session's own card: the endpoint and model,
+  the thinking level where one was chosen, the repository and the branch it is on, and what it takes
+  on disk, a key and a value to a row, with a value that does not fit beside its key dropped whole
+  to the line under it rather than broken mid-word. An archived session says so in one such row,
+  the date, where it was a paragraph. Nothing sits under the message box any more, and what
   sits above it is only what the next press depends on: whether the cache is warm and what
   re-sending costs, and the sentence saying what the press will do. The sentence over a command box
   names the repository and branch a command runs in, which is where somebody about to `git push`
@@ -276,6 +278,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conversation under it. The two clasps stand in a row at the top of the page rather than over the
   corners of what is under them, say `Sessions` and `Controls` rather than a glyph apiece, and the
   console's name stands between them.
+- The rail is three kinds of card: one for reading the conversation, which holds the search, the
+  key and the dock as sections; a card per running plugin; and one for the session, its facts with
+  archiving as the last section. Every row on them is words at the left and a value or a control at
+  the right. A switch is a checkbox drawn in the page's own chrome, on the settings step too. A
+  number's `Set` is a mark against its own box, drawn only while the box holds something
+  unrecorded; the card-wide button is gone. The rail is 16rem at every shape, held short of a
+  phone's far edge, where a wide window's column was 11rem. A number's box drops to the line under
+  a label too long to share one rather than breaking the label beside it. This repository's `pre-commit` card says `attempts per turn` beside its box, where it said
+  `attempts` before the box and `per turn` after it.
 - The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
   this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
   rather than multiplied, since the pitches on either side of the answer are a pixel apart.

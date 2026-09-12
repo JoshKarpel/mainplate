@@ -106,7 +106,15 @@
     /* What lifts a card off the page: the rail's cards, and on a phone the session list's. */
     --lift: 0 2px 12px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
     --sidebar: 17rem;
-    --rail: 11rem;
+    /* One width at every shape, so a card has one layout to be right in, and a wide one, because
+       every card in it is rows of a key at the left and a value or a control at the right, and a
+       row is only a row while the two fit on one line: a repository or a branch beside its key is
+       about twenty-five characters of the monospace face, and the column this was, 11rem, cut every
+       one of them. On a phone it is held short of the far edge, as the session list is. The cost,
+       stated: a wide window's reading measure loses 5rem against the column this was, and at the
+       78rem edge where the rail still stands beside the conversation the transcript is narrower
+       than its measure. */
+    --rail: 16rem;
     --measure: 46rem;
     /* What a grid of cards is laid out in, as against `--measure`, which is what prose is read at.
        A transcript wants a column narrow enough to read a line of; a picker wants room for three
@@ -2679,7 +2687,9 @@ pre > .copy {
         right: var(--space-5);
         bottom: 0.8rem;
         z-index: 10;
-        width: var(--rail);
+        /* The column a wide window draws, held short of the far edge on a phone narrower than that
+           so a sheet slid out still leaves the page it lies over showing at the side. */
+        width: min(var(--rail), calc(100vw - 3.5rem));
         padding: 0;
         /* `clip` on the inline axis, and `visible` still on the block axis, because the sheet is
            parked off the right-hand edge by a transform when the rail is shut. Off-screen by
@@ -2735,6 +2745,20 @@ pre > .copy {
         visibility: visible;
         transform: none;
     }
+}
+
+/* Everything that reads the conversation, on one card: the search, the key and the dock, as
+   sections parted by a rule rather than three cards, so the rail is three kinds of card - reading,
+   a plugin's, the session's - rather than eight things with the same edge. */
+.navigate {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.navigate > * + * {
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--edge);
 }
 
 .search {
@@ -2829,31 +2853,109 @@ mark.hit.current {
     text-transform: uppercase;
 }
 
-/* Two columns rather than a wrap, and the shape is decided rather than whatever the rail's width
-   leaves. Wrapped, `Set` lands on a line of its own reading as a further setting; laid out, it sits
-   beside the last row, and a switch takes the full width because it is a sentence. */
+/* One control to a row, the words at the left and the control at the right, which is the shape of
+   every row in the rail: the facts on the session's card are a key and a value the same way, so a
+   reader scans one column of words and one of values down the whole sheet, and every switch and
+   every box lines up with the others whatever its label's length. */
 .plugin__settings {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: var(--space-2);
 }
 
-.plugin__settings .plugin__switch {
-    grid-column: 1 / -1;
-}
-
-/* `min-width: 0` on the label as well as on the box inside it, and both are load-bearing: a grid
-   item's own floor is its content, so without it a number's track refuses to shrink and pushes `Set`
-   out of the card entirely rather than out of its column. */
+/* `min-width: 0` on the label as well as on the box inside it, and both are load-bearing: a flex
+   item's own floor is its content, so without it a number's row refuses to shrink and pushes its
+   box out of the card rather than cutting its label. */
 .plugin__switch,
 .plugin__number {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    justify-content: space-between;
+    gap: var(--space-3);
     min-width: 0;
     color: var(--ink-soft);
     cursor: pointer;
+}
+
+/* The box comes first in the markup, so a reader with the file absent still gets the browser's own
+   `[x] words` row; here it is drawn at the right, after its words. */
+.plugin__settings .plugin__switch > input {
+    order: 1;
+    margin-left: auto;
+}
+
+/* A checkbox and not a sliding switch, drawn in the page's own chrome: a box with a mark in it says
+   on or off at a glance, where a slider says which end the knob is at. The same box on the settings
+   step, where a tier's switch also has the third state, some of them, drawn as a dash. */
+.plugin__switch > input[type="checkbox"],
+.tier__switch > input[type="checkbox"] {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 1.1em;
+    height: 1.1em;
+    margin: 0;
+    border: 1px solid var(--edge);
+    border-radius: 0.25em;
+    background: var(--sunk);
+    color: var(--ink);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+    appearance: none;
+}
+
+.plugin__switch > input[type="checkbox"]::before,
+.tier__switch > input[type="checkbox"]::before {
+    content: "";
+}
+
+.plugin__switch > input[type="checkbox"]:checked,
+.tier__switch > input[type="checkbox"]:checked,
+.tier__switch > input[type="checkbox"]:indeterminate {
+    border-color: var(--mark);
+    background: color-mix(in srgb, var(--mark) 30%, var(--sunk));
+}
+
+.plugin__switch > input[type="checkbox"]:checked::before,
+.tier__switch > input[type="checkbox"]:checked::before {
+    content: "\2713";
+    font-size: 0.85em;
+    font-weight: 700;
+}
+
+.tier__switch > input[type="checkbox"]:indeterminate::before {
+    content: "";
+    width: 0.55em;
+    height: 2px;
+    background: var(--ink);
+}
+
+/* Where the row does not fit on one line, which `attempts per turn` does not at the phone's size,
+   the box and its unit drop to the line under, still at the right, so a long label costs a line
+   rather than pushing the box out of the card or breaking into two lines of its own beside it. The
+   label is held to one line and cut only where it alone is wider than the row, which no label a
+   card should carry is. */
+.plugin__number {
+    flex-wrap: wrap;
+}
+
+.plugin__number > span:first-child {
+    flex: none;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The box, its unit and its own `Set`, as one item at the right, so they drop together. */
+.plugin__value {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: none;
+    margin-left: auto;
 }
 
 /* Four digits and no more, which is a bound rather than a guess: a control declared in units is
@@ -2892,14 +2994,32 @@ mark.hit.current {
     color: var(--ink);
 }
 
+/* A number's own `Set`, a mark against its box, and drawn only while there is something in the box
+   that has not been recorded: a switch takes effect on the press and a number does not, so a row
+   at rest has nothing to press and shows nothing, and a row somebody has typed in shows the one
+   press that records it, against the figure it records. A `Set` on a row of its own was tried and
+   spent a line on every card whether anything was pending or not.
+
+   The script marks every number row clean or dirty, and a clean row hides its mark. With
+   `mainplate.js` absent nothing marks anything, so the mark is simply always drawn, plain, which is
+   the form working: the tick is the form's submit, and Enter in the box is the same press. */
 .plugin__set {
-    padding: 0.25rem 0.4rem;
+    display: inline-grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
     border: 1px solid var(--edge);
     border-radius: 0.35rem;
     background: transparent;
     color: var(--ink-soft);
     font: inherit;
+    line-height: 1;
     cursor: pointer;
+}
+
+.plugin__number[data-clean] .plugin__set {
+    display: none;
 }
 
 .plugin__set:hover,
@@ -2908,26 +3028,29 @@ mark.hit.current {
     color: var(--mark);
 }
 
-/* A switch takes effect on the press and a number does not, so the button has to say when there is
-   something in a box that has not been recorded. `--mark` is the same gold every control on this page
-   draws its focus ring in, which is what makes it read as "this wants a press" rather than as a
-   warning; the border alone, since filling it would make an unpressed button look pressed.
-
-   With `mainplate.js` absent nothing sets `data-dirty` and the button is simply always plain, which
-   is the state it was in before there was a mark. */
-.plugin__settings[data-dirty] .plugin__set {
+/* `--mark` is the same gold every control on this page draws its focus ring in, which is what makes
+   it read as "this wants a press" rather than as a warning; the border alone, since filling it would
+   make an unpressed button look pressed. */
+.plugin__number[data-dirty] .plugin__set {
     border-color: var(--mark);
     color: var(--mark);
 }
 
-/* What this session is: which model, where its files are, what it holds on disk. Facts and never
-   controls, in the faint ink every figure on this page takes, and in the rail rather than under the
-   message box, where they were read as being about the act of sending and took a row on every
-   window and three on a phone. A plugin card's shape, since it sits among them. */
+/* What this session is, and the control that ends it, on one card: which model, where its files
+   are, what it holds on disk, in the faint ink every figure on this page takes, and archiving as
+   the last section under a rule. In the rail rather than under the message box, where the facts
+   were read as being about the act of sending and took a row on every window and three on a
+   phone. A plugin card's shape, since it sits among them. */
 .about {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+}
+
+.about > .archive {
+    margin-top: var(--space-1);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--edge);
 }
 
 .about__head {
@@ -2936,22 +3059,51 @@ mark.hit.current {
     text-transform: uppercase;
 }
 
-.about__facts {
+/* A card of facts: a key and a value to a row, the key in the head's own faint chrome and the value
+   at the right in the ink every figure here takes. The value is one line, never wrapped: a value
+   broken mid-word across two lines is what made this card read as a mess where the dock beside it
+   reads as a grid.
+
+   What gives way is where the value stands. Beside its key where the two fit on one line, which is
+   most of them; on the line under it, still at the right, where they do not, which is a model id
+   or a repository. Only then, longer than the whole row, is it cut with an ellipsis, and it is whole
+   in its title. A key column sized to its widest word was tried and cut every value on the card to
+   make room for `thinking`. The cost, stated: the values do not line up down the card, since which
+   line each is on depends on its length. */
+.facts {
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
     margin: 0;
-    padding: 0;
-    list-style: none;
+}
+
+.fact {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    column-gap: var(--space-3);
+}
+
+.fact dt {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.fact dd {
+    max-width: 100%;
+    margin: 0 0 0 auto;
+    overflow: hidden;
     color: var(--ink-soft);
-    /* A model id is one unbreakable word longer than this column, so it breaks where it must
-       rather than pushing the card's edge out past the rail's. */
-    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* The card that closes a session, and the fact that somebody did. A plugin card's shape, since it
    sits among them; a disclosure rather than a bare button, so the press is under a sentence saying
-   what it takes off the disk. */
+   what it takes off the disk. Closed, it is one row of facts, the date, in the shape of the card
+   above it. */
 .archive {
     display: flex;
     flex-direction: column;
@@ -2962,6 +3114,9 @@ mark.hit.current {
     color: var(--ink-faint);
     letter-spacing: 0.08em;
     text-transform: uppercase;
+}
+
+summary.archive__head {
     cursor: pointer;
 }
 
@@ -3760,10 +3915,6 @@ main:has(> .forking) {
      arrow under about 44px square is one that gets missed. */
 @media (max-width: 48rem) {
     :root {
-        /* Wider than the column a wide window gives the rail, because everything in it is sized to
-           be hit rather than pointed at. What sets it is the key and the theme, which are words
-           laid out in columns and cannot give way; the dock's three arrows fit well inside that. */
-        --rail: 12.5rem;
         /* A clasp on a phone is pressed rather than pointed at, so it is about 44px tall. Named
            once, because the row across the top of the page is this tall for the two clasps
            standing in it, and the three cannot be allowed to disagree. */

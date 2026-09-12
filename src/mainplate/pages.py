@@ -1973,8 +1973,8 @@ def where_it_works(repository: str, branch: str | None) -> str:
     and on the first turn's own rule; this is where it is now. Conditional for the sessions recorded
     before every one had a branch.
 
-    One function for the card in the rail and the sentence over a command box, so the two cannot
-    spell the same place two ways.
+    The card in the rail says the same two things as two rows rather than through this, because a
+    row holds one value and a sentence holds a phrase; what the two share is the branch itself.
     """
     return f"{repository} @ {branch}" if branch is not None else repository
 
@@ -2008,61 +2008,73 @@ def about_card(
     there is nothing a later fork could put back on disk.
 
     Nothing at all for a session with no choice recorded, which is the window between its row and
-    its first message: a card with a head and no facts would be a heading over nothing.
+    its first message; the card these stand on, drawn by `rail`, still carries archiving then.
+
+    **A row per fact, each with its key**, rather than a list of bare values. Bare, the card was five
+    lines in one ink that a reader had to already know the order of, and a model id longer than the
+    column broke mid-word. A key says what the value is, and a value is one thing on one line, cut
+    with an ellipsis where it does not fit and whole in the row's title, which is what keeps the
+    card the same shape at the rail's width and the phone's. The model is its id after the last
+    slash, since the row above already says which endpoint routes it, and the whole id is the title.
     """
     if chosen is None:
         return None
-    return div(
-        cls="about",
-        attrs={"aria-label": "About this session"},
+    return dl(
+        cls="facts",
         children=[
-            div(cls="about__head", children="about"),
-            ul(
-                cls="about__facts",
-                children=[
-                    li(cls="about__model", children=f"{chosen.endpoint} \N{MIDDLE DOT} {chosen.model}"),
-                    *(
-                        (li(cls="about__thinking", children=f"thinking {name_of_thinking(chosen.thinking)}"),)
-                        if chosen.thinking is not None
-                        else ()
+            *fact("on", chosen.endpoint),
+            *fact("model", chosen.model.rpartition("/")[2], cls="about__model", title=chosen.model),
+            *(
+                fact("thinking", name_of_thinking(chosen.thinking), cls="about__thinking")
+                if chosen.thinking is not None
+                else ()
+            ),
+            *(
+                (
+                    *fact(
+                        "repo",
+                        repository,
+                        cls="worktree",
+                        # The repository is what a reader recognises and the worktree is
+                        # where to point an editor, so one is shown and the other is there
+                        # to be read. No worktree yet is an ordinary state rather than a
+                        # missing one: the first pass makes it, so a session says where it
+                        # works before it has worked.
+                        title=f"This session's worktree: {worktree}"
+                        if worktree is not None
+                        else "This session works here once its first turn runs",
                     ),
-                    *(
-                        (
-                            li(
-                                cls="worktree",
-                                # The repository is what a reader recognises and the worktree is where
-                                # to point an editor, so one is shown and the other is there to be
-                                # read. No worktree yet is an ordinary state rather than a missing
-                                # one: the first pass makes it, so a session says where it works
-                                # before it has worked.
-                                attrs={
-                                    "title": f"This session's worktree: {worktree}"
-                                    if worktree is not None
-                                    else "This session works here once its first turn runs"
-                                },
-                                children=where_it_works(repository, chosen.branch),
-                            ),
-                        )
-                        if repository is not None
-                        else ()
-                    ),
-                    *(
-                        (
-                            li(
-                                cls="footprint",
-                                # On the same terms as the sidebar's figure, which is the same
-                                # sentence behind it, so a row and its page agree.
-                                attrs={"title": footprint_note(footprint)},
-                                children=f"{sized(footprint.allocated)} on disk",
-                            ),
-                        )
-                        if footprint is not None and footprint.allocated
-                        else ()
-                    ),
-                ],
+                    # The branch is what somebody about to `git push` needs, and the one
+                    # part they cannot work out from the repository's name; conditional
+                    # for the sessions recorded before every one had a branch.
+                    *(fact("branch", chosen.branch) if chosen.branch is not None else ()),
+                )
+                if repository is not None
+                else ()
+            ),
+            *(
+                # On the same terms as the sidebar's figure, which is the same sentence
+                # behind it, so a row and its page agree.
+                fact("disk", sized(footprint.allocated), cls="footprint", title=footprint_note(footprint))
+                if footprint is not None and footprint.allocated
+                else ()
             ),
         ],
     )
+
+
+def fact(key: str, value: str, *, cls: str | None = None, title: str | None = None) -> tuple[Element]:
+    """
+    One row of a card of facts: what it is, and what it is, as the pair a `dl` is made of.
+
+    The pair is in a `div` of its own, which a `dl` allows, because the row is what wraps: the
+    stylesheet keeps a value beside its key where it fits and drops it to the line under where it
+    does not, and only a box around the pair can say which. The value carries the class and the
+    title, since the value is what a test finds and what a reader hovers; the key is the same word
+    on every session and needs neither. A one-tuple, so a row is spread into a card's children the
+    same way a conditional row is.
+    """
+    return (div(cls="fact", children=[dt(children=key), dd(cls=cls, attrs={"title": title}, children=value)]),)
 
 
 def written(text: str, *, document: bool = False) -> Element:
@@ -3119,11 +3131,27 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
     )
 
 
+def navigate_card() -> Element:
+    """
+    Everything that reads the conversation, on one card: the search, the key, and the dock.
+
+    One card with three sections rather than three cards, so the rail is three kinds of card, this
+    one, a plugin's, and the session's, rather than a column of things with the same edge. The three
+    read one another: the search and the dock both step what the key leaves in play, so a reader
+    says once what they are looking through, and one card is where that is said.
+    """
+    return div(
+        cls="navigate",
+        attrs={"aria-label": "Reading the conversation"},
+        children=[search_card(), key_card(), dock_card()],
+    )
+
+
 def search_card() -> Element:
     """
     A field that marks every match in the conversation and steps through them.
 
-    Its own card, and no `hx-` attribute anywhere on it: searching what is already on the page is
+    Its own section, and no `hx-` attribute anywhere on it: searching what is already on the page is
     not a question for the server, and asking one would mean a round trip per keystroke to render
     a conversation the browser is already holding.
     """
@@ -3409,23 +3437,38 @@ def plugin_control(control: Switch | Number, held: Setting, plugin: str, form: s
         cls="plugin__number",
         children=[
             span(children=control.label),
-            input_(
-                attrs={
-                    "type": "number",
-                    "name": named,
-                    "value": str(int(held)),
-                    # The bounds the plugin declared, said to the browser as well so the refusal
-                    # usually happens before the post rather than only after it. Re-checked at the
-                    # boundary regardless, because a `min` on an input is a suggestion.
-                    "min": None if control.least is None else str(control.least),
-                    "max": None if control.most is None else str(control.most),
-                    "form": form,
-                    "aria-label": control.label,
-                }
+            span(
+                cls="plugin__value",
+                children=[
+                    input_(
+                        attrs={
+                            "type": "number",
+                            "name": named,
+                            "value": str(int(held)),
+                            # The bounds the plugin declared, said to the browser as well so the
+                            # refusal usually happens before the post rather than only after it.
+                            # Re-checked at the boundary regardless, because a `min` on an input is
+                            # a suggestion.
+                            "min": None if control.least is None else str(control.least),
+                            "max": None if control.most is None else str(control.most),
+                            "form": form,
+                            "aria-label": control.label,
+                        }
+                    ),
+                    # The unit, which is what lets a box hold two digits instead of six. Not part of
+                    # the label's own words, because it belongs after the number rather than before
+                    # it.
+                    *((span(cls="plugin__unit", children=control.unit),) if control.unit else ()),
+                    # The number's own `Set`, against its box: a switch takes effect on the press
+                    # and a number does not, so this is the press that records it, and the
+                    # stylesheet draws it only while there is something in the box to record.
+                    button(
+                        cls="plugin__set",
+                        attrs={"type": "submit", "form": form, "aria-label": f"Set {control.label}", "title": "Set"},
+                        children="\N{CHECK MARK}",
+                    ),
+                ],
             ),
-            # The unit, which is what lets a box hold two digits instead of six. Not part of the
-            # label's own words, because it belongs after the number rather than before it.
-            *((span(cls="plugin__unit", children=control.unit),) if control.unit else ()),
         ],
     )
 
@@ -3446,6 +3489,11 @@ def plugin_card(links: Links, session: str, plugin: Enrolled, settings: Mapping[
 
     A plugin that declared no card gets none here, rather than an empty frame with its name on it: a
     heading over nothing reports a feature rather than a fact.
+
+    There is no `Set` for the card. Each number carries its own, against its box, drawn only while
+    the box holds something unrecorded; see `plugin_control`. A card-wide button on a row of its
+    own was tried and spent a line on every card whether anything was pending or not, and beside
+    the last control it read as that control's alone.
     """
     if plugin.described.card is None:
         return div(cls="plugin", attrs={"hidden": True})
@@ -3475,7 +3523,6 @@ def plugin_card(links: Links, session: str, plugin: Enrolled, settings: Mapping[
                         )
                         for row in card.rows
                     ),
-                    button(cls="plugin__set", attrs={"type": "submit"}, children="Set"),
                 ],
             ),
         ],
@@ -3774,8 +3821,12 @@ def archive_card(links: Links, session: str, archived: datetime | None) -> Eleme
     A plain form answered with a redirect, so it works with the script absent and lands on the page as
     it now is.
 
-    Once pressed, the card is the fact: when, and what became of the files. The way back is the fork
-    on the rule under the last turn, which is where every fork lives, so it is not repeated here.
+    Once pressed, the card is the fact: when, as one row in the shape the card of facts above it
+    draws. What became of the files is the card's title rather than a paragraph under the head,
+    because the sentence was written for the disclosure, where it is a warning before a press; after
+    the fact it is eight lines of prose in a column of controls, and the transcript already ends in
+    the sentence saying why. The way back is the fork on the rule under the last turn, which is
+    where every fork lives, so it is not repeated here.
 
     The same control stands on every live row of the session list, as `archive_action`, so a session
     can be closed without being opened first; the two share `archive_press`, which is the one form.
@@ -3783,15 +3834,15 @@ def archive_card(links: Links, session: str, archived: datetime | None) -> Eleme
     if archived is not None:
         return div(
             cls="archive",
+            attrs={
+                "title": (
+                    "Its worktree and scratch are taken off the disk; the conversation stays, and forking it "
+                    "from the end carries on."
+                )
+            },
             children=[
-                div(cls="archive__head", children="Archived"),
-                p(
-                    cls="archive__says",
-                    children=(
-                        f"Since {archived_on(archived)}. Its worktree and scratch are taken off the disk; "
-                        f"the conversation stays, and forking it from the end carries on."
-                    ),
-                ),
+                div(cls="archive__head", children="archived"),
+                dl(cls="facts", children=[*fact("since", archived_on(archived))]),
             ],
         )
     return details(
@@ -3902,14 +3953,15 @@ def rail(
     inconsistency: a setting is a value the plugin reads when it runs, and being loaded decides what
     is in the prefix.
 
-    **What the session is, and then archiving it, are the last two cards about this session**, under
-    the plugins' cards. `about` is the one card here that is read rather than pressed - which model,
-    where its files are, what it holds on disk - and it stands with the control that ends the
+    **What the session is, and then archiving it, are one card about this session**, under the
+    plugins' cards. `about` is its facts, the part that is read rather than pressed - which model,
+    where its files are, what it holds on disk - and they stand with the control that ends the
     conversation rather than at the top, because a reader opens the rail to search, fold and move,
     and a card of facts ahead of those would push every control down for the sake of things that
-    never change. Archiving is the one control here that ends the conversation rather than steering
-    it: everything above it is something to do while the session runs, and this is what to do when
-    it is over.
+    never change. Archiving is the last section of that card, under a rule: it is the one control
+    here that ends the conversation rather than steering it, so everything above it is something to
+    do while the session runs, and this is what to do when it is over. The card is drawn whether or
+    not there are facts yet, since archiving is offered before the first message.
 
     **The theme goes last, pinned to the bottom by the stylesheet**, because it is the one card here
     that is not about this conversation at all - it is the reader's, across every session - so it is
@@ -3930,17 +3982,22 @@ def rail(
             div(
                 cls="rail__sheet",
                 children=[
-                    search_card(),
-                    key_card(),
-                    dock_card(),
+                    navigate_card(),
                     shelf_card(),
                     *(
                         plugin_card(links, session, plugin, settings_of(plugin.described, tended.of(plugin.qualified)))
                         for plugin in plugins
                         if plugin.described.card is not None
                     ),
-                    about,
-                    archive_card(links, session, archived),
+                    div(
+                        cls="about",
+                        attrs={"aria-label": "About this session"},
+                        children=[
+                            div(cls="about__head", children="session"),
+                            about,
+                            archive_card(links, session, archived),
+                        ],
+                    ),
                     theme_card(),
                 ],
             ),

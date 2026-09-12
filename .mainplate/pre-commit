@@ -257,7 +257,10 @@ def setting_up(payload: dict[str, Any]) -> dict[str, Any]:
             "heading": "pre-commit",
             "rows": [
                 {"switch": {"name": "checks", "label": "before stopping", "default": True}},
-                {"number": {"name": "most", "label": "attempts", "unit": "per turn", "default": MOST, "least": 1}},
+                # The whole phrase as the label and no unit, so the row reads `attempts per turn 3`
+                # with the box at the right. A unit is a symbol after the number, a `K`; as
+                # `attempts [3] per turn` this read as three of something per turn.
+                {"number": {"name": "most", "label": "attempts per turn", "default": MOST, "least": 1}},
             ],
         },
     }

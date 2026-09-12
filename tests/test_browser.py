@@ -782,7 +782,7 @@ class TestTheSessionListOnAPhone:
 
     @pytest.mark.parametrize(
         ("clasp", "above", "below"),
-        [(".sessions__clasp", ".sessions .start", ".sessions ul"), (".rail__clasp", ".search", ".key")],
+        [(".sessions__clasp", ".sessions .start", ".sessions ul"), (".rail__clasp", ".navigate", ".shelf")],
         ids=["sessions", "rail"],
     )
     async def test_a_scroll_over_the_gap_between_two_cards_leaves_the_conversation_put(
@@ -2077,14 +2077,20 @@ class TestAPluginsOwnCard:
         session = await a_conversation(console, page)
         before = await read_tending(service.database, session)
 
+        # At rest the row is marked clean and its own `Set` is not drawn: there is nothing to press.
+        await expect(page.locator(".plugin__number")).to_have_attribute("data-clean", "")
+        await expect(page.locator(".plugin__set")).to_be_hidden()
+
         await page.fill(".plugin__number input", "120")
 
-        await expect(page.locator(".plugin__settings")).to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__number")).to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__set")).to_be_visible()
         assert await read_tending(service.database, session) == before, "typing records nothing"
 
         await page.click(".plugin__set")
 
-        await expect(page.locator(".plugin__settings")).not_to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__number")).to_have_attribute("data-clean", "")
+        await expect(page.locator(".plugin__set")).to_be_hidden()
         assert (await read_tending(service.database, session)).of("bundled:handoff")["reserve"] == 120
 
     async def test_typing_the_recorded_value_back_leaves_nothing_to_press(
@@ -2099,10 +2105,11 @@ class TestAPluginsOwnCard:
         recorded = await box.input_value()
 
         await box.fill("120")
-        await expect(page.locator(".plugin__settings")).to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__number")).to_have_attribute("data-dirty", "")
         await box.fill(recorded)
 
-        await expect(page.locator(".plugin__settings")).not_to_have_attribute("data-dirty", "")
+        await expect(page.locator(".plugin__number")).to_have_attribute("data-clean", "")
+        await expect(page.locator(".plugin__number")).not_to_have_attribute("data-dirty", "")
 
     async def test_the_unit_the_plugin_declared_is_drawn_beside_the_box(
         self, page: Page, console: tuple[str, Service]

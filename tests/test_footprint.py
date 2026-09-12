@@ -206,7 +206,7 @@ class TestWhatAPageSaysASessionTakes:
         assert answered.status == 200
         note = "44 MiB on disk across this session&#39;s worktree, scratch and plugins, measured at 15:09"
         assert f'<span class="footprint" title="{note}">44 MiB</span>' in answered.text
-        assert f'<li class="footprint" title="{note}">44 MiB on disk</li>' in answered.text
+        assert f'<dt>disk</dt><dd class="footprint" title="{note}">44 MiB</dd>' in answered.text
 
     async def test_a_session_measured_at_nothing_draws_no_figure(self, app: ASGIApp, service: Service) -> None:
         """A zero is a claim, and a session that has not worked yet is not worth one."""

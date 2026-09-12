@@ -1317,7 +1317,10 @@ class TestWhatASessionIsOn:
             page = await caller.get(f"/sessions/{session}")
 
         card = page.text[page.text.index('<div class="about"') : page.text.index('class="archive"')]
-        assert f'<li class="about__model">{DEFAULT_CHOICE.endpoint} \N{MIDDLE DOT} {DEFAULT_CHOICE.model}</li>' in card
+        assert f'<div class="fact"><dt>on</dt><dd>{DEFAULT_CHOICE.endpoint}</dd></div>' in card
+        # The id after its last slash, with the whole of it on the row for a reader who hovers.
+        shown = DEFAULT_CHOICE.model.rpartition("/")[2]
+        assert f'<dd class="about__model" title="{DEFAULT_CHOICE.model}">{shown}</dd>' in card
         assert 'class="about__thinking"' not in card, "a session that never raised the question has no level to name"
         composer = page.text[page.text.index('<form class="composer"') : page.text.index("</form>")]
         assert DEFAULT_CHOICE.model not in composer
@@ -1329,7 +1332,7 @@ class TestWhatASessionIsOn:
         async with calling(app) as caller:
             page = await caller.get(f"/sessions/{session.id}")
 
-        assert '<li class="about__thinking">thinking high</li>' in page.text
+        assert '<dt>thinking</dt><dd class="about__thinking">high</dd>' in page.text
 
 
 class TestWhatARuleSays:

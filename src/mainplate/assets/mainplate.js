@@ -894,6 +894,7 @@
       paintCopied();
       paintCache();
       paintDue();
+      paintNumbers();
       research(false);
       if (following) toEnd();
     };
@@ -1641,11 +1642,28 @@
     //
     // Delegated, because that swap replaces the form: a listener wired to the box at load would be
     // pointing at a box that no longer exists after the first press.
+    //
+    // The mark is on the row rather than on the form, because the button is the row's own: a card
+    // with two numbers shows a mark against the one that changed. A clean row is marked as well as
+    // a dirty one, since a clean row hides its button and a row nothing has marked shows it, which
+    // is what keeps the form working with this file absent.
+    const markNumber = (box) => {
+      const row = box.closest(".plugin__number");
+      if (!row) return;
+      const clean = box.value === box.defaultValue;
+      row.toggleAttribute("data-clean", clean);
+      row.toggleAttribute("data-dirty", !clean);
+    };
+
+    const paintNumbers = () => {
+      document.querySelectorAll(".plugin__number input").forEach(markNumber);
+    };
+
     const wireNumbers = () => {
       document.addEventListener("input", (event) => {
         const box = event.target;
-        if (!(box instanceof HTMLInputElement) || !box.closest(".plugin__number")) return;
-        box.form?.toggleAttribute("data-dirty", box.value !== box.defaultValue);
+        if (!(box instanceof HTMLInputElement)) return;
+        markNumber(box);
       });
     };
 

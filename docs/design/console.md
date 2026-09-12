@@ -104,8 +104,10 @@ scrolled, and re-entered by sending a message. `land` therefore has to route its
 bottom and the scroll listener switches following back on at the very moment they asked to be
 somewhere in particular.
 
-The rail (search, key, dock, shelf, a card per running plugin, what the session is, archiving,
-theme) lives **outside** the region that swaps, so no control is rebuilt under a reader's finger. What it projects back *onto* the transcript, the search
+The rail (one card for reading the conversation, which is the search, the key and the dock; the
+shelf; a card per running plugin; one card for the session, which is what it is and archiving it;
+and the theme) lives **outside** the region that swaps, so no control is rebuilt under a reader's
+finger. What it projects back *onto* the transcript, the search
 marks, the panel landed on, which kinds are muted, what is folded, cannot live in the markup either,
 so `assets/mainplate.js` holds it as values and reapplies it after every swap. That projection is
 one idempotent `repaint()` serving the first render, every swap, and every press.
