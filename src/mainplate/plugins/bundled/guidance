@@ -325,14 +325,20 @@ def covering(settled: Path, here: Path) -> tuple[Path, ...]:
     A directory outside the repository yields nothing rather than raising. It cannot arrive from a
     tool, which refuses one long before this, but this reads what a model wrote and a value that
     cannot happen is not one to crash on.
+
+    **Walked downward from the root rather than upward from the directory**, which is the only reading
+    that stops at the root: a walk up the parents runs past it, and the directory holding the
+    repository is somebody else's - a checkout inside a checkout, or a worktree planted under the
+    clone it came from, in which case the next `AGENTS.md` up is a file this session was never given
+    and has no name relative to its root.
     """
     if settled != here and settled not in here.parents:
         return ()
     found: list[Path] = []
-    for each in reversed((here, *here.parents)):
-        if each == settled:
-            continue
-        guidance = guidance_at(each)
+    at = settled
+    for part in here.relative_to(settled).parts:
+        at = at / part
+        guidance = guidance_at(at)
         if guidance is not None:
             found.append(guidance.relative_to(settled))
     return tuple(found)

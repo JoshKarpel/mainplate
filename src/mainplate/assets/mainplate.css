@@ -1364,6 +1364,55 @@ pre > .copy {
     text-align: center;
 }
 
+/* Why nothing is happening, where nothing is and something should be. Every state that draws this is
+   a fault - a pass that fell over, or a session nothing is coming for - so it is in the error's own
+   hue, on a ground faint enough to read as a tint rather than as a filled block.
+
+   **Dashed where `.stalled` is solid, and that is the whole difference between them.** Both say the
+   session has stopped; this one says it will be tried again, so the same red in a broken line rather
+   than a second hue nobody has to learn. Mixed against `--raised` rather than given a value apiece,
+   so both halves follow the theme the tokens already switch. */
+.attention {
+    max-width: 40rem;
+    margin: var(--gap) auto 0;
+    padding: 0.55rem 0.85rem;
+    border: 1px dashed var(--error-edge);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--vermilion) 8%, var(--raised));
+    color: var(--ink-soft);
+    text-align: center;
+}
+
+.attention__said,
+.attention__then {
+    margin: 0;
+}
+
+/* The reason, set apart from the prose either side of it. An exception's `repr` is the one thing in
+   the box a reader has to work through, and it is neither a sentence nor centred text: it gets the
+   monospace face, its own ground, the left margin a wrapped line needs, and room to scroll sideways
+   rather than pushing the document along with it. */
+.attention__reason {
+    position: relative;
+    margin: 0.55rem 0;
+    /* Room on the right for the copy button the script seats in the corner, so the first line of a
+       `repr` does not run under it. */
+    padding: 0.45rem 3.4rem 0.45rem 0.6rem;
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--vermilion) 10%, var(--ground));
+    color: var(--ink);
+    font-size: 0.8rem;
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* The reason is not in a panel, so the panel's own hover rule cannot reach its button. */
+.attention:hover .copy,
+.attention .copy:focus-visible {
+    opacity: 1;
+}
+
 /* --- The box you type in ---------------------------------------------- */
 
 .composer {

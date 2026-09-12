@@ -297,6 +297,34 @@ def setup_refused_key(attempt: int) -> StepKey:
     return f"plugins:setup:{attempt}:refused"
 
 
+FAILED_PREFIX: Final = "failed:"
+"""
+Where a pass that raised says so, and the prefix `progress_in` counts around.
+
+Named rather than spelled at each of the three places that want it - the key builder, the counter
+that must not count these, and the reader that walks them - because a fourth spelling of one word is
+the kind of disagreement nothing reports.
+"""
+
+
+def failed_key(at: int) -> StepKey:
+    """
+    Why the pass that raised at this point raised, keyed by how far the session had got.
+
+    **Not numbered by attempt, which is the whole reason a retried failure does not fill the store.**
+    A pass that falls over at the same place on every delivery computes the same `at` and so claims
+    the same key, and the store keeps the value already there; one that gets further before falling
+    over has a different count and writes a new record. So a session broken for a week holds one of
+    these per point it actually reached rather than one per lease.
+
+    Not turn-prefixed either, and deliberately: a pass can fail before it has reached a turn at all -
+    planting a worktree, reading a declaration, running a setup - and a key naming a turn would have
+    had to invent one for those. Where it *did* get to is `at`, which is a number the page compares
+    rather than a name it parses.
+    """
+    return f"{FAILED_PREFIX}{at}"
+
+
 # What the thinking level is called inside the recorded choice. Named once here because the writer
 # and the reader are both in this file and must not drift, which is the same reason the keys are.
 THINKING_FIELD: Final = "thinking"
@@ -2182,6 +2210,48 @@ def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
         turn += 1
     said = recorded.get(refused_key(turn, len(responded(recorded, turn))))
     return None if said is None else parse_refused(said)
+
+
+def parse_failed(recorded: object) -> records.Failed:
+    """Why one pass raised, read back as the record holding the reason and where it had got to."""
+    return records.Failed.model_validate(recorded)
+
+
+def progress_in(recorded: Mapping[str, object]) -> int:
+    """
+    How far this session has got, as the one number a failure is keyed by and compared against.
+
+    Every record but the failures themselves, because a failure has to be able to say "and nothing
+    has happened since". Counted with them in, the record a failing pass writes would move the number
+    it was just keyed by, so the next delivery would find its own key taken by a different count, and
+    a session broken for a week would hold a record per lease instead of one.
+
+    A count and not a hash, for `Service.token`'s reason: what it is asked is whether anything moved,
+    and a checkpoint is append-only, so nothing else can move it.
+    """
+    return sum(1 for key in recorded if not key.startswith(FAILED_PREFIX))
+
+
+def failure_in(recorded: Mapping[str, object]) -> records.Failed | None:
+    """
+    Why the last pass at this session raised, where one did and nothing has happened since.
+
+    **The liveness test is the whole of this function.** A failure whose `at` is still what the
+    session holds is why the session is stopped right now; one recorded before something later landed
+    is a pass that has since got past it, which is history, and history is what the transcript is
+    for. That is `refusal_in`'s rule said against a count rather than against a turn, and it has to be
+    a count because a pass can fail somewhere no turn names.
+
+    One walk of the records in store order, `ends_in`'s way: the order is the property being used and
+    the store already guarantees it, so the newest failure is the last one this sees.
+    """
+    latest: records.Failed | None = None
+    for key, value in recorded.items():
+        if key.startswith(FAILED_PREFIX):
+            latest = parse_failed(value)
+    if latest is None or latest.at != progress_in(recorded):
+        return None
+    return latest
 
 
 def called_in(responses: Sequence[ModelResponse]) -> Iterator[str]:

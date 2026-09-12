@@ -62,6 +62,7 @@ type StepKind = Literal[
     "heard",
     "model",
     "refused",
+    "failed",
     "tool",
     "messages",
     "plugins",
@@ -372,6 +373,36 @@ class Refused(Record):
 
     why: str
     status: int | None = None
+
+
+class Failed(Record):
+    """
+    Why the last pass at this session raised, where one did, and how far it had got.
+
+    **`Refused`'s opposite, which is why it is a second record and not a second reading of that
+    one.** A refusal is settled: the provider will not take the request and no pass ever will, so it
+    is recorded once, the pass reports `Stalled`, and nothing wakes the session again. This is a pass
+    that fell over, on a plugin that exited non-zero, a tool that raised, a store that was briefly
+    unreachable, or a bug - and every one of those is something that can be *fixed*, after which the
+    redelivery the worker was already going to make resumes the session from where it stopped. So the
+    reason is written down and the failure is still re-raised, which is what keeps the retry.
+
+    **`at` is how many records the session held when the pass fell over**, counting every key but
+    these, and it is what makes one of these sound in a write-once store. A pass that fails at the
+    same point writes the same key and the store keeps what is there, so a session failing for ever
+    accumulates one record rather than one per lease. A pass that gets further and then fails has a
+    different count and so writes a new one. And it is what the page asks to tell a current failure
+    from a spent one: this is why the session is stopped exactly while `at` is still what the session
+    holds, because anything recorded since is a pass that got past it.
+
+    Named for what happened rather than for what it is about, because there is nothing it is about:
+    the failure is of the pass, and where the pass was is `at`.
+    """
+
+    kind: Literal["failed"] = "failed"
+
+    why: str
+    at: int = 0
 
 
 class Returned(Record):

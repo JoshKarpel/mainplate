@@ -76,6 +76,10 @@ from mainplate.conversation import Progressed
 from mainplate.conversation import Stalled
 from mainplate.conversation import Unconfirmed
 from mainplate.conversation import conversing
+from mainplate.conversation import failed_key
+from mainplate.conversation import parse_failed
+from mainplate.conversation import progress_in
+from mainplate.durability import as_recorded
 from mainplate.exe import ExeDevGitHub
 from mainplate.forge import Clones
 from mainplate.forge import Forge
@@ -292,35 +296,39 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     ) as service:
         answering = work(
             service.durable,
-            readying(
-                service.durable,
-                conversing(
-                    endpoints,
-                    settings.instructions,
-                    workspaces,
-                    bwrap=bwrap,
-                    # The holders rather than what they currently hold, so a turn is priced at the
-                    # rates in force when it ran. What that costs the worker is two dictionary
-                    # lookups per model request; what it buys is a figure in the checkpoint that
-                    # nothing later re-derives, so a session's total means the same thing next month
-                    # as today.
-                    prices=Prices(catalogues=catalogues, references=references),
-                    allowance=settings.allowance,
-                    # The database rather than the `Service`, because what a pass needs is two
-                    # columns of one row and a `Service` is every question a request handler may ask.
-                    # Given these, a pass can read what a session's plugins are set to and write what
-                    # one of them remembers; given neither, every plugin runs on its declared
-                    # defaults and forgets everything between events.
-                    tendings=partial(read_tending, service.database),
-                    storings=partial(set_settings, service.database),
-                    declaring=declaring,
-                    # The whole `Durable` rather than the checkpointer a pass already holds, because
-                    # a note put in an inbox *queues* the session as well as being recorded: an entry
-                    # appended mid-pass is invisible to the pass that appended it, so a plugin's
-                    # delivery made that way would leave the session waiting on a message already in
-                    # its own inbox with nothing that will ever wake it.
-                    delivering=delivering(service.durable),
-                ),
+            # Outermost, so nothing a pass can raise goes unreported: not the conversation's own
+            # failures, and not `readying`'s calls to the queue either.
+            reporting(
+                readying(
+                    service.durable,
+                    conversing(
+                        endpoints,
+                        settings.instructions,
+                        workspaces,
+                        bwrap=bwrap,
+                        # The holders rather than what they currently hold, so a turn is priced at the
+                        # rates in force when it ran. What that costs the worker is two dictionary
+                        # lookups per model request; what it buys is a figure in the checkpoint that
+                        # nothing later re-derives, so a session's total means the same thing next
+                        # month as today.
+                        prices=Prices(catalogues=catalogues, references=references),
+                        allowance=settings.allowance,
+                        # The database rather than the `Service`, because what a pass needs is two
+                        # columns of one row and a `Service` is every question a request handler may
+                        # ask. Given these, a pass can read what a session's plugins are set to and
+                        # write what one of them remembers; given neither, every plugin runs on its
+                        # declared defaults and forgets everything between events.
+                        tendings=partial(read_tending, service.database),
+                        storings=partial(set_settings, service.database),
+                        declaring=declaring,
+                        # The whole `Durable` rather than the checkpointer a pass already holds,
+                        # because a note put in an inbox *queues* the session as well as being
+                        # recorded: an entry appended mid-pass is invisible to the pass that appended
+                        # it, so a plugin's delivery made that way would leave the session waiting on
+                        # a message already in its own inbox with nothing that will ever wake it.
+                        delivering=delivering(service.durable),
+                    ),
+                )
             ),
             limit=settings.passes,
         )
@@ -356,6 +364,55 @@ def delivering(durable: Durable) -> Callable[[str, records.Note], Awaitable[None
         await durable.deliver(session, note.recorded())
 
     return deliver
+
+
+def reporting(answer: Callable[[Run], Awaitable[None]]) -> Callable[[Run], Awaitable[None]]:
+    """
+    A pass that falls over says so where the page can read it, and still falls over.
+
+    **The re-raise is the point rather than an afterthought.** A plugin that exits non-zero, a tool
+    that raises, a store that blinks: every one of those is something somebody can fix, and the
+    worker's own answer to a raised pass - leave the delivery unanswered, redeliver when the lease
+    elapses - is what resumes the session from the step it stopped at once they have. Recording the
+    reason and returning would take that away and turn a fixable fault into a session nothing ever
+    looks at again. So this adds a sentence and changes no control flow.
+
+    **What it closes is a session that is stuck with nothing saying so.** Before it, the whole account
+    of a broken pass was a log line in the worker: the page drew the same three dots it draws for a
+    reply being written, and the two were indistinguishable for as long as the failure lasted. What a
+    reader is owed there is which of them it is.
+
+    Here rather than in `conversation.py` for `readying`'s reason, and outside it for one more: what a
+    pass raises is not only the conversation's, since `readying` itself calls the queue.
+
+    `Exception` and not `BaseException`, which is what the durability layer's own hierarchy asks for.
+    A suspension and a lost claim are `Interruption`s precisely so that a driver's `except Exception`
+    cannot absorb one, and neither is a failure: one is something the pass *did* and the other says
+    there was no pass here to have an outcome. A `Fenced` raised by the write below travels for the
+    same reason - another pass owns the workflow, and this one has nothing left to report about it.
+
+    A store that will not take the record leaves the original failure the only one worth raising. The
+    write is the diagnostic and the exception is the fault, so a diagnostic that cannot be filed is
+    logged and dropped rather than replacing what it was describing.
+    """
+
+    async def report(run: Run) -> None:
+        try:
+            await answer(run)
+        except Exception as raised:
+            # Where the session had got to when it fell over, read off the snapshot this pass has been
+            # keeping current. It is also the key, so a pass that falls over here again on the next
+            # delivery claims the name this one wrote rather than adding to it.
+            at = progress_in(run.recorded)
+            fell = records.Failed(why=f"{raised!r}", at=at)
+            logger.warning(f"{run.workflow} failed at {at} records: {raised!r}")
+            try:
+                await run.step(failed_key(at), partial(as_recorded, fell), parse_failed)
+            except Exception as unrecorded:  # noqa: BLE001 - the fault is what raised, not the note about it
+                logger.error(f"{run.workflow} failed and the reason could not be recorded: {unrecorded!r}")
+            raise
+
+    return report
 
 
 def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> Callable[[Run], Awaitable[None]]:

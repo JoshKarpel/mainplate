@@ -70,9 +70,12 @@ Three things about that connection are decided rather than incidental:
   thing a stream sends is the current state: what a page that has just connected needs and what one
   connected for an hour needs are the same thing.
 - **The server notices by polling a change token**, not by being told. `Service.token` counts a
-  session's recorded steps, which is sound because a checkpoint is append-only and cheap because it
-  decodes none of them. The two halves of the process stay joined only by the store, exactly as they
-  would be if the worker were elsewhere.
+  session's recorded steps and reads where it stands with the worker, which is cheap because it
+  decodes no value and is three rows by primary key. The two halves of the process stay joined only
+  by the store, exactly as they would be if the worker were elsewhere. The worker's standing is in
+  there because a pass that falls over records *nothing*, so a token made of the count alone holds
+  still while the page sits under a spinner; see
+  [what the worker is doing about a session](durability.md#what-the-worker-is-doing-about-a-session).
 
 The transcript swaps with **`outerMorph`**, and that is what lets a turn be watched: a turn records
 several times while it runs, so a replacement would shut a call the reader opened to watch, over and
@@ -483,6 +486,25 @@ it of the turn being answered rather than of the last panel on the page, because
 while a reply is coming and what is at the bottom may be their message. A *command* running is not
 this: it runs outside the conversation and no model was told about it, so it says nothing about
 whether one is answering.
+
+**The dots are the answer only where nothing is wrong, and where something is there is a line
+instead.** A reply being written and a session no worker will ever pick up drew the same three dots,
+for as long as the second lasted, which made a broken pass a thing nobody could see. So the end of a
+transcript draws one of three things and never two: [a refusal](durability.md#a-pass-that-falls-over),
+which outranks the rest because it is the only one nothing is waiting on; the `.attention` line,
+saying why nothing is happening where something should be; or the dots, which is what a reply being
+written actually looks like.
+
+`waiting_for` speaks on a **recorded failure** rather than on the worker's standing, which is what
+keeps it quiet: a held-back delivery is ordinary for a store round trip on every pass, so a line drawn
+on that alone would talk through healthy turns. The one exception is a session nothing is scheduled
+for at all, which no race produces. The reason is set apart from the prose either side of it, in the
+monospace face with a copy button of its own, because an exception's `repr` is the one thing in the
+box a reader has to work through and is neither a sentence nor centred text. The countdown beside it
+is the [cache note's](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) bargain one
+field along: the server renders the figure and `data-due` lets the script keep it current, since the
+stream sends this region when the worker's standing *changes* and counting down is exactly the
+interval where it does not.
 
 **A panel whose default would otherwise move carries the working dots on its own row instead.** The
 panel saying a reply is being written, and a stretch of context whose instructions no pass has

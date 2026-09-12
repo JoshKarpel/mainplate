@@ -70,6 +70,8 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
 from mainplate.conversation import conversing
+from mainplate.conversation import failed_key
+from mainplate.conversation import failure_in
 from mainplate.conversation import heard_key
 from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
@@ -81,6 +83,7 @@ from mainplate.conversation import parse_delivered
 from mainplate.conversation import parse_instructions
 from mainplate.conversation import parse_messages
 from mainplate.conversation import parted
+from mainplate.conversation import progress_in
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_instructions
@@ -1513,6 +1516,66 @@ class TestReadingBackWhatWasAlreadyRecorded:
         """Reading a retired name back is not the same as accepting anything at all."""
         with pytest.raises(TypeError, match="is not a filesystem this console knows"):
             parse_choice({"endpoint": "here", "model": "m", "isolation": {"filesystem": "everywhere"}})
+
+
+class TestAPassThatFellOver:
+    """
+    What a session holds about a pass that raised, which is a different thing from one that was
+    refused and is read differently for that reason.
+
+    A refusal is settled and stops the session; this is a fault somebody can fix, so it is recorded
+    *and* re-raised, and the worker's redelivery is what resumes the session once they have. What the
+    record has to be good for is two questions the page asks: what fell over, and whether that is why
+    the session is stopped right now.
+    """
+
+    def test_how_far_a_session_has_got_counts_every_record_but_the_failures(self) -> None:
+        """
+        Which is what keeps a retried failure to one record instead of one per lease.
+
+        Counted with them in, the record a failing pass writes would move the number it was just
+        keyed by, so the next delivery at the same point would find a different key free and write
+        again, for ever.
+        """
+        recorded: dict[str, object] = {CHOICE_KEY: {}, inbox_key(0): {}, failed_key(2): {}}
+
+        assert progress_in(recorded) == 2
+        assert failed_key(2) == "failed:2", "the literal, so a drift in the builder fails here"
+
+    def test_a_failure_is_why_the_session_is_stopped_only_while_nothing_has_happened_since(self) -> None:
+        """
+        `refusal_in`'s rule against a count rather than against a turn, and it has to be a count
+        because a pass can fall over somewhere no turn names: planting a worktree, reading a
+        declaration, running a setup.
+        """
+        fell = records.Failed(why="PluginFailed('checks exited 1')", at=2).recorded()
+        stopped = {CHOICE_KEY: {}, inbox_key(0): {}, failed_key(2): fell}
+        moved = {**stopped, messages_key(0): {}}
+
+        current = failure_in(stopped)
+        assert current is not None
+        assert "checks exited 1" in current.why
+        assert failure_in(moved) is None, "something got past it, so it is history and the transcript has it"
+
+    def test_the_newest_failure_is_the_one_read(self) -> None:
+        """
+        A session that got further and fell over again has two, and only the second says why it is
+        stopped now. Read by walking the records in store order, which is the order `load` promises.
+        """
+        recorded = {
+            CHOICE_KEY: {},
+            failed_key(1): records.Failed(why="the first thing", at=1).recorded(),
+            inbox_key(0): {},
+            failed_key(2): records.Failed(why="the second thing", at=2).recorded(),
+        }
+
+        current = failure_in(recorded)
+        assert current is not None
+        assert current.why == "the second thing"
+
+    def test_nothing_is_read_where_no_pass_has_fallen_over(self) -> None:
+        """The control, and the ordinary case: the page says nothing where there is nothing to say."""
+        assert failure_in({CHOICE_KEY: {}, inbox_key(0): {}}) is None
 
 
 class TestARequestTheProviderWillNotTake:

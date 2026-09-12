@@ -3125,3 +3125,59 @@ class TestTheFocusRingHasRoomToBeDrawn:
         assert room["reach"] > 0, "the focused field has no ring to leave room for"
         assert room["left"] >= room["reach"]
         assert room["right"] >= room["reach"]
+
+
+class TestTheLineWhereNothingIsHappening:
+    """
+    The box at the end of a transcript that says why nothing is happening, and the two things on it
+    a still cannot show.
+
+    Both are script, and both are the difference between a page that is waiting and a page that is
+    stuck. The countdown moves while the page holds still, which is exactly the interval the stream
+    sends nothing in, so a server-rendered figure would sit at its first value for the whole wait.
+    The copy button is seated by the same walk that seats a panel's, and it is outside a panel, so a
+    change to that walk takes it away with nothing else noticing.
+    """
+
+    async def test_the_reason_is_copyable(self, page: Page, gallery: str) -> None:
+        """
+        Which is the whole point of setting it apart: it is the one thing on the page somebody pastes
+        into an issue, a search, or a message to whoever wrote the plugin.
+        """
+        await page.goto(f"{gallery}/failed.html", wait_until="load")
+        reason = page.locator("#attention .attention__reason")
+        button = reason.locator("button.copy")
+
+        await expect(button).to_have_count(1)
+        assert (await reason.inner_text()).startswith("PluginFailed"), "and the reason is really under it"
+
+    async def test_the_countdown_moves_while_the_page_holds_still(self, page: Page, gallery: str) -> None:
+        """
+        Driven by moving the clock rather than by waiting, so this costs no wall time and cannot be
+        flaky: what is under test is that the figure is computed from `data-due` and the time since
+        the element was seen, not that a timer fires.
+        """
+        await page.goto(f"{gallery}/failed.html", wait_until="load")
+        due = page.locator("#attention .attention__due")
+        before = await due.inner_text()
+
+        moved = await page.evaluate(
+            """() => {
+                const line = document.getElementById("attention");
+                line.seenAt = Date.now() - 300_000;
+                return Number(line.dataset.due);
+            }"""
+        )
+        await page.evaluate("() => document.dispatchEvent(new CustomEvent('htmx:after:swap'))")
+
+        assert moved > 0, "the control: the server really did hand over a figure to count down from"
+        await expect(due).not_to_have_text(before)
+
+    async def test_a_page_with_nothing_wrong_draws_no_such_line(self, page: Page, gallery: str) -> None:
+        """
+        The control the rest of this rests on. A line drawn through healthy turns would be a console
+        that cries wolf, and every ordinary page here is one where nothing is wrong.
+        """
+        await page.goto(f"{gallery}/answering.html", wait_until="load")
+
+        await expect(page.locator("#attention")).to_have_count(0)

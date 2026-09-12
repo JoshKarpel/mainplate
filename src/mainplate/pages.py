@@ -118,7 +118,11 @@ from mainplate.reference import Described
 from mainplate.reference import Reference
 from mainplate.reference import describe
 from mainplate.sandbox import Filesystem
+from mainplate.service import Claimed
 from mainplate.service import Conversation
+from mainplate.service import Delayed
+from mainplate.service import Idle
+from mainplate.service import Queued
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
 from mainplate.sessions import Session
@@ -2937,10 +2941,18 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
                     )
             drawn.append(panel_element(links, session, panel))
         before = through
-    if said.awaiting and stalled is None and not out_on_a_call(said):
-        drawn.append(waiting_panel())
+    # What is happening at the end of the conversation, as one of three things and never two. A
+    # refusal outranks the rest because it is the only one nothing can be waiting on; then why nothing
+    # is happening, where something should be; and the dots last, which is what a reply being written
+    # actually looks like. A call still out is already drawn working on its own panel, so the dots are
+    # left off there and the sentence is not: a pass can fall over with a call outstanding.
+    waiting = None if stalled is not None else waiting_for(showing)
     if stalled is not None:
         drawn.append(p(cls="stalled", children=stalled))
+    elif waiting is not None:
+        drawn.append(attention_element(showing, waiting))
+    elif said.awaiting and not out_on_a_call(said):
+        drawn.append(waiting_panel())
     return div(
         cls="transcript",
         attrs={"id": TRANSCRIPT_ID},
@@ -4277,6 +4289,131 @@ def stalled_by(showing: Conversation) -> str | None:
     return (
         f"The provider refused this turn{coded} and would refuse it again, so nothing is waiting on "
         f"it: {said}. Fork at this turn to carry on without the requests it made."
+    )
+
+
+DUE_FIELD: Final = "data-due"
+"""
+How long until the next pass at this session is due, in seconds, as of this render.
+
+Read by `paintDue`, which is what keeps the figure current: the stream sends this region when the
+worker's standing *changes*, and counting down is exactly the interval where it does not. The word is
+here rather than at both ends, for `CACHE_ID`'s reason.
+"""
+
+ATTENTION_ID: Final = "attention"
+"""The one line saying why nothing is happening, where nothing is and something should be."""
+
+
+@dataclass(frozen=True, slots=True)
+class Waiting:
+    """
+    Why nothing is happening to this session, in the three parts the line is drawn from.
+
+    **Three parts and not one sentence, because one of them is not prose.** `reason` is an exception's
+    `repr`: it can be a line or a paragraph, it is full of quotes and brackets and paths, and it is
+    the one thing in the box a reader has to actually read. Run together with the text either side of
+    it, it is a wall nobody can find the edges of, so the page sets it apart and this is what lets it.
+
+    `then` is what happens next, which is the half that makes this different from a refusal: the
+    session is coming back, and saying so is what turns an error into a wait. Absent only where the
+    statement is already the whole of it.
+    """
+
+    said: str
+    reason: str | None = None
+    then: str | None = None
+
+
+def waiting_for(showing: Conversation) -> Waiting | None:
+    """
+    Why nothing is happening to this session, where something should be and nothing is.
+
+    **The dots are the answer for every ordinary state, and this is the answer for the ones they lie
+    about.** A reply being written and a session no worker will ever pick up drew the same three dots,
+    for as long as the second lasted, which made a broken pass a thing nobody could see. So this
+    speaks only where the dots would be wrong, and the caller draws them where it returns nothing.
+
+    **Driven by the recorded failure rather than by the worker's standing**, which is what keeps it
+    quiet. A delivery held back is ordinary for a moment on every pass - the queue reserves the row
+    before the claim lands - so a line drawn on `Delayed` alone would flash "nothing is answering
+    this" through healthy turns. A live failure is what tells a held-back delivery the worker is
+    waiting out from the one nobody is coming back to, and `failure_in` is what makes it live.
+
+    **The exception is a session nothing is scheduled for at all.** There is no race that produces one
+    with something outstanding: a message and the row that queues it are written in a single commit,
+    and a pass asks for the next one from inside itself, so this state is a session that has genuinely
+    been dropped and is worth saying so about even with no reason recorded.
+
+    Nothing at all where nothing is outstanding and nothing failed, which is a settled conversation:
+    there is nothing to be stuck about, so there is nothing to say.
+
+    It says why the session is stopped and not *when* it resumes, which is `attention_element`'s half:
+    one of these is a fact that will read the same in an hour and the other is a figure that is wrong
+    a second later, so only the second needs the script.
+    """
+    failed = showing.failed
+    if not showing.said.awaiting and failed is None:
+        return None
+    fell = "The last pass at this session failed." if failed is not None else None
+    why = None if failed is None else failed.why
+    match showing.attention:
+        case Claimed():
+            return None if fell is None else Waiting(said=fell, reason=why, then="Another pass is answering it now.")
+        case Queued():
+            return None if fell is None else Waiting(said=fell, reason=why, then="It is queued for another pass.")
+        case Delayed():
+            # **It does not promise the retry will work**, and that is deliberate rather than hedging.
+            # Most of what lands here is fixable and the next pass carries on from where this one
+            # stopped; some of it is not, because what a pass replays is *recorded*, so a response the
+            # agent will not accept is one every later pass will also not accept. Nothing here can
+            # tell those apart, so it says what the mechanism does and names the way out of the second
+            # - which is `stalled_by`'s way out, for the same reason: forking drops the turn's own
+            # requests and keeps everything under them.
+            carrying = "It will be tried again, carrying on from here. Fork at this turn if it keeps failing."
+            return None if fell is None else Waiting(said=fell, reason=why, then=carrying)
+        case Idle():
+            nothing = "Nothing is answering this session and nothing is scheduled to."
+            return Waiting(said=nothing) if fell is None else Waiting(said=fell, reason=why, then=nothing)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def attention_element(showing: Conversation, waiting: Waiting) -> Element:
+    """
+    Why nothing is happening and how long until something does, with the reason set apart.
+
+    **Three children rather than one paragraph**, which is what makes the reason readable: it is an
+    exception's `repr`, so it is the one thing in the box a reader has to work through, and it sits in
+    a block of its own in the monospace face with the prose above and below it. Centred prose around a
+    left-aligned block, because a `repr` that wraps is unreadable centred and a one-line statement is
+    not.
+
+    **The server renders the figure and the script keeps it current**, which is `cache_note`'s bargain
+    one field along and for the same reason: the stream sends this region when the worker's standing
+    changes, and counting down is exactly the interval where it does not. `data-due` is what the script
+    measures from, against its own clock from the moment it first saw the element, so no two machines'
+    clocks are subtracted. A reader with no script gets the wait as it was when the page was drawn,
+    which is a figure that goes stale rather than a sentence that is missing.
+
+    The figure is only on the one arm that has one, and the sentence before it reads correctly alone.
+    """
+    due = showing.attention.until if isinstance(showing.attention, Delayed) else None
+    then: list[Element | str] = [] if waiting.then is None else [waiting.then]
+    if due is not None and waiting.then is not None:
+        then.extend((" Due in ", span(cls="attention__due", children=elapsed(due)), "."))
+    return div(
+        cls="attention",
+        attrs={"id": ATTENTION_ID, **({DUE_FIELD: f"{due.total_seconds():.0f}"} if due is not None else {})},
+        children=[
+            p(cls="attention__said", children=waiting.said),
+            *(
+                ()
+                if waiting.reason is None
+                else (pre(cls="attention__reason", children=code(children=waiting.reason)),)
+            ),
+            *(() if not then else (p(cls="attention__then", children=then),)),
+        ],
     )
 
 

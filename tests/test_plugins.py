@@ -1019,6 +1019,38 @@ class TestTheBundledGuidance:
         )
         assert answered.inject == ()
 
+    async def test_a_guidance_file_above_the_repository_is_not_reached_for(
+        self, guidance: Path, repository: Path, tmp_path: Path
+    ) -> None:
+        """
+        A worktree planted under the clone it came from has this console's own `AGENTS.md` one
+        directory up, and that file was never given to the session and has no name relative to its
+        root. A walk up the parents runs past the root and finds it, which is a plugin that fails on
+        every request after the model reads anything nested - and a plugin that fails is a turn that
+        never makes its next request.
+        """
+        (tmp_path / "AGENTS.md").write_text("Somebody else's project, and not this session's.\n")
+        messages = [
+            {
+                "kind": "response",
+                "parts": [
+                    {
+                        "part_kind": "tool-call",
+                        "tool_name": "read",
+                        "args": {"path": "apps/web/main.py"},
+                        "tool_call_id": "c1",
+                    }
+                ],
+            }
+        ]
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked(guidance, spoken(event="before_request", worktree=str(repository), messages=messages)),
+        )
+        assert len(answered.inject) == 1
+        assert "Use the design tokens." in answered.inject[0]
+        assert "Somebody else's project" not in answered.inject[0]
+
 
 class TestWhatTheBundledSetIs:
     def test_every_bundled_plugin_is_an_executable_that_describes_itself(self) -> None:

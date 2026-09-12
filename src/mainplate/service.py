@@ -40,6 +40,7 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import declared_in
+from mainplate.conversation import failure_in
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
@@ -83,10 +84,136 @@ from mainplate.sessions import set_settings
 from mainplate.sessions import switch
 from mainplate.settings import DEFAULT_WATCHING
 
-# How many steps a session has recorded. A count and not a hash of them, because what it is asked
-# for is whether to look again rather than what changed, and the store's own primary key already
-# orders the rows this scans.
-RECORDED = "SELECT COUNT(*) FROM workflow_checkpoint WHERE workflow = ?"
+# How many steps a session has recorded, whether a pass holds it, and when the queue next hands it
+# over. A count rather than a hash of the steps, because what it is asked for is whether to look again
+# rather than what changed, and the store's own primary key already orders the rows this scans.
+#
+# The two moments come back as the store wrote them, with the store's own now beside them, rather
+# than as durations already subtracted. Both readings need them that way: `attention` subtracts, so
+# that the one clock either moment was written against is the one it is measured against and no two
+# machines' clocks ever meet; and `token` must not, because a duration shrinks between two polls with
+# nothing having happened, and a token that moves on its own is a page that re-renders for ever.
+# `NULL` from either subquery is a row that does not exist, which is its own answer in both cases.
+#
+# NOTE: `workflow_claim` and `workflow_queue` are `without-durability-sqlite`'s own tables, read here
+# for the same reason and with the same cost as the count above. See `Service.attended`.
+ATTENDED = """
+SELECT
+    (SELECT COUNT(*) FROM workflow_checkpoint WHERE workflow = :workflow),
+    (SELECT held_until FROM workflow_claim WHERE workflow = :workflow),
+    (SELECT visible_at FROM workflow_queue WHERE namespace = :namespace AND workflow = :workflow),
+    unixepoch('now', 'subsec')
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class Claimed:
+    """A pass holds this session right now, which is what a live claim on it means."""
+
+
+@dataclass(frozen=True, slots=True)
+class Queued:
+    """No pass holds this session and the queue will hand it to the next worker that reads."""
+
+
+@dataclass(frozen=True, slots=True)
+class Delayed:
+    """
+    No pass holds this session and the delivery for it is held back until `until` from now.
+
+    Which is what a pass that fell over leaves behind: the worker deliberately does not answer for a
+    delivery whose pass raised, so the queue keeps the row it reserved and reclaims it once the lease
+    elapses. That is the state this whole reading exists to name, because on the page it used to be
+    indistinguishable from a reply being written.
+
+    A duration and not a moment, so the page never subtracts two machines' clocks: the store measured
+    it against its own, and the script counts down from what it was handed. `cache_note` is the same
+    bargain one field along.
+    """
+
+    until: timedelta
+
+
+@dataclass(frozen=True, slots=True)
+class Idle:
+    """
+    No pass holds this session and nothing is scheduled to.
+
+    The ordinary state of a settled conversation, and a real fault where something is outstanding:
+    a message nobody will ever answer, which nothing else on the page can show.
+    """
+
+
+type Attention = Claimed | Queued | Delayed | Idle
+"""
+What the worker is doing about one session, as the claim and the queue answer between them.
+
+**Not a fact about the conversation, so it is not in the checkpoint and must not be.** It is live
+control-plane state that changes several times per pass and is true only at the instant it is read,
+where a checkpoint holds what was said and never changes at all. Read on every render, next to the
+count that decides whether to render.
+
+Four arms rather than two booleans, because two of the four combinations cannot happen and a reader
+of a pair would have to know which. A sealed union in the shape `Ended` already has here.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class Attended:
+    """
+    One reading of what the store holds about a session outside its checkpoint values.
+
+    The raw four, so that the two things made of them are made of the same one: `attention_of` reads a
+    state and `Service.token` reads a change token, and a token built from the state would have to be
+    built from words.
+
+    Unix seconds and not `datetime`s, because they are the store's own numbers and the only thing done
+    with them is comparing two of them against a third that came back beside them.
+    """
+
+    recorded: int
+    held_until: float | None
+    due_at: float | None
+    asked_at: float
+
+
+def attention_of(attended: Attended) -> Attention:
+    """
+    What the worker is doing about a session, out of what the store said about it.
+
+    The claim is asked first and settles it, because a live claim *is* a pass in flight and a queue row
+    beside one is only the delivery that pass is answering for. A claim outliving the process that took
+    it reads as held until its lease elapses, which is the honest answer rather than a wrong one: the
+    claim is what stops another worker starting, so for that interval a pass genuinely does hold the
+    session, and `reclaim` is what ends it.
+
+    With no claim, the delivery says the rest. Due already is a session the next worker read will take;
+    due later is one held back, which is what the worker leaving a failed pass's delivery unanswered
+    produces; no row at all is a session nothing is coming for.
+
+    Pure, and taking the reading rather than the session, so the states a page draws are testable
+    without a store: four values in, one arm out.
+    """
+    if attended.held_until is not None and attended.held_until > attended.asked_at:
+        return Claimed()
+    if attended.due_at is None:
+        return Idle()
+    waiting = attended.due_at - attended.asked_at
+    return Queued() if waiting <= 0 else Delayed(until=timedelta(seconds=waiting))
+
+
+def token_of(attended: Attended) -> str:
+    """
+    Whether a session is worth reading again, out of what the store said about it.
+
+    **`asked_at` is the one field deliberately not in it**, and that is the whole of this function. The
+    two moments go in as the store wrote them, so a reading taken a second later is the same token;
+    put in as durations they would shrink between two polls with nothing having happened, and a token
+    that differs from itself is a page that re-renders for ever. Pure and separate from `attention_of`
+    for exactly that reason: the difference between the two is which fields each is allowed to touch,
+    which is a thing a test can hold rather than a thing a reader has to notice.
+    """
+    return f"{attended.recorded}:{attended.held_until}:{attended.due_at}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +249,35 @@ class Conversation:
     It is about the turn being answered rather than about any turn in the conversation. A refusal
     recorded against a turn that later answered is history, and history is what the transcript is
     for; only a refusal on the turn nothing has got past says the session has stopped.
+    """
+
+    failed: records.Failed | None = None
+    """
+    Why the last pass at this session raised, where one did and nothing has happened since.
+
+    **The fourth way to be stuck, and the only one that gets better on its own.** A missing endpoint
+    needs a configuration file put back, a refused request needs a fork, and a setup that would not
+    run needs a switch moved; this needs the plugin, the tool or the store that fell over to be fixed,
+    after which the redelivery the worker was already going to make carries on from where the pass
+    stopped. So the sentence says what fell over *and* that it will be tried again, which is the one
+    of the four where waiting is the right thing to do.
+
+    Read against how far the session has got, so a failure something later got past is history. See
+    `failure_in`.
+    """
+
+    attention: Attention = field(default_factory=Idle)
+    """
+    What the worker is doing about this session right now: whether a pass holds it, and when the next
+    one is due.
+
+    **The one field here that is not read from the checkpoint and is not configuration either.** It is
+    the store's claim and queue rows, which are live control-plane state, and it is here because the
+    page had no way to tell a reply being written from a session nothing was ever going to pick up:
+    both drew the same three dots, for as long as the second lasted.
+
+    `Idle` by default, which is what a `Conversation` built with no store behind it should say: the
+    gallery renders from fixtures and a fixture has no worker.
     """
 
     repository: str | None = None
@@ -419,6 +575,11 @@ class Service:
             refused_setup=None if registered is not None else setup_refused_in(recorded),
             answerable=chosen is not None and self.catalogues.current.models_of(chosen.endpoint) is not None,
             refused=refusal_in(recorded),
+            # Why the last pass raised, where one did, and what the worker is doing about it now. The
+            # pair is deliberate: the reason is a fact about a pass that is over and the attention is
+            # true only at this instant, so one is in the checkpoint and the other is a read.
+            failed=failure_in(recorded),
+            attention=await self.attention(session),
             repository=self.repository_of(chosen),
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
             runnable=self.commands is not None and self.workspaces is not None and working,
@@ -431,27 +592,71 @@ class Service:
             ),
         )
 
-    async def token(self, session: str) -> int:
+    async def attended(self, session: str) -> Attended:
         """
-        How much has been recorded for a session, as the one number that says whether to read again.
+        What both readings below are made of: how much this session has recorded, what the claim and
+        the delivery say, and the moment the store answered.
+
+        One query rather than three, because a render asks for both readings and they want overlapping
+        subsets of it: a page that took the count on one statement and the claim on another could draw
+        a session as claimed against a checkpoint from before that pass wrote anything.
+
+        The moment is the *store's*, read in the same statement as the two it will be subtracted from,
+        so `attention_of` measures each against the clock that wrote it and no two machines' clocks
+        ever meet. `Conversation.since` is the one place in this console that does subtract two, and it
+        says so; this one does not have to.
+
+        NOTE: this reaches past `SqliteCheckpointer` and `SqliteScheduler` into
+        `without-durability-sqlite`'s own three tables, which is the one place in this console that
+        knows the store's schema rather than its interface. All three belong upstream - the count as a
+        method on the checkpointer, the claim and the delivery as a status read on the checkpointer and
+        the scheduler - and until they are, renaming any of those tables is a change that has to be
+        made here too. They are one query behind one method so that there is one place to change.
+        """
+        row = await self.database.run(
+            lambda connection: connection.execute(
+                ATTENDED, {"workflow": session, "namespace": self.durable.scheduler.namespace}
+            ).fetchone()
+        )
+        recorded, held, due, asked = row
+        return Attended(
+            recorded=int(recorded),
+            held_until=None if held is None else float(held),
+            due_at=None if due is None else float(due),
+            asked_at=float(asked),
+        )
+
+    async def attention(self, session: str) -> Attention:
+        """What the worker is doing about this session, as `attention_of` reads one `attended`."""
+        return attention_of(await self.attended(session))
+
+    async def token(self, session: str) -> str:
+        """
+        Whether this session is worth reading again: how much it has recorded, and where it stands
+        with the worker.
 
         What a live connection asks several times a second, so it has to be cheaper than the answer
         it guards: `load` decodes every step's JSON, which for a long conversation is megabytes to
-        find out that nothing happened. This counts rows over the primary key's own prefix and reads
-        no value at all.
+        find out that nothing happened. This reads three rows by primary key and decodes no value.
 
-        A count is a sound change token because a checkpoint is append-only: a step's key is written
-        once and `ON CONFLICT` keeps the value it already had, so nothing is ever rewritten and the
-        only way this moves is a record that did not exist before. It says how much, never what, and
-        that is all a reader needs to decide to look properly.
+        **The count alone is not enough, and that is what this change is.** The count moves only when
+        something is recorded, which is exactly what a broken pass does *not* do: a session whose pass
+        fell over records nothing on the retry after that, so a token made of the count alone holds
+        still while the page sits under a spinner, which is the failure this whole reading exists to
+        end. What moves when the worker picks a session up, lets it go, and schedules the next attempt
+        is the claim and the delivery, so those belong in the token that decides whether to redraw.
 
-        NOTE: this reaches past `SqliteCheckpointer` into `without-durability-sqlite`'s own table,
-        which is the one place this console knows the store's schema rather than its interface. It
-        belongs upstream as a method on the checkpointer; until it is one, a rename of that table is
-        a change that has to be made here too.
+        **The two moments go in as the store wrote them and never as durations**, which is the one
+        thing here that is easy to get wrong: a duration shrinks between two polls with nothing having
+        happened, so a token carrying one differs from itself and the page re-renders for ever.
+
+        **It is a change token and not a cursor**, which is what makes a non-monotone one sound: the
+        stream compares it for inequality and nothing reads it as a position. A checkpoint is
+        append-only and a claim is not, so this goes up and comes back down, and `!=` is true either
+        way. A string rather than a number for the same reason it is three values: there is no
+        arithmetic anybody may do on it.
         """
-        counted = await self.database.run(lambda connection: connection.execute(RECORDED, (session,)).fetchone())
-        return int(counted[0])
+        return token_of(await self.attended(session))
 
     async def requested_at(self, session: str, turn: int, at: int) -> object | None:
         """

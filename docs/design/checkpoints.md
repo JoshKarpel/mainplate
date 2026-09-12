@@ -31,6 +31,7 @@ This console's is the rest:
 | `turn:{n}:tool:{id}` | What one tool call returned and how long it ran | `StepwiseDurability` |
 | `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
 | `turn:{n}:messages` | What the agent run produced | The conversation body |
+| `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |
 
 **Nothing allocates a number by trying any more, and no key is contended.** A message used to name
 the turn it was going into, so writing one meant deciding which turn that was against a checkpoint
@@ -62,6 +63,20 @@ draining its inbox passes over one rather than reading it.
 **A result is named after the entry rather than after a turn**, because which turn a command belongs
 to is decided by where its entry landed: a key naming one would be a second answer to that question,
 written by a handler reading a page that may have moved on.
+
+**`failed:{at}` is keyed by progress rather than by attempt, and that is what keeps it finite.** A
+pass that raises is redelivered once per lease for as long as it keeps raising, so a key numbered by
+attempt would grow a record per lease for ever. `at` is how many records the session held when the
+pass fell over, counting every key but these, so a pass falling over at the same point claims the
+same name and the store keeps what is there; one that gets further before falling over writes a new
+one. Counting the failures in would defeat it, since the record a failing pass writes would move the
+number it was just keyed by.
+
+It is also how the page tells a current failure from a spent one: this is why the session is stopped
+exactly while `at` is still what the session holds, because anything recorded since is a pass that
+got past it. That is `turn:{n}:refused:{i}`'s rule against a count rather than against a turn, and it
+has to be a count because a pass can fall over where no turn names it - planting a worktree, reading
+a declaration, running a setup.
 
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model requests
 happen in a fixed order, so counting them names a step the same way on every pass, and the tree

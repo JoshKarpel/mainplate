@@ -202,6 +202,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A session whose pass fell over says so.** A pass that raises is left unanswered by the worker and
+  redelivered once per lease for as long as it keeps raising, which is the right answer to a fault
+  somebody can fix - but the whole account of it was a line in the log, so the page drew the same
+  three dots it draws for a reply being written and the two were indistinguishable for as long as the
+  fault lasted. The reason is now recorded, keyed by how far the session had got so a retry claims the
+  same key rather than adding one per lease, and the end of the transcript says which of the two is
+  happening: a pass is answering it, it is queued, the last one failed and here is what it said and
+  when the next is due, or nothing is scheduled at all. The failure is still re-raised, so the
+  redelivery that resumes the session once the fault is fixed is untouched. What made this visible was
+  a bundled plugin raising on every request for two days with nothing anywhere on screen.
+- The bundled `guidance` plugin no longer walks past the repository root looking for nested
+  `AGENTS.md` files. A worktree planted under the clone it came from has the console's own guidance
+  one directory up, which was never given to the session and has no name relative to its root, so the
+  plugin exited non-zero on every request after the model read anything nested - and a plugin that
+  fails is a turn that never makes its next request.
 - **Prompt caching is on.** It is opt-in on the Anthropic wire and was never asked for, so every
   request paid full input price for the whole conversation - and since a conversation is re-sent
   whole on every turn, on a long turn that is most of the bill. Nothing about the request looked any

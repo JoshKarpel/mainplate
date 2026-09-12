@@ -46,6 +46,10 @@
   // missed a paragraph cannot fold the reply it missed.
   const FRAMES = ".tool__body, .ran__body, .block--document";
 
+  // The line at the end of a transcript saying why nothing is happening, which two things here reach
+  // for: the countdown it carries, and the copy button its reason gets. The server's own `ATTENTION_ID`.
+  const ATTENTION = "attention";
+
   // Storage is arbitrary text, and a value written by an older build or by a hand in the console
   // must not leave the page in a scheme it has no rules for.
   const asTheme = (held) => (THEMES.includes(held) ? held : "system");
@@ -671,6 +675,13 @@
         // and a button pinned in a scroller travels with the content and off its own corner.
         panel.querySelectorAll("pre").forEach((code, at) => seated(code, `${panel.id}:${at}`));
       });
+      // The reason a pass failed, which is the one thing on this page somebody is going to paste
+      // into an issue, a search, or a message to whoever wrote the plugin. Seated on its own rather
+      // than by the walk above, because it is not in a panel: it is the line the transcript ends on
+      // when nothing is answering the session. Named rather than numbered, since there is only ever
+      // one, and `wireCopy` needs nothing taught - the button sits inside a `pre` like every other.
+      const reason = box.querySelector(`#${ATTENTION} .attention__reason`);
+      if (reason) seated(reason, ATTENTION);
     };
 
     // Taken off again before a swap, for the reason the search marks are: these are elements the
@@ -831,6 +842,35 @@
       state.textContent = since >= retention ? "cold" : `warm as of ${ago(since)}`;
     };
 
+    // How long until, in the words the attention line uses. `ago`'s shape with seconds kept, because
+    // what this counts down is a lease rather than a lunch break: a wait of forty seconds reading
+    // `just now` would say the opposite of what it means.
+    const soon = (seconds) => {
+      if (seconds <= 0) return "any moment";
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 1) return `${Math.ceil(seconds)}s`;
+      const spare = Math.floor(seconds % 60);
+      return spare ? `${minutes}m ${spare}s` : `${minutes}m`;
+    };
+
+    // How long until the worker looks at this session again, counted here rather than on the server.
+    // The stream sends this region when the worker's standing *changes*, and counting down is exactly
+    // the interval where it does not, so a server-rendered figure would sit at its first value for the
+    // whole wait - which on a ten minute lease is the difference between a page that is waiting and a
+    // page that is stuck, said wrongly.
+    //
+    // `paintCache`'s bargain, field for field: `data-due` is what the server measured, the rest is
+    // measured from the moment this element was first seen, and the stamp lives on the element so a
+    // swap brings a fresh one. Absent on every arm but the held-back delivery, which is the only one
+    // with a figure to keep.
+    const paintDue = () => {
+      const line = document.getElementById(ATTENTION);
+      const due = line?.querySelector(".attention__due");
+      if (!line || !due || line.dataset.due === undefined) return;
+      if (line.seenAt === undefined) line.seenAt = Date.now();
+      due.textContent = soon(Number(line.dataset.due) - (Date.now() - line.seenAt) / 1000);
+    };
+
     // `announce` is false exactly once, on the first render: every panel is new to this file then,
     // and a conversation that flashed itself top to bottom on being opened would be pointing at
     // everything, which is pointing at nothing.
@@ -846,6 +886,7 @@
       paintCopies();
       paintCopied();
       paintCache();
+      paintDue();
       research(false);
       if (following) toEnd();
     };
@@ -1635,6 +1676,13 @@
       setInterval(paintCache, 15_000);
     };
 
+    const wireDue = () => {
+      // Every second, and not the cache note's fifteen, because this one counts *seconds* under a
+      // minute: a figure that says `40s` and holds still for fifteen of them is a countdown a reader
+      // stops believing. It is one `textContent` on one element that is usually absent.
+      setInterval(paintDue, 1_000);
+    };
+
     const wireSwaps = () => {
       document.addEventListener("htmx:before:swap", (event) => {
         if (event.target !== transcript()) return;
@@ -1672,6 +1720,7 @@
     wireNumbers();
     wireTiers();
     wireCache();
+    wireDue();
     wireSend();
     wireCopy();
     wireFresh();

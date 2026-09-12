@@ -69,9 +69,14 @@ async def watching(
     written once.
 
     The token is what makes this cheap enough to ask often: it counts a session's steps and decodes
-    none of them, so a quiet conversation costs one indexed count per tick and no render, no markup
-    and no bytes. Only a token that moved is worth the read that follows it, and a checkpoint is
-    append-only, so the only thing that can move it is a record that did not exist before.
+    none of them, so a quiet conversation costs three indexed reads per tick and no render, no markup
+    and no bytes. Only a token that moved is worth the read that follows it.
+
+    It carries where the session stands with the worker as well as how much it has recorded, which is
+    what makes a broken pass visible here: a pass that falls over records nothing, so a token made of
+    the count alone would hold still and this would send nothing while the page sat under a spinner.
+    What moves instead is the claim being taken and let go and the next attempt being scheduled. So the
+    token is not monotone, and nothing here needs it to be: `!=` is the whole of what it is asked.
 
     The first pass through always sends, because nothing has been seen yet. That is deliberate
     rather than incidental: it is what makes a reconnect correct with no replay and no resumption
@@ -83,7 +88,7 @@ async def watching(
     console does not learn that a session moved from the worker that moved it; it learns by looking,
     exactly as it would if the worker were another process entirely.
     """
-    seen: int | None = None
+    seen: str | None = None
     while True:
         now = await service.token(session)
         if now != seen:
@@ -96,7 +101,7 @@ async def watching(
             # regions would sit under its spinner for ever with nothing saying why. Once, and then
             # out, because a page told this reloads and the reload opens a connection of its own.
             if on_step != settling(showing):
-                yield Event(data="", type=LOADED, id=str(now))
+                yield Event(data="", type=LOADED, id=now)
                 return
             # Whichever regions the page's *shape* has, which `settling` decides for both sides: a
             # page drawing the settings step has no transcript and no message box on it, and one past
@@ -122,5 +127,5 @@ async def watching(
                     partial(CACHE_ID, "outerHTML", cache_note(showing)),
                 ]
             )
-            yield Event(data=render(regions), id=str(now))
+            yield Event(data=render(regions), id=now)
         await asyncio.sleep(every.total_seconds())

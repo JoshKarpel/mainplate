@@ -32,6 +32,8 @@ const targets = (requested.length ? requested : [
   "handed-off.html",
   "stalled.html",
   "refused.html",
+  "failed.html",
+  "dropped.html",
   "forking.html",
   "forking-attach.html",
 ]).map((each) => {

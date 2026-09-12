@@ -150,6 +150,77 @@ keeping everything under them, and the sentence on the page says so. `refusal_in
 reads, of the turn being answered and no other: a refusal on a turn that later answered is history,
 and the transcript is where history goes.
 
+## A pass that falls over
+
+**A refusal is settled and a failure is not, so the two are recorded differently and read
+differently.** The provider turning a request down is permanent: the recorded history and the
+recorded message are what they are, so the pass reports `Stalled` and nothing wakes the session
+again. A pass that *raises* is a different animal - a plugin that exited non-zero, a tool that threw,
+a store that blinked, a bug - and every one of those is something somebody can fix, after which the
+redelivery the worker was already going to make resumes the session from the step it stopped at. So
+`reporting` records the reason and **re-raises**, which changes no control flow at all and adds a
+sentence the page can draw.
+
+**What it closes is a session stuck with nothing saying so.** Before it, the whole account of a
+broken pass was `logger.warning` inside the worker: the page drew the same three dots it draws for a
+reply being written, and the two were indistinguishable for as long as the fault lasted. The bug that
+produced this was exactly that - a bundled plugin raising on every `before_request`, a session
+retried once per lease for two days, and nothing anywhere on screen.
+
+It catches `Exception` and not `BaseException`, which is what `without-durability`'s own hierarchy
+asks for: a suspension and a lost claim are `Interruption`s precisely so that a driver's `except
+Exception` cannot absorb one, and neither is a failure. It sits **outside** `readying` rather than
+inside `conversing`, so what it covers is everything a pass can raise rather than everything the
+conversation can, the queue calls included. And a store that will not take the record leaves the
+original exception the only one worth raising: the write is the diagnostic and the exception is the
+fault.
+
+**It does not promise the retry will work, and the page says so.** Most of what lands here is fixable
+and the next pass carries on; some of it is not, because what a pass replays is *recorded*. A model
+response the agent graph will not accept - a thinking-only response cut off by the output limit, say
+- is recorded before the graph ever sees it, so every later pass replays the same record, raises the
+same exception, and never reaches a provider at all. Nothing in `reporting` can tell those apart, so
+the sentence says what the mechanism does and names the way out of the second, which is `fork` at
+that turn.
+
+## What the worker is doing about a session
+
+**Live control-plane state, read on every render, and emphatically not in the checkpoint.** Whether a
+pass holds a session and when the next delivery is due are true at the instant they are read and
+change several times per pass; a checkpoint holds what was said and never changes. `Service.attended`
+reads the claim and the queue beside the record count, and `attention_of` turns the three into one of
+four: `Claimed`, `Queued`, `Delayed`, `Idle`.
+
+The claim settles it first, because a live claim *is* a pass in flight and the queue row beside one
+is only the delivery that pass is answering for. A claim outliving the process that took it reads as
+held until its lease elapses, which is honest rather than wrong: for that interval the claim is what
+stops another worker starting, and `reclaim` is what ends it.
+
+**`Delayed` with a recorded failure is the signature of the whole problem.** The worker deliberately
+leaves a failed pass's delivery unanswered, so the queue keeps the row it reserved and reclaims it
+once the lease elapses. Read on its own that state is ordinary - the queue reserves a row a store
+round trip before the claim lands, so every healthy pass passes through it - which is why the page
+speaks on the *failure* and uses the delivery only to say when the next attempt is due. `Idle` with
+something outstanding is the exception and needs no failure beside it: a message and the row that
+queues it are written in one commit, and a pass asks for the next one from inside itself, so there is
+no race that produces one.
+
+**It is in `Service.token` as well, and that is what makes any of it visible.** A pass that falls over
+records nothing, so a token made of the record count alone holds still while the page sits under a
+spinner - the failure this exists to end. The claim and the delivery are what move when the worker
+picks a session up, lets it go, and schedules the next attempt. Two consequences: the token is no
+longer monotone, which is fine because the stream compares it for inequality and nothing reads it as
+a position; and the two moments go in **as the store wrote them** and never as durations, since a
+duration shrinks between two polls with nothing having happened and a token that differs from itself
+is a page that re-renders for ever.
+
+The cost, stated: this is the one place in the console that knows
+`without-durability-sqlite`'s schema rather than its interface, and it is now three tables rather
+than one. All three belong upstream - the count as a method on the checkpointer, the claim and the
+delivery as a status read - and until they are there, renaming any of those tables is a change that
+has to be made in `Service.attended` too. One query behind one method, so there is one place to
+change.
+
 ## What replay costs
 
 **Measured rather than reasoned about**, and it is not where it looks. Each pass re-runs `converse`

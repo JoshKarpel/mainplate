@@ -76,7 +76,11 @@ from mainplate.reference import facts_of
 from mainplate.reference import resending
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
+from mainplate.service import Attention
+from mainplate.service import Claimed
 from mainplate.service import Conversation
+from mainplate.service import Delayed
+from mainplate.service import Idle
 from mainplate.sessions import Origin
 from mainplate.sessions import Session
 from mainplate.snapshots import branch_named
@@ -651,6 +655,8 @@ def showing(
     working: bool = True,
     started: bool = True,
     refused: records.Refused | None = None,
+    failed: records.Failed | None = None,
+    attention: Attention | None = None,
     since: timedelta | None = SINCE,
     plugins: tuple[Enrolled, ...] | None = ENROLLED,
     declared: tuple[Installed, ...] | None = DECLARED,
@@ -674,6 +680,12 @@ def showing(
     one whose worktree is still being planted. Both default to something, because that is what every
     ordinary page shows - the rail draws a card per running plugin, and a gallery of pages with an
     empty rail would be a gallery of a console nobody has.
+
+    `failed` and `attention` are the other thing a page cannot read out of a checkpoint, and the
+    second is the only argument here that is not a fact at all: what the worker is doing is true at the
+    instant it is read, and a gallery has no worker any more than it has a clock. `Claimed` by default
+    where a turn is outstanding, because that is what an ordinary page is showing - a reply being
+    written - and it is what makes the failure pages the *only* ones drawing the line.
     """
     chosen = CATALOGUE.default if working else replace(CATALOGUE.default, repository=None)
     said = transcript(snapshotted(written) if working and started else written)
@@ -686,6 +698,8 @@ def showing(
         plugins=plugins,
         declared=declared,
         refused=refused,
+        failed=failed,
+        attention=attention if attention is not None else Claimed(),
         repository=REPOSITORY if working else None,
         worktree=WORKSPACE / session.id if working else None,
         # Which follows the repository, because a command runs in a session's worktree: it is what
@@ -779,6 +793,28 @@ def pages() -> dict[str, str]:
         tone="strong",
     ).recorded()
 
+    # A pass that fell over and the worker waiting out the lease before trying again, which is the one
+    # state that used to be drawn as three dots and is the reason this line exists. The turn is the one
+    # in `answering`, so the page shows a half-finished turn with the sentence where its spinner was:
+    # what a screenshot has to prove is that a reader can tell this from a reply being written, which
+    # is exactly what no still of the old page could show.
+    fell_over = showing(
+        PARENT,
+        answering,
+        failed=records.Failed(
+            why=(
+                "PluginFailed(\"bundled:guidance exited 1: ValueError: '/srv/AGENTS.md' is not in the "
+                "subpath of '/srv/mainplate/worktrees/f3c1'\")"
+            ),
+            at=len(answering),
+        ),
+        attention=Delayed(until=timedelta(minutes=8, seconds=24)),
+    )
+    # And the other half of the same failure: nothing holds the session and nothing is scheduled to,
+    # which is a session that has been dropped rather than one waiting. Drawn with no reason recorded,
+    # because that is the shape it comes in - there is no pass to have written one - and it is the arm
+    # whose whole content is that nothing is coming.
+    dropped = showing(PARENT, answering, attention=Idle())
     stalled = showing(LISTED[3], recorded(CONVERSATION), answerable=False)
     # The other way to be stopped, which points somewhere different because nothing can be put back:
     # what the provider turned down is the recorded history itself, so the sentence names the fork.
@@ -831,6 +867,8 @@ def pages() -> dict[str, str]:
         "handed-off.html": session_page(LINKS, LISTED, showing(PARENT, handed), REACHABLE),
         "stalled.html": session_page(LINKS, LISTED, stalled, REACHABLE),
         "refused.html": session_page(LINKS, LISTED, turned_down, REACHABLE),
+        "failed.html": session_page(LINKS, LISTED, fell_over, REACHABLE),
+        "dropped.html": session_page(LINKS, LISTED, dropped, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one.
