@@ -111,6 +111,11 @@ would put an identical question to the provider and get an identical answer. `En
 named for the pass rather than `Outcome`, which already means how a tool call went here and what the
 mechanism made of a pass in `without-durability`.
 
+**`Archived` asks for the same nothing for a third reason**: the session was closed, so a message
+queued before the press is passed over, and the pass records and plants nothing, since what it would
+plant is what [the reconciler](workspace.md#archiving) is taking off the disk. Its own arm so the
+log says so rather than reporting a stall on a session somebody deliberately ended.
+
 **`Unconfirmed` asks for the same nothing and means the opposite**, which is why it is a fourth arm
 and not a second reading of the third. A pass that reaches a session still on its
 [settings step](plugins.md#setup) stops having recorded nothing at all, so there is no refusal to

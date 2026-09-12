@@ -107,6 +107,17 @@ class Settings(BaseSettings):
     spend real bandwidth re-learning a value that changes a few times a month.
     """
 
+    archive_every: timedelta = Field(default=timedelta(minutes=1), gt=timedelta())
+    """
+    How often archived sessions still holding directories are taken off the disk.
+
+    A minute, because the press that archives a session only records that it is archived, and this
+    is the loop that acts on it: what the interval decides is how long a session pressed archived
+    keeps its files, and a minute is short against the walk that measures them and long against the
+    query that finds nothing to do. A session a pass still holds is left for the next round, so the
+    interval is also how soon after a turn ends its files go.
+    """
+
     measure_every: timedelta = Field(default=timedelta(minutes=5), gt=timedelta())
     """
     How often every session's directories are walked to say what it takes on disk.

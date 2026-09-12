@@ -102,6 +102,13 @@ transcript will be, so a branch will not show you what its parent said until you
 That is the cost of forking being how a session changes its mind about them: a branch declares and
 sets up from scratch, so editing a repository's `.mainplate/` and forking is how you try the change.
 
+**Archiving keeps the conversation and gives the disk back.** Every session holds a worktree and a
+scratch, and its row says how much they come to. `Archive`, on a card in the rail, closes the
+session at once: nothing more can be said in it, and a loop in the background takes its directories
+off the disk once no turn is running in it. The conversation stays readable, and the rule under its
+last turn forks from the end, which is how an archived session comes back: a live one with every
+turn and a fresh worktree at the files it ended with.
+
 ## What a model costs
 
 No gateway reached so far publishes a price anywhere in its model list, and what it does publish is
@@ -330,8 +337,8 @@ if it is still running when it looks; a message nobody took is still in the queu
 opens on it.
 
 The caret beside Send opens the rest. Each has a name you can type instead: `/` at the start of an
-empty box opens the same list, and a space after the whole word takes it, so `/fork ` puts the box
-in that answer's mode with the button beside it saying `Fork` rather than `Send`. Nothing is ever
+empty box opens the same list, and a space after the whole word takes it, so `/forget ` puts the box
+in that answer's mode with the button beside it saying `Forget` rather than `Send`. Nothing is ever
 inferred from what you typed, so what you are about to press always says what it does.
 
 - **Next** queues the message behind the reply that is coming instead of putting it to the model
@@ -346,10 +353,10 @@ inferred from what you typed, so what you are about to press always says what it
   window free for writing one, and hands itself off once the conversation reaches it. On by default,
   which is safe only because a handoff destroys nothing. All of it is a plugin, so every word of it
   can be replaced with your own.
-- **Aside** steps out into a side conversation you mean to come back from and **Fork** starts one
-  you do not; from either, **Parent** sends what is in the box back into the conversation you left.
-  That is a message rather than a merge, which is what makes it honest: the turns you took on the
-  side were asked against a different history.
+- **Parent**, from any fork, sends what is in the box back into the conversation it was forked
+  from. That is a message rather than a merge, which is what makes it honest: the turns you took on
+  the branch were asked against a different history. Forking itself is never in this menu; it is the
+  `fork` link on a rule, at a turn boundary.
 - **Keep** puts it on the shelf and clears the box. Pressing a kept note adds it back rather than
   replacing what is there, so several assemble into one message. It lives in your browser, so it
   does not follow you to another machine yet.

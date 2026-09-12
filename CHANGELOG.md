@@ -9,12 +9,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Archiving a session**, from a card in the rail or under the settings step: nothing more is said
+  in it, the composer refuses and the row is muted at once, and a reconciler takes its worktree,
+  scratch and plugins' scratches off the disk in the background, once no pass or command holds it.
+  The conversation stays, and the rule under its last turn forks from the end, so an archived
+  session comes back as a live one with every turn and a fresh worktree at the files it ended with.
+- A fork from the end of a conversation plants at the newest tree the parent recorded, which for an
+  archived session is the worktree as the reconciler found it; it used to plant at the repository's
+  head, which is files the conversation never saw.
 - What a session takes on disk, on its row in the sidebar and on the line under the message box:
   its worktree, git's directory for it, its scratch and its plugins' scratches, counted as `du`
   counts them. Measured by a sweep on a timer (`measure_every`, five minutes by default) rather than
   when a page is drawn, since a session that fetched a toolchain holds tens of thousands of files;
   the figure's title says when it was measured. `Places.of` is the one list of which directories are
   a session's, which is what taking a session off the disk will read.
+- `just shots` drives the same Python Playwright the suite does, so a checkout pins one Chromium and
+  needs no Node: `package.json` and `scripts/shoot.mjs` are gone, `scripts/shoot.py` is the driver,
+  and it shoots whatever `gallery.pages()` renders rather than a list of its own.
 - **Plugins**: somebody adds to this console without editing it. A plugin is a single executable,
   spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
   written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
@@ -286,6 +297,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind
   choices are stored under those values, so a kind that was quieted comes back once and is quieted
   again.
+
+### Removed
+
+- The composer's `fork` and `aside` answers, and the `/fork` and `/aside` leaders with them. Both
+  forked the end of a live conversation, which is typing into it with extra steps, and what they
+  planted the branch at depended on whether a turn was running at the time, where the `fork` link on
+  a rule always plants at that turn's own tree. Forking is that link, at a turn boundary, and the
+  one end worth forking, an archived session's, carries the same link on the rule under its last
+  turn. `Parent` stays, from any fork. Sessions recorded as asides are still drawn as they were.
 
 ## [0.0.1]
 

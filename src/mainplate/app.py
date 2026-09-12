@@ -57,6 +57,7 @@ from without_web import static_files
 from mainplate import records
 from mainplate.agent import Wires
 from mainplate.agent import build_wires
+from mainplate.archive import reconciling
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import discover
 from mainplate.catalogue import refreshing
@@ -70,6 +71,7 @@ from mainplate.console import CONSOLE_ROUTES
 from mainplate.console import LINKS
 from mainplate.console import page_response
 from mainplate.console import recover
+from mainplate.conversation import Archived
 from mainplate.conversation import Ended
 from mainplate.conversation import Noting
 from mainplate.conversation import Progressed
@@ -360,6 +362,9 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
             await running.enter_async_context(
                 background_task(measuring(footprints, places, service.database, settings.measure_every))
             )
+            await running.enter_async_context(
+                background_task(reconciling(service, places, footprints, settings.archive_every))
+            )
             if config.model_reference is not None:
                 await running.enter_async_context(
                     background_task(refreshing_reference(references, config.model_reference, settings.reference_every))
@@ -485,6 +490,8 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
                 logger.warning(f"{run.workflow} stalled on a request no pass can make; not waking it again")
             case Unconfirmed():
                 logger.info(f"{run.workflow} is waiting on its settings step; the press is what wakes it")
+            case Archived():
+                logger.info(f"{run.workflow} is archived; a fork is what carries it on")
             case Noting(notes=notes):
                 for note in notes:
                     logger.info(f"{run.workflow}: {note.plugin} asked for a message to be put to it")

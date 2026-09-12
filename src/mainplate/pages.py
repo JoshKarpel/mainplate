@@ -23,6 +23,7 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 from itertools import groupby
@@ -387,6 +388,7 @@ class Links:
     fork: Reversible
     setup: Reversible
     press: Reversible
+    archive: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -475,6 +477,10 @@ class Links:
         hold without knowing what a session enrolled.
         """
         return url_for(self.press, {"session": session})
+
+    def to_archive(self, session: str) -> str:
+        """Where the press that closes a session goes, which is a plain form post answered with a redirect."""
+        return url_for(self.archive, {"session": session})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -659,7 +665,12 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
                     li(
                         attrs={"data-depth": str(depth)},
                         children=a(
-                            cls=("session", "current" if session.id == showing else None, "forked" if depth else None),
+                            cls=(
+                                "session",
+                                "current" if session.id == showing else None,
+                                "forked" if depth else None,
+                                "archived" if session.archived is not None else None,
+                            ),
                             attrs={"href": links.to_session(session.id)},
                             children=[
                                 span(cls="name", children=session.title or UNTITLED),
@@ -670,6 +681,21 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
                                             cls="when",
                                             attrs={"datetime": session.created_at.isoformat()},
                                             children=session.created_at.strftime("%b %d, %H:%M"),
+                                        ),
+                                        # Said in a word as well as by muting the name, because a
+                                        # muted row on its own reads as a styling accident, and the
+                                        # word is what a reader scanning for a closed session looks
+                                        # for.
+                                        *(
+                                            (
+                                                span(
+                                                    cls="archived",
+                                                    attrs={"title": f"Archived {archived_on(session.archived)}"},
+                                                    children="archived",
+                                                ),
+                                            )
+                                            if session.archived is not None
+                                            else ()
                                         ),
                                         # Where it left its parent, and whether it left meaning to
                                         # come back. The glyph carries it rather than a word: a row
@@ -2913,6 +2939,31 @@ def cache_note(showing: Conversation) -> Element:
 # window a request used is the console's own arithmetic.
 
 
+def end_rule(links: Links, session: str, turns: int) -> Element:
+    """
+    The rule under the last turn, carrying the one control the end of a conversation has: fork.
+
+    A rule rather than a button, so it reads as the boundary it is - the place turn `turns` would
+    open - and takes the same faint chrome every other rule's fork link has. It carries no figures,
+    because nothing has been asked at it yet.
+    """
+    return div(
+        cls=("rule", "rule--end"),
+        attrs={"id": f"rule-{turns}"},
+        children=[
+            span(cls="rule__at", attrs={"title": f"Where turn {turns} would open"}, children="end"),
+            a(
+                cls="rule__fork",
+                attrs={
+                    "href": links.to_fork_form(session, turns),
+                    "title": "Fork from the end, carrying every turn and asking nothing again",
+                },
+                children="fork",
+            ),
+        ],
+    )
+
+
 def transcript_region(links: Links, showing: Conversation) -> Element:
     """
     The conversation, and whether it is still waiting on the rest of it.
@@ -3010,6 +3061,14 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
     # actually looks like. A call still out is already drawn working on its own panel, so the dots are
     # left off there and the sentence is not: a pass can fall over with a call outstanding.
     waiting = None if stalled is not None else waiting_for(showing)
+    # A fork from the end, on a rule of its own after the last turn, where every other fork sits on
+    # the rule opening the turn it re-asks. It carries every turn and re-asks none, so what the branch
+    # opens on is an empty box. Only on an archived session, because it is how one comes back and
+    # the one control such a session has left: on a live one, carrying on is typing into the box, and
+    # the composer's own `fork` covers wanting to carry on somewhere else. A turn the pass never
+    # finished comes across too and is what the branch resumes, so nothing said in it is lost.
+    if session and said.turns > 0 and showing.session.archived is not None:
+        drawn.append(end_rule(links, session, said.turns))
     if stalled is not None:
         drawn.append(p(cls="stalled", children=stalled))
     elif waiting is not None:
@@ -3596,7 +3655,12 @@ def setup_step(links: Links, showing: Conversation) -> Element:
                         cls="setup__again",
                         attrs={"method": "post", "action": links.to_setup(showing.session.id)},
                         children=button(
-                            attrs={"type": "submit", "name": SETTLE_FIELD, "value": AGAIN},
+                            attrs={
+                                "type": "submit",
+                                "name": SETTLE_FIELD,
+                                "value": AGAIN,
+                                "disabled": showing.session.archived is not None,
+                            },
                             children="Try again",
                         ),
                     ),
@@ -3634,9 +3698,17 @@ def setup_step(links: Links, showing: Conversation) -> Element:
                     tier_group(tier, plugins, showing.session.tending, form=settling)
                     for tier, plugins in by_tier(showing.declared)
                 ),
+                # Disabled for real on an archived session, as the composer's box is: the route
+                # refuses the press either way, and a button that posts to a refusal is a control
+                # that lies about what the page does.
                 button(
                     cls="setup__set",
-                    attrs={"type": "submit", "name": SETTLE_FIELD, "value": SETTLED},
+                    attrs={
+                        "type": "submit",
+                        "name": SETTLE_FIELD,
+                        "value": SETTLED,
+                        "disabled": showing.session.archived is not None,
+                    },
                     children="Load plugins",
                 ),
             ],
@@ -3655,7 +3727,61 @@ def plugin_id(qualified: str) -> str:
     return f"plugin-{qualified.replace(':', '-')}"
 
 
-def rail(links: Links, session: str, tended: Tending, plugins: Sequence[Enrolled] = ()) -> Element:
+def archive_card(links: Links, session: str, archived: datetime | None) -> Element:
+    """
+    The one control that closes a session, or the fact that somebody already did.
+
+    Behind a disclosure rather than a bare button, because the press takes a worktree off the disk
+    and a mis-press on a card in a rail is one thing this console can make impossible for the price
+    of one more click: what opens says what the press does, and the button is under that sentence.
+    A plain form answered with a redirect, so it works with the script absent and lands on the page as
+    it now is.
+
+    Once pressed, the card is the fact: when, and what became of the files. The way back is the fork
+    on the rule under the last turn, which is where every fork lives, so it is not repeated here.
+    """
+    if archived is not None:
+        return div(
+            cls="archive",
+            children=[
+                div(cls="archive__head", children="Archived"),
+                p(
+                    cls="archive__says",
+                    children=(
+                        f"Since {archived_on(archived)}. Its worktree and scratch are taken off the disk; "
+                        f"the conversation stays, and forking it from the end carries on."
+                    ),
+                ),
+            ],
+        )
+    return details(
+        cls="archive",
+        children=[
+            summary(cls="archive__head", children="Archive"),
+            p(
+                cls="archive__says",
+                children=(
+                    "Takes this session's worktree, scratch and plugins off the disk and stops anything more "
+                    "being said in it. The conversation stays, and a fork of it carries on."
+                ),
+            ),
+            form(
+                cls="archive__press",
+                attrs={"method": "post", "action": links.to_archive(session)},
+                children=button(cls="archive__set", attrs={"type": "submit"}, children="Archive"),
+            ),
+        ],
+    )
+
+
+def rail(
+    links: Links,
+    session: str,
+    tended: Tending,
+    plugins: Sequence[Enrolled] = (),
+    *,
+    archived: datetime | None = None,
+) -> Element:
     """
     Everything that navigates the conversation, in one column outside the region that swaps.
 
@@ -3686,6 +3812,10 @@ def rail(links: Links, session: str, tended: Tending, plugins: Sequence[Enrolled
     inconsistency: a setting is a value the plugin reads when it runs, and being loaded decides what
     is in the prefix.
 
+    **Archiving is the last card about this session**, under the plugins' cards, because it is the
+    one control here that ends the conversation rather than steering it: everything above it is
+    something to do while the session runs, and this is what to do when it is over.
+
     **The theme goes last, pinned to the bottom by the stylesheet**, because it is the one card here
     that is not about this conversation at all - it is the reader's, across every session - so it is
     the one thing a reader scanning the rail for something about *this* session can skip.
@@ -3708,6 +3838,7 @@ def rail(links: Links, session: str, tended: Tending, plugins: Sequence[Enrolled
                 for plugin in plugins
                 if plugin.described.card is not None
             ),
+            archive_card(links, session, archived),
             theme_card(),
         ],
     )
@@ -3865,9 +3996,13 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
 
     Ordered by how far the text travels: waiting for the next turn keeps it here and merely later,
     `Forget` keeps it here and drops what the model was told, a `Handoff` keeps it here and has the
-    session write down what the model should be told instead, an `Aside` is a step out you mean to
-    come back from, a `Fork` is a conversation of its own, `Parent` reaches the one this came out of,
-    `Run` is not a message at all, and `Keep` sends it nowhere.
+    session write down what the model should be told instead, `Parent` reaches the conversation this
+    one came out of, `Run` is not a message at all, and `Keep` sends it nowhere.
+
+    **Nothing here forks.** A fork happens at a turn boundary through the link on a rule, where what
+    it plants at is settled; an answer that forked the end of a live conversation was the same as
+    typing into it, and the one end worth forking, an archived session's, has that link on the rule
+    under its last turn.
 
     **A plugin's own answers are not here**, and they are appended by `composer` rather than merged
     into this list: what a session offers depends on what it loaded, where these are the
@@ -3890,8 +4025,6 @@ def sending_answers(returning: bool, answering: bool, running: bool) -> tuple[An
             Disposition.FORGET,
             "Ask it with the model's context cleared, leaving the whole conversation on the page",
         ),
-        dispatched(Disposition.ASIDE, "Step out into a side conversation you mean to come back from"),
-        dispatched(Disposition.FORK, "Ask it in a new session carrying this whole conversation"),
         *(
             (dispatched(Disposition.PARENT, "Send it to the conversation this one was forked out of"),)
             if returning
@@ -4005,14 +4138,14 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
     shelf's own card in the rail shows nothing then.
 
     It deliberately does *not* remember what was chosen last, which is where GitHub's version of this
-    control goes further. That would mean a button labelled `Send` that forks, which is the one
+    control goes further. That would mean a button labelled `Send` that forgets, which is the one
     failure a control like this can have that nobody notices until after it has happened; here what a
     button says is always what it does, and a mode is only ever entered by asking for it by name.
 
     **A leader is a shortcut to a row and never a second way to say it.** With `mainplate.js`
-    present, typing `/fork ` into an empty box - or `! `, which is `/run`'s own key - turns the box
-    into that answer's box: the button beside it says `Fork`, and a sentence above it says what will
-    happen. **The space is what commits it**, and until it is pressed the word is ordinary text with
+    present, typing `/forget ` into an empty box - or `! `, which is `/run`'s own key - turns the box
+    into that answer's box: the button beside it says `Forget`, and a sentence above it says what
+    will happen. **The space is what commits it**, and until it is pressed the word is ordinary text with
     the menu open beside it, so nothing happens on a keystroke somebody was in the middle of. That is
     the whole safety property, and it is why every mode's button is rendered here rather than made out
     of `Send` by the script. The server parses no leader out of what was posted, so a paragraph that
@@ -4271,6 +4404,11 @@ def start_page(
     )
 
 
+def archived_on(archived: datetime) -> str:
+    """When a session was archived, in the words the sidebar dates a session in, so the two agree."""
+    return archived.strftime("%b %d, %H:%M")
+
+
 def stalled_by(showing: Conversation) -> str | None:
     """
     Why this session cannot be answered, or nothing at all when it can.
@@ -4288,6 +4426,13 @@ def stalled_by(showing: Conversation) -> str | None:
     stop a session, since an endpoint routes more ids than it advertises, so saying so here would
     tell somebody to fix something that is not broken.
     """
+    # Archived outranks the rest, because it is the one stop somebody chose: an endpoint put back or
+    # a fork past a refusal would carry on a session that was deliberately closed.
+    if showing.session.archived is not None:
+        return (
+            f"Archived {archived_on(showing.session.archived)}: nothing more is said in it, and its worktree "
+            f"and scratch are taken off the disk. Fork it to carry on from where it left off."
+        )
     if showing.chosen is None:
         return None
     if not showing.answerable:
@@ -4490,7 +4635,19 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
         return document(
             links,
             showing.session.title or UNTITLED,
-            shell(links, listed, showing=showing.session.id, reachable=reachable, pane=[setup_step(links, showing)]),
+            shell(
+                links,
+                listed,
+                showing=showing.session.id,
+                reachable=reachable,
+                # The step has no rail, and a session stuck on it is exactly one somebody may want
+                # to close, so the card stands under the step rather than being reachable only once
+                # the step is answered.
+                pane=[
+                    setup_step(links, showing),
+                    archive_card(links, showing.session.id, showing.session.archived),
+                ],
+            ),
             session=showing.session.id,
             forked_from=showing.session.forked.session if showing.session.forked is not None else None,
             settling=True,
@@ -4543,7 +4700,15 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                     plugins=plugins,
                 ),
             ],
-            aside_rail=[rail(links, showing.session.id, showing.session.tending, plugins)],
+            aside_rail=[
+                rail(
+                    links,
+                    showing.session.id,
+                    showing.session.tending,
+                    plugins,
+                    archived=showing.session.archived,
+                )
+            ],
         ),
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,

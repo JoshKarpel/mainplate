@@ -13,7 +13,7 @@
 # line below points the tools that fetch at the right one.
 #
 # **Through mise, so the tools are the ones `mise.toml` pins.** The namespace has `/usr` and nothing
-# of the machine's, so `just`, `node` and `uv` all have to be fetched, and mise is what fetches the
+# of the machine's, so `just` and `uv` both have to be fetched, and mise is what fetches the
 # versions this repository declares rather than whatever an installer happens to serve. mise itself
 # is fetched first, into `$HOME/.local/bin`, and its shims are what put the tools on `PATH`: there
 # is no shell rc to `mise activate` in, and a shims directory works in a `sh -c`.
@@ -24,7 +24,7 @@
 #
 # **What crosses back to the session is what is appended to `$MAINPLATE_ENV`**, one `KEY=value` per
 # line, and nothing else in this environment does. `PATH` is set whole: the shims first, so a `uv`
-# or a `node` is the pinned one, then mise's own directory, then the system's.
+# or a `just` is the pinned one, then mise's own directory, then the system's.
 
 set -euo pipefail
 

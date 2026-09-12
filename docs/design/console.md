@@ -164,6 +164,11 @@ rather than saying nothing. That is `SELECTION` reading the repository straight 
 A fork is drawn nested under what it came from and labelled with the turn it left at, which is
 emergent from the `Origin` on each row rather than from anything inside a checkpoint.
 
+Each row also says what its session takes on disk, read off [a holder a sweep
+fills](workspace.md#what-a-session-takes-on-disk), and an [archived](workspace.md#archiving) row
+is muted with the word beside its date: the same join that reaches the repository reaches the
+`archived` key, so neither is a column.
+
 ## The picker
 
 **Ordered widest-first: workspace, network, repository code, endpoint, model, thinking**, and then

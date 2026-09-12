@@ -301,3 +301,45 @@ rather than a zero.
 index's: a reading of the disk that changes under a reader, refreshed by a task that answers no
 requests, and not a word of anything said. A column would be a copy of that reading kept in step by
 hand, which is the second copy this console is built to refuse, one level down from the checkpoint.
+
+## Archiving
+
+**Archiving a session keeps its conversation and takes its directories away.** The checkpoint stays,
+so the session is still readable and still forkable; what goes is everything `Places.of` names, which
+is the space a session holds once it is over. It is the answer to a console that has been used for a
+while: every session ever started holds a worktree and a scratch, and the one thing a finished
+session needs from the disk is nothing.
+
+**The press records a fact and a reconciler acts on it.** `Service.archive` writes one key,
+`archived`, and redirects; from that moment the composer refuses, the transcript says why, the rail's
+card says when, the row is muted, and the routes that would write to the session answer `422`. Taking
+the directories away is `archive.py`'s, on a timer: each round reads the key off every row, finds the
+sessions still holding something on disk, and takes it off. A reconciler rather than a job the press
+queues, because what it does is diff a desired state against an actual one and converge, so a
+console that died halfway through, or was pressed while a pass still held the session, finishes on
+its next round with nothing to be told. The cost, stated: a session pressed archived keeps its files
+for up to `archive_every`, and a console with nothing to do reads its index once a minute.
+
+**It refuses to take a worktree from under a pass.** A pass reads the checkpoint at its top and never
+sees a key written after it started, so a session the worker holds is left for the next round, and
+the pass that follows reads the key at its own top and stops - `Archived` is its own arm of `Ended`,
+so the log says a session was closed rather than that one stalled. A command a person is still
+running is the same case from the other side. Both are read off live state, since both are true only
+at the instant they are read.
+
+**The worktree's last tree is captured on the way out**, under `archived:tree`, because the press
+cannot know it: files may still be being written when the button goes down, and the reconciler waits
+until nothing holds the session. It is what a fork from the end of an archived session plants at, so
+the branch carries on with the files the conversation actually ended with, snapshots the worktree
+never captured included - what a person ran in it after the last request, and what a plugin fixed
+at the turn's end. The worktree goes through `git worktree remove` rather than `rmtree`, since git
+keeps its own directory for a linked worktree inside the clone and its own list of them; the
+snapshots live in the clone's object store under a ref of their own and outlive the worktree, which
+is what keeps every earlier fork point reachable too.
+
+**Nothing un-archives a session, and that is the design rather than a gap.** The key is write-once,
+and what a person wants back is the conversation with somewhere to work, which is exactly what
+[forking from the end](forking.md#forking-the-end) is: a live session carrying every turn, with a
+fresh worktree at the archived tree and a scratch of its own. Putting the archived session itself
+back would mean reconstructing a scratch that was deliberately not snapshotted, which is a second
+mechanism to keep for a state a fork already reaches.

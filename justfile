@@ -3,12 +3,8 @@
 set ignore-comments
 
 # Not the default port, so a console started for a quick look never takes down one already
-# serving on this machine, and a `just serve` can run beside a `just screenshot`.
+# serving on this machine, and a `just serve` can run beside a `just shots`.
 DEV_PORT := "8101"
-
-# Where the gallery is served from while it is being shot. Its own port again, so a shot taken
-# while a console is running does not need either of them stopped.
-GALLERY_PORT := "8102"
 
 GALLERY := "build/gallery"
 SHOTS := "build/shots"
@@ -23,21 +19,18 @@ list:
 
 alias l := list
 
-# Two Chromiums, and for now that is what it costs: the suite drives Playwright's Python binding and
-# `shots` still drives its Node one, which pin their own browser builds separately.
+# One Chromium, fetched by Playwright's Python binding, which the suite and `shots` both drive.
 #
 # Split from `setup` because a mainplate session runs this half and cannot run the other: git's
 # hooks live in the clone's *common* directory, shared by every worktree of it and bound read-only
 # in a session, so `pre-commit install` there is both refused and wrong. `.mainplate/setup` is what
 # runs this in a session, and the split is what keeps the two callers on one definition.
-[doc('Fetch the dependencies and the browsers, which is the half of setup a session can run')]
+[doc('Fetch the dependencies and the browser, which is the half of setup a session can run')]
 dependencies:
     uv sync
     uv run playwright install chromium
-    npm install
-    npx playwright install chromium
 
-[doc('Prepare a fresh clone: dependencies, browsers, and pre-commit as a git hook')]
+[doc('Prepare a fresh clone: dependencies, the browser, and pre-commit as a git hook')]
 setup: dependencies
     uv run pre-commit install
 
@@ -57,12 +50,7 @@ gallery:
 # them: `just shots 'session.html#panel-0-1'`.
 [doc('Screenshot every page, wide and phone, into build/shots')]
 shots *args: gallery
-    #!/usr/bin/env bash
-    set -euo pipefail
-    uv run python -m http.server {{ GALLERY_PORT }} --bind 127.0.0.1 --directory {{ GALLERY }} &>/dev/null &
-    trap 'kill %1 2>/dev/null || true' EXIT
-    sleep 1
-    node scripts/shoot.mjs http://127.0.0.1:{{ GALLERY_PORT }} {{ SHOTS }} {{ args }}
+    uv run python -m scripts.shoot {{ GALLERY }} {{ SHOTS }} {{ args }}
 
 # Behaviour rather than appearance is a different question and gets a different check, and those are
 # in the suite rather than here: what a still cannot show is that *two* panels are drawn as where the

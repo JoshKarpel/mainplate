@@ -32,6 +32,8 @@ This console's is the rest:
 | `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
 | `turn:{n}:messages` | What the agent run produced | The conversation body |
 | `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |
+| `archived` | That somebody archived the session, and when | `Service.archive`, on the press |
+| `archived:tree` | What the worktree held when it was taken off the disk | The reconciler in `archive.py`, just before uprooting it |
 
 **Nothing allocates a number by trying any more, and no key is contended.** A message used to name
 the turn it was going into, so writing one meant deciding which turn that was against a checkpoint
@@ -115,6 +117,10 @@ both halves of that are decided. Not turn-prefixed, because `before` copies thos
 fork that attached a repository its parent never had would inherit instructions with no guidance in
 them. Not session-level, because a forget ends a stretch of context and composing again there is
 free: the prefix it would have invalidated has just been thrown away.
+
+`archived` and `archived:tree` are session-level for the reason a fork of an archived session is a
+live one: `before` leaves them behind, so the branch starts open with every turn the parent had. See
+[archiving](workspace.md#archiving).
 
 The four `plugins:…` keys are session-level for the same reason `instructions:{n}` is not
 turn-prefixed, and they come in two pairs one moment apart. `plugins:declared:console` and

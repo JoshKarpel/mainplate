@@ -43,6 +43,7 @@ from typing import Final
 
 from without_durability_sqlite import Database
 
+from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import REPOSITORY_FIELD
 from mainplate.tending import Tending
@@ -124,9 +125,11 @@ class Origin:
     `aside` is whether the fork was made as a step out that is meant to come back, rather than as a
     way of going somewhere else. Nothing about the two differs mechanically - both are `Service.fork`
     and both copy the same prefix - so this is a fact about what somebody *meant*, recorded because
-    only they know it and because the sidebar cannot draw the difference otherwise. It sits here
-    rather than in the checkpoint for the reason the rest of `Origin` does: it relates two sessions
-    and is a fact about neither on its own.
+    only they know it and because the sidebar cannot draw the difference otherwise. Nothing writes it
+    any more, since the composer's aside went with its fork; rows written while it existed still
+    carry it and are still drawn as what they were. It sits here rather than in the checkpoint for
+    the reason the rest of `Origin` does: it relates two sessions and is a fact about neither on its
+    own.
     """
 
     session: str
@@ -200,6 +203,16 @@ class Session:
     another process entirely.
     """
 
+    archived: datetime | None = None
+    """
+    When this session was archived, or nothing at all for one still being answered.
+
+    Reached out of the checkpoint's `archived` key by the same join that reaches the repository, and
+    for the same reason: it is recorded there, once, by the press, so a column here would be the
+    second copy. Read per row because both readers want it per row - the sidebar to mute the row and
+    the reconciler to know which sessions' directories to take off the disk.
+    """
+
     footprint: Footprint | None = None
     """
     What this session takes on disk, as the last sweep measured it, or nothing where none has.
@@ -252,6 +265,11 @@ COLUMNS = "id, created_at, title, forked_from, forked_at, forked_aside"
 # `LEFT JOIN` because a session is enrolled before its choice is written, and that window is an
 # ordinary state rather than a fault: it renders as a session working in no repository, which is
 # also what a JSON `null` there means, so the two need not be told apart.
+#
+# The second join is the same shape for the same reason: whether a session is archived is recorded
+# in its checkpoint, once, by the press, and the sidebar and the reconciler both want it per row
+# without loading a conversation. Most rows join nothing there, which is a `NULL` and a session
+# still being answered.
 SELECTION = """
 SELECT sessions.id,
        sessions.created_at,
@@ -261,16 +279,24 @@ SELECT sessions.id,
        sessions.forked_aside,
        sessions.enabled,
        sessions.settings,
-       json_extract(choice.value, :repository_path)
+       json_extract(choice.value, :repository_path),
+       json_extract(archived.value, :archived_path)
   FROM sessions
   LEFT JOIN workflow_checkpoint AS choice
     ON choice.workflow = sessions.id AND choice.step = :choice_key
+  LEFT JOIN workflow_checkpoint AS archived
+    ON archived.workflow = sessions.id AND archived.step = :archived_key
 """
 
 # Named rather than positional, so the two statements below can add their own without counting
 # question marks. They name the key scheme, which lives in `conversation.py` for exactly this
 # reason: the code writing a choice and the statement reading one cannot drift apart.
-SCHEME: Final = {"choice_key": CHOICE_KEY, "repository_path": f"$.{REPOSITORY_FIELD}"}
+SCHEME: Final = {
+    "choice_key": CHOICE_KEY,
+    "repository_path": f"$.{REPOSITORY_FIELD}",
+    "archived_key": ARCHIVED_KEY,
+    "archived_path": "$.at",
+}
 
 
 async def enrol(database: Database, session: Session) -> None:
@@ -410,7 +436,7 @@ async def switch(database: Database, session: str, enabled: Mapping[str, bool]) 
     )
 
 
-type Row = tuple[str, str, str, str | None, int | None, int | None, str | None, str | None, str | None]
+type Row = tuple[str, str, str, str | None, int | None, int | None, str | None, str | None, str | None, str | None]
 
 
 async def selecting(database: Database, statement: str, parameters: Mapping[str, str]) -> list[Row]:
@@ -433,6 +459,7 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 None if enabled is None else str(enabled),
                 None if settings is None else str(settings),
                 None if repository is None else str(repository),
+                None if archived is None else str(archived),
             )
             for (
                 identifier,
@@ -444,6 +471,7 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 enabled,
                 settings,
                 repository,
+                archived,
             ) in connection.execute(statement, parameters)
         ]
 
@@ -451,7 +479,7 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
 
 
 def parse_session(row: Row) -> Session:
-    identifier, created_at, title, forked_from, forked_at, forked_aside, enabled, settings, repository = row
+    identifier, created_at, title, forked_from, forked_at, forked_aside, enabled, settings, repository, archived = row
     return Session(
         id=identifier,
         created_at=datetime.fromisoformat(created_at),
@@ -462,6 +490,7 @@ def parse_session(row: Row) -> Session:
         forked=parse_origin(identifier, forked_from, forked_at, forked_aside),
         repository=repository,
         tending=parse_tending(enabled, settings),
+        archived=None if archived is None else datetime.fromisoformat(archived),
     )
 
 

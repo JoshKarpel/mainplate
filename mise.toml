@@ -1,10 +1,9 @@
 [tools]
 uv = "latest"
-# `just` and `node` are here because a mainplate session's setup goes through mise and has nothing
-# of the machine's: `.mainplate/setup` installs mise, `mise install` puts all three where the
-# session's commands look, and `just dependencies` runs under them.
+# `just` is here because a mainplate session's setup goes through mise and has nothing of the
+# machine's: `.mainplate/setup` installs mise, `mise install` puts both where the session's commands
+# look, and `just dependencies` runs under them.
 just = "latest"
-node = "lts"
 
 [settings]
 # Skip brand-new releases when resolving any fuzzy version, as supply-chain defense.

@@ -2783,6 +2783,57 @@ mark.hit.current {
     color: var(--mark);
 }
 
+/* The card that closes a session, and the fact that somebody did. A plugin card's shape, since it
+   sits among them; a disclosure rather than a bare button, so the press is under a sentence saying
+   what it takes off the disk. */
+.archive {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.archive__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.archive__says {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+}
+
+.archive__set {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--error-edge);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    cursor: pointer;
+}
+
+.archive__set:hover,
+.archive__set:focus-visible {
+    background: var(--sunk);
+    color: var(--mark);
+}
+
+/* Under the settings step, which has no rail to hold it: a session stuck on the step is exactly one
+   somebody may want to close. The step's own measure, so the two read as one column. */
+.setup + .archive {
+    max-width: var(--wide);
+    margin: var(--gap) auto 0;
+}
+
+/* The rule under the last turn, carrying the fork from the end. More air above it than a request
+   rule, as a turn's has, because it is a boundary of the larger kind: where the next turn would open. */
+.rule--end {
+    margin-top: var(--space-5);
+}
+
 /* The step between creating a session and typing into it: which of the plugins it declares to run.
    It stands alone in `main`, because a session being set up has no transcript to read, nothing to
    type into and nothing to navigate.
@@ -3433,6 +3484,22 @@ main:has(> .forking) {
     color: var(--ink-faint);
     font-size: 0.68rem;
     font-family: var(--mono);
+}
+
+/* A closed session: the name in the faint ink and the word beside the date, because a muted row on
+   its own reads as a styling accident. The row stays a link, since the conversation is still there
+   to read and to fork. */
+.session.archived .name {
+    color: var(--ink-faint);
+}
+
+.session .archived {
+    flex: none;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 /* Which turn the fork left its parent at, which is the one fact that distinguishes two forks of

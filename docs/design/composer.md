@@ -6,7 +6,7 @@ each one writes, which is also the order of how much they can break:
 
 - **The shelf** writes nothing recorded at all. It is unsent text.
 - **A disposition** decides which session's inbox the message goes into, and which of the two kinds
-  of message it is. Nothing new is written that was not already written by `say`, `send` or `fork`.
+  of message it is. Nothing new is written that was not already written by `say` or `send`.
 - **A steer** is not a disposition and not a thing anybody asks for: it is what happens to an
   ordinary message that a pass finds while it is working. Nothing about the write differs.
 - **A command** is the one that is not a message at all. It goes in the same queue, is read out of
@@ -33,8 +33,8 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   folds in. It is kept as an explicit answer because wanting to be taken up *after* the reply that
   is coming is an intent no record carries and so nothing can decide it for you. It is offered only
   while something is being answered, since otherwise it is what Send already does.
-- `forget` is `Service.say` with the boundary set, so it shares an arm with `next` the way `fork`
-  shares one with `aside`. It is the only answer that changes what the *model* is handed rather than
+- `forget` is `Service.say` with the boundary set, so it shares an arm with `next`. It is the only
+  answer that changes what the *model* is handed rather than
   where the message goes, and being a `Prompt` is what makes it possible: a boundary between turns
   is the only place one can be, so it must never be folded into a turn already running. See
   [Forget](#forget).
@@ -45,24 +45,21 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   an empty message for this disposition alone. It shares the family `forget` is in, both ending a
   stretch of context where they stand, and differs in who writes what the next one opens on. See
   [Handoff](#handoff).
-- `fork` is `Service.fork(at=turns, said=...)`, which is pi's `/clone` and needed a control rather
-  than a mechanism: the fork route already accepts `at == said.turns`, so forking the end has always
-  been reachable by URL and offered by nothing. It is called `fork` and not `branch` because it is
-  the same call the rule above every turn makes, with a different `at`; see [the
-  words](../philosophy.md#the-words).
-- `aside` is the same call with `Origin.aside` set. **Nothing mechanical differs**, since the copy,
-  the worktree and the choice are identical, so what it records is what somebody *meant*, which
-  nothing else could recover and which the sidebar cannot draw otherwise. Saying that plainly is
-  better than inventing a difference to justify the flag.
-- `parent` sends into the session this one was forked from, which is how an aside comes back. It is
-  offered from **any** fork rather than only an aside, because what it needs is `Origin.session` and
-  every fork has one; gating it on the flag would be a restriction invented to make the flag look
-  load-bearing. The destination is read off the row and never posted, so a form cannot put a message
-  in a conversation nobody was looking at. It is drawn once the branch is past [its own settings
-  step](plugins.md#setup), since this control is in the composer and a settling page has none: an
-  aside is a fork, so the round trip is step aside, confirm, read, send back. That falls out of how
-  forks work rather than being a rule about asides, and it is left that way rather than given a
-  second page shape to keep working.
+- `parent` sends into the session this one was forked from, which is how a branch reports back. It
+  is offered from **any** fork, because what it needs is `Origin.session` and every fork has one.
+  The destination is read off the row and never posted, so a form cannot put a message in a
+  conversation nobody was looking at. It is drawn once the branch is past [its own settings
+  step](plugins.md#setup), since this control is in the composer and a settling page has none, so
+  the round trip is fork, confirm, read, send back. That falls out of how forks work, and it is left
+  that way rather than given a second page shape to keep working.
+
+**Nothing in the menu forks.** A fork is made from the link on a rule, at a turn boundary, where what
+it plants at is settled; see [forking](forking.md). The menu offered one at the end of the
+conversation for a while, as `fork` and as `aside`, and both went for one reason: forking the end of
+a live session is typing into it with extra steps, and the one end worth forking is an archived
+session's, which carries the same link on [the rule under its last turn](forking.md#forking-the-end).
+`Origin.aside` is what the aside answer wrote and nothing writes now; rows that carry it are still
+drawn as the step-outs they were, because a recorded value is not the console's to rewrite.
 - `run` is `Service.run`, and it is the one answer here that is not a message going somewhere. It is
   in the same field all the same, because the question the menu asks is what happens to what you
   typed; a control of its own would spend a slot in the row above the box. It is offered only where
@@ -71,14 +68,6 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   nothing. See [Run](#run).
 - A **steer** is [below](#steer). It is not one of these and never was a choice a form makes: it is
   what becomes of a `here` message that a pass finds while it is working.
-
-**`Origin.aside` is the one column added for presentation**, and it earns that only because the
-sidebar draws the two marks differently: a fork gets `→2` in the mark ink and an aside gets `↩2` in
-the faint one, because what a reader scanning a tree wants to pick out is where the conversation
-actually went. It arrives through `ADDED` like the two columns before it, and `parse_origin`
-*defaults* it where the pair beside it is demanded: every fork written before asides existed has
-`NULL` there and was a plain fork, so reading it as one is ordinary parsing of an optional rather
-than a guess.
 
 **Send and everywhere else are one split control**, because a destination per button spends a slot
 in the row above the message box, which is the row a phone has least of. `sending_control` is Send
@@ -144,8 +133,8 @@ look identical in markup either way.
 
 ## Leaders
 
-**`/fork ` in an empty box is a shortcut to a row of that menu, never a second way of saying it.**
-Typed, it puts the composer into that answer's mode: the button beside the box says `Fork`, a
+**`/forget ` in an empty box is a shortcut to a row of that menu, never a second way of saying it.**
+Typed, it puts the composer into that answer's mode: the button beside the box says `Forget`, a
 sentence above it says what will happen, and what is then written and sent goes there. `! ` is the
 same thing for `/run`, which earns a key of its own by being the mode reached oftenest.
 
@@ -161,8 +150,8 @@ written in one character, so it narrows, commits, and is undone by a backspace e
 Six things there are decided rather than incidental:
 
 - **It is entered in the page, visibly, and never parsed off the message.** If the server stripped a
-  leading `/fork` out of what was posted, a paragraph that legitimately opens with one would
-  silently be a fork, and it would have happened by the time anybody noticed. So the leader is
+  leading `/forget` out of what was posted, a paragraph that legitimately opens with one would
+  silently clear the context, and it would have happened by the time anybody noticed. So the leader is
   consumed by the script, the mode is drawn, and both buttons are rendered by the server with their
   own labels and their own posted values: the script toggles one attribute on the form and hands
   `requestSubmit` whichever button that leaves standing, so it holds no label, no field name and no
@@ -191,8 +180,8 @@ Six things there are decided rather than incidental:
 - **Whether a mode outlives what was sent from it is the answer's own decision**, carried on the
   button the server drew for it as `data-staying` and read there rather than kept in a list in the
   script. `Run` stays, because a command is rarely the only one; everything else comes back to
-  `Send`, because it is a thing somebody meant once, and a `Fork` or an `Aside` has navigated away
-  by then anyway. The script leaves the mode a turn of the event loop after the `submit`, because
+  `Send`, because it is a thing somebody meant once, and a `Parent` has navigated away by then
+  anyway. The script leaves the mode a turn of the event loop after the `submit`, because
   what leaving it does is hide the very button the send is attributed to.
 
 **Which modes exist is read off the buttons the server drew**, not kept in a list in the script. A

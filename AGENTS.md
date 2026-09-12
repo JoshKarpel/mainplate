@@ -28,7 +28,7 @@ written in two places.
 ## Commands
 
 ```console
-$ just setup            # uv sync, the browsers, and pre-commit as a git hook
+$ just setup            # uv sync, the browser, and pre-commit as a git hook
 $ just dependencies     # the same without the hook, which is the half a session's `.mainplate/setup` runs
 $ just test             # mypy, then pytest
 $ just test tests/test_console.py::TestTheConsole  # extra args go straight to pytest
@@ -118,8 +118,8 @@ change:
 - [`docs/design/composer.md`](docs/design/composer.md): dispositions, leaders, the shelf, `forget`,
   handoff, steering, and running a command.
 - [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's worktree,
-  where in it and on what branch, snapshots, and where everything a session keeps on disk is and
-  what it takes.
+  where in it and on what branch, snapshots, where everything a session keeps on disk is and what it
+  takes, and archiving, which takes it away while keeping the conversation.
 - [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
 - [`docs/design/sandbox.md`](docs/design/sandbox.md): the mount namespace `bash` runs behind, and

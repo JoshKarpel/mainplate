@@ -408,7 +408,7 @@
 
     // --- Leaders ------------------------------------------------------------
     //
-    // `/fork ` typed into an empty box puts the composer into that answer's mode, and Escape puts it
+    // `/forget ` typed into an empty box puts the composer into that answer's mode, and Escape puts it
     // back. `! ` is the same thing for `/run`, which earns a key of its own by being the mode reached
     // oftenest. A leader is a shortcut to a row of the sending menu and never a second way of saying
     // it: the server parses no leader out of a message, so a paragraph that opens with `/` is a
@@ -1404,7 +1404,7 @@
         if (offering) {
           const showing = narrowLeaders();
           // The space is what commits a leader, and only where the box names an answer in full:
-          // `/fork ` and `! ` are somebody who has finished the word, where `/fo ` is somebody who
+          // `/forget ` and `! ` are somebody who has finished the word, where `/fo ` is somebody who
           // has not, and taking the row the keyboard happens to be on would put the box in a mode
           // they were still spelling their way towards. Unnamed, the key types itself, which breaks
           // the pattern and puts the menu away on the next `input`.

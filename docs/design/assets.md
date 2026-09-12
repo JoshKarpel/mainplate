@@ -161,6 +161,5 @@ tag deciding which actually register. Why one file rather than core plus separat
 extensions is on [the console's page](console.md#htmx-4), because what reads the allowlist is
 `EXTENSIONS` in `pages.py` rather than anything here.
 
-`mainplate.js` itself depends on nothing. `package.json` at the repository root exists only for
-`scripts/shoot.mjs`, so a checkout pins two Chromiums: Playwright's Python and Node bindings each
-fetch their own.
+`mainplate.js` itself depends on nothing, and nothing in the repository needs Node: `just shots`
+drives the same Python Playwright the suite does, so a checkout pins one Chromium.
