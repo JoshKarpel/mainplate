@@ -1397,6 +1397,15 @@ pre > .copy {
     text-align: center;
 }
 
+/* On an archived session nothing follows the transcript, so the notice is the last thing on the
+   page and would end flush with its bottom edge. The room under it is the composer's own bottom
+   padding, so the page ends the way every page with a box ends. Only where there is no box: a
+   session stalled on a missing endpoint keeps its box under the notice, and the box's padding is the
+   room there. */
+.transcript:last-child .stalled {
+    margin-bottom: var(--gap);
+}
+
 /* Why nothing is happening, where nothing is and something should be. Every state that draws this is
    a fault - a pass that fell over, or a session nothing is coming for - so it is in the error's own
    hue, on a ground faint enough to read as a tint rather than as a filled block.
