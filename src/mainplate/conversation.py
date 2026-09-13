@@ -115,6 +115,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_json
 from without_durability.interfaces import INBOX
 from without_durability.interfaces import Entry
@@ -2705,15 +2706,24 @@ async def answering_turn(
 
     `keeping` absent is a session none of whose plugins asked, and it runs exactly as it did before
     the event existed: one run, and no record of it having been let go.
+
+    A turn may make as many requests as it takes. Pydantic AI caps a run at fifty by default, and
+    that cap counts replayed requests as well as live ones, so a long turn would reach it on the
+    same pass however it was resumed, raise something no arm of `conversing` catches, and be
+    redelivered into the same wall every lease. How much a session may spend is a question about
+    money and not about round trips, and it will be answered where money is counted.
     """
-    said: list[ModelMessage] = list((await agent.run(asked, message_history=list(history))).new_messages())
+    unbounded = UsageLimits(request_limit=None)
+    said: list[ModelMessage] = list(
+        (await agent.run(asked, message_history=list(history), usage_limits=unbounded)).new_messages()
+    )
     if keeping is None:
         return tuple(said)
     attempt = 0
     while injected := await keeping(attempt, sum(1 for each in said if isinstance(each, ModelResponse))):
         attempt += 1
         said.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
-        said.extend((await agent.run(None, message_history=[*history, *said])).new_messages())
+        said.extend((await agent.run(None, message_history=[*history, *said], usage_limits=unbounded)).new_messages())
     return tuple(said)
 
 
