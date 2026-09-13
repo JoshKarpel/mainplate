@@ -62,7 +62,7 @@ catches that outside the run and returns `Progressed`. An allowance of `None` is
 exactly what a pass was before there was a number here, so the tradeoff is a dial rather than a
 branch.
 
-Five things there are decided rather than incidental:
+Six things there are decided rather than incidental:
 
 - **Only live requests count.** A replayed one pays nobody and takes no time worth bounding, so a
   resumed pass gets *further* than the last rather than stopping where it did. Whether a request is
@@ -93,6 +93,12 @@ Five things there are decided rather than incidental:
   answers two turns, and a fresh count per turn would let it make one live request for each under a
   lease sized for one. So `conversing` makes one `Allowance` per pass and hands the same one to
   every `stepping` scope in it.
+- **The turn itself is unbounded.** Pydantic AI caps a run at fifty requests by default, and
+  `answering_turn` turns that off rather than raising it. The cap counts replayed requests as well
+  as live ones, so a long turn reaches it on the same pass however it is resumed, and it raises
+  something no arm of `conversing` catches: a `Failed` record, redelivered into the same wall every
+  lease. What a session may spend is a question about money, and the bound belongs where money is
+  counted, which is the priced turn on the [cost page](cost.md) and not a count of round trips.
 
 ## Carrying the turn on, and stopping
 

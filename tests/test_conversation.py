@@ -1370,6 +1370,31 @@ class TestWhatOnePassDoes:
             Blocked(listening=frozenset({opened_key(1)})),
         ), "the first pass handed the rest of the turn back; the second finished it and waited"
 
+    async def test_a_turn_may_make_as_many_requests_as_it_takes(self, service: Service, workspaces: Workspaces) -> None:
+        """
+        No cap on round trips per turn, which is a bound Pydantic AI supplies by default and this
+        console turns off: fifty, counted over replayed requests as well as live ones, raised as
+        something no arm of the pass catches. Sixty is past it by enough that a count off by a few
+        would still fail.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        # Each call under its own id rather than through `calls`, which numbers a batch from zero:
+        # a tool step is keyed by the call's id, so sixty calls sharing one would collide as a step
+        # written twice in one pass, long before anything counted them.
+        readings = (
+            ModelResponse(
+                parts=[ToolCallPart(tool_name="read", args={"path": "src/kept.txt"}, tool_call_id=f"call-{at}")]
+            )
+            for at in range(60)
+        )
+        scripted = Scripted(script=(*readings, ModelResponse(parts=[TextPart("read it")])))
+
+        made = await passes_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        assert made == (Blocked(listening=frozenset({opened_key(1)})),)
+        assert scripted.asked == 61
+
     async def test_what_a_stretch_records_is_exactly_what_its_requests_carried(
         self, service: Service, workspaces: Workspaces
     ) -> None:
