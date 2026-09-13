@@ -45,6 +45,7 @@ from mainplate.console import parse_form_send
 from mainplate.console import posted_isolation
 from mainplate.console import posted_workspace
 from mainplate.conversation import DECLARED_KEY
+from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
 from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import Disposition
 from mainplate.conversation import choice_of
@@ -1039,6 +1040,37 @@ class TestWhatIsNewInTheList:
         session = answered.location.rsplit("/", 1)[-1]
         assert (await service.read(session)).chosen == chosen  # type: ignore[union-attr]
 
+    async def test_a_session_records_the_output_override_it_was_started_with(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        async with calling(app) as caller:
+            answered = await caller.post("/sessions", {**starting_form(), OUTPUT_OVERRIDE_FIELD: "20000"})
+        session = answered.location.rsplit("/", 1)[-1]
+        assert (await service.read(session)).chosen == replace(DEFAULT_CHOICE, output_override=20_000)  # type: ignore[union-attr]
+
+    async def test_an_empty_override_box_is_no_override(self, app: ASGIApp, service: Service) -> None:
+        """Blank is somebody leaving the number to the console, and is recorded as exactly that."""
+        async with calling(app) as caller:
+            answered = await caller.post("/sessions", {**starting_form(), OUTPUT_OVERRIDE_FIELD: "  "})
+        session = answered.location.rsplit("/", 1)[-1]
+        assert (await service.read(session)).chosen.output_override is None  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize("written", ["lots", "0", "-5", "2.5", "²"])
+    async def test_an_override_that_is_not_a_number_of_tokens_is_refused(
+        self, app: ASGIApp, service: Service, written: str
+    ) -> None:
+        """Somebody who typed something meant something, and a session quietly on the default is the mistake."""
+        async with calling(app) as caller:
+            answered = await caller.post("/sessions", {**starting_form(), OUTPUT_OVERRIDE_FIELD: written})
+        assert answered.status == 422
+        assert await service.listed() == ()
+
+    async def test_the_picker_offers_the_override_box_under_the_thinking_level(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            page = await caller.get("/")
+        assert f'name="{OUTPUT_OVERRIDE_FIELD}"' in page.text
+        assert page.text.index('id="thinking"') < page.text.index(f'name="{OUTPUT_OVERRIDE_FIELD}"')
+
     async def test_a_pair_no_profile_offers_is_refused_rather_than_recorded(
         self, app: ASGIApp, service: Service
     ) -> None:
@@ -1596,6 +1628,20 @@ class TestWhatASessionIsOn:
             page = await caller.get(f"/sessions/{session.id}")
 
         assert '<dt>thinking</dt><dd class="about__thinking">high</dd>' in page.text
+
+    async def test_an_output_override_is_named_only_where_one_was_typed(self, app: ASGIApp, service: Service) -> None:
+        """A session that left the box empty sends what the console knows and has no number of its own to name."""
+        plain = await service.start(DEFAULT_CHOICE, None)
+        await registered(service, plain.id)
+        overridden = await service.start(replace(DEFAULT_CHOICE, output_override=20_000), None)
+        await registered(service, overridden.id)
+
+        async with calling(app) as caller:
+            without = await caller.get(f"/sessions/{plain.id}")
+            with_one = await caller.get(f"/sessions/{overridden.id}")
+
+        assert 'class="about__override"' not in without.text
+        assert '<dt>output override</dt><dd class="about__override">20000</dd>' in with_one.text
 
 
 class TestWhatARuleSays:

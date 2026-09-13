@@ -890,6 +890,7 @@
       paintFollow();
       paintLeading();
       paintBranches();
+      paintOverride();
       paintCopies();
       paintCopied();
       paintCache();
@@ -1344,6 +1345,15 @@
       if (toggle) toggle.checked = false;
     };
 
+    // The override box says what leaving it empty sends, which is the picked model's own number, so
+    // it follows the pick. The sentence is copied off the card rather than composed here: the server
+    // renders one per card and the one for the starting model into the box, so this holds no wording
+    // of its own and with the file absent the box is right for the model the page opened on.
+    const paintOverride = () => {
+      const box = document.getElementById("output-override");
+      const picked = document.querySelector(".model__pick:checked")?.closest("[data-override]");
+      if (box && picked) box.placeholder = picked.dataset.override;
+    };
     // Matching is over a card's whole text, which is why a model answers to its name and to the
     // routed id under it: both are printed on the card.
     const narrow = (part, needle) => {
@@ -1364,6 +1374,7 @@
         if (!(pick instanceof HTMLInputElement) || pick.type !== "radio") return;
         const part = pick.closest(".picker__part");
         if (part) shut(part);
+        paintOverride();
       });
     };
 

@@ -447,6 +447,50 @@ class TestFindingTheRateForASession:
         )
         assert prices.pricer(self.CHOICE)(RequestUsage(input_tokens=1_000)) is None
 
+
+class TestTheMostARequestMayGenerate:
+    """
+    Which number a request is sent as its output limit, and why the endpoint's own wins.
+
+    Sent above what the endpoint accepts a request is refused outright, and sent below it a model
+    that thinks at length is cut off with the tokens paid for and nothing to show. So where the
+    endpoint states the number nothing overrules it, and the record is for where it says nothing.
+    """
+
+    CHOICE = Choice(endpoint="gateway", model="p/known")
+
+    def catalogue(self, *models: Listed) -> Catalogues:
+        offering = Offering(endpoint="gateway", format="anthropic", url=None, models=models)
+        return Catalogues(current=Catalogue(offered={"gateway": offering}, default=self.CHOICE))
+
+    def stated(self, output: int | None) -> Listed:
+        return Listed(id="p/known", label="Known", provider="p", output=output)
+
+    def recorded(self, output: int) -> References:
+        return References(current=Reference(qualified={"p/known": Facts(output=output)}, upstream={}))
+
+    def test_what_the_endpoint_states_wins_over_the_record(self) -> None:
+        prices = Prices(catalogues=self.catalogue(self.stated(128_000)), references=self.recorded(64_000))
+        assert prices.output_cap(self.CHOICE) == 128_000
+
+    def test_the_record_answers_where_the_endpoint_says_nothing(self) -> None:
+        prices = Prices(catalogues=self.catalogue(self.stated(None)), references=self.recorded(131_072))
+        assert prices.output_cap(self.CHOICE) == 131_072
+
+    def test_the_endpoints_number_needs_no_database(self) -> None:
+        """A console configured without a reference still has to send something, and the listing is enough."""
+        prices = Prices(catalogues=self.catalogue(self.stated(64_000)), references=References())
+        assert prices.output_cap(self.CHOICE) == 64_000
+
+    def test_where_neither_knows_nothing_is_sent(self) -> None:
+        """Nothing rather than a guess, since a number guessed too high is refused outright."""
+        prices = Prices(catalogues=self.catalogue(self.stated(None)), references=References())
+        assert prices.output_cap(self.CHOICE) is None
+
+    def test_a_model_the_endpoint_no_longer_lists_has_no_number_either(self) -> None:
+        prices = Prices(catalogues=self.catalogue(listing("p/something-else")), references=self.recorded(64_000))
+        assert prices.output_cap(self.CHOICE) is None
+
     def test_a_record_that_prices_nothing_leaves_the_turn_unpriced(self) -> None:
         prices = Prices(
             catalogues=self.catalogue(listing("p/known")),

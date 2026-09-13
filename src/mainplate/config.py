@@ -83,7 +83,7 @@ class Endpoint(BaseModel):
     It decides three things at once, and they travel together: which models the endpoint will list,
     which of them it will actually answer for, and what `url` has to be. The Anthropic SDK appends
     `/v1/messages` to what it is given, so it wants the host; the OpenAI SDK appends
-    `/chat/completions`, so it wants the host *and* `/v1`.
+    `/responses`, so it wants the host *and* `/v1`.
 
     Deliberately the same word `model_reference.format` uses, because it is the same question asked
     twice: what shape are the bytes at the other end.

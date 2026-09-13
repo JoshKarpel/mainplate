@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from datetime import timedelta
 
 import pytest
+from anthropic.types import ModelInfo
 from conftest import CATALOGUE
 from conftest import CONFIG
 from conftest import OFFERED
 from conftest import Stand
 from conftest import Watching
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.settings import ModelSettings
 from without_async import background_task
 
@@ -24,6 +28,7 @@ from mainplate.agent import OpenAIWire
 from mainplate.agent import UnknownChoice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.agent import anthropic_listed
 from mainplate.agent import build_wire
 from mainplate.agent import build_wires
 from mainplate.agent import chat_models
@@ -161,6 +166,23 @@ class TestBuildingEndpoints:
         endpoint = Endpoint.model_validate({"format": wire, "url": "https://gateway.example.invalid/v1"})
         assert isinstance(build_wire(endpoint), built)
 
+    def test_the_openai_wire_speaks_the_responses_api_and_keeps_nothing_at_the_provider(self) -> None:
+        """
+        The checkpoint is the conversation, said to the one API that offers to hold it instead.
+
+        Pinned on the built model rather than on a request, because the request's shape is Pydantic
+        AI's: what this console decides is which API, and that the exchange is not stored, which is
+        what server-side chaining would depend on. The two chaining settings are pinned absent, since
+        either would have the provider reconstruct the history and this console send only what is new.
+        """
+        wire = build_wire(Endpoint.model_validate({"format": "openai", "url": "https://gw.invalid/v1"}))
+        built = wire.model("openai/gpt-5.6-sol")
+
+        assert isinstance(built, OpenAIResponsesModel)
+        assert built.settings == {"openai_store": False}
+        assert "openai_previous_response_id" not in (built.settings or {})
+        assert "openai_conversation_id" not in (built.settings or {})
+
     def test_every_profile_gets_one_before_anything_takes_traffic(self) -> None:
         """Eager, so a credential an SDK refuses names its own endpoint instead of a later session."""
         assert sorted(build_wires(CONFIG).by_endpoint) == ["gateway", "here"]
@@ -211,6 +233,67 @@ class TestBuildingEndpoints:
         await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful", thinking="high"), "be terse").run("hi")
 
         assert watcher.seen == [{"temperature": 0.5, "thinking": "high"}]
+
+    async def test_the_output_limit_reaches_the_request_as_the_models_whole_maximum(self) -> None:
+        """
+        The number sent is the model's own ceiling and not a budget: the model is never told it, so a
+        smaller one buys nothing but an answer cut off with its tokens already paid for.
+        """
+        watcher = Watching()
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+
+        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse", output_cap=128_000).run(
+            "hi"
+        )
+
+        assert watcher.seen == [{"max_tokens": 128_000}]
+
+    async def test_a_number_somebody_typed_beats_the_one_the_console_looked_up(self) -> None:
+        """
+        The override's precedence is the ordering that already says a recorded choice wins, and this
+        is what pins that the looked-up cap was slotted *under* the choice rather than over it.
+        """
+        watcher = Watching()
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+        chosen = Choice(endpoint="here", model="ripe/careful", output_override=20_000)
+
+        await agent_for(endpoints, chosen, "be terse", output_cap=128_000).run("hi")
+
+        assert watcher.seen == [{"max_tokens": 20_000}]
+
+    async def test_with_no_limit_known_nothing_is_sent_rather_than_a_guess(self) -> None:
+        """A number guessed too high is refused outright, so the adapter's own default is the honest answer."""
+        watcher = Watching()
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+
+        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse").run("hi")
+
+        # Empty settings reach the model as `None`, which is Pydantic AI's normalisation and not
+        # this console's, so what is pinned is the absence of the key rather than the shape.
+        assert len(watcher.seen) == 1
+        assert "max_tokens" not in (watcher.seen[0] or {})
+
+
+class TestReadingAnAnthropicListing:
+    def found(self, model_id: str, max_tokens: int | None) -> ModelInfo:
+        return ModelInfo(
+            id=model_id,
+            display_name=model_id,
+            created_at=datetime(2026, 3, 1, tzinfo=UTC),
+            type="model",
+            max_tokens=max_tokens,
+        )
+
+    def test_the_output_limit_the_endpoint_states_is_read_off_the_listing(self) -> None:
+        """
+        The one number beside identity that is, because it is what the request sends and only the
+        endpoint is guaranteed to agree with itself about what it accepts.
+        """
+        assert anthropic_listed(self.found("anthropic/claude-opus-5", 128_000)).output == 128_000
+
+    def test_a_resold_model_the_endpoint_states_nothing_for_carries_nothing(self) -> None:
+        """The gateway forwards the serving service's record and leaves the SDK's own field empty."""
+        assert anthropic_listed(self.found("fireworks/kimi-k3", None)).output is None
 
 
 class TestDiscovering:

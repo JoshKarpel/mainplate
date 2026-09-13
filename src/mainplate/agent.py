@@ -52,7 +52,8 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.anthropic import AnthropicModelSettings
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -229,6 +230,27 @@ class Choice:
     back as the default rather than as a failure.
     """
 
+    output_override: int | None = None
+    """
+    The most one request may generate, where somebody typed a number, or nothing to send what the
+    console knows.
+
+    **An override and never a default**, which is the whole of what the name says. Empty is not a
+    number the form copied in for them: it is the session sending whatever the endpoint's listing or
+    the reference says at each turn, read afresh per agent built, so a limit the endpoint raises
+    reaches a running session and a session started while the reference was unreachable is not
+    frozen at a blank. A number here beats both, for the session's life, because it is a thing
+    somebody said; `agent_for` puts the choice's settings over everything else it composes, so the
+    precedence is that rule and not a second one.
+
+    What it is for is the model neither source knows: a resold model on a gateway with no reference
+    configured, which would otherwise run on the adapter's own default and be cut off. What it costs
+    is that a wrong number sticks to the session, and above the endpoint's ceiling that is a refused
+    turn naming the number; the way past is a fork with the field changed, exactly as for a thinking
+    level the endpoint stopped taking. It is not a budget: the model is never told it, so a smaller
+    number buys only a cut-off answer.
+    """
+
     def branching(self, session: str) -> Choice:
         """
         The same choice with a branch of its own, where a repository was picked and nobody named one.
@@ -280,12 +302,17 @@ class Choice:
     @property
     def settings(self) -> ModelSettings | None:
         """
-        What this choice asks of a model, which today is the thinking level and nothing else.
+        What this choice asks of a model: the thinking level and the output override, where each was given.
 
         `None` rather than an empty mapping, so a choice that asks for nothing builds an agent
         indistinguishable from one built before this field existed.
         """
-        return None if self.thinking is None else ModelSettings(thinking=self.thinking)
+        asked = ModelSettings()
+        if self.thinking is not None:
+            asked["thinking"] = self.thinking
+        if self.output_override is not None:
+            asked["max_tokens"] = self.output_override
+        return asked or None
 
 
 class UnknownChoice(LookupError):
@@ -318,10 +345,10 @@ class Listed:
     one id - so this is a facet of a model rather than a parent of it, and the tree really is
     `endpoint -> model` with this as a heading.
 
-    This is **identity and nothing else**: which model, under which two names, in which group. What
-    a card says *about* a model - what it costs, how much it reads, what it can do - is not here and
-    is not read off a listing at all. It comes from `reference.py`, from one database, for every
-    model alike.
+    This is **identity, and the one number a request cannot be made without**: which model, under
+    which two names, in which group, and how much one request may generate. What a card says *about*
+    a model - what it costs, how much it reads, what it can do - is not here and is not read off a
+    listing at all. It comes from `reference.py`, from one database, for every model alike.
 
     That is a deliberate refusal rather than an omission, and the reason is what these listings look
     like. The Anthropic wire describes Claude in detail, forwards a different vendor's record
@@ -345,6 +372,21 @@ class Listed:
     routed id: `fireworks/kimi-k3` is routed here and is `accounts/fireworks/models/kimi-k3` there.
     It is the second of the two names the reference is looked up under, and the one that finds a
     model a gateway has renamed into its own namespace - which is most of what a gateway serves.
+    """
+
+    output: int | None = None
+    """
+    The most one request may ask this model to generate, where the endpoint says.
+
+    The other field read off a listing, and it is not a fact for a card: it is what the request
+    *sends*, and the endpoint is the one party guaranteed to agree with itself about what it will
+    accept. Asked for above this number a request is refused outright rather than clamped, and
+    asked for below it a model that thinks at length is cut off mid-thought with the tokens paid for
+    and nothing to show, so a database's guess is the right answer only where the endpoint gives
+    none. The Anthropic wire states it for the models its vendor serves and nothing for the ones it
+    resells; the OpenAI wire never states it. `reference.py` fills the rest, from the same record a
+    card reads, and `Described` still draws the record and never this, so what a page *says* about a
+    model keeps its one source.
     """
 
 
@@ -482,6 +524,7 @@ def anthropic_listed(found: ModelInfo) -> Listed:
         label=found.display_name or passed.label or found.id,
         provider=provider_of(found.id, "anthropic"),
         upstream=passed.upstream,
+        output=found.max_tokens,
     )
 
 
@@ -518,7 +561,12 @@ def passed_through(extra: Mapping[str, object]) -> PassedThrough:
 @dataclass(frozen=True, slots=True)
 class OpenAIWire:
     """
-    An endpoint spoken to over `/v1/chat/completions`.
+    An endpoint spoken to over `/v1/responses`.
+
+    The responses API rather than chat completions, because OpenAI's current models will not take
+    function tools with reasoning on over the older one: GPT-5.6 reasons by default and refuses a
+    tool-bearing request there unless reasoning is switched off outright, which for a coding session
+    is every request. The gateway serves the responses API for the models it resells too.
 
     Its list needs two things thrown out before it is a picker. exe.dev publishes every OpenAI
     model twice, once bare and once prefixed, so a bare id that some prefixed id ends with is the
@@ -530,7 +578,23 @@ class OpenAIWire:
     sdk: OpenAIProvider
 
     def model(self, name: str) -> Model:
-        return OpenAIChatModel(name, provider=self.sdk)
+        """
+        The named model, told never to keep the conversation at the provider.
+
+        **The checkpoint is the conversation, and this is where that has to be said to this API.**
+        The responses API can hold a conversation server-side and be handed only what is new, by a
+        `previous_response_id` or a conversation id, and that is a second copy of what was said,
+        kept somewhere this console cannot read, replay a fork from, or take a session off. Pydantic
+        AI sends neither unless asked, so the whole recorded history goes with every request; what is
+        set here is `store`, which is OpenAI keeping the exchange on its side regardless, and which
+        that chaining would depend on. Off, and the provider is a function of the request. What it
+        costs is nothing this console wanted: the reasoning across turns still travels, as encrypted
+        items replayed out of the history.
+
+        On the model rather than in the settings a session composes, because it is a fact about
+        how this wire may be spoken to rather than anything a session asks for.
+        """
+        return OpenAIResponsesModel(name, provider=self.sdk, settings=OpenAIResponsesModelSettings(openai_store=False))
 
     async def listed(self) -> tuple[Listed, ...]:
         page = await self.sdk.client.models.list()
@@ -798,6 +862,7 @@ def agent_for(
     bwrap: str | None = None,
     plugins: Live | None = None,
     environment: Mapping[str, str] | None = None,
+    output_cap: int | None = None,
 ) -> Agent[None, str]:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -832,8 +897,29 @@ def agent_for(
     `environment` is what the session's own commands run under, on top of what the sandbox sets:
     what a repository's setup recorded for the session, handed in as the value it was recorded as
     rather than looked up here. See `Sandbox.argv`.
+
+    `output_cap` is the most one request may generate as the console knows it, and **it is the
+    model's own maximum rather than a budget**: the model is never told the number, so a smaller one
+    buys nothing but a response cut off with its tokens already paid for. It is handed in rather than
+    looked up here because where it comes from is the catalogue and the reference, both reloadable
+    configuration this module does not hold; see `Listed.output` for which says it. `None` sends
+    nothing, which leaves the adapter's own default - 4096 on the Anthropic wire, the provider's on
+    the OpenAI one - and is the honest answer where neither source knows, since a number guessed too
+    high is refused outright. A `Choice.output_override` beats it, by the ordering below and no other
+    rule.
     """
     wire = wires.for_endpoint(chosen.endpoint)
+    # The session's own settings over everything else, so a recorded choice always wins: the thing
+    # somebody picked is the thing that happens. The cap the console looked up sits between the
+    # wire's and the choice's, which is exactly its standing - a fact about the model that a number
+    # somebody typed overrides - so the override's precedence is this ordering and not a rule written
+    # somewhere else. A dict display rather than keyword splats, because a key named twice is a
+    # `TypeError` to a call and the later value to a display, and overlap is the point.
+    asked: ModelSettings = {
+        **wire.caching(),
+        **(ModelSettings() if output_cap is None else ModelSettings(max_tokens=output_cap)),
+        **(chosen.settings or ModelSettings()),
+    }
     reach = reaching(chosen.isolation, worktree, scratch, bwrap)
     tools: list[AbstractToolset[None]] = []
     if plugins is not None and (contributed := contributions(plugins)):
@@ -846,10 +932,7 @@ def agent_for(
         wire.model(chosen.model),
         name="mainplate",
         instructions=instructions,
-        # The session's own settings over the wire's, so a recorded choice always wins: what the two
-        # carry does not overlap today, and if it ever does, the thing somebody picked should be the
-        # thing that happens.
-        model_settings=ModelSettings(**wire.caching(), **(chosen.settings or ModelSettings())),
+        model_settings=asked,
         capabilities=[StepwiseDurability()],
         toolsets=tools,
     )

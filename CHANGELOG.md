@@ -9,6 +9,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A max output tokens override on the picker**, under the thinking level, for the model the
+  console has no number for: a resold model behind a gateway with no reference configured, or one
+  you know better about than the record does. A number there beats what the console looks up, for
+  the session's life, and is named on the session's card in the rail. Empty is not an override, and
+  it is deliberately not the looked-up number copied in: a session that leaves it empty sends what
+  the endpoint and the reference say at each turn and follows them when they move. The empty box
+  says what that is for the model picked above it, `max (128K)` or that nobody knows.
+- **An open model list is shown whole, and the start page scrolls as one box.** The list used to
+  give up height down to a couple of lines of card behind a scrollbar on a short window, so that
+  the questions under it stayed put; now nothing in the picker shrinks, and the fold is what keeps
+  that cheap, since the list is only long while it is open and a pick shuts it.
+
 - **A row in the session list says `new`** when its session has recorded something since anybody
   looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
   message of your own. Opening the session clears it, and so does watching the answer arrive on a
@@ -252,6 +264,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A start page shorter than the shut picker drew the model card over the thinking level** and
+  whatever sat under it, rather than scrolling. The model group was allowed to shrink so its list
+  could scroll while open, and kept that permission while shut, when there was no list to scroll and
+  nothing to clip the one card. Nothing in the picker shrinks now, open or shut, and the page scrolls.
+- **A request is sent with the model's whole output limit.** Nothing set one, so the Anthropic wire
+  ran on Pydantic AI's default of 4096 tokens, which a model thinking at length hit on ordinary
+  coding turns, with every token paid for and nothing to act on. The number now comes off the
+  endpoint's own listing where it states one and the reference database where it does not, on both
+  wires, and is sent as the model's maximum rather than a budget: the model is never told it, so a
+  smaller one buys only a cut-off answer.
+- **A session cut off at that limit stops and says so, rather than retrying for ever.** The answer
+  was recorded before the loop raised over it, so a redelivery replayed the same answer into the same
+  exception once per lease with nothing on screen but a failure. It is now written down as a refusal
+  under the request the turn could not go on to make, the page says the model was cut off and at
+  what number, and a fork at the turn is the way past, exactly as for a request the provider will
+  not take.
 - The fork page's `Fork and ask` button wears the same face as `Create session`, which is the same
   press one page over; it had the browser's own.
 - **A session whose pass fell over says so.** A pass that raises is left unanswered by the worker and
@@ -283,6 +311,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The OpenAI wire speaks the responses API.** OpenAI's current models refuse function tools with
+  reasoning on over chat completions, and GPT-5.6 reasons by default, so a coding session on it was
+  a refused turn or a model with its reasoning switched off. The conversation is still sent whole on
+  every request and the checkpoint stays the only copy of it: the wire never asks the provider to
+  hold the history, and tells it not to keep the exchange either. Sessions already on the wire carry
+  on; a gateway model that only speaks chat completions stops working there, and its own refusal
+  says so.
+- **The lease a pass holds is an hour**, up from ten minutes. A request sent with a model's whole
+  output limit is one Anthropic's SDK budgets an hour of generation for, and the only thing the length
+  costs is how long a session waits after the process answering it dies.
+- The sentence under a stopped turn says the turn stopped and would stop the same way again, rather
+  than that the provider refused it, since a turn cut off at its output limit stops the same way and
+  no provider refused anything.
 - **A window too narrow for three columns takes the phone's shape at once**: the session list and
   the rail both fold away behind the two clasps in the row across the top, at the width where the
   three stop fitting. There used to be a shape between, with the rail folded behind a glyph floating

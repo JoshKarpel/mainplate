@@ -1956,10 +1956,6 @@ pre > .copy {
     width: 100%;
     max-width: var(--wide);
     margin: 0 auto;
-    /* So the models can give up height instead of the whole picker growing past the bottom of the
-       page. Without it a flex item is floored at its content height and `.setup` has to scroll,
-       which carries the endpoints and the settings off with the list. */
-    min-height: 0;
     /* Inside the scroller rather than on it, and that is what keeps the sticky provider heading
        flush with the top of the box. A sticky `top: 0` is measured from the scroll container's
        *content* edge, so padding on `.setup` parks the heading that far down and leaves a strip
@@ -2125,7 +2121,8 @@ pre > .copy {
 /* `relative`, because the branches are drawn *over* whatever is under the field rather than pushing
    it down: the network group and the endpoint below it would otherwise jump every time somebody
    typed a letter, which on a page of folded groups reads as the whole picker moving. */
-.basis__field {
+.basis__field,
+.override__field {
     position: relative;
     display: flex;
     flex-direction: column;
@@ -2133,9 +2130,16 @@ pre > .copy {
     min-width: 0;
 }
 
+/* The output override is the base's shape with one field and no list behind it: a number somebody
+   may type, under the thinking level, drawn as the base is so the two boxes on this page match. */
+.override {
+    margin-top: var(--space-3);
+}
+
 /* The same row a group's legend and its count sit in, because it is the same pair: what the field is
    called, and how many answers there are to complete it from. */
-.basis__label {
+.basis__label,
+.override__label {
     display: flex;
     align-items: baseline;
     gap: var(--space-4);
@@ -2151,7 +2155,8 @@ pre > .copy {
     color: var(--person-edge);
 }
 
-.basis input {
+.basis input,
+.override input {
     /* The neutral edge every other input takes, and deliberately not the person's hue: that one is
        reserved for the box a message is written in, which is the thing on the person's side of the
        palette. This is a setting, not something said. */
@@ -2168,7 +2173,8 @@ pre > .copy {
 /* A sentence rather than a ref, so it is set in the page's own face and not the input's: the
    monospace above is for the value somebody types, and a whole sentence in it does not fit the box.
    Named rather than `inherit`, which would inherit the monospace from the input itself. */
-.basis input::placeholder {
+.basis input::placeholder,
+.override input::placeholder {
     color: var(--ink-faint);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     font-size: 0.72rem;
@@ -2330,19 +2336,6 @@ pre > .copy {
     background: color-mix(in srgb, var(--person-edge) 8%, var(--ground));
 }
 
-/* And a shut list is one card, so it neither scrolls nor holds the height a list would. */
-.picker__part:not(:has(> .picker__toggle:checked)) .models {
-    min-height: 0;
-    overflow-y: visible;
-}
-
-/* The one part that gives. The endpoints are a handful of cards and the settings are two rows, so
-   when there is not enough room it is the model list that should shrink and scroll: it is the part
-   whose length is a property of whatever gateway you are pointed at rather than of this page. */
-.picker__part--models {
-    min-height: 0;
-}
-
 /* The word naming each group, at the head of its row and drawn as the same faint chrome the panel
    roles are: it labels the choice without competing with the thing being chosen. */
 .picker__legend {
@@ -2450,19 +2443,18 @@ pre > .copy {
     display: flex;
     flex-direction: column;
     gap: var(--space-5);
-    /* Its own scroller, because one endpoint can offer seventy models and a page that grew to hold
-       all of them would put the message box below the fold on the one page whose whole purpose is
-       to reach that box.
+    /* As tall as its cards on the start page, where `.setup` scrolls the whole choosing as one box.
+       It used to be the one part of the picker that gave up height, scrolling inside a block that
+       scrolled inside the page, so that the questions under it stayed put however long the list ran;
+       what that bought was a list two lines of card tall behind a scrollbar on a short window, and
+       a group allowed to shrink drawing its content over the questions under it whenever the floor
+       and the shrinking disagreed. The fold is what makes the plain answer cheap: the list is only
+       long while it is open, a pick shuts it, and the box above it narrows it, so nothing has to
+       give and one box scrolls, which is what a phone does and what every other page here does.
 
-       Bounded by the room actually left rather than by a fixed height, which is what keeps
-       everything around it put: at a fixed bound a short window still overflowed the picker as a
-       whole, so the outer block scrolled and carried them off with the models. Here this is the
-       only thing that scrolls, so the repository and the endpoints above it and the thinking level
-       below it all stay where they are however long the list runs.
-
-       The floor is what stops "shrink to fit" becoming "shrink to nothing": past it the outer block
-       scrolls after all, which is the right answer in a window too short to show a choice and a
-       message box at once.
+       A scroller all the same, for the fork page, which bounds it (`.forking .models`): that page has
+       a transcript under the picker that a reader has to see to choose a turn at all. Unbounded, as
+       here, `auto` draws nothing.
 
        And it chains, deliberately: `overscroll-behavior: contain` here made the end of the list a
        wall, so a wheel that started over the models could not reach the rest of the page it sits in
@@ -2470,7 +2462,6 @@ pre > .copy {
        `contain` belongs on a scroller that *is* the reading surface, which the transcript is and a
        bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on
        into the block around it, which is what a reader who kept flicking asked for. */
-    min-height: 7rem;
     overflow-y: auto;
 }
 
@@ -4075,6 +4066,7 @@ main:has(> .forking) {
         .composer textarea,
         .naming input,
         .basis input,
+        .override input,
         .plugin__number input,
         .forking textarea,
         .picker__filter-field,
@@ -4110,27 +4102,12 @@ main:has(> .forking) {
 
         /* --- Choosing what a session runs on --- */
 
-        /* One scroller for the whole choosing, where a wide window has the models scrolling inside
-           a block that scrolls inside the page. That nesting is what keeps the settings put beside
-           a long model list, and on a phone it bought a list about thirty pixels tall: `.setup` is
-           the row that grows, the picker is taller than it whatever happens, so the part that was
-           meant to give had nothing to give from.
-
-           So the models simply stop scrolling and `.setup` carries the lot, which is one box
-           scrolling inside a document that does not - the property that mattered, and the same one
-           every other page here has.
-
-           The `flex: none` is the other half and is not optional. Every `min-height: 0` above
-           exists to let a part shrink so the models can be the one that gives; with nothing left to
-           scroll, that permission just squashes the list to a third of its content and draws the
-           rest of it over the settings underneath. Nothing here shrinks, so everything is its own
-           height and one box scrolls. */
-        .picker,
-        .picker__part--models,
-        .models,
+        /* One scroller for the whole choosing on every page, which the start page already has at
+           any width: the fork page bounds its list so the transcript under it stays reachable, and
+           on a phone that bound bought a list about thirty pixels tall. So the bound comes off and
+           `.setup` carries the lot, which is one box scrolling inside a document that does not - the
+           property that mattered, and the same one every other page here has. */
         .forking .models {
-            flex: none;
-            min-height: auto;
             max-height: none;
             overflow-y: visible;
         }

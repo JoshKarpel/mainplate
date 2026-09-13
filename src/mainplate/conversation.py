@@ -17,8 +17,8 @@
 #                          appended from outside a pass, by `Service.say`, `send` and `run`
 #     result:{entry}       what the command delivered under that entry exited with, said and took,
 #                          written by `Commands` when it finishes
-#     choice               the endpoint, model, repository, isolation and thinking level this
-#                          session is on, written once at creation
+#     choice               the endpoint, model, repository, isolation, thinking level and output
+#                          override this session is on, written once at creation
 #     turn:{n}:opened      the entry this turn took, recorded by `Run.receive` in the body below
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request
@@ -101,6 +101,8 @@ from typing import assert_never
 from typing import cast
 
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import IncompleteToolCall
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -344,6 +346,12 @@ def failed_key(at: int) -> StepKey:
 # What the thinking level is called inside the recorded choice. Named once here because the writer
 # and the reader are both in this file and must not drift, which is the same reason the keys are.
 THINKING_FIELD: Final = "thinking"
+
+# The most one request may generate, where somebody typed a number rather than leaving it to what
+# the console knows; inside the recorded choice and on the form. Absent from every record written
+# before it existed and from every session nobody typed into, and both read back as no override,
+# which is the session sending whatever the catalogue and the reference say at each turn.
+OUTPUT_OVERRIDE_FIELD: Final = "output_override"
 
 REPOSITORY_FIELD: Final = "repository"
 
@@ -869,6 +877,21 @@ def parse_thinking(recorded: object) -> ThinkingLevel | None:
     raise TypeError(f"a thinking level must be a boolean or an effort, not {recorded!r}")
 
 
+def parse_output_override(recorded: object) -> int | None:
+    """
+    A recorded output override, or a loud failure if the checkpoint holds something that is not one.
+
+    Absent reads as `None`, which is the session sending whatever the console knows at each turn,
+    and is what every session recorded before this existed asked for. A `bool` is refused although
+    it is an `int`, because `True` under this key was never written by this console.
+    """
+    if recorded is None:
+        return None
+    if isinstance(recorded, bool) or not isinstance(recorded, int) or recorded <= 0:
+        raise TypeError(f"an output override must be a positive number of tokens or nothing, not {recorded!r}")
+    return recorded
+
+
 def parse_isolation(recorded: object, repository: str | None) -> Isolation:
     """
     How much of the filesystem a session reaches, defaulted from what it is working in.
@@ -942,6 +965,7 @@ def parse_choice(recorded: object) -> Choice:
         # that matters is that refusing is the thing somebody has to have actually said.
         trusted=recorded.get(TRUSTED_FIELD) is not False,
         thinking=parse_thinking(recorded.get(THINKING_FIELD)),
+        output_override=parse_output_override(recorded.get(OUTPUT_OVERRIDE_FIELD)),
     )
 
 
@@ -968,6 +992,7 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
         ISOLATION_FIELD: {FILESYSTEM_FIELD: chosen.isolation.filesystem.value, NETWORK_FIELD: chosen.isolation.network},
         TRUSTED_FIELD: chosen.trusted,
         THINKING_FIELD: chosen.thinking,
+        OUTPUT_OVERRIDE_FIELD: chosen.output_override,
     }
 
 
@@ -2083,6 +2108,39 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
     while (answered := recorded.get(model_key(turn, len(responses)))) is not None:
         responses.append(parse_model_response(answered))
     return tuple(responses)
+
+
+def cut_off_in(recorded: Mapping[str, object], turn: int) -> ModelResponse | None:
+    """
+    The last answer the turn being answered recorded, where the model was stopped at its output limit.
+
+    The *last* and no other, because that is the one Pydantic AI raises over: an earlier answer
+    stopped there and still carried a usable tool call was acted on and the turn went on. Nothing
+    here says whether that stop is a fault - a cut-off answer with text in it is returned as the
+    turn's answer, not raised - so this is read only once the loop has raised, to tell that raise
+    apart from every other.
+    """
+    answered = responded(recorded, turn)
+    if not answered or answered[-1].finish_reason != "length":
+        return None
+    return answered[-1]
+
+
+def cut_off_why(error: UnexpectedModelBehavior, cap: int | None) -> str:
+    """
+    What the page says of an answer the model was cut off in, in place of a provider's own words.
+
+    The number that was sent, because that is the one to look up, and the endpoint's default where
+    none was: a session on a model neither the endpoint nor the reference states a limit for is
+    exactly the one whose page should say so.
+    """
+    limit = f"its output limit of {cap} tokens" if cap is not None else "the endpoint's default output limit"
+    doing = (
+        "in the middle of a tool call"
+        if isinstance(error, IncompleteToolCall)
+        else "before it said anything this console could act on"
+    )
+    return f"the model was cut off at {limit} {doing}"
 
 
 def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None:
@@ -3250,6 +3308,12 @@ def conversing(
             if began not in composed:
                 composed[began] = await run.step(instructions_key(began), composing, parse_instructions)
             spoken = composed[began]
+            # Read here, per agent built, rather than at the top of the pass: it comes off the
+            # catalogue and the reference, both reloadable under a pass, and a model whose endpoint
+            # raised the number should get the new one on the next turn rather than the next
+            # restart. It is not recorded, because it is a fact about the model and not a thing
+            # anybody said, and the number that mattered is the one the response was cut off at.
+            cap = None if prices is None else prices.output_cap(chosen)
             agent = agent_for(
                 endpoints,
                 chosen,
@@ -3261,6 +3325,7 @@ def conversing(
                 # What the repository's setup asked to have set for this session's commands, read
                 # off the record the setup pass wrote: a value, settled for the session's life.
                 environment=environment_in(run.recorded),
+                output_cap=cap,
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
@@ -3283,7 +3348,7 @@ def conversing(
             # What the plugins say each time the model tries to stop, recorded per attempt under this
             # turn, so a resumed pass replays the turn being kept going rather than asking again.
             keeping = keeping_through(run, live, at.turn, opening_of(asked))
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating):
+            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating) as scope:
                 try:
                     answered = await answering_turn(agent, asked.said, at.history, keeping)
                 except AllowanceSpent:
@@ -3296,6 +3361,19 @@ def conversing(
                     # provider will not take this request on any pass, so asking for another is
                     # asking to be refused again; the reason is already recorded, so the page can
                     # say what happened without this carrying anything back.
+                    return Stalled()
+                except UnexpectedModelBehavior as error:
+                    # Raised by Pydantic AI *after* an answer was recorded rather than by the
+                    # provider on the request: the model was cut off at its output limit before it
+                    # said anything the loop could act on. Every input to that answer is recorded,
+                    # so a redelivery would replay the same answer into the same exception, once per
+                    # lease, for ever. It is settled the way a refusal is and written where one is,
+                    # under the request the turn could not go on to make; see `Refused`. Anything
+                    # else this raises is left to propagate, which is the default and the safe way
+                    # round.
+                    if cut_off_in(run.recorded, at.turn) is None:
+                        raise
+                    await scope.refuse(scope.at("model"), records.Refused(why=cut_off_why(error, cap)))
                     return Stalled()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             ended, at = at.turn, Reached(turn=at.turn + 1, history=(*at.history, *said))

@@ -20,7 +20,7 @@ This console's is the rest:
 
 | Key | Holds | Written by |
 |---|---|---|
-| `choice` | The endpoint, model, repository, base, branch, isolation and thinking level | `Service.start` and `Service.fork`, before the first message |
+| `choice` | The endpoint, model, repository, base, branch, isolation, thinking level and output override | `Service.start` and `Service.fork`, before the first message |
 | `result:{entry}` | What the command delivered under `{entry}` exited with, said and took | `Commands`, when it finishes |
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |

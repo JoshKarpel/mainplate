@@ -72,12 +72,10 @@ one place the name is drawn: a wide window has no banner, for the reason in `she
 hidden box keeps its layout and still scrolls.
 
 Two more things change on a phone, and both follow from it having one column of room. **Nested
-same-axis scrollers go away**: the wide picker has the models scrolling inside a block that scrolls
-inside the page, which is what keeps the endpoints and the settings put beside a seventy-model list,
-and on a phone it bought a list thirty pixels tall. So the models stop scrolling *and* nothing in
-the picker shrinks; the `flex: none` is the half that is easy to miss, since every `min-height: 0`
-above exists to let a part give way, and with nothing left to scroll that permission just squashes
-the list and draws the rest of it over what follows. **And nothing on the transcript is revealed by
+same-axis scrollers go away**: the fork page bounds its model list on a wide window so the transcript
+under the picker stays in reach, and on a phone that bound bought a list thirty pixels tall, so it
+comes off and the choosing scrolls as one box, which is what the start page does at every width
+([the picker](console.md#the-picker)). **And nothing on the transcript is revealed by
 hover any more**, which is the same lesson taken one step further than a `@media (hover: none)`
 override: the branch link used to appear on a person's panel under the pointer, so on a touch screen
 forking did not exist until a media query put it back. On the rule it is simply always drawn, and

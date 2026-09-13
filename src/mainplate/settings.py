@@ -201,7 +201,7 @@ class Settings(BaseSettings):
     A number and not a second code path, which is what keeps it a thing to turn.
     """
 
-    lease: timedelta = Field(default=timedelta(minutes=10), gt=timedelta())
+    lease: timedelta = Field(default=timedelta(hours=1), gt=timedelta())
     """
     How long a pass may take before another worker may take the session over.
 
@@ -209,8 +209,10 @@ class Settings(BaseSettings):
     pass is at the allowance above. Set it too short and a request in flight is fenced and re-run,
     too long and a crashed process leaves its session waiting that long.
 
-    Ten minutes, and it is the *tool* ceiling that decides it rather than the model: `bash` will run
-    a command for up to `MAX_SECONDS`, which is ten minutes on its own, where a round trip to a
-    provider is a couple. So this is a bound on the one honest worst case rather than a generous
-    figure, and lowering it means lowering what a command may take first.
+    An hour, and it is the *model* that decides it: a request is sent with the model's whole output
+    limit, which on the frontier models is a hundred and twenty-eight thousand tokens, and that is
+    the figure Anthropic's own SDK budgets an hour of generation for. `bash` is the other ceiling,
+    at `MAX_SECONDS`, which is ten minutes. The only thing the length costs is how long a session
+    waits after the process answering it dies, which is failure recovery and not the ordinary case,
+    so it is sized for the one honest worst case rather than shaved to make that rare wait shorter.
     """

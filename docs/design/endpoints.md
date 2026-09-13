@@ -26,12 +26,26 @@ ten thousand tokens.
 
 `format` names the API shape rather than the vendor, because one hostname often answers both and
 each reaches models the other does not. It also decides what `url` means: the Anthropic SDK appends
-`/v1/messages`, so it wants the host; the OpenAI SDK appends `/chat/completions`, so it wants the
-host and `/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
+`/v1/messages`, so it wants the host; the OpenAI SDK appends `/responses`, so it wants the host and
+`/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
 
 `agent.py` holds one `Wire` class per format, and it holds *all three* format-specific things: how
 to name a model over it, how to ask it what it serves, and what it has to be told to reuse a
 conversation's prefix. A third format is one class, not an edit in three files.
+
+**The OpenAI wire speaks the responses API, and is told to keep nothing.** Chat completions was the
+wire until OpenAI's current models stopped taking function tools with reasoning on over it: GPT-5.6
+reasons by default and refuses a tool-bearing request there unless reasoning is switched off, which
+for a coding session is every request, and the provider's own message says to use the responses API
+instead. The gateway serves that one for the models it resells as well. What the responses API adds
+that this console must refuse is a conversation held at the provider: handed a `previous_response_id`
+or a conversation id it reconstructs the history on its side and takes only what is new, which is a
+second copy of what was said, kept where no page can render it, no fork can replay it, and no
+archive can take it off the disk. So the wire never chains, the whole recorded history goes with
+every request, and `store` is off so the exchange is not kept on OpenAI's side either; reasoning
+still carries across turns, as encrypted items replayed out of the history. The cost, stated: a
+gateway model that only speaks chat completions stops working on this wire, and the provider's own
+refusal is what says so.
 
 **`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
 conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input
@@ -134,18 +148,65 @@ between them is the thing to keep straight. The **catalogue** says which models 
 of the endpoints. The **reference** says what they cost and what they do, and is asked of one
 database, because no endpoint reached so far answers that question at all.
 
-**`Listed` is identity and nothing else**: id, label, family, and `upstream`. That is a refusal
-rather than an omission. A gateway's list holds three shapes at once: a Claude arrives fully typed
-with a capability block and token limits, a resold model arrives with all of that empty and the
-upstream service's record forwarded in the extras, and GPT and Grok arrive as four fields saying
-nothing. Reading each of those and filling the gaps from a database would put three kinds of card on
-one page, where the facts shown depended on which wire answered. One source is worth more than the
-coverage a merge would buy, so `Described` reads facts only from the reference.
+**`Listed` is identity, and the one number a request cannot be made without**: id, label, family,
+`upstream`, and `output`. Keeping description off it is a refusal rather than an omission. A
+gateway's list holds three shapes at once: a Claude arrives fully typed with a capability block and
+token limits, a resold model arrives with all of that empty and the upstream service's record
+forwarded in the extras, and GPT and Grok arrive as four fields saying nothing. Reading each of those
+and filling the gaps from a database would put three kinds of card on one page, where the facts shown
+depended on which wire answered. One source is worth more than the coverage a merge would buy, so
+`Described` reads facts only from the reference.
 
-`upstream` is the exception and is identity too: it is what the service actually serving a model
-calls it (`accounts/fireworks/models/kimi-k3`), and it is the second of the two keys a record is
-found under. It is not optional in practice, since most of what a gateway serves is resold and the
+`upstream` is identity too: it is what the service actually serving a model calls it
+(`accounts/fireworks/models/kimi-k3`), and it is the second of the two keys a record is found under.
+It is not optional in practice, since most of what a gateway serves is resold and the
 provider-and-model split alone finds none of it.
+
+## What a request may generate
+
+`output` is the other field read off a listing, and it is not a fact for a card: it is what the
+request *sends* as its output limit, and the endpoint is the one party guaranteed to agree with
+itself about what it will accept. The Anthropic wire states it (`max_tokens` on the models API) for
+the models its vendor serves and leaves it empty for the ones it resells; the OpenAI wire never
+states it. `output_cap_of` in `reference.py` reads the listing first and the same record a card
+reads second, and `Prices.output_cap` asks it per agent built, so an endpoint that raises the
+number reaches a running session on its next turn. `Described` still draws the record and never the
+listing, so what a page *says* about a model keeps its one source; what a request sends is a
+different question with a different right answer.
+
+**The number sent is the model's whole maximum and not a budget**, and the reasoning is worth
+keeping because every other default in the field is lower. The model is never told the number, so a
+smaller one cannot make it terser; it can only cut a response off, with every token already paid
+for and nothing to act on. The one thing a low cap insures against is a runaway generation, which on
+the frontier models costs a few dollars once and almost never happens, and on the small open models
+where it does happen costs cents. Pacing is a different feature (`effort`, and Anthropic's task
+budget, which the model *is* told), and a per-request cost bound belongs beside the allowance as a
+visible setting if it is ever wanted. The default it replaces was Pydantic AI's 4096 on the
+Anthropic wire, which a model thinking at length ran into on ordinary coding turns.
+
+What it costs: sent above the endpoint's ceiling a request is refused outright rather than clamped,
+so a wrong record is a refused turn where a missing one was a card without a number. That is why the
+listing wins where it speaks, and why nothing is sent where neither source knows. And a request
+asking for the whole limit is one Anthropic's SDK will only make as a stream, which Pydantic AI
+falls back to on its own; the lease is sized for it ([durability](durability.md#what-one-pass-does)).
+
+**Where neither source knows, the picker has a box.** `Choice.output_override` is a number somebody
+typed, recorded with the choice and fixed for the session's life like the thinking level beside it,
+and it beats whatever the console looks up: `agent_for` composes the wire's settings, then the cap it
+was handed, then the choice's own, so the precedence is the ordering that already says a recorded
+choice wins and not a second rule. The name is the rule said in one word. Empty is *not an override*
+rather than a zero or an unknown, and it is deliberately never the looked-up number copied into the
+record: that would be a second copy of reloadable configuration, frozen at whatever the reference
+happened to say the minute the session started, or at a blank if it was unreachable then. Left
+empty, a session sends what the catalogue and the reference say at each turn and follows them when
+they move.
+
+What it is for is the model the console has no number for - a resold model behind a gateway on a
+console with no reference configured - and the model somebody knows better about than the record
+does. What it costs is that a wrong number sticks to the session: above the ceiling that is a
+refused turn naming the number, below it a cut-off the page names the same way, and the way past
+either is a fork with the box changed. It is not a budget, for the reason above: the model is never
+told it.
 
 Three rules there are load-bearing:
 
