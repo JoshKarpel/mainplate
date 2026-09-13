@@ -14,7 +14,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   you know better about than the record does. A number there beats what the console looks up, for
   the session's life, and is named on the session's card in the rail. Empty is not an override, and
   it is deliberately not the looked-up number copied in: a session that leaves it empty sends what
-  the endpoint and the reference say at each turn and follows them when they move.
+  the endpoint and the reference say at each turn and follows them when they move. The empty box
+  says what that is for the model picked above it, `max (128K)` or that nobody knows.
+- **An open model list is shown whole, and the start page scrolls as one box.** The list used to
+  give up height down to a couple of lines of card behind a scrollbar on a short window, so that
+  the questions under it stayed put; now nothing in the picker shrinks, and the fold is what keeps
+  that cheap, since the list is only long while it is open and a pick shuts it.
 
 - **A row in the session list says `new`** when its session has recorded something since anybody
   looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
@@ -259,6 +264,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A start page shorter than the shut picker drew the model card over the thinking level** and
+  whatever sat under it, rather than scrolling. The model group was allowed to shrink so its list
+  could scroll while open, and kept that permission while shut, when there was no list to scroll and
+  nothing to clip the one card. Nothing in the picker shrinks now, open or shut, and the page scrolls.
 - **A request is sent with the model's whole output limit.** Nothing set one, so the Anthropic wire
   ran on Pydantic AI's default of 4096 tokens, which a model thinking at length hit on ordinary
   coding turns, with every token paid for and nothing to act on. The number now comes off the

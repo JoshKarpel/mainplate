@@ -102,6 +102,27 @@ different pages. A screenshot that differs run to run is one nobody can compare 
 # literal written twice and a page saying it is on a branch belonging to some other session.
 PARENT_ID = "aa" * 16
 
+# The rest of what a gateway resells, named as the serving service names them. Enough of them that
+# an open model list is taller than a short window, which is what the start page's scrolling is
+# about and what a real gateway lists anyway: three cards are one row, and one row shows nothing
+# about what happens when the list does not fit. Each has a record under its upstream name, where
+# Kimi K2 above deliberately has none, so the one card saying so stays the one card.
+RESOLD_NAMES = (
+    ("kimi-k3", "Kimi K3"),
+    ("glm-5p3", "GLM 5.3"),
+    ("deepseek-v4-pro", "DeepSeek V4 Pro"),
+    ("qwen3-coder", "Qwen3 Coder"),
+    ("minimax-m3", "MiniMax M3"),
+    ("gpt-oss-120b", "GPT-OSS 120B"),
+    ("nemotron-3-ultra", "Nemotron 3 Ultra"),
+    ("inkling", "Inkling"),
+    ("muse-glimmer-30b", "Muse Glimmer 30B"),
+)
+RESOLD = tuple(
+    Listed(id=f"fireworks/{name}", label=label, provider="fireworks", upstream=f"accounts/fireworks/models/{name}")
+    for name, label in RESOLD_NAMES
+)
+
 CATALOGUE = Catalogue(
     offered={
         "llm-anthropic": Offering(
@@ -117,6 +138,7 @@ CATALOGUE = Catalogue(
                     provider="fireworks",
                     upstream="accounts/fireworks/models/kimi-k2",
                 ),
+                *RESOLD,
             ),
         ),
         # Named with the `/v1` the OpenAI SDK wants, because the two rows differing only by a wire
@@ -176,7 +198,16 @@ REFERENCE = Reference(
             traits=(("tools", True), ("vision", True)),
         ),
     },
-    upstream={},
+    upstream={
+        f"accounts/fireworks/models/{name}": Facts(
+            cost=Cost(input=0.6, output=2.5),
+            context=262_144,
+            output=131_072,
+            released=date(2030, 6, 1),
+            traits=(("tools", True),),
+        )
+        for name, _ in RESOLD_NAMES
+    },
 )
 
 WORKING_IN = "exe-github:mainplate"

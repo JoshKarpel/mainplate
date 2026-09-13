@@ -266,11 +266,26 @@ for a commit-ish, `output_override_field` asks for a number, and `naming` asks f
 and none has a set to draw. Behind `choosing` they would be a card per ref a repository has, a card
 per integer, or a card that is really a text box. The name takes the *message box's* rules rather
 than a setting's, because the palette runs on one axis and a name is text the person writes, where a
-base, a branch and an override narrow a choice. The override's placeholder names whose limit leaving
-it sends rather than printing the number, because the number is the model's and the model is picked
-above it: a figure rendered into the box would be the starting model's and wrong from the first pick
-onwards, where the model's own card already carries it. What the field is for, and why its name is
-the word *override*, is on [the endpoints page](endpoints.md#what-a-request-may-generate).
+base, a branch and an override narrow a choice. The override's placeholder says what leaving it
+empty sends, as the number (`max (128K)`) or as a sentence saying nobody knows it, and it follows the
+pick: the number is the model's and the model is picked above it, so the server renders every card's
+sentence onto the card (`data-override`) and the starting model's into the box, and the script copies
+the picked card's across on a pick. The script holds no wording of its own, so the two cannot drift,
+and with it absent the box is right for the model the page opened on. What the field is for, and why
+its name is the word *override*, is on [the endpoints page](endpoints.md#what-a-request-may-generate).
+
+**Nothing in the picker gives up height; the choosing scrolls as one box.** The model list used to
+be the one part that did, scrolling inside a block that scrolled inside the page so the questions
+under it stayed put however long the list ran. What that bought on a short window was two lines of
+card behind a scrollbar, and, whenever the floor under the list and the permission to shrink
+disagreed, a group drawing its content over the questions beneath it: shut, its one card over the
+thinking level and the override box. Measuring a floor of three rows in the script was tried and is
+not worth trying again, because the floor holds the list open while the group around it is still
+allowed to shrink, which is the same overlap one step later. The fold is what makes the plain answer
+cheap: the list is only long while it is open, a pick shuts it, and the narrowing box shortens it, so
+the list is as tall as its cards and `.setup` carries the lot, which is what a phone already did and
+what every other page here does. The fork page keeps a bound on its list, since it has a transcript
+under the picker that a reader has to see to choose a turn at all.
 
 Another question with a closed set of answers is a `choosing` call and nothing else. The script
 names none of the card classes, since it finds a card structurally, as a `<label>` with a radio in

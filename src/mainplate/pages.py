@@ -119,6 +119,7 @@ from mainplate.reference import Cost
 from mainplate.reference import Described
 from mainplate.reference import Reference
 from mainplate.reference import describe
+from mainplate.reference import output_cap_of
 from mainplate.sandbox import Filesystem
 from mainplate.service import Claimed
 from mainplate.service import Conversation
@@ -216,6 +217,7 @@ WORKSPACE_FIELD: Final = "workspace"
 # replaces the whole block so the completions are that repository's. Both are named here because the
 # card carries the target and the block carries the id, and the two must not drift.
 BASIS_ID: Final = "basis"
+OVERRIDE_ID: Final = "output-override"
 BRANCHES_ID: Final = "branches"
 FOUND_ID: Final = "branches-found"
 
@@ -1171,7 +1173,16 @@ def model_card(described: Described, chosen: bool) -> Element:
         cls="model",
         # The name this card answers to, which is the same string the group's completion list is
         # built from: naming one exactly is how the reader picks it without reaching for the card.
-        attrs={"data-provider": facts.provider, "data-name": facts.label},
+        # And what the override box under the picker should say while this card is the pick, carried
+        # here as the sentence itself, so the script that copies it across on a pick holds no wording
+        # of its own and the two cannot drift. The number is the one the wire would send, which is
+        # the listing's where it states one and the record's otherwise; the card's own figure is the
+        # record's alone, since a card says facts from one source.
+        attrs={
+            "data-provider": facts.provider,
+            "data-name": facts.label,
+            "data-override": override_placeholder(facts.output if facts.output is not None else described.output),
+        },
         children=[
             input_(
                 cls="model__pick",
@@ -1517,15 +1528,29 @@ def thinking_cards(chosen: ThinkingLevel | None) -> Element:
     )
 
 
-def output_override_field(chosen: int | None) -> Element:
+def override_placeholder(cap: int | None) -> str:
+    """
+    What the override box says while it is empty, for a model the console knows this much about.
+
+    What leaving the box empty *sends*, said as the number where there is one, because that is the
+    question somebody looking at the box is asking and "the model's limit" made them go and find it.
+    Where nothing knows the number the sentence says so and says what happens, which is the adapter's
+    own default going out on the wire: that is the one case the box exists for, so it is the case the
+    placeholder has to make plain rather than the one it may leave vague.
+    """
+    return f"max ({tokens(cap)})" if cap is not None else "unknown, so the wire's default applies unless you set one"
+
+
+def output_override_field(chosen: int | None, cap: int | None) -> Element:
     """
     The most one request may generate, as a box somebody may type a number into and usually will not.
 
     Not a `choosing` group, because there is no set to draw: it is one number or nothing, like a base.
     The placeholder says what leaving it does, which is the whole of what keeps one more field from
-    being one more step, and it says *whose* limit that is rather than printing a number, since the
-    number is the model's and the model is picked in the group above this one: a figure rendered here
-    would be the starting model's and wrong from the first pick onwards. The model's card carries it.
+    being one more step. It is rendered here for the starting model and rewritten by the script from
+    whichever card is picked, each card carrying its own sentence (`data-override`), so with the
+    script absent it is right for the model the page opened on and with it present it follows the
+    pick. `cap` is that starting model's number, or nothing where nothing knows it.
 
     "Override" is on the label rather than in a sentence under it, because the word is the precedence
     rule: a number here beats what the console knows, and empty is not an override rather than a zero
@@ -1540,12 +1565,13 @@ def output_override_field(chosen: int | None) -> Element:
                 input_(
                     attrs={
                         "type": "text",
+                        "id": OVERRIDE_ID,
                         "name": OUTPUT_OVERRIDE_FIELD,
                         "value": None if chosen is None else str(chosen),
                         "form": CHOOSING_ID,
                         "inputmode": "numeric",
                         "autocomplete": "off",
-                        "placeholder": "the model's own limit (or leave it empty)",
+                        "placeholder": override_placeholder(cap),
                     }
                 ),
             ],
@@ -2007,9 +2033,9 @@ def picker(
     Both card groups are folded down to what is picked (see `choosing`), so the order above is what
     a reader sees rather than what they would reach after scrolling: four labelled lines and the two
     cards that are the current choice. Opened, the models are the one part with no bound on their
-    length, and on a wide window they are the only part that scrolls - the list is as long as
-    whatever gateway you are pointed at makes it, where everything else here is a fixed handful of
-    rows, so it is what gives up height when there is not enough.
+    length - the list is as long as whatever gateway you are pointed at makes it, where everything
+    else here is a fixed handful of rows - and nothing gives up height for it: the choosing scrolls
+    as one box, and a pick shuts the list again.
 
     `chosen` is what the controls start on, defaulting to the configured default for a new session.
     A fork passes the parent's own choice instead, so continuing on the same model is the path that
@@ -2061,7 +2087,7 @@ def picker(
             ),
             model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
             thinking_cards(starting.thinking),
-            output_override_field(starting.output_override),
+            output_override_field(starting.output_override, output_cap_of(catalogue, reference, starting)),
             # What to call it, last, because it is the one question here that decides nothing about
             # how the session runs: everything above it is what the session *is*, and this is what a
             # reader will call it. Handed in rather than drawn here, because the fork page asks the

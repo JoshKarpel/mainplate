@@ -691,6 +691,22 @@ class TestFoldingAGroupOfCards:
         assert await posted(page, THINKING_FIELD) == before
         assert await opened(page, "open-thinking") is True
 
+    async def test_the_override_box_says_what_the_picked_model_would_get(self, page: Page, gallery: str) -> None:
+        """
+        The placeholder follows the pick, copied off the card so the script holds no wording of its
+        own. Checked against the card's own sentence rather than a number, since which model is
+        second is the fixture's business.
+        """
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.click('label[for="open-model"]')
+        await page.locator(".model").nth(1).click()
+
+        said = await page.evaluate(
+            "() => document.querySelector('.model__pick:checked').closest('.model').dataset.override"
+        )
+        assert said.startswith("max (")
+        assert await page.get_attribute("#output-override", "placeholder") == said
+
     @pytest.mark.parametrize("name", ["start.html", "forking.html"])
     async def test_a_shut_group_still_posts_its_choice(self, page: Page, gallery: str, name: str) -> None:
         await page.goto(f"{gallery}/{name}", wait_until="load")
@@ -888,13 +904,12 @@ SHORT = ViewportSize(width=1400, height=620)
 
 class TestWhatScrollsOnTheStartPage:
     """
-    The choosing scrolls inside itself, the model list is what gives, and the document never moves.
+    The choosing scrolls as one box, the model list is shown whole, and the document never moves.
 
     A browser, and for `TestTheShapeOfANarrowWindow`'s reason one axis over: every rendering of this
     is a correct picture of *some* page, and what is wrong when it breaks is that the page grew past
-    the window. The symptom a reader meets is not the growth. `.models` is bounded by the room left,
-    so a block that never took a bound leaves it at its full height - a scroll container with nothing
-    to scroll - and a wheel anywhere over the model list then moves nothing at all.
+    the window, or that a part of the picker was squashed and drew its content over the questions
+    under it. Neither symptom is in the markup.
     """
 
     async def test_the_choosing_takes_the_window_rather_than_growing_past_it(self, page: Page, gallery: str) -> None:
@@ -908,29 +923,26 @@ class TestWhatScrollsOnTheStartPage:
         )
         assert room["document"] <= room["viewport"]
 
-    async def test_the_model_list_is_the_part_that_gives(self, page: Page, gallery: str) -> None:
+    async def test_an_open_list_is_shown_whole_and_the_choosing_is_what_scrolls(self, page: Page, gallery: str) -> None:
+        """
+        Nothing in the picker gives up height. The list used to be the part that did, scrolling
+        inside a block that scrolled inside the page, which on a short window was two lines of card
+        behind a scrollbar; now it is as tall as its cards and `.setup` carries the lot.
+        """
         await page.set_viewport_size(SHORT)
         await page.goto(f"{gallery}/start.html", wait_until="load")
         await page.click('label[for="open-model"]')
 
-        # Bounded by the room left, so it holds more than it shows. The negation is the broken shape:
-        # a list at its content height reports these equal and scrolls nowhere.
         held = await page.evaluate(
-            "() => { const models = document.querySelector('.models');"
-            " return { holds: models.scrollHeight, shows: models.clientHeight }; }"
+            "() => { const models = document.querySelector('.models'); const setup = document.querySelector('.setup');"
+            " return { list: models.scrollHeight - models.clientHeight,"
+            " choosing: setup.scrollHeight - setup.clientHeight }; }"
         )
-        assert held["holds"] > held["shows"]
+        assert held["list"] == 0, "the list holds no more than it shows"
+        assert held["choosing"] > 0, "the control: the open picker is taller than the window, so something scrolls"
 
-    async def test_a_wheel_over_the_model_list_reaches_the_end_of_the_list_and_then_the_page(
-        self, page: Page, gallery: str
-    ) -> None:
-        """
-        What a reader actually does, and the assertion the two above exist to explain.
-
-        Both ends of one gesture: the list moves, and once it has nowhere left to go the block around
-        it takes the rest. `overscroll-behavior: contain` here made the second half of that a wall,
-        so a wheel that started over the models could not reach the questions under them.
-        """
+    async def test_a_wheel_over_the_model_list_moves_the_choosing(self, page: Page, gallery: str) -> None:
+        """What a reader actually does: a wheel anywhere over the picker scrolls the one box there is."""
         await page.set_viewport_size(SHORT)
         await page.goto(f"{gallery}/start.html", wait_until="load")
         await page.click('label[for="open-model"]')
@@ -938,15 +950,35 @@ class TestWhatScrollsOnTheStartPage:
         assert over is not None
         await page.mouse.move(over["x"] + over["width"] / 2, over["y"] + 20)
 
-        for _ in range(12):
-            await page.mouse.wheel(0, 300)
+        await page.mouse.wheel(0, 300)
 
-        moved = await page.evaluate(
-            "() => ({ models: document.querySelector('.models').scrollTop,"
-            " choosing: document.querySelector('.setup').scrollTop })"
+        # A wheel lands asynchronously, so the wait is on the scroll itself rather than on a clock.
+        await page.wait_for_function("() => document.querySelector('.setup').scrollTop > 0")
+
+    @pytest.mark.parametrize("opened", [False, True])
+    async def test_a_picker_too_tall_for_the_window_scrolls_rather_than_piling_up(
+        self, page: Page, gallery: str, opened: bool
+    ) -> None:
+        """
+        A part allowed to shrink so its list could scroll drew that list, or its one card when shut,
+        over the thinking level and the box under it on any window shorter than the whole picker.
+        Every rendering of that is a correct picture of some page, which is why it is measured: the
+        model group ends before the question after it begins, open and shut alike.
+        """
+        await page.set_viewport_size(SHORT)
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        if opened:
+            await page.click('label[for="open-model"]')
+
+        laid = await page.evaluate(
+            "() => { const parts = [...document.querySelectorAll('.picker__part')];"
+            " const models = parts.find((part) => part.classList.contains('picker__part--models'));"
+            " const below = parts[parts.indexOf(models) + 1];"
+            " const cards = [...models.querySelectorAll('.model')].filter((card) => card.offsetParent !== null);"
+            " return { last: Math.max(...cards.map((card) => card.getBoundingClientRect().bottom)),"
+            " next: below.getBoundingClientRect().top }; }"
         )
-        assert moved["models"] > 0
-        assert moved["choosing"] > 0
+        assert laid["last"] <= laid["next"], "the last card showing ends before the next question begins"
 
 
 # Where a conversation draws monospace, which is the fenced blocks a model answers in and the body of
