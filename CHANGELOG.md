@@ -264,6 +264,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A turn of more than fifty round trips failed, and was retried into the same failure every
+  lease.** Nothing set a request limit, so every turn ran under Pydantic AI's default of fifty
+  requests, counted over replayed requests as well as live ones, and the fifty-first raised
+  something no part of the pass caught. A turn now makes as many requests as it takes; how much a
+  session may spend is a question about money, and will be bounded where money is counted.
 - **A start page shorter than the shut picker drew the model card over the thinking level** and
   whatever sat under it, rather than scrolling. The model group was allowed to shrink so its list
   could scroll while open, and kept that permission while shut, when there was no list to scroll and
