@@ -644,8 +644,27 @@ def document(
                                     "content": "width=device-width, initial-scale=1, interactive-widget=resizes-content",
                                 }
                             ),
+                            meta(
+                                attrs={
+                                    "name": "theme-color",
+                                    "content": "#f4f2ee",
+                                    "media": "(prefers-color-scheme: light)",
+                                }
+                            ),
+                            meta(
+                                attrs={
+                                    "name": "theme-color",
+                                    "content": "#131316",
+                                    "media": "(prefers-color-scheme: dark)",
+                                }
+                            ),
+                            meta(attrs={"name": "apple-mobile-web-app-capable", "content": "yes"}),
+                            meta(attrs={"name": "apple-mobile-web-app-title", "content": "mainplate"}),
+                            meta(attrs={"name": "apple-mobile-web-app-status-bar-style", "content": "default"}),
                             title(children=heading),
-                            link(attrs={"rel": "icon", "href": "data:,"}),
+                            link(attrs={"rel": "icon", "href": links.to_asset("icon.svg"), "type": "image/svg+xml"}),
+                            link(attrs={"rel": "apple-touch-icon", "href": links.to_asset("apple-touch-icon.png")}),
+                            link(attrs={"rel": "manifest", "href": links.to_asset("manifest.webmanifest")}),
                             link(attrs={"rel": "stylesheet", "href": links.to_asset("mainplate.css")}),
                             meta(attrs={"name": "htmx-config", "content": f"extensions: {EXTENSIONS}"}),
                             script(attrs={"src": links.to_asset("htmax.min.js")}),

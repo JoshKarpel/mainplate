@@ -37,6 +37,11 @@ Then open <http://127.0.0.1:8100>. Sessions are stored in `mainplate.db` in the 
 so pointing the console at a different project is `--database`, and reading a session back is
 opening the same file again.
 
+On a phone, open the console over HTTPS and install it from the browser's add-to-home-screen action
+to give it its own icon and a full-height app window. Browsers allow service workers only on secure
+origins (or localhost), so plain HTTP on a LAN address does not offer the installable app. The
+installed app remains online-only: it keeps no offline copy of the console or its sessions.
+
 `mainplate serve --help` lists the flags. They are the few worth reaching for at a shell; every
 other setting is a field of `Settings` read from a `MAINPLATE_`-prefixed environment variable, so
 `MAINPLATE_REFRESH` sets how often the models are re-read and `MAINPLATE_PASSES` how many sessions

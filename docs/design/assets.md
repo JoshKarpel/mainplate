@@ -10,6 +10,28 @@ looked at rather than argued about. `just serve` restarts on any change under `s
 is what makes an edit watchable: the assets are inventoried once at startup, so an edited stylesheet
 only reaches a *new* process.
 
+## The installed app is still an online console
+
+On a secure origin, the web app manifest makes the console installable with its own icon and opens
+it in a `standalone` window, where the shell's existing `100dvh` bound spends the full app viewport
+rather than the space left under browser controls. Service workers require HTTPS except on
+localhost, so plain HTTP on a LAN address remains an ordinary browser page. The Apple metadata
+carries the same name, icon, and standalone display onto iOS, whose home-screen installation does
+not use every manifest field.
+
+A service worker is the small piece Chromium expects an installable app to carry, and this one's
+only response to a fetch is the network's response. It writes no Cache Storage entries and has no
+offline path: without the server, the installed console does not open. That is deliberate, because
+the conversation lives in the server's checkpoint and an offline page would either be an empty
+shell or a second, stale copy of it. The cost, stated: every request from an installed page passes
+through one network-only worker before it reaches the server.
+
+The worker is served under `/assets/` with `Service-Worker-Allowed: /`, so it can control the `/`
+start URL without creating a special second route for one static file. The header is inert on the
+other assets that share the inventory's response policy. Its update check bypasses the browser's
+HTTP cache, while ordinary assets keep the inventory's revalidation policy; neither is an offline
+application cache.
+
 ## Everything the script does is an enhancement
 
 With `mainplate.js` absent the page still renders, posts, and folds. What the rail projects onto the
