@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -1250,6 +1251,34 @@ ANSWERED = [
         "usage": {"input_tokens": 5_300, "cache_read_tokens": 4_100, "output_tokens": 640, "cost": "0.0123"},
     }
 ]
+
+
+class TestTheInstallableConsole:
+    async def test_the_page_advertises_the_installable_console(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert 'rel="manifest" href="/assets/manifest.webmanifest"' in answered.text
+        assert 'rel="apple-touch-icon" href="/assets/apple-touch-icon.png"' in answered.text
+        assert 'name="apple-mobile-web-app-capable" content="yes"' in answered.text
+
+    async def test_the_manifest_opens_as_a_standalone_console(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/assets/manifest.webmanifest")
+        manifest = json.loads(answered.body)
+        assert answered.headers["content-type"].startswith("application/manifest+json")
+        assert manifest["start_url"] == "/"
+        assert manifest["scope"] == "/"
+        assert manifest["display"] == "standalone"
+        assert {icon["sizes"] for icon in manifest["icons"]} == {"192x192", "512x512"}
+
+    async def test_the_service_worker_reaches_the_console_without_an_offline_cache(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/assets/service-worker.js")
+        assert answered.status == 200
+        assert answered.headers["service-worker-allowed"] == "/"
+        assert "respondWith(fetch(event.request))" in answered.text
+        assert "caches" not in answered.text
+
 
 # One call, as a response holds it, for the pages that need a turn with a tool in it.
 CALLED = {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"}

@@ -59,6 +59,16 @@ Before swapping the face for a smaller one, read the coverage numbers on the des
 megabyte is buying every symbol block on the cell, and a fallback filling a gap does it one
 character at a time at the wrong advance.
 
+## The installed app stays online-only
+
+`service-worker.js` is network-only. It may register and control `/`, but it must not write Cache
+Storage entries or supply an offline response: the server's checkpoint is the conversation, and a
+cached page would be an empty shell or a stale second copy. The `Service-Worker-Allowed` header in
+`app.py` is what lets a script under `/assets/` take that root scope.
+
+The manifest's `192x192` and `512x512` PNGs and the `180x180` Apple touch icon are raster forms of
+`icon.svg`. Keep the mark inside the central safe circle so a platform's mask does not cut it.
+
 ## Two more that are easy to undo
 
 - **Do not replace `htmax.min.js` with core plus separately vendored extensions.** One file cannot

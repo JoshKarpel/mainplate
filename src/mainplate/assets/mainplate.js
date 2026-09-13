@@ -16,6 +16,7 @@
 // it, and the live connection that would have brought an answer without a reload.
 (() => {
   "use strict";
+  const SERVICE_WORKER = new URL("service-worker.js", document.currentScript.src);
 
   // --- Values ------------------------------------------------------------
   //
@@ -1771,6 +1772,13 @@
       viewport.addEventListener("resize", fit);
     };
 
+    const wireServiceWorker = () => {
+      if (!("serviceWorker" in navigator)) return;
+      navigator.serviceWorker
+        .register(SERVICE_WORKER, { scope: "/", updateViaCache: "none" })
+        .catch(() => {});
+    };
+
     // The other direction of the live connection. A message the page has swapped in is a message
     // somebody was shown, and the page is the only party that knows it: the server learns that a tab
     // went dark only when a write to it fails, and the first write after that lands in a socket the
@@ -1833,6 +1841,7 @@
     wireShapes();
     wireSeen();
     wireKeyboard();
+    wireServiceWorker();
     wireHash();
 
     toCurrentSession();

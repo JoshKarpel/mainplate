@@ -29,10 +29,12 @@ from pathlib import Path
 from typing import Final
 from typing import assert_never
 
+from without_asgi import STATIC_ASSET_HEADERS
 from without_asgi import ASGIApp
 from without_asgi import HttpScope
 from without_asgi import Lifespan
 from without_asgi import Response
+from without_asgi import headers
 from without_asgi import inventory
 from without_asgi import make_asgi_app
 from without_asgi.routing import stack
@@ -147,7 +149,12 @@ def build_router() -> Router[Service]:
     there is no traversal to get wrong. The cost is the one in the name, that nothing may write
     into `assets/` while the process runs.
     """
-    assets = inventory(ASSET_ROOT)
+    assets = inventory(
+        ASSET_ROOT,
+        # The worker lives under the asset prefix but controls the whole console. The scope header is
+        # read only for a service-worker script, so carrying it on the other static responses is inert.
+        headers=headers.add(STATIC_ASSET_HEADERS, b"service-worker-allowed", b"/"),
+    )
     return Router(
         routes=(*CONSOLE_ROUTES, static_files(ASSETS, assets)),
         fallback=handle(http_scope(), fn=missing),

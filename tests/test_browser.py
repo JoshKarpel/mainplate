@@ -301,6 +301,20 @@ async def lands_on(page: Page, *expected: str) -> None:
         await expect(landed.nth(at)).to_have_attribute("id", panel)
 
 
+class TestTheInstalledConsole:
+    async def test_the_network_only_worker_controls_the_whole_console(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        origin, _ = console
+        await page.goto(origin)
+        scope = await page.evaluate("() => navigator.serviceWorker.ready.then((registration) => registration.scope)")
+        await page.reload()
+        await page.wait_for_function("() => navigator.serviceWorker.controller !== null")
+
+        assert scope == f"{origin}/"
+        assert await page.evaluate("() => caches.keys()") == []
+
+
 class TestWhereTheReaderIs:
     """
     At most one panel is ever drawn as where the reader is, however they arrived at it.
