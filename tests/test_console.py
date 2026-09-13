@@ -1257,7 +1257,7 @@ class TestTheInstallableConsole:
     async def test_the_page_advertises_the_installable_console(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
             answered = await caller.get("/")
-        assert 'rel="manifest" href="/assets/manifest.webmanifest"' in answered.text
+        assert 'rel="manifest" href="/assets/manifest.webmanifest" crossorigin="use-credentials"' in answered.text
         assert 'rel="apple-touch-icon" href="/assets/apple-touch-icon.png"' in answered.text
         assert 'name="apple-mobile-web-app-capable" content="yes"' in answered.text
 
