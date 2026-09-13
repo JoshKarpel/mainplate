@@ -252,6 +252,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A request is sent with the model's whole output limit.** Nothing set one, so the Anthropic wire
+  ran on Pydantic AI's default of 4096 tokens, which a model thinking at length hit on ordinary
+  coding turns, with every token paid for and nothing to act on. The number now comes off the
+  endpoint's own listing where it states one and the reference database where it does not, on both
+  wires, and is sent as the model's maximum rather than a budget: the model is never told it, so a
+  smaller one buys only a cut-off answer.
+- **A session cut off at that limit stops and says so, rather than retrying for ever.** The answer
+  was recorded before the loop raised over it, so a redelivery replayed the same answer into the same
+  exception once per lease with nothing on screen but a failure. It is now written down as a refusal
+  under the request the turn could not go on to make, the page says the model was cut off and at
+  what number, and a fork at the turn is the way past, exactly as for a request the provider will
+  not take.
 - The fork page's `Fork and ask` button wears the same face as `Create session`, which is the same
   press one page over; it had the browser's own.
 - **A session whose pass fell over says so.** A pass that raises is left unanswered by the worker and
@@ -283,6 +295,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The lease a pass holds is an hour**, up from ten minutes. A request sent with a model's whole
+  output limit is one Anthropic's SDK budgets an hour of generation for, and the only thing the length
+  costs is how long a session waits after the process answering it dies.
+- The sentence under a stopped turn says the turn stopped and would stop the same way again, rather
+  than that the provider refused it, since a turn cut off at its output limit stops the same way and
+  no provider refused anything.
 - **A window too narrow for three columns takes the phone's shape at once**: the session list and
   the rail both fold away behind the two clasps in the row across the top, at the width where the
   three stop fitting. There used to be a shape between, with the rail folded behind a glyph floating

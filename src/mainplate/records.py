@@ -352,7 +352,14 @@ class Response(Record):
 
 class Refused(Record):
     """
-    A model request the provider will not accept, whatever this console does about it.
+    A model request that will never be answered, whatever this console does about it.
+
+    Two things are, and they are recorded alike because they stop a session alike. The provider
+    will not accept the request: a prompt over the window, a model it will not route, a credential
+    it turns away. Or the provider answered the request before and the answer cannot be gone on
+    from: the model was cut off at its output limit before it said anything the loop could act on,
+    which Pydantic AI raises over after the answer is already recorded. The first carries the
+    provider's status; the second carries none.
 
     **Recorded because the alternative is a session that stops with nothing saying so.** A pass that
     raises is left unanswered by the worker, redelivered when its lease elapses, and tried again for
@@ -364,7 +371,8 @@ class Refused(Record):
     is refused is a request, and a request's input is the recorded history and the recorded message,
     neither of which will ever change: a turn refused at request `i` is refused at request `i` on
     every later pass. So the key it goes under is the request's own position, and the record can
-    never be contradicted by a retry.
+    never be contradicted by a retry. A cut-off is keyed the same way, under the request the turn
+    could not go on to make, which is the position after the answer it was cut off in.
 
     `status` is the provider's own, `None` where the failure carried none. It is not flattened into a
     reason, for the same reason `Result.status` is not flattened into a boolean: the number is what

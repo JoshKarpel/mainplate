@@ -26,7 +26,9 @@ from conftest import said_at
 from conftest import started
 from conftest import steered_at
 from pydantic import ValidationError
+from pydantic_ai.exceptions import IncompleteToolCall
 from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
@@ -70,6 +72,8 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
 from mainplate.conversation import conversing
+from mainplate.conversation import cut_off_in
+from mainplate.conversation import cut_off_why
 from mainplate.conversation import failed_key
 from mainplate.conversation import failure_in
 from mainplate.conversation import heard_key
@@ -100,6 +104,7 @@ from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
 from mainplate.conversation import turn_prefix
 from mainplate.durability import TOOK
+from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.durability import parse_refused
 from mainplate.durability import stepping
 from mainplate.durability import terminally
@@ -1722,3 +1727,87 @@ class TestARequestTheProviderWillNotTake:
         refused = refusal_in(await service.checkpointer.load(SESSION))
         assert refused is not None
         assert refused.status == 400
+
+
+class TestAnAnswerCutOffAtTheOutputLimit:
+    """
+    The other request no pass can ever get past: one the provider answered, and cut off.
+
+    Pydantic AI raises over an answer stopped at its output limit with nothing in it the loop can act
+    on, and it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left
+    as an ordinary failure it would be replayed into the same exception once per lease for ever,
+    which is the loop the refusal record exists to close, so it is written where a refusal is.
+    """
+
+    CUT_OFF = ModelResponse(parts=[ThinkingPart(content="let me think about")], finish_reason="length", timestamp=WHEN)
+
+    async def test_it_stalls_the_session_and_says_so_where_a_refusal_would(self, service: Service) -> None:
+        await waiting(service, "hello")
+        scripted = Scripted(script=(self.CUT_OFF,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert ended == Completed(Stalled()), "nothing is owed, so nothing wakes it"
+        assert model_key(0, 0) in recorded, "the answer was paid for and is kept"
+        assert refused_key(0, 0) not in recorded, "and is not recorded as refused, because it was answered"
+        refused = parse_refused(recorded[refused_key(0, 1)])
+        assert refused.status is None, "no provider turned anything down"
+        assert "output limit" in refused.why
+        assert refusal_in(recorded) == refused, "which is exactly where the page looks"
+
+    async def test_a_later_pass_replays_the_answer_and_asks_nothing_again(self, service: Service) -> None:
+        """
+        A person writing into the stalled session queues it, so a second pass happens whatever the
+        worker does. It replays the recorded answer into the same exception and must come to the same
+        settled answer, off the record, with the provider never reached.
+        """
+        await waiting(service, "hello")
+        scripted = Scripted(script=(self.CUT_OFF,))
+        body = conversing(scripted.endpoints(), INSTRUCTIONS)
+
+        first = await pass_at(service, body)
+        second = await pass_at(service, body)
+
+        assert first == Completed(Stalled())
+        assert second == Completed(Stalled())
+        assert scripted.asked == 1, "the second pass replayed the answer rather than asking for it"
+
+    async def test_an_answer_cut_off_with_words_in_it_is_an_answer(self, service: Service) -> None:
+        """
+        The control, and the line this stays on the right side of: Pydantic AI hands a truncated text
+        back as the turn's answer rather than raising, so the turn ends and the session waits for the
+        next message like any other.
+        """
+        await waiting(service, "hello")
+        half = ModelResponse(parts=[TextPart("the answer is, in short,")], finish_reason="length", timestamp=WHEN)
+        scripted = Scripted(script=(half,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        assert ended == Blocked(listening=frozenset({opened_key(1)}))
+        assert refusal_in(await service.checkpointer.load(SESSION)) is None
+
+    def test_the_reason_names_the_number_that_was_sent(self) -> None:
+        """The number is what somebody looks up, and its absence is what a session with none should say."""
+        assert "output limit of 4096 tokens" in cut_off_why(UnexpectedModelBehavior("cut"), 4096)
+        assert "default output limit" in cut_off_why(UnexpectedModelBehavior("cut"), None)
+
+    def test_a_tool_call_cut_off_is_said_to_be_one(self) -> None:
+        assert "tool call" in cut_off_why(IncompleteToolCall("cut"), 128_000)
+        assert "tool call" not in cut_off_why(UnexpectedModelBehavior("cut"), 128_000)
+
+    def test_only_the_last_answer_decides_and_only_where_it_was_cut_off(self) -> None:
+        """
+        An earlier answer stopped at the limit that still carried a usable call was acted on, and the
+        turn went on, so the reading is of the last answer and no other.
+        """
+        whole = ModelResponse(parts=[TextPart("done")], timestamp=WHEN)
+        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF), model_key(0, 1): kept(whole)}, 0) is None
+        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF)}, 0) == self.CUT_OFF
+        assert cut_off_in({}, 0) is None
+
+
+def kept(answered: ModelResponse) -> object:
+    """One answer as `CheckpointedModel.request` records it, so a reading is tested against the real shape."""
+    return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()

@@ -50,7 +50,10 @@ is why. A pass that was a whole conversation had to fit inside `Settings.lease`,
 number a bet on the longest turn anybody would ever ask for: a turn with enough round trips to cross
 it is fenced on its next write, redelivered, replayed, and runs into the same wall again. Cut per
 request, what the lease has to cover is one round trip and the batch after it, which is a bound that
-can be reasoned about rather than guessed at.
+can be reasoned about rather than guessed at: an hour, because a request is sent with the model's
+whole output limit and that is what Anthropic's own SDK budgets for generating it. The length costs
+only how long a session waits after the process answering it dies, which is failure recovery and not
+the ordinary case.
 
 `Settings.allowance` is the whole of it: **one setting with a live value, never a second code
 path.** `CheckpointedModel.request` spends one on each *live* request and `Allowance.take` refuses
@@ -137,6 +140,20 @@ codes that describe the moment rather than the request (`408`, `409`, `425`, `42
 redelivery is exactly what each asks for. **The default is transient**, which is the safe way round:
 read as terminal, a transient error stalls a session that would have recovered on its own, where the
 other way costs a redelivery per lease until somebody looks.
+
+**An answer the model was cut off in is the one settled thing that is not a 4xx**, and `conversing`
+names it rather than `terminally`, because it is not raised on the request at all. A response stopped
+at its output limit with nothing in it the loop can act on - all thinking, or a tool call broken off
+mid-arguments - is recorded like any other, and Pydantic AI raises `UnexpectedModelBehavior` over it
+*afterwards*, from inside the agent graph. Every input to that answer is recorded, so a redelivery
+replays the same answer into the same exception once per lease for ever, which is exactly the loop
+above. So `converse` catches that exception, reads the last recorded answer of the turn, and where
+it was stopped at the limit writes a `Refused` with no status under the request the turn could not
+go on to make and reports `Stalled`. Anything else the graph raises is left to propagate, since a
+raise this console cannot account for is the transient default. What is worth stating is that this
+should be rare: a request is sent with the model's whole output limit
+([endpoints](endpoints.md#what-a-request-may-generate)), so reaching it is a model that ran to its
+ceiling without finishing a thought, and the cut-off answer stays on the page for what it is.
 
 **`turn:{n}:refused:{i}` is named after the request rather than the turn**, and it is a settled
 value in a write-once store for a reason worth keeping: what a request is made of is the recorded

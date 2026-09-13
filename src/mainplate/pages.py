@@ -4712,7 +4712,7 @@ def stalled_by(showing: Conversation) -> str | None:
     said = showing.refused.why
     coded = "" if showing.refused.status is None else f" ({showing.refused.status})"
     return (
-        f"The provider refused this turn{coded} and would refuse it again, so nothing is waiting on "
+        f"This turn stopped{coded} and would stop the same way again, so nothing is waiting on "
         f"it: {said}. Fork at this turn to carry on without the requests it made."
     )
 

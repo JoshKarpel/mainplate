@@ -506,6 +506,30 @@ def facts_of(catalogue: Catalogue, reference: Reference | None, chosen: Choice) 
     return reference.look_up(listed)
 
 
+def output_cap_of(catalogue: Catalogue, reference: Reference | None, chosen: Choice) -> int | None:
+    """
+    The most one request may ask this session's model to generate, or nothing where nobody knows.
+
+    The listing first and the record second, and the order is the point. What is being asked is
+    what the *endpoint* will accept, and asked for above that a request is refused outright rather
+    than clamped, so where the endpoint states the number nothing else should overrule it. Where it
+    states none - every model the OpenAI wire lists, every model the Anthropic wire resells - the
+    same record a card reads is the only other source, and it is worth a refusal the page can name
+    against the alternative, which is an adapter default a model that thinks at length runs into
+    with nothing to show.
+
+    Unlike `facts_of` this does not stop at a missing reference: the listing's number needs no
+    database, and a console configured without one still has to send something.
+    """
+    listed = catalogue.listed_as(chosen.endpoint, chosen.model)
+    if listed is None:
+        return None
+    if listed.output is not None:
+        return listed.output
+    facts = reference.look_up(listed) if reference is not None else None
+    return facts.output if facts is not None else None
+
+
 def rate(per_million: float) -> Decimal:
     """
     One published price as an exact decimal.
@@ -633,6 +657,16 @@ class Prices:
         under it are reloadable configuration and a pass outlives a refresh of either.
         """
         return facts_of(self.catalogues.current, self.references.current, chosen)
+
+    def output_cap(self, chosen: Choice) -> int | None:
+        """
+        The most one request may ask this session's model to generate, as things stand.
+
+        Here beside `facts` because it is read off the same two holders at the same moment, once
+        per agent built, and a cap read at the top of a pass would send yesterday's number to a
+        model the endpoint has since raised it for. See `output_cap_of` for which source wins.
+        """
+        return output_cap_of(self.catalogues.current, self.references.current, chosen)
 
     def pricer(self, chosen: Choice) -> Pricer:
         """

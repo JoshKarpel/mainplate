@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from datetime import timedelta
 
 import pytest
+from anthropic.types import ModelInfo
 from conftest import CATALOGUE
 from conftest import CONFIG
 from conftest import OFFERED
@@ -24,6 +27,7 @@ from mainplate.agent import OpenAIWire
 from mainplate.agent import UnknownChoice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.agent import anthropic_listed
 from mainplate.agent import build_wire
 from mainplate.agent import build_wires
 from mainplate.agent import chat_models
@@ -211,6 +215,54 @@ class TestBuildingEndpoints:
         await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful", thinking="high"), "be terse").run("hi")
 
         assert watcher.seen == [{"temperature": 0.5, "thinking": "high"}]
+
+    async def test_the_output_limit_reaches_the_request_as_the_models_whole_maximum(self) -> None:
+        """
+        The number sent is the model's own ceiling and not a budget: the model is never told it, so a
+        smaller one buys nothing but an answer cut off with its tokens already paid for.
+        """
+        watcher = Watching()
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+
+        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse", output_cap=128_000).run(
+            "hi"
+        )
+
+        assert watcher.seen == [{"max_tokens": 128_000}]
+
+    async def test_with_no_limit_known_nothing_is_sent_rather_than_a_guess(self) -> None:
+        """A number guessed too high is refused outright, so the adapter's own default is the honest answer."""
+        watcher = Watching()
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+
+        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse").run("hi")
+
+        # Empty settings reach the model as `None`, which is Pydantic AI's normalisation and not
+        # this console's, so what is pinned is the absence of the key rather than the shape.
+        assert len(watcher.seen) == 1
+        assert "max_tokens" not in (watcher.seen[0] or {})
+
+
+class TestReadingAnAnthropicListing:
+    def found(self, model_id: str, max_tokens: int | None) -> ModelInfo:
+        return ModelInfo(
+            id=model_id,
+            display_name=model_id,
+            created_at=datetime(2026, 3, 1, tzinfo=UTC),
+            type="model",
+            max_tokens=max_tokens,
+        )
+
+    def test_the_output_limit_the_endpoint_states_is_read_off_the_listing(self) -> None:
+        """
+        The one number beside identity that is, because it is what the request sends and only the
+        endpoint is guaranteed to agree with itself about what it accepts.
+        """
+        assert anthropic_listed(self.found("anthropic/claude-opus-5", 128_000)).output == 128_000
+
+    def test_a_resold_model_the_endpoint_states_nothing_for_carries_nothing(self) -> None:
+        """The gateway forwards the serving service's record and leaves the SDK's own field empty."""
+        assert anthropic_listed(self.found("fireworks/kimi-k3", None)).output is None
 
 
 class TestDiscovering:

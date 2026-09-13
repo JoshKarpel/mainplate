@@ -318,10 +318,10 @@ class Listed:
     one id - so this is a facet of a model rather than a parent of it, and the tree really is
     `endpoint -> model` with this as a heading.
 
-    This is **identity and nothing else**: which model, under which two names, in which group. What
-    a card says *about* a model - what it costs, how much it reads, what it can do - is not here and
-    is not read off a listing at all. It comes from `reference.py`, from one database, for every
-    model alike.
+    This is **identity, and the one number a request cannot be made without**: which model, under
+    which two names, in which group, and how much one request may generate. What a card says *about*
+    a model - what it costs, how much it reads, what it can do - is not here and is not read off a
+    listing at all. It comes from `reference.py`, from one database, for every model alike.
 
     That is a deliberate refusal rather than an omission, and the reason is what these listings look
     like. The Anthropic wire describes Claude in detail, forwards a different vendor's record
@@ -345,6 +345,21 @@ class Listed:
     routed id: `fireworks/kimi-k3` is routed here and is `accounts/fireworks/models/kimi-k3` there.
     It is the second of the two names the reference is looked up under, and the one that finds a
     model a gateway has renamed into its own namespace - which is most of what a gateway serves.
+    """
+
+    output: int | None = None
+    """
+    The most one request may ask this model to generate, where the endpoint says.
+
+    The other field read off a listing, and it is not a fact for a card: it is what the request
+    *sends*, and the endpoint is the one party guaranteed to agree with itself about what it will
+    accept. Asked for above this number a request is refused outright rather than clamped, and
+    asked for below it a model that thinks at length is cut off mid-thought with the tokens paid for
+    and nothing to show, so a database's guess is the right answer only where the endpoint gives
+    none. The Anthropic wire states it for the models its vendor serves and nothing for the ones it
+    resells; the OpenAI wire never states it. `reference.py` fills the rest, from the same record a
+    card reads, and `Described` still draws the record and never this, so what a page *says* about a
+    model keeps its one source.
     """
 
 
@@ -482,6 +497,7 @@ def anthropic_listed(found: ModelInfo) -> Listed:
         label=found.display_name or passed.label or found.id,
         provider=provider_of(found.id, "anthropic"),
         upstream=passed.upstream,
+        output=found.max_tokens,
     )
 
 
@@ -798,6 +814,7 @@ def agent_for(
     bwrap: str | None = None,
     plugins: Live | None = None,
     environment: Mapping[str, str] | None = None,
+    output_cap: int | None = None,
 ) -> Agent[None, str]:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -832,6 +849,15 @@ def agent_for(
     `environment` is what the session's own commands run under, on top of what the sandbox sets:
     what a repository's setup recorded for the session, handed in as the value it was recorded as
     rather than looked up here. See `Sandbox.argv`.
+
+    `output_cap` is the most one request may generate, and **it is the model's own maximum rather
+    than a budget**: the model is never told the number, so a smaller one buys nothing but a response
+    cut off with its tokens already paid for. It is handed in rather than looked up here because
+    where it comes from is the catalogue and the reference, both reloadable configuration this
+    module does not hold; see `Listed.output` for which says it. `None` sends nothing, which leaves
+    the adapter's own default - 4096 on the Anthropic wire, the provider's on the OpenAI one - and
+    is the honest answer where neither source knows, since a number guessed too high is refused
+    outright.
     """
     wire = wires.for_endpoint(chosen.endpoint)
     reach = reaching(chosen.isolation, worktree, scratch, bwrap)
@@ -848,8 +874,13 @@ def agent_for(
         instructions=instructions,
         # The session's own settings over the wire's, so a recorded choice always wins: what the two
         # carry does not overlap today, and if it ever does, the thing somebody picked should be the
-        # thing that happens.
-        model_settings=ModelSettings(**wire.caching(), **(chosen.settings or ModelSettings())),
+        # thing that happens. The cap is neither's and goes on last: it is a fact about the model
+        # rather than a request of the format or of the person.
+        model_settings=ModelSettings(
+            **wire.caching(),
+            **(chosen.settings or ModelSettings()),
+            **(ModelSettings() if output_cap is None else ModelSettings(max_tokens=output_cap)),
+        ),
         capabilities=[StepwiseDurability()],
         toolsets=tools,
     )

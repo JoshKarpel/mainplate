@@ -134,18 +134,47 @@ between them is the thing to keep straight. The **catalogue** says which models 
 of the endpoints. The **reference** says what they cost and what they do, and is asked of one
 database, because no endpoint reached so far answers that question at all.
 
-**`Listed` is identity and nothing else**: id, label, family, and `upstream`. That is a refusal
-rather than an omission. A gateway's list holds three shapes at once: a Claude arrives fully typed
-with a capability block and token limits, a resold model arrives with all of that empty and the
-upstream service's record forwarded in the extras, and GPT and Grok arrive as four fields saying
-nothing. Reading each of those and filling the gaps from a database would put three kinds of card on
-one page, where the facts shown depended on which wire answered. One source is worth more than the
-coverage a merge would buy, so `Described` reads facts only from the reference.
+**`Listed` is identity, and the one number a request cannot be made without**: id, label, family,
+`upstream`, and `output`. Keeping description off it is a refusal rather than an omission. A
+gateway's list holds three shapes at once: a Claude arrives fully typed with a capability block and
+token limits, a resold model arrives with all of that empty and the upstream service's record
+forwarded in the extras, and GPT and Grok arrive as four fields saying nothing. Reading each of those
+and filling the gaps from a database would put three kinds of card on one page, where the facts shown
+depended on which wire answered. One source is worth more than the coverage a merge would buy, so
+`Described` reads facts only from the reference.
 
-`upstream` is the exception and is identity too: it is what the service actually serving a model
-calls it (`accounts/fireworks/models/kimi-k3`), and it is the second of the two keys a record is
-found under. It is not optional in practice, since most of what a gateway serves is resold and the
+`upstream` is identity too: it is what the service actually serving a model calls it
+(`accounts/fireworks/models/kimi-k3`), and it is the second of the two keys a record is found under.
+It is not optional in practice, since most of what a gateway serves is resold and the
 provider-and-model split alone finds none of it.
+
+## What a request may generate
+
+`output` is the other field read off a listing, and it is not a fact for a card: it is what the
+request *sends* as its output limit, and the endpoint is the one party guaranteed to agree with
+itself about what it will accept. The Anthropic wire states it (`max_tokens` on the models API) for
+the models its vendor serves and leaves it empty for the ones it resells; the OpenAI wire never
+states it. `output_cap_of` in `reference.py` reads the listing first and the same record a card
+reads second, and `Prices.output_cap` asks it per agent built, so an endpoint that raises the
+number reaches a running session on its next turn. `Described` still draws the record and never the
+listing, so what a page *says* about a model keeps its one source; what a request sends is a
+different question with a different right answer.
+
+**The number sent is the model's whole maximum and not a budget**, and the reasoning is worth
+keeping because every other default in the field is lower. The model is never told the number, so a
+smaller one cannot make it terser; it can only cut a response off, with every token already paid
+for and nothing to act on. The one thing a low cap insures against is a runaway generation, which on
+the frontier models costs a few dollars once and almost never happens, and on the small open models
+where it does happen costs cents. Pacing is a different feature (`effort`, and Anthropic's task
+budget, which the model *is* told), and a per-request cost bound belongs beside the allowance as a
+visible setting if it is ever wanted. The default it replaces was Pydantic AI's 4096 on the
+Anthropic wire, which a model thinking at length ran into on ordinary coding turns.
+
+What it costs: sent above the endpoint's ceiling a request is refused outright rather than clamped,
+so a wrong record is a refused turn where a missing one was a card without a number. That is why the
+listing wins where it speaks, and why nothing is sent where neither source knows. And a request
+asking for the whole limit is one Anthropic's SDK will only make as a stream, which Pydantic AI
+falls back to on its own; the lease is sized for it ([durability](durability.md#what-one-pass-does)).
 
 Three rules there are load-bearing:
 

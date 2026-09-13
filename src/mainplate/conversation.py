@@ -101,6 +101,8 @@ from typing import assert_never
 from typing import cast
 
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import IncompleteToolCall
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -2085,6 +2087,39 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
     return tuple(responses)
 
 
+def cut_off_in(recorded: Mapping[str, object], turn: int) -> ModelResponse | None:
+    """
+    The last answer the turn being answered recorded, where the model was stopped at its output limit.
+
+    The *last* and no other, because that is the one Pydantic AI raises over: an earlier answer
+    stopped there and still carried a usable tool call was acted on and the turn went on. Nothing
+    here says whether that stop is a fault - a cut-off answer with text in it is returned as the
+    turn's answer, not raised - so this is read only once the loop has raised, to tell that raise
+    apart from every other.
+    """
+    answered = responded(recorded, turn)
+    if not answered or answered[-1].finish_reason != "length":
+        return None
+    return answered[-1]
+
+
+def cut_off_why(error: UnexpectedModelBehavior, cap: int | None) -> str:
+    """
+    What the page says of an answer the model was cut off in, in place of a provider's own words.
+
+    The number that was sent, because that is the one to look up, and the endpoint's default where
+    none was: a session on a model neither the endpoint nor the reference states a limit for is
+    exactly the one whose page should say so.
+    """
+    limit = f"its output limit of {cap} tokens" if cap is not None else "the endpoint's default output limit"
+    doing = (
+        "in the middle of a tool call"
+        if isinstance(error, IncompleteToolCall)
+        else "before it said anything this console could act on"
+    )
+    return f"the model was cut off at {limit} {doing}"
+
+
 def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None:
     """
     Everything a session loaded, or nothing at all where nobody has answered its settings step.
@@ -3250,6 +3285,12 @@ def conversing(
             if began not in composed:
                 composed[began] = await run.step(instructions_key(began), composing, parse_instructions)
             spoken = composed[began]
+            # Read here, per agent built, rather than at the top of the pass: it comes off the
+            # catalogue and the reference, both reloadable under a pass, and a model whose endpoint
+            # raised the number should get the new one on the next turn rather than the next
+            # restart. It is not recorded, because it is a fact about the model and not a thing
+            # anybody said, and the number that mattered is the one the response was cut off at.
+            cap = None if prices is None else prices.output_cap(chosen)
             agent = agent_for(
                 endpoints,
                 chosen,
@@ -3261,6 +3302,7 @@ def conversing(
                 # What the repository's setup asked to have set for this session's commands, read
                 # off the record the setup pass wrote: a value, settled for the session's life.
                 environment=environment_in(run.recorded),
+                output_cap=cap,
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered
@@ -3283,7 +3325,7 @@ def conversing(
             # What the plugins say each time the model tries to stop, recorded per attempt under this
             # turn, so a resumed pass replays the turn being kept going rather than asking again.
             keeping = keeping_through(run, live, at.turn, opening_of(asked))
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating):
+            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating) as scope:
                 try:
                     answered = await answering_turn(agent, asked.said, at.history, keeping)
                 except AllowanceSpent:
@@ -3296,6 +3338,19 @@ def conversing(
                     # provider will not take this request on any pass, so asking for another is
                     # asking to be refused again; the reason is already recorded, so the page can
                     # say what happened without this carrying anything back.
+                    return Stalled()
+                except UnexpectedModelBehavior as error:
+                    # Raised by Pydantic AI *after* an answer was recorded rather than by the
+                    # provider on the request: the model was cut off at its output limit before it
+                    # said anything the loop could act on. Every input to that answer is recorded,
+                    # so a redelivery would replay the same answer into the same exception, once per
+                    # lease, for ever. It is settled the way a refusal is and written where one is,
+                    # under the request the turn could not go on to make; see `Refused`. Anything
+                    # else this raises is left to propagate, which is the default and the safe way
+                    # round.
+                    if cut_off_in(run.recorded, at.turn) is None:
+                        raise
+                    await scope.refuse(scope.at("model"), records.Refused(why=cut_off_why(error, cap)))
                     return Stalled()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             ended, at = at.turn, Reached(turn=at.turn + 1, history=(*at.history, *said))
