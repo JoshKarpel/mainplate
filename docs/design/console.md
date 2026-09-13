@@ -236,14 +236,15 @@ session is opened and closed from its rail there.
 
 ## The picker
 
-**Ordered widest-first: workspace, network, repository code, endpoint, model, thinking**, and then
-the name. What files a session has is the broadest thing about it and is one question rather than
-two, so it leads; the network follows because it is the other thing deciding what the agent can do at
-all; whether the repository's own code runs is the third question about that same subject, so it
-sits with them and is drawn only where a repository is picked; the endpoint and the model are
-adjacent because they are a pair, the list being whatever the endpoint above it offers; the thinking
-level is a setting *on* the model, so it sits under it. The name comes last because it is the one
-question here that decides nothing about how the session runs.
+**Ordered widest-first: workspace, network, repository code, endpoint, model, thinking, output
+override**, and then the name. What files a session has is the broadest thing about it and is one
+question rather than two, so it leads; the network follows because it is the other thing deciding
+what the agent can do at all; whether the repository's own code runs is the third question about
+that same subject, so it sits with them and is drawn only where a repository is picked; the endpoint
+and the model are adjacent because they are a pair, the list being whatever the endpoint above it
+offers; the thinking level and the output override are settings *on* the model, so they sit under
+it, the override last because it is the one almost nobody touches. The name comes after all of them
+because it is the one question here that decides nothing about how the session runs.
 
 **There is no message box on this page, and its button says `Create session`.** A repository's
 plugins cannot even be named until its worktree is planted, which a pass does, and none of them may
@@ -260,11 +261,16 @@ it could carry neither the forge a repository came from, nor the sentence under 
 one, nor the fold. Having two kinds of control answering versions of one question was the thing to
 remove.
 
-**Two questions here are deliberately not cards, and both for the same reason**: `starting_at` asks
-for a commit-ish and `naming` asks for a line of prose, and neither has a set to draw. Behind
-`choosing` they would be a card per ref a repository has, or a card that is really a text box. The
-name takes the *message box's* rules rather than a setting's, because the palette runs on one axis
-and a name is text the person writes, where a base and a branch narrow a choice.
+**Three questions here are deliberately not cards, and all for the same reason**: `starting_at` asks
+for a commit-ish, `output_override_field` asks for a number, and `naming` asks for a line of prose,
+and none has a set to draw. Behind `choosing` they would be a card per ref a repository has, a card
+per integer, or a card that is really a text box. The name takes the *message box's* rules rather
+than a setting's, because the palette runs on one axis and a name is text the person writes, where a
+base, a branch and an override narrow a choice. The override's placeholder names whose limit leaving
+it sends rather than printing the number, because the number is the model's and the model is picked
+above it: a figure rendered into the box would be the starting model's and wrong from the first pick
+onwards, where the model's own card already carries it. What the field is for, and why its name is
+the word *override*, is on [the endpoints page](endpoints.md#what-a-request-may-generate).
 
 Another question with a closed set of answers is a `choosing` call and nothing else. The script
 names none of the card classes, since it finds a card structurally, as a `<label>` with a radio in

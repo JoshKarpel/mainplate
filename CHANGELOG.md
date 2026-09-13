@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A max output tokens override on the picker**, under the thinking level, for the model the
+  console has no number for: a resold model behind a gateway with no reference configured, or one
+  you know better about than the record does. A number there beats what the console looks up, for
+  the session's life, and is named on the session's card in the rail. Empty is not an override, and
+  it is deliberately not the looked-up number copied in: a session that leaves it empty sends what
+  the endpoint and the reference say at each turn and follows them when they move.
+
 - **A row in the session list says `new`** when its session has recorded something since anybody
   looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
   message of your own. Opening the session clears it, and so does watching the answer arrive on a

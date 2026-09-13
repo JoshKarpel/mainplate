@@ -87,6 +87,7 @@ from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
+from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Block
@@ -1516,6 +1517,42 @@ def thinking_cards(chosen: ThinkingLevel | None) -> Element:
     )
 
 
+def output_override_field(chosen: int | None) -> Element:
+    """
+    The most one request may generate, as a box somebody may type a number into and usually will not.
+
+    Not a `choosing` group, because there is no set to draw: it is one number or nothing, like a base.
+    The placeholder says what leaving it does, which is the whole of what keeps one more field from
+    being one more step, and it says *whose* limit that is rather than printing a number, since the
+    number is the model's and the model is picked in the group above this one: a figure rendered here
+    would be the starting model's and wrong from the first pick onwards. The model's card carries it.
+
+    "Override" is on the label rather than in a sentence under it, because the word is the precedence
+    rule: a number here beats what the console knows, and empty is not an override rather than a zero
+    or an unknown.
+    """
+    return div(
+        cls="override",
+        children=label(
+            cls="override__field",
+            children=[
+                span(cls="override__label", children="Max output tokens override"),
+                input_(
+                    attrs={
+                        "type": "text",
+                        "name": OUTPUT_OVERRIDE_FIELD,
+                        "value": None if chosen is None else str(chosen),
+                        "form": CHOOSING_ID,
+                        "inputmode": "numeric",
+                        "autocomplete": "off",
+                        "placeholder": "the model's own limit (or leave it empty)",
+                    }
+                ),
+            ],
+        ),
+    )
+
+
 # The two answers to "what files does this session have" that are not a repository. Their values are
 # the `Filesystem` members they mean, and that is unambiguous rather than lucky: a repository's id is
 # `forge:key`, so it always holds a colon and can never be either of these.
@@ -1960,11 +1997,12 @@ def picker(
     this page and a row of selects made it look like a footnote to the message box.
 
     **The order is what a session is decided by, widest first: where it works, what answers it,
-    which model, and how hard that model thinks.** The repository comes first because it is the
-    broadest of the four and the only one that decides what the agent can touch at all; the endpoint
-    and the model are next and are adjacent because they are a pair, the list being whatever the
-    endpoint above it offers; the thinking level is last because it is a setting on the model rather
-    than a choice beside it.
+    which model, how hard that model thinks, and how much it may say.** The repository comes first
+    because it is the broadest of them and the only one that decides what the agent can touch at
+    all; the endpoint and the model are next and are adjacent because they are a pair, the list
+    being whatever the endpoint above it offers; the thinking level and the output override are last
+    because they are settings on the model rather than choices beside it, and the override after the
+    level because it is the one almost nobody touches.
 
     Both card groups are folded down to what is picked (see `choosing`), so the order above is what
     a reader sees rather than what they would reach after scrolling: four labelled lines and the two
@@ -2023,6 +2061,7 @@ def picker(
             ),
             model_cards(catalogue.offered[starting.endpoint].models, reference, starting.model),
             thinking_cards(starting.thinking),
+            output_override_field(starting.output_override),
             # What to call it, last, because it is the one question here that decides nothing about
             # how the session runs: everything above it is what the session *is*, and this is what a
             # reader will call it. Handed in rather than drawn here, because the fork page asks the
@@ -2100,6 +2139,13 @@ def about_card(
             *(
                 fact("thinking", name_of_thinking(chosen.thinking), cls="about__thinking")
                 if chosen.thinking is not None
+                else ()
+            ),
+            # On the thinking level's terms: only where somebody typed one, since a session that left
+            # the box empty sends what the console knows and has no number of its own to name.
+            *(
+                fact("output override", str(chosen.output_override), cls="about__override")
+                if chosen.output_override is not None
                 else ()
             ),
             *(

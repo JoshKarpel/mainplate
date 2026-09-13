@@ -65,8 +65,9 @@ level, and defaults to saying nothing about thinking at all.
 You pick what a session is answered on when you create it, ordered widest first: its **workspace**,
 which is a repository this console can reach, or no files, or this whole machine; whether its
 commands may reach the **network**; whether the repository's own **plugins** run; the **endpoint**
-and **model**; and a **thinking level**. All of it is fixed for the session's life, and **forking is
-how it changes**.
+and **model**; a **thinking level**; and, for a model the console has no output limit for, a **max
+output tokens override**. All of it is fixed for the session's life, and **forking is how it
+changes**.
 
 Creating one takes you to its page, where it plants its worktree and reads what each tier of plugins
 *declares* out of files. It runs none of them: a plugin is a program, so the step you pass through

@@ -230,6 +230,19 @@ class TestBuildingEndpoints:
 
         assert watcher.seen == [{"max_tokens": 128_000}]
 
+    async def test_a_number_somebody_typed_beats_the_one_the_console_looked_up(self) -> None:
+        """
+        The override's precedence is the ordering that already says a recorded choice wins, and this
+        is what pins that the looked-up cap was slotted *under* the choice rather than over it.
+        """
+        watcher = Watching()
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+        chosen = Choice(endpoint="here", model="ripe/careful", output_override=20_000)
+
+        await agent_for(endpoints, chosen, "be terse", output_cap=128_000).run("hi")
+
+        assert watcher.seen == [{"max_tokens": 20_000}]
+
     async def test_with_no_limit_known_nothing_is_sent_rather_than_a_guess(self) -> None:
         """A number guessed too high is refused outright, so the adapter's own default is the honest answer."""
         watcher = Watching()

@@ -229,6 +229,27 @@ class Choice:
     back as the default rather than as a failure.
     """
 
+    output_override: int | None = None
+    """
+    The most one request may generate, where somebody typed a number, or nothing to send what the
+    console knows.
+
+    **An override and never a default**, which is the whole of what the name says. Empty is not a
+    number the form copied in for them: it is the session sending whatever the endpoint's listing or
+    the reference says at each turn, read afresh per agent built, so a limit the endpoint raises
+    reaches a running session and a session started while the reference was unreachable is not
+    frozen at a blank. A number here beats both, for the session's life, because it is a thing
+    somebody said; `agent_for` puts the choice's settings over everything else it composes, so the
+    precedence is that rule and not a second one.
+
+    What it is for is the model neither source knows: a resold model on a gateway with no reference
+    configured, which would otherwise run on the adapter's own default and be cut off. What it costs
+    is that a wrong number sticks to the session, and above the endpoint's ceiling that is a refused
+    turn naming the number; the way past is a fork with the field changed, exactly as for a thinking
+    level the endpoint stopped taking. It is not a budget: the model is never told it, so a smaller
+    number buys only a cut-off answer.
+    """
+
     def branching(self, session: str) -> Choice:
         """
         The same choice with a branch of its own, where a repository was picked and nobody named one.
@@ -280,12 +301,17 @@ class Choice:
     @property
     def settings(self) -> ModelSettings | None:
         """
-        What this choice asks of a model, which today is the thinking level and nothing else.
+        What this choice asks of a model: the thinking level and the output override, where each was given.
 
         `None` rather than an empty mapping, so a choice that asks for nothing builds an agent
         indistinguishable from one built before this field existed.
         """
-        return None if self.thinking is None else ModelSettings(thinking=self.thinking)
+        asked = ModelSettings()
+        if self.thinking is not None:
+            asked["thinking"] = self.thinking
+        if self.output_override is not None:
+            asked["max_tokens"] = self.output_override
+        return asked or None
 
 
 class UnknownChoice(LookupError):
@@ -850,16 +876,28 @@ def agent_for(
     what a repository's setup recorded for the session, handed in as the value it was recorded as
     rather than looked up here. See `Sandbox.argv`.
 
-    `output_cap` is the most one request may generate, and **it is the model's own maximum rather
-    than a budget**: the model is never told the number, so a smaller one buys nothing but a response
-    cut off with its tokens already paid for. It is handed in rather than looked up here because
-    where it comes from is the catalogue and the reference, both reloadable configuration this
-    module does not hold; see `Listed.output` for which says it. `None` sends nothing, which leaves
-    the adapter's own default - 4096 on the Anthropic wire, the provider's on the OpenAI one - and
-    is the honest answer where neither source knows, since a number guessed too high is refused
-    outright.
+    `output_cap` is the most one request may generate as the console knows it, and **it is the
+    model's own maximum rather than a budget**: the model is never told the number, so a smaller one
+    buys nothing but a response cut off with its tokens already paid for. It is handed in rather than
+    looked up here because where it comes from is the catalogue and the reference, both reloadable
+    configuration this module does not hold; see `Listed.output` for which says it. `None` sends
+    nothing, which leaves the adapter's own default - 4096 on the Anthropic wire, the provider's on
+    the OpenAI one - and is the honest answer where neither source knows, since a number guessed too
+    high is refused outright. A `Choice.output_override` beats it, by the ordering below and no other
+    rule.
     """
     wire = wires.for_endpoint(chosen.endpoint)
+    # The session's own settings over everything else, so a recorded choice always wins: the thing
+    # somebody picked is the thing that happens. The cap the console looked up sits between the
+    # wire's and the choice's, which is exactly its standing - a fact about the model that a number
+    # somebody typed overrides - so the override's precedence is this ordering and not a rule written
+    # somewhere else. A dict display rather than keyword splats, because a key named twice is a
+    # `TypeError` to a call and the later value to a display, and overlap is the point.
+    asked: ModelSettings = {
+        **wire.caching(),
+        **(ModelSettings() if output_cap is None else ModelSettings(max_tokens=output_cap)),
+        **(chosen.settings or ModelSettings()),
+    }
     reach = reaching(chosen.isolation, worktree, scratch, bwrap)
     tools: list[AbstractToolset[None]] = []
     if plugins is not None and (contributed := contributions(plugins)):
@@ -872,15 +910,7 @@ def agent_for(
         wire.model(chosen.model),
         name="mainplate",
         instructions=instructions,
-        # The session's own settings over the wire's, so a recorded choice always wins: what the two
-        # carry does not overlap today, and if it ever does, the thing somebody picked should be the
-        # thing that happens. The cap is neither's and goes on last: it is a fact about the model
-        # rather than a request of the format or of the person.
-        model_settings=ModelSettings(
-            **wire.caching(),
-            **(chosen.settings or ModelSettings()),
-            **(ModelSettings() if output_cap is None else ModelSettings(max_tokens=output_cap)),
-        ),
+        model_settings=asked,
         capabilities=[StepwiseDurability()],
         toolsets=tools,
     )

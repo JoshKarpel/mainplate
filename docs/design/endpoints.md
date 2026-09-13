@@ -176,6 +176,24 @@ listing wins where it speaks, and why nothing is sent where neither source knows
 asking for the whole limit is one Anthropic's SDK will only make as a stream, which Pydantic AI
 falls back to on its own; the lease is sized for it ([durability](durability.md#what-one-pass-does)).
 
+**Where neither source knows, the picker has a box.** `Choice.output_override` is a number somebody
+typed, recorded with the choice and fixed for the session's life like the thinking level beside it,
+and it beats whatever the console looks up: `agent_for` composes the wire's settings, then the cap it
+was handed, then the choice's own, so the precedence is the ordering that already says a recorded
+choice wins and not a second rule. The name is the rule said in one word. Empty is *not an override*
+rather than a zero or an unknown, and it is deliberately never the looked-up number copied into the
+record: that would be a second copy of reloadable configuration, frozen at whatever the reference
+happened to say the minute the session started, or at a blank if it was unreachable then. Left
+empty, a session sends what the catalogue and the reference say at each turn and follows them when
+they move.
+
+What it is for is the model the console has no number for - a resold model behind a gateway on a
+console with no reference configured - and the model somebody knows better about than the record
+does. What it costs is that a wrong number sticks to the session: above the ceiling that is a
+refused turn naming the number, below it a cut-off the page names the same way, and the way past
+either is a fork with the box changed. It is not a budget, for the reason above: the model is never
+told it.
+
 Three rules there are load-bearing:
 
 - **The routed id wins over the upstream name.** A gateway that has taken a model over under its own

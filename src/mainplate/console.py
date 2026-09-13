@@ -36,6 +36,7 @@ from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import NETWORK_FIELD
+from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
@@ -360,8 +361,27 @@ def parse_form_start(raw: bytes) -> Started:
             isolation=posted_isolation(fields),
             trusted=posted_trust(fields),
             thinking=posted_thinking(fields),
+            output_override=posted_output_override(fields),
         ),
     )
+
+
+def posted_output_override(fields: Mapping[str, list[str]]) -> int | None:
+    """
+    The output override a form named, nothing where the box was empty, and a refusal where it holds
+    something that is not a number of tokens.
+
+    The same three answers `posted_ref` gives and for the same reason: blank is somebody leaving the
+    number to the console, and `lots` in the box is somebody who meant something and would otherwise
+    get a session quietly sending the default. ASCII digits only, because `isdigit` alone takes a
+    superscript that `int` then refuses.
+    """
+    written = fields.get(OUTPUT_OVERRIDE_FIELD, [""])[0].strip()
+    if not written:
+        return None
+    if not (written.isascii() and written.isdigit()) or int(written) == 0:
+        raise NotAMessage(f"{written!r} is not a number of output tokens")
+    return int(written)
 
 
 def posted_trust(fields: Mapping[str, list[str]]) -> bool:
@@ -507,6 +527,7 @@ def parse_form_fork(raw: bytes) -> Forking:
             repository=posted_workspace(fields)[0],
             isolation=posted_isolation(fields),
             thinking=posted_thinking(fields),
+            output_override=posted_output_override(fields),
         ),
         said=said_in(fields) or None,
     )

@@ -17,8 +17,8 @@
 #                          appended from outside a pass, by `Service.say`, `send` and `run`
 #     result:{entry}       what the command delivered under that entry exited with, said and took,
 #                          written by `Commands` when it finishes
-#     choice               the endpoint, model, repository, isolation and thinking level this
-#                          session is on, written once at creation
+#     choice               the endpoint, model, repository, isolation, thinking level and output
+#                          override this session is on, written once at creation
 #     turn:{n}:opened      the entry this turn took, recorded by `Run.receive` in the body below
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request
@@ -346,6 +346,12 @@ def failed_key(at: int) -> StepKey:
 # What the thinking level is called inside the recorded choice. Named once here because the writer
 # and the reader are both in this file and must not drift, which is the same reason the keys are.
 THINKING_FIELD: Final = "thinking"
+
+# The most one request may generate, where somebody typed a number rather than leaving it to what
+# the console knows; inside the recorded choice and on the form. Absent from every record written
+# before it existed and from every session nobody typed into, and both read back as no override,
+# which is the session sending whatever the catalogue and the reference say at each turn.
+OUTPUT_OVERRIDE_FIELD: Final = "output_override"
 
 REPOSITORY_FIELD: Final = "repository"
 
@@ -871,6 +877,21 @@ def parse_thinking(recorded: object) -> ThinkingLevel | None:
     raise TypeError(f"a thinking level must be a boolean or an effort, not {recorded!r}")
 
 
+def parse_output_override(recorded: object) -> int | None:
+    """
+    A recorded output override, or a loud failure if the checkpoint holds something that is not one.
+
+    Absent reads as `None`, which is the session sending whatever the console knows at each turn,
+    and is what every session recorded before this existed asked for. A `bool` is refused although
+    it is an `int`, because `True` under this key was never written by this console.
+    """
+    if recorded is None:
+        return None
+    if isinstance(recorded, bool) or not isinstance(recorded, int) or recorded <= 0:
+        raise TypeError(f"an output override must be a positive number of tokens or nothing, not {recorded!r}")
+    return recorded
+
+
 def parse_isolation(recorded: object, repository: str | None) -> Isolation:
     """
     How much of the filesystem a session reaches, defaulted from what it is working in.
@@ -944,6 +965,7 @@ def parse_choice(recorded: object) -> Choice:
         # that matters is that refusing is the thing somebody has to have actually said.
         trusted=recorded.get(TRUSTED_FIELD) is not False,
         thinking=parse_thinking(recorded.get(THINKING_FIELD)),
+        output_override=parse_output_override(recorded.get(OUTPUT_OVERRIDE_FIELD)),
     )
 
 
@@ -970,6 +992,7 @@ def recorded_choice(chosen: Choice) -> dict[str, object]:
         ISOLATION_FIELD: {FILESYSTEM_FIELD: chosen.isolation.filesystem.value, NETWORK_FIELD: chosen.isolation.network},
         TRUSTED_FIELD: chosen.trusted,
         THINKING_FIELD: chosen.thinking,
+        OUTPUT_OVERRIDE_FIELD: chosen.output_override,
     }
 
 

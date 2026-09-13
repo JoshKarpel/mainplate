@@ -1010,6 +1010,7 @@ class TestTheRecordedChoice:
             base="release/2.1",
             branch="try-the-other-way",
             thinking="high",
+            output_override=20_000,
         )
         assert recorded_choice(chosen) == {
             "kind": "choice",
@@ -1021,6 +1022,7 @@ class TestTheRecordedChoice:
             "isolation": {"filesystem": "nothing", "network": False},
             "trusted": True,
             "thinking": "high",
+            "output_override": 20_000,
         }
 
     def test_what_a_session_did_not_choose_is_recorded_rather_than_left_out(self) -> None:
@@ -1036,6 +1038,7 @@ class TestTheRecordedChoice:
             "isolation": {"filesystem": "nothing", "network": False},
             "trusted": True,
             "thinking": None,
+            "output_override": None,
         }
 
     def test_a_choice_written_before_repositories_existed_still_parses(self) -> None:
@@ -1065,6 +1068,19 @@ class TestTheRecordedChoice:
     def test_a_level_the_checkpoint_should_not_hold_is_refused_loudly(self) -> None:
         with pytest.raises(TypeError, match="not 'ferocious'"):
             parse_choice({"endpoint": "here", "model": "ripe/fast", "thinking": "ferocious"})
+
+    def test_an_output_override_survives_the_checkpoint(self) -> None:
+        chosen = Choice(endpoint="gateway", model="wide/steady", output_override=20_000)
+        assert parse_choice(recorded_choice(chosen)) == chosen
+
+    def test_a_choice_written_before_the_override_existed_sends_what_the_console_knows(self) -> None:
+        """No key at all is no override, which is what every session before the box had and still means."""
+        assert parse_choice({"endpoint": "here", "model": "ripe/fast"}).output_override is None
+
+    @pytest.mark.parametrize("held", ["20000", 0, -5, True, 2.5])
+    def test_an_override_the_checkpoint_should_not_hold_is_refused_loudly(self, held: object) -> None:
+        with pytest.raises(TypeError, match="output override"):
+            parse_choice({"endpoint": "here", "model": "ripe/fast", "output_override": held})
 
 
 class TestAnsweringASession:
