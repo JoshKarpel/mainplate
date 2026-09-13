@@ -664,7 +664,15 @@ def document(
                             title(children=heading),
                             link(attrs={"rel": "icon", "href": links.to_asset("icon.svg"), "type": "image/svg+xml"}),
                             link(attrs={"rel": "apple-touch-icon", "href": links.to_asset("apple-touch-icon.png")}),
-                            link(attrs={"rel": "manifest", "href": links.to_asset("manifest.webmanifest")}),
+                            # Chromium fetches a manifest with credentials omitted, same origin or not, unless
+                            # the link says otherwise, so a login in front of the console must see the cookie.
+                            link(
+                                attrs={
+                                    "rel": "manifest",
+                                    "href": links.to_asset("manifest.webmanifest"),
+                                    "crossorigin": "use-credentials",
+                                }
+                            ),
                             link(attrs={"rel": "stylesheet", "href": links.to_asset("mainplate.css")}),
                             meta(attrs={"name": "htmx-config", "content": f"extensions: {EXTENSIONS}"}),
                             script(attrs={"src": links.to_asset("htmax.min.js")}),

@@ -19,6 +19,12 @@ localhost, so plain HTTP on a LAN address remains an ordinary browser page. The 
 carries the same name, icon, and standalone display onto iOS, whose home-screen installation does
 not use every manifest field.
 
+The manifest link carries `crossorigin="use-credentials"`, which looks redundant on a same-origin
+URL and is not: Chromium fetches a manifest with credentials omitted unless the link says so, while
+every other request the page makes sends the cookie. A console behind a login, which is how the
+exe.dev proxy serves a private VM, would otherwise hand the browser the login page where it expected
+JSON, and the page would offer a plain home-screen shortcut rather than the installed app.
+
 A service worker is the small piece Chromium expects an installable app to carry, and this one's
 only response to a fetch is the network's response. It writes no Cache Storage entries and has no
 offline path: without the server, the installed console does not open. That is deliberate, because
