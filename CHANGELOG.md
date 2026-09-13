@@ -311,6 +311,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The OpenAI wire speaks the responses API.** OpenAI's current models refuse function tools with
+  reasoning on over chat completions, and GPT-5.6 reasons by default, so a coding session on it was
+  a refused turn or a model with its reasoning switched off. The conversation is still sent whole on
+  every request and the checkpoint stays the only copy of it: the wire never asks the provider to
+  hold the history, and tells it not to keep the exchange either. Sessions already on the wire carry
+  on; a gateway model that only speaks chat completions stops working there, and its own refusal
+  says so.
 - **The lease a pass holds is an hour**, up from ten minutes. A request sent with a model's whole
   output limit is one Anthropic's SDK budgets an hour of generation for, and the only thing the length
   costs is how long a session waits after the process answering it dies.

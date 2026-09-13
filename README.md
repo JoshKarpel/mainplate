@@ -53,7 +53,7 @@ somebody has to remember to update.
 `format` names the API shape rather than the vendor, because one hostname often answers both and
 each reaches models the other does not. It also decides what `url` has to be: the Anthropic SDK
 appends `/v1/messages` to what it is given, so it wants the host, and the OpenAI SDK appends
-`/chat/completions`, so it wants the host and `/v1`.
+`/responses`, so it wants the host and `/v1`.
 
 A new session starts on whichever model the default endpoint listed first, which for most gateways
 is their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
@@ -167,7 +167,7 @@ mainplate is installed and restarted
 
 One hostname gets two endpoints, one per API format, because each reaches models the other does not.
 `llm-anthropic` offers every Claude and every Fireworks model, all answered over `/v1/messages`;
-`llm-openai` offers GPT, Grok, and Fireworks again over `/v1/chat/completions`. Between them a
+`llm-openai` offers GPT, Grok, and Fireworks again over `/v1/responses`. Between them a
 default VM offers around seventy models with nothing configured.
 
 Off exe.dev the lookup finds nothing and the install writes a template to edit. Either way an

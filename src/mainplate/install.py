@@ -128,7 +128,7 @@ GATEWAY: Final = """\
 # One hostname, two endpoints, because exe.dev answers both API formats there and each reaches
 # models the other does not. The Anthropic format serves every Claude and the Fireworks models; the
 # OpenAI format serves GPT, Grok, and the Fireworks models again. Note the `/v1`, which only the
-# OpenAI SDK wants: it appends `/chat/completions` where the Anthropic SDK appends `/v1/messages`.
+# OpenAI SDK wants: it appends `/responses` where the Anthropic SDK appends `/v1/messages`.
 #
 # The *provider* of a model (anthropic, fireworks, xai) is not configured here and is not a level of
 # this file: it is discovered, and the same provider shows up under both endpoints.

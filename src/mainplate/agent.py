@@ -52,7 +52,8 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.anthropic import AnthropicModelSettings
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -560,7 +561,12 @@ def passed_through(extra: Mapping[str, object]) -> PassedThrough:
 @dataclass(frozen=True, slots=True)
 class OpenAIWire:
     """
-    An endpoint spoken to over `/v1/chat/completions`.
+    An endpoint spoken to over `/v1/responses`.
+
+    The responses API rather than chat completions, because OpenAI's current models will not take
+    function tools with reasoning on over the older one: GPT-5.6 reasons by default and refuses a
+    tool-bearing request there unless reasoning is switched off outright, which for a coding session
+    is every request. The gateway serves the responses API for the models it resells too.
 
     Its list needs two things thrown out before it is a picker. exe.dev publishes every OpenAI
     model twice, once bare and once prefixed, so a bare id that some prefixed id ends with is the
@@ -572,7 +578,23 @@ class OpenAIWire:
     sdk: OpenAIProvider
 
     def model(self, name: str) -> Model:
-        return OpenAIChatModel(name, provider=self.sdk)
+        """
+        The named model, told never to keep the conversation at the provider.
+
+        **The checkpoint is the conversation, and this is where that has to be said to this API.**
+        The responses API can hold a conversation server-side and be handed only what is new, by a
+        `previous_response_id` or a conversation id, and that is a second copy of what was said,
+        kept somewhere this console cannot read, replay a fork from, or take a session off. Pydantic
+        AI sends neither unless asked, so the whole recorded history goes with every request; what is
+        set here is `store`, which is OpenAI keeping the exchange on its side regardless, and which
+        that chaining would depend on. Off, and the provider is a function of the request. What it
+        costs is nothing this console wanted: the reasoning across turns still travels, as encrypted
+        items replayed out of the history.
+
+        On the model rather than in the settings a session composes, because it is a fact about
+        how this wire may be spoken to rather than anything a session asks for.
+        """
+        return OpenAIResponsesModel(name, provider=self.sdk, settings=OpenAIResponsesModelSettings(openai_store=False))
 
     async def listed(self) -> tuple[Listed, ...]:
         page = await self.sdk.client.models.list()

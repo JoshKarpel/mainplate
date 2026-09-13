@@ -26,12 +26,26 @@ ten thousand tokens.
 
 `format` names the API shape rather than the vendor, because one hostname often answers both and
 each reaches models the other does not. It also decides what `url` means: the Anthropic SDK appends
-`/v1/messages`, so it wants the host; the OpenAI SDK appends `/chat/completions`, so it wants the
-host and `/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
+`/v1/messages`, so it wants the host; the OpenAI SDK appends `/responses`, so it wants the host and
+`/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
 
 `agent.py` holds one `Wire` class per format, and it holds *all three* format-specific things: how
 to name a model over it, how to ask it what it serves, and what it has to be told to reuse a
 conversation's prefix. A third format is one class, not an edit in three files.
+
+**The OpenAI wire speaks the responses API, and is told to keep nothing.** Chat completions was the
+wire until OpenAI's current models stopped taking function tools with reasoning on over it: GPT-5.6
+reasons by default and refuses a tool-bearing request there unless reasoning is switched off, which
+for a coding session is every request, and the provider's own message says to use the responses API
+instead. The gateway serves that one for the models it resells as well. What the responses API adds
+that this console must refuse is a conversation held at the provider: handed a `previous_response_id`
+or a conversation id it reconstructs the history on its side and takes only what is new, which is a
+second copy of what was said, kept where no page can render it, no fork can replay it, and no
+archive can take it off the disk. So the wire never chains, the whole recorded history goes with
+every request, and `store` is off so the exchange is not kept on OpenAI's side either; reasoning
+still carries across turns, as encrypted items replayed out of the history. The cost, stated: a
+gateway model that only speaks chat completions stops working on this wire, and the provider's own
+refusal is what says so.
 
 **`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
 conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input

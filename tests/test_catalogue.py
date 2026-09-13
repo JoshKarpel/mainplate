@@ -14,6 +14,7 @@ from conftest import OFFERED
 from conftest import Stand
 from conftest import Watching
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.settings import ModelSettings
 from without_async import background_task
 
@@ -164,6 +165,23 @@ class TestBuildingEndpoints:
     def test_the_declared_wire_decides_what_talks_to_the_endpoint(self, wire: str, built: type) -> None:
         endpoint = Endpoint.model_validate({"format": wire, "url": "https://gateway.example.invalid/v1"})
         assert isinstance(build_wire(endpoint), built)
+
+    def test_the_openai_wire_speaks_the_responses_api_and_keeps_nothing_at_the_provider(self) -> None:
+        """
+        The checkpoint is the conversation, said to the one API that offers to hold it instead.
+
+        Pinned on the built model rather than on a request, because the request's shape is Pydantic
+        AI's: what this console decides is which API, and that the exchange is not stored, which is
+        what server-side chaining would depend on. The two chaining settings are pinned absent, since
+        either would have the provider reconstruct the history and this console send only what is new.
+        """
+        wire = build_wire(Endpoint.model_validate({"format": "openai", "url": "https://gw.invalid/v1"}))
+        built = wire.model("openai/gpt-5.6-sol")
+
+        assert isinstance(built, OpenAIResponsesModel)
+        assert built.settings == {"openai_store": False}
+        assert "openai_previous_response_id" not in (built.settings or {})
+        assert "openai_conversation_id" not in (built.settings or {})
 
     def test_every_profile_gets_one_before_anything_takes_traffic(self) -> None:
         """Eager, so a credential an SDK refuses names its own endpoint instead of a later session."""
