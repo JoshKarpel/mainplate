@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from functools import cache
+
 import pytest
 from pydantic import ValidationError
 
@@ -9,9 +12,13 @@ from mainplate.tools.files.anchors import UNADDRESSABLE
 from mainplate.tools.files.anchors import WIDTH
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import EditRefused
+from mainplate.tools.files.anchors import Moved
 from mainplate.tools.files.anchors import Operation
+from mainplate.tools.files.anchors import Span
 from mainplate.tools.files.anchors import Splice
 from mainplate.tools.files.anchors import Substitute
+from mainplate.tools.files.anchors import anchor
+from mainplate.tools.files.anchors import moved
 from mainplate.tools.files.anchors import written
 
 # A small file with all three interesting shapes in it: unique lines, a pair of byte-identical lines
@@ -34,6 +41,18 @@ DUPLICATED = "        return None"
 
 def anchored() -> Anchored:
     return Anchored.over(SOURCE)
+
+
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        pytest.param(("alpha",), "oahy", id="one line"),
+        pytest.param(("before", "after"), "srpp", id="two lines"),
+        pytest.param(("one", "two", "three"), "buey", id="three lines"),
+    ],
+)
+def test_anchor_encoding_is_unchanged(window: tuple[str, ...], expected: str) -> None:
+    assert anchor(window) == expected
 
 
 def code(at: int) -> str:
@@ -240,6 +259,54 @@ class TestApplyingABatch:
                 Splice(op="splice", after=code(9), text="# end"),
             ]
         ) == ("def renamed(value):", *SOURCE[1:], "# end")
+
+    def test_one_cache_serves_the_anchor_tables_before_and_after_a_batch(self) -> None:
+        calls = 0
+
+        def counting(window: Sequence[str]) -> str:
+            nonlocal calls
+            calls += 1
+            return anchor(window)
+
+        cached = cache(counting)
+        source = ("alpha", "bravo", "charlie", "delta")
+        before = Anchored.over(source, cached)
+        first, last = before.codes[0], before.codes[3]
+        assert first is not None
+        assert last is not None
+
+        done = written(
+            before,
+            [
+                Substitute(op="substitute", at=first, find="alpha", replace="ALPHA"),
+                Substitute(op="substitute", at=last, find="delta", replace="DELTA"),
+            ],
+            cached,
+        )
+
+        assert done.lines == ("ALPHA", "bravo", "charlie", "DELTA")
+        assert calls == 6
+
+    def test_unchanged_lines_are_remapped_across_a_multi_span_batch(self) -> None:
+        before = Anchored(
+            lines=("before", "deleted", "middle", "replaced", "after"),
+            codes=("aaaa", "bbbb", "cccc", "dddd", "eeee"),
+            by_code={"aaaa": 0, "bbbb": 1, "cccc": 2, "dddd": 3, "eeee": 4},
+        )
+        after = Anchored(
+            lines=("before", "middle", "first", "second", "after"),
+            codes=("aaaa", "zzzz", "ffff", "gggg", "yyyy"),
+            by_code={"aaaa": 0, "zzzz": 1, "ffff": 2, "gggg": 3, "yyyy": 4},
+        )
+        spans = (
+            Span(start=1, stop=2, lines=()),
+            Span(start=3, stop=4, lines=("first", "second")),
+        )
+
+        assert moved(before, after, spans, shown=()) == (
+            Moved(was="cccc", now="zzzz", line="middle"),
+            Moved(was="eeee", now="yyyy", line="after"),
+        )
 
     def test_operations_that_change_the_same_lines_are_refused_entire(self) -> None:
         with pytest.raises(EditRefused, match="operations 1 and 2"):
