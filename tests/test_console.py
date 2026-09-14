@@ -46,6 +46,7 @@ from mainplate.console import parse_form_send
 from mainplate.console import posted_isolation
 from mainplate.console import posted_workspace
 from mainplate.conversation import DECLARED_KEY
+from mainplate.conversation import LEADERS
 from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
 from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import Disposition
@@ -67,6 +68,9 @@ from mainplate.pages import CACHE_ID
 from mainplate.pages import LISTED_ID
 from mainplate.pages import SETUP_ID
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.pages import Subject
+from mainplate.pages import sending_answers
+from mainplate.pages import subject_of
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import recorded_declaration
 from mainplate.plugins.installed import Installed
@@ -1394,6 +1398,70 @@ class TestTheSendingMenu:
         assert 'value="fork"' not in page.text
         assert 'value="aside"' not in page.text
         assert posted.status == 422
+
+    def test_the_words_the_console_refuses_a_plugin_are_the_words_the_menu_draws(self) -> None:
+        """
+        One fact in two places, because the page cannot be imported from the conversation without
+        closing a ring: `LEADERS` is what a plugin is refused against, and the menu is what a reader
+        types against. Every answer the console can offer on any session, so a word offered only on
+        a fork or only while a turn is being answered is still refused.
+        """
+        assert {answer.leader for answer in sending_answers(returning=True, answering=True, runs_in="here")} == LEADERS
+
+
+class TestWhatAFoldedCallSays:
+    """
+    The subject beside a call's name, which is what makes a call affordable to draw shut: the path
+    or the command is on the line a reader scans, and the arguments are a press away.
+    """
+
+    @pytest.mark.parametrize(
+        ("tool", "arguments", "expected"),
+        [
+            ("bash", '{"command": "git status --short"}', Subject("git status --short")),
+            ("bash", '{"command": "  ls\\n  wc -l\\n  sort"}', Subject("ls", extent="2 more lines")),
+            ("bash", '{"command": "make\\nall"}', Subject("make", extent="1 more line")),
+            ("read", '{"path": "src/a.py"}', Subject("src/a.py")),
+            (
+                "read",
+                '{"path": "src/a.py", "offset": 40, "limit": 20}',
+                Subject("src/a.py", extent="lines 40\N{EN DASH}59"),
+            ),
+            ("read", '{"path": "src/a.py", "offset": 40}', Subject("src/a.py", extent="from line 40")),
+            ("read", '{"path": "src/a.py", "limit": 20}', Subject("src/a.py", extent="first 20 lines")),
+            ("read", '{"path": "notes.md", "root": "scratch"}', Subject("scratch:notes.md")),
+            ("edit", '{"path": "src/a.py", "operations": [{}, {}, {}]}', Subject("src/a.py", extent="3 operations")),
+            ("edit", '{"path": "src/a.py", "operations": [{}]}', Subject("src/a.py", extent="1 operation")),
+            ("create", '{"path": "src/new.py", "content": "x"}', Subject("src/new.py")),
+            ("list", "{}", Subject(".")),
+            ("list", '{"path": "src", "depth": 3}', Subject("src", extent="depth 3")),
+        ],
+    )
+    def test_each_of_the_consoles_own_tools_names_what_it_acted_on(
+        self, tool: str, arguments: str, expected: Subject
+    ) -> None:
+        assert subject_of(tool, arguments) == expected
+
+    @pytest.mark.parametrize(
+        ("tool", "arguments"),
+        [
+            # A plugin's tool: its arguments are its own vocabulary.
+            ("hand_off", '{"path": "wherever"}'),
+            # Malformed, which is the call a reader most needs to open as it arrived.
+            ("bash", '{"command": "ls"'),
+            ("read", '["src/a.py"]'),
+            # Well-formed and missing the field that is the point of the call.
+            ("bash", '{"seconds": 30}'),
+            ("bash", '{"command": "   "}'),
+            ("read", '{"offset": 3}'),
+            ("read", '{"path": ""}'),
+        ],
+    )
+    def test_a_call_with_no_subject_to_name_is_named_by_its_tool_alone(self, tool: str, arguments: str) -> None:
+        assert subject_of(tool, arguments) is None
+
+    def test_a_figure_that_is_not_an_integer_is_treated_as_not_given(self) -> None:
+        assert subject_of("read", '{"path": "a.py", "offset": "40", "limit": true}') == Subject("a.py")
 
 
 class TestSendingBackToTheParent:

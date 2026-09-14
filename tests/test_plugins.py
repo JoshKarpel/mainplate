@@ -440,6 +440,12 @@ class TestWhenTwoPluginsWantOneName:
             described=Described.model_validate({"tools": [{"name": tool, "description": "d"}]}),
         )
 
+    def answering(self, tier: Tier, name: str, leader: str) -> Enrolled:
+        return Enrolled(
+            installed=Installed(tier=tier, name=name, path=Path("/a")),
+            described=Described.model_validate({"answers": [{"leader": leader, "saying": "s"}]}),
+        )
+
     def test_two_of_the_operators_own_wanting_one_tool_are_refused_naming_both(self) -> None:
         """
         Safe to refuse precisely because both are yours: the refusal holds up the first message
@@ -447,15 +453,27 @@ class TestWhenTwoPluginsWantOneName:
         """
         with pytest.raises(Collides, match="hand_off"):
             refuse_collisions(
-                (self.enrolled(Tier.USER, "mine", "hand_off"), self.enrolled(Tier.BUNDLED, "handoff", "hand_off"))
+                (self.enrolled(Tier.USER, "mine", "hand_off"), self.enrolled(Tier.BUNDLED, "handoff", "hand_off")),
+                leaders=(),
             )
+
+    def test_a_plugin_wanting_one_of_the_consoles_own_leaders_is_refused_naming_the_console(self) -> None:
+        """
+        `/run` is the console's own word, and a plugin's row under it would be two buttons that both
+        light up when somebody types `!`. The console is the other claimant, so the refusal says so.
+        """
+        with pytest.raises(Collides, match="this console and user:checks both contribute the leader 'run'"):
+            refuse_collisions((self.answering(Tier.USER, "checks", "run"),), leaders=frozenset({"run", "keep"}))
+
+    def test_a_repositorys_leader_cannot_reach_the_consoles_because_it_is_prefixed(self) -> None:
+        refuse_collisions((self.answering(Tier.REPOSITORY, "checks", "run"),), leaders=frozenset({"run"}))
 
     def test_a_repository_cannot_collide_because_its_names_are_prefixed(self) -> None:
         both = (
             self.enrolled(Tier.BUNDLED, "handoff", "hand_off"),
             self.enrolled(Tier.REPOSITORY, "handoff", "hand_off"),
         )
-        refuse_collisions(both)
+        refuse_collisions(both, leaders=())
         assert len(dropping_collisions(both)) == 2
 
     def test_a_repository_that_still_collides_is_dropped_rather_than_stopping_the_session(self) -> None:
@@ -464,7 +482,7 @@ class TestWhenTwoPluginsWantOneName:
         deciding whether your session starts.
         """
         both = (self.enrolled(Tier.USER, "mine", "repo_review_lint"), self.enrolled(Tier.REPOSITORY, "review", "lint"))
-        refuse_collisions(both)
+        refuse_collisions(both, leaders=())
         assert [each.qualified for each in dropping_collisions(both)] == ["user:mine"]
 
     def test_every_reader_of_the_running_set_gets_the_drop_without_the_refusal(self) -> None:

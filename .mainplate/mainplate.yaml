@@ -2,7 +2,7 @@
 #
 # Two plugins, and each path is relative to the worktree root. The key is the whole of a plugin's
 # name: a session running the second calls it `repository:pre-commit`, prefixes its tool to
-# `repo_pre-commit_check` and its leader to `/pre-commit:check`, and holds its settings under that
+# `repo_pre-commit_run` and its leader to `/pre-commit:run`, and holds its settings under that
 # qualified name. Nothing here can name an endpoint, a credential or an isolation level, because the
 # type this is read into has no field for one.
 #

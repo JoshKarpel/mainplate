@@ -365,8 +365,7 @@
       // Only a fold the reader has actually acted on is forced, and it is forced *either* way. The
       // server renders a call shut and a command open, so one set of ids to reopen would put back
       // every command a reader had put away; what has to survive a swap is the decision, whichever
-      // way it went. A fold nobody has touched is left alone, which is what lets the server say a
-      // call is still out.
+      // way it went. A fold nobody has touched is left where the server put it.
       box.querySelectorAll(FOLDS).forEach((fold) => {
         const decided = folds.get(fold.id);
         if (decided !== undefined) fold.open = decided;
@@ -501,7 +500,12 @@
     // safe: mid-message a `/` is an ordinary character, and in a command box it is the front of half
     // the paths anybody types.
 
-    const LEADER = /^\/([a-z]*)$/;
+    // What may follow the slash is what a leader may be spelled with: a plugin's name is one path
+    // segment, and a repository's leader is that name, a colon and the word, so `/pre-commit:run`
+    // has to match or a repository's answers could only ever be reached from the menu. A second
+    // slash is deliberately not in the class, which is what keeps `/etc/hosts` a path rather than a
+    // leader nobody answers to being looked up on every keystroke.
+    const LEADER = /^\/([A-Za-z0-9._:-]*)$/;
 
     // The word a box holds while somebody is naming an answer, or nothing where it holds anything
     // else. `!` is spelled here rather than handled beside the keyboard, because it is not a key that
@@ -1223,17 +1227,15 @@
     // they shut. Every kind that folds, since a command opens by default and a call does not, so
     // reading a set of ids back off the page could not tell a decision from a default.
     //
-    // **Every toggle, including the ones a morph causes, and that is deliberate.** A call still out
-    // is drawn open, so the morph that delivers one records it as open, and the reader watching it
-    // fill in keeps it open when the result lands instead of having it collapse under them. Told
-    // apart - by comparing against the `data-opens` the server sent - a still-out call would shut
-    // itself the moment it returned, and a reader could not ask otherwise: at the moment they would
-    // press, open is already what the console said, so the press would read as agreeing rather than
-    // as deciding. The two are indistinguishable there, so this does not try.
+    // **Every toggle is taken as the reader's, and that is only true because the server never
+    // changes its mind.** Where a fold starts is decided per kind and never per render - a call is
+    // shut whether or not it has come back, a command is open - so a morph delivering a result adds
+    // no `open` and removes none the reader did not set, and the only toggles left are presses. A
+    // server that drew a call open while it was out broke exactly this: the morph's own toggle was
+    // recorded as a decision, and every call a reader watched arrive stayed open for good.
     //
-    // What that costs is that nothing stays undecided for long on a turn being watched. The dock's
-    // third button is the way back, and it is why the *server* still says where each fold started:
-    // see `data-opens` and `opens` in `pages.py`.
+    // The dock's third button is the way back from any decision, and it is why the *server* still
+    // says where each fold started: see `data-opens` and `opens` in `pages.py`.
     const wireFolds = () => {
       document.addEventListener("toggle", (event) => {
         const fold = event.target;

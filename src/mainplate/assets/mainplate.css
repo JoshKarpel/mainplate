@@ -1014,6 +1014,29 @@ pre > .copy {
     font-weight: 600;
 }
 
+/* What the call was about, on the line a reader scans without opening anything: the path a `read`
+   took, the command `bash` ran. It is the one part of the summary that can be arbitrarily long and
+   the one whose end matters least, so it takes the room the name and the outcome leave and gives
+   way to an ellipsis rather than wrapping; the whole of it is in the `title`, and the body a press
+   away. `flex-basis` rather than `flex: 1`, so that on a narrow window it drops to a line of its own
+   under the name instead of shrinking to nothing beside it. */
+.tool__subject {
+    flex: 1 1 12rem;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* How much of the subject: which lines, how many operations, how deep. Kept whole where the subject
+   is clipped, since it is short and is the half a reader cannot recover from the path. */
+.tool__extent {
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    white-space: nowrap;
+}
+
 /* How long the call ran, beside the name rather than out at the outcome: it is a fact about this
    call and the outcome is the column a reader scans down a turn, so the two do not share an edge. */
 .tool__took {
@@ -4196,6 +4219,19 @@ main:has(> .forking) {
         .rule__span {
             flex-basis: 100%;
             height: 0;
+        }
+
+        /* A call's subject takes a line of its own under the name, whole and wrapped, rather than
+           the room the name and the outcome leave: on a phone that room is a path clipped to its
+           first directory, and there is no hover to read the rest off. `order` puts it after the
+           duration and the outcome so that those stay on the name's line rather than being pushed
+           under the subject one at a time. */
+        .tool__subject {
+            order: 1;
+            flex-basis: 100%;
+            overflow: visible;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
     }
 }

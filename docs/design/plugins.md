@@ -964,6 +964,13 @@ holds up the first message and not the settings step, so the screen still draws,
 plugins, and still has the switch that fixes it. A collision that stopped the page rendering would
 be one nothing could act on.
 
+**The console's own leaders are claimants too.** `/run`, `/forget`, `/keep` and the rest are words
+[the composer](composer.md#leaders) answers to on some session, and an operator's plugin claiming
+one of them is refused the same way, naming the console as the other party. Left unrefused, the
+pair drew two rows under one word and two mode buttons lit by one `!`, and which of them the
+keyboard posted was whichever the page happened to draw first. `conversation.LEADERS` is that set,
+and the suite pins it to what the composer draws.
+
 The cost, stated: **two tiers, two rules.** The uniform alternative, prefixing every plugin's tools,
 was not taken because it renames `hand_off` to something worse in every session's prefix to solve a
 collision the operator can already see and fix.

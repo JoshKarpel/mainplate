@@ -1363,46 +1363,46 @@ class TestWatchingATurnArrive:
         second while it runs, so a replacement would shut a call the reader opened to watch, over
         and over, exactly while they were reading it.
 
-        The reader presses, which is what makes this a test about a *decision*. Left to the state the
-        server happened to render - a call still out is drawn open - it would pass on a page where
-        nobody had decided anything, and so could not tell a kept decision from a default that had
-        not moved yet.
+        The reader presses, which is what makes this a test about a *decision*: a call is drawn shut,
+        so the open one is the reader's answer and not the console's, and a morph that put the
+        console's back would be visible as the fold shutting under them.
         """
         service = await self.started(console, page)
         await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
         calls = page.locator("details.tool")
         await expect(calls).to_have_count(2)
-        # Shut and opened again, so what is on the page is this reader's answer and not the console's.
         await calls.first.locator("summary").click()
-        await expect(calls.first).not_to_have_attribute("open", "")
-        await calls.first.locator("summary").click()
+        await expect(calls.first).to_have_attribute("open", "")
 
         await service.checkpointer.supply(self.session, tool_key(0, "call-1"), came_back("the first file"))
         await service.checkpointer.supply(self.session, tool_key(0, "call-2"), came_back("the second file"))
 
-        # Both are back, so the server now renders both shut; the reader's answer is what holds.
+        # Both are back and the server still renders both shut; the reader's answer is what holds.
         await expect(calls.first).to_contain_text("the first file")
         await expect(calls.first).to_have_attribute("open", "")
+        await expect(calls.nth(1)).not_to_have_attribute("open", "")
 
-    async def test_a_call_drawn_open_because_it_was_out_stays_open_when_its_result_lands(
+    async def test_a_call_still_out_is_drawn_shut_and_stays_shut_when_its_result_lands(
         self, page: Page, console: tuple[str, Service]
     ) -> None:
         """
-        Nobody pressed anything here, and it stays open all the same, which is what recording a
-        morph's own toggle buys. A reader watching a call fill in is reading it at exactly the moment
-        the result arrives, so collapsing it to a line then would take the thing being watched away
-        at the moment it became worth having. The dock's third button is how a reader asks for the
-        console's answer back.
+        Nobody pressed anything here, and nothing opens. A call used to draw itself open while it
+        was out, and because every toggle is kept as the reader's decision the morph delivering its
+        result was recorded as one, so every call a reader watched arrive stayed open for good and a
+        turn of reads was a column of open boxes. What says a call is out is the working mark in its
+        summary, and what says what it was about is the subject beside its name.
         """
         service = await self.started(console, page)
         await service.checkpointer.supply(self.session, model_key(0, 0), PARTWAY)
         call = page.locator("details.tool").first
-        await expect(call).to_have_attribute("open", "")
+        await expect(call).not_to_have_attribute("open", "")
+        await expect(call.locator(".waiting")).to_have_count(1)
+        await expect(call.locator(".tool__subject")).to_have_text("a.py")
 
         await service.checkpointer.supply(self.session, tool_key(0, "call-1"), came_back("the first file"))
         await expect(call).to_contain_text("the first file")
 
-        await expect(call).to_have_attribute("open", "")
+        await expect(call).not_to_have_attribute("open", "")
 
     async def test_the_dock_puts_every_fold_back_where_the_console_had_it(
         self, page: Page, console: tuple[str, Service]
@@ -1986,7 +1986,7 @@ class TestTheLineAShutPanelStandsFor:
             "lines => lines.map(line => line.textContent)"
         )
 
-        assert named == ["read_file", "grep", "read, read"]
+        assert named == ["read", "bash", "read, read"]
 
 
 class TestFoldingADocumentTheConsoleHandedOver:
@@ -2746,6 +2746,32 @@ class TestNamingAModeFromTheKeyboard:
         await expect(page.locator(".sender__send")).to_be_hidden()
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
         assert await page.input_value(".composer textarea") == "", "the leader and its space are consumed"
+
+    async def test_a_repositorys_leader_can_be_typed_with_its_prefix(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        A repository's answer lands as `/<plugin>:<word>`, and a plugin's name may carry a hyphen, so
+        what the keyboard admits after the slash has to be what a leader may be spelled with rather
+        than the letters the console's own happen to use. Otherwise a repository's answers were rows
+        in the menu and nothing else.
+        """
+        url, service = console
+        checks = Enrolled(
+            installed=Installed(tier=Tier.REPOSITORY, name="pre-commit", path=Path("/nowhere")),
+            described=Described.model_validate(
+                {"answers": [{"leader": "run", "saying": "run the hooks over what has changed", "demands": False}]}
+            ),
+        )
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE, enrolled=(CARDED, checks))
+        await taking(service, session.id)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await page.click(".composer textarea")
+        await page.keyboard.type("/pre-commit:run ")
+
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "pre-commit:run")
+        await expect(page.locator('.sender__leader[data-leader="pre-commit:run"]')).to_be_visible()
+        assert await page.input_value(".composer textarea") == ""
 
     async def test_every_answer_the_server_drew_has_a_mode_to_be_in(
         self, page: Page, console: tuple[str, Service]

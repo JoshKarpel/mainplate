@@ -600,15 +600,17 @@ and is what makes the page work with no script, `data-opens` is where the consol
 two stop being the same thing the moment anything presses anything. Not a copy that can drift, then,
 but the original beside the current.
 
-**`mainplate.js` records every toggle as a decision, a morph's own included, and that is
-deliberate.** A call still out is drawn open, so the morph that delivers one records it open, and a
-reader watching it fill in keeps it open when the result lands rather than having it collapse under
-them at the moment it became worth reading. Told apart, by comparing against the `data-opens` the
-server just sent, a still-out call would shut itself on arrival and a reader could not ask
-otherwise, because at the moment they would press, open is already what the console said, so the
-press reads as agreeing rather than as deciding. The two are indistinguishable there, so nothing
-tries. What it costs is that little stays undecided on a turn being watched, and the third button is
-the way back. `TestWatchingATurnArrive` pins both halves against each other.
+**`mainplate.js` records every toggle as the reader's decision, and what makes that true is that
+the server never changes its mind about a fold.** Where a fold starts is decided per kind and never
+per render: a call is shut whether or not it has come back, a command is open, a system prompt is
+away. So a morph delivering a result adds no `open` and removes none the reader did not set, and the
+only toggles left to record are presses. The script cannot tell a morph's toggle from a reader's,
+and does not try; a render whose answer moved between two states of the same fold would be recorded
+as a decision nobody made. That is exactly what drawing a call *open while it was out* did: the morph
+that delivered it recorded it open, and every call a reader watched arrive stayed open for good, so a
+turn of twenty reads was twenty open boxes. A call still out is drawn shut now, with the working mark
+in its summary saying it is out and [the subject beside its name](#what-a-folded-call-says) saying
+what it is about. `TestWatchingATurnArrive` pins it.
 
 **A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
 working, on its own panel, and it is the model's call, so a second panel of dots under it says the
@@ -644,6 +646,27 @@ composed yet, are both drawn *shut* with the dots in the opening line's place. T
 of one decision: a panel opened to show three dots is a row spent on three dots, which is the thing
 this row exists not to spend; and a fold whose default moves under a reader is one the console can
 no longer draw either way once a morph has recorded the state it delivered.
+
+### What a folded call says
+
+**A call's summary names what it acted on, beside the tool's name**, so a turn of reads and edits
+reads as a list of paths with nothing opened: `read src/mainplate/pages.py lines 140–179`, `edit
+src/mainplate/pages.py 3 operations`, `bash grep -n overflow-x mainplate.css`. It is what makes
+drawing every call shut affordable, since what a reader scanning a turn wants from a call is what it
+touched, and what it was handed and what came back are the press away that the fold has always been.
+
+Two slots, `said` and `extent`. The first is the subject, a path or a command's first line, and is
+the part that can be long, so the stylesheet lets it take the room the name and the outcome leave and
+clip to an ellipsis rather than wrap; the whole of it is in the `title`. The second is how much of the
+subject - which lines, how many operations, how deep, how many more lines of command - and stays
+whole, because it is short and is the half a reader cannot recover from the path.
+
+**Named per tool, and only for this console's own.** `subject_of` in `pages.py` knows the four file
+tools and `bash`, and reads the one field that is the point of each call. A plugin's tool is named
+and nothing more: its arguments are its own vocabulary, and a guess at which of them is the subject
+is a second rendering of something the body already shows exactly. So is a malformed call, which is
+the one a reader most needs to open as it arrived, so nothing that is not a well-formed object with
+the field in it produces a subject at all.
 
 ## The line a shut panel stands for
 
