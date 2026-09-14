@@ -48,6 +48,7 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from functools import cache
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -63,6 +64,7 @@ from mainplate.tools.files.anchors import EditRefused
 from mainplate.tools.files.anchors import Moved
 from mainplate.tools.files.anchors import Operation
 from mainplate.tools.files.anchors import Written
+from mainplate.tools.files.anchors import anchor
 from mainplate.tools.files.anchors import written
 
 # The most a single read will show without being asked for more. A whole file is the common case and
@@ -447,7 +449,8 @@ class Files:
         # edit landed, which is the same lost write with a smaller window.
         async with self.exclusively(located.path):
             found, text = await asyncio.to_thread(self.loaded, path, root)
-            done = written(Anchored.over(text.lines), operations)
+            cached_anchor = cache(anchor)
+            done = written(Anchored.over(text.lines, cached_anchor), operations, cached_anchor)
             # `newline=""` again, so the endings `Text` just put back are written as they are rather
             # than translated a second time on the way out.
             await asyncio.to_thread(found.write_text, text.rejoined(done.lines), encoding="utf-8", newline="")
