@@ -49,10 +49,10 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from typing import Annotated
 from typing import Final
 from typing import Literal
@@ -65,6 +65,10 @@ from pydantic import model_validator
 ALPHABET: Final = "abcdefghijklmnopqrstuvwxyz"
 
 WIDTH: Final = 4
+PAIR_BASE: Final = len(ALPHABET) ** 2
+PAIR_ALPHABET: Final = tuple(
+    f"{ALPHABET[low]}{ALPHABET[high]}" for high in range(len(ALPHABET)) for low in range(len(ALPHABET))
+)
 
 # How many preceding lines an anchor may take in before it gives up. Beyond this a line is inside a
 # run of genuinely identical lines that no amount of context tells apart, and the honest answer is
@@ -117,11 +121,8 @@ class EditRefused(ValueError):
 def anchor(window: Sequence[str]) -> str:
     """The anchor for a line, given itself and however many lines before it it needed."""
     value = int.from_bytes(hashlib.blake2b("\n".join(window).encode(), digest_size=8).digest())
-    letters = []
-    for _ in range(WIDTH):
-        value, rest = divmod(value, len(ALPHABET))
-        letters.append(ALPHABET[rest])
-    return "".join(letters)
+    high, low = divmod(value, PAIR_BASE)
+    return PAIR_ALPHABET[low] + PAIR_ALPHABET[high % PAIR_BASE]
 
 
 def addressable(lines: Sequence[str]) -> tuple[int, ...]:
@@ -138,7 +139,10 @@ def clashes(codes: Mapping[int, str]) -> frozenset[str]:
     return frozenset(code for code, many in Counter(codes.values()).items() if many > 1)
 
 
-def anchors(lines: Sequence[str]) -> tuple[str | None, ...]:
+def anchors(
+    lines: Sequence[str],
+    anchor_for: Callable[[Sequence[str]], str] = anchor,
+) -> tuple[str | None, ...]:
     """
     An anchor per line, or nothing for a line that cannot have one.
 
@@ -152,20 +156,21 @@ def anchors(lines: Sequence[str]) -> tuple[str | None, ...]:
     what precedes it, so it keeps the anchor it has and its twin further down moves instead.
     """
     reach = dict.fromkeys(addressable(lines), 0)
-    codes = {at: anchor(window(lines, at, depth)) for at, depth in reach.items()}
+    codes = {at: anchor_for(window(lines, at, depth)) for at, depth in reach.items()}
     for _ in range(MAX_DEPTH):
         contested = clashes(codes)
         if not contested:
             break
-        deepened = False
-        for at, depth in reach.items():
-            if codes[at] in contested and depth < MAX_DEPTH and at - depth > 0:
-                reach[at] = depth + 1
-                deepened = True
+        deepened = tuple(
+            at for at, depth in reach.items() if codes[at] in contested and depth < MAX_DEPTH and at - depth > 0
+        )
         if not deepened:
             break
-        codes = {at: anchor(window(lines, at, depth)) for at, depth in reach.items()}
-    settled = {at: code for at, code in codes.items() if code not in clashes(codes)}
+        for at in deepened:
+            reach[at] += 1
+            codes[at] = anchor_for(window(lines, at, reach[at]))
+    contested = clashes(codes)
+    settled = {at: code for at, code in codes.items() if code not in contested}
     return tuple(settled.get(at) for at in range(len(lines)))
 
 
@@ -184,8 +189,8 @@ class Anchored:
     by_code: Mapping[str, int]
 
     @classmethod
-    def over(cls, lines: Sequence[str]) -> Anchored:
-        codes = anchors(lines)
+    def over(cls, lines: Sequence[str], anchor_for: Callable[[Sequence[str]], str] = anchor) -> Anchored:
+        codes = anchors(lines, anchor_for)
         return cls(
             lines=tuple(lines),
             codes=codes,
@@ -476,7 +481,12 @@ class Moved:
     line: str
 
 
-def moved(before: Anchored, after: Anchored, shown: Sequence[tuple[int, int]]) -> tuple[Moved, ...]:
+def moved(
+    before: Anchored,
+    after: Anchored,
+    spans: Sequence[Span],
+    shown: Sequence[tuple[int, int]],
+) -> tuple[Moved, ...]:
     """
     Every anchor that changed on a line nobody edited and the reply does not already show.
 
@@ -486,20 +496,40 @@ def moved(before: Anchored, after: Anchored, shown: Sequence[tuple[int, int]]) -
     unless it is said out loud. The two tables are both in hand at this point, so saying it costs a
     comparison rather than any bookkeeping kept between calls.
 
-    Lines already inside a region the reply is showing are left out, since their new anchors are
-    right there.
+    Lines outside the spans are copied unchanged by `spliced`, so their before and after positions
+    are known from the spans' landed ranges. Lines already inside a region the reply is showing are
+    left out, since their new anchors are right there.
     """
     changed: list[Moved] = []
-    matcher = SequenceMatcher(a=before.lines, b=after.lines, autojunk=False)
-    for start, landed, length in matcher.get_matching_blocks():
-        for step in range(length):
-            was, now = before.codes[start + step], after.codes[landed + step]
-            if was is None or now is None or was == now:
-                continue
-            if any(low <= landed + step < high for low, high in shown):
-                continue
-            changed.append(Moved(was=was, now=now, line=after.lines[landed + step]))
+    before_at = 0
+    after_at = 0
+    for span, (_, landed_stop) in zip(sorted(spans, key=lambda each: each.start), shifted(spans), strict=True):
+        changed.extend(remapped(before, after, before_at, span.start, after_at, shown))
+        before_at = span.stop
+        after_at = landed_stop
+    changed.extend(remapped(before, after, before_at, len(before.lines), after_at, shown))
     return tuple(changed)
+
+
+def remapped(
+    before: Anchored,
+    after: Anchored,
+    before_start: int,
+    before_stop: int,
+    after_start: int,
+    shown: Sequence[tuple[int, int]],
+) -> list[Moved]:
+    changed: list[Moved] = []
+    for offset in range(before_stop - before_start):
+        before_at = before_start + offset
+        after_at = after_start + offset
+        was, now = before.codes[before_at], after.codes[after_at]
+        if was is None or now is None or was == now:
+            continue
+        if any(low <= after_at < high for low, high in shown):
+            continue
+        changed.append(Moved(was=was, now=now, line=after.lines[after_at]))
+    return changed
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,7 +550,11 @@ class Written:
         return self.after.lines
 
 
-def written(before: Anchored, operations: Sequence[Operation]) -> Written:
+def written(
+    before: Anchored,
+    operations: Sequence[Operation],
+    anchor_for: Callable[[Sequence[str]], str] = anchor,
+) -> Written:
     """
     A whole batch resolved, checked against itself, and applied.
 
@@ -539,8 +573,8 @@ def written(before: Anchored, operations: Sequence[Operation]) -> Written:
             f"would depend on the order they were applied in; nothing was written. Split them across "
             f"two calls, or combine them into one operation"
         )
-    after = Anchored.over(spliced(before.lines, spans))
+    after = Anchored.over(spliced(before.lines, spans), anchor_for)
     regions = merged(
         [(max(0, start - CONTEXT), min(len(after.lines), stop + CONTEXT)) for start, stop in shifted(spans)]
     )
-    return Written(after=after, regions=regions, remapped=moved(before, after, regions))
+    return Written(after=after, regions=regions, remapped=moved(before, after, spans, regions))
