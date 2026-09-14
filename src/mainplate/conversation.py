@@ -483,6 +483,32 @@ def parse_disposition(named: str) -> Disposition | None:
         return None
 
 
+KEEP: Final = "keep"
+"""
+The one composer answer with no disposition behind it, because it sends the text nowhere.
+
+Named beside the dispositions rather than in `pages.py`, where it is drawn, so that every word the
+console's own composer answers to is spelled in one module: a plugin claiming one of them is refused
+against `LEADERS`, and a refusal that missed `keep` would let a plugin's row sit under the shelf's.
+"""
+
+LEADERS: Final[frozenset[str]] = frozenset(
+    {*(each.value for each in Disposition if each is not Disposition.HERE), KEEP}
+)
+"""
+Every word the console's own composer can answer to, which no plugin of the operator's may claim.
+
+`here` is left out because it is never typed: it is what Send does, and Send is a button rather than
+a leader. Everything else is a row somebody can reach by `/word`, on *some* session - `run` only
+where there is a worktree, `parent` only on a fork, `next` only while a turn is being answered - and
+the set is the union rather than what one session draws, since a leader that collided only while a
+turn was running would be a row that means two things some of the time.
+
+**A copy of what `pages.sending_answers` draws, and the suite pins the two together**, because the
+page cannot be imported from here without closing a ring and the refusal cannot live on the page.
+"""
+
+
 # Which endpoint the session is answered on, inside the recorded choice and on the form that starts
 # one. Named once here for the reason the turn keys are: the code that writes it and the code that
 # reads it are both in this file and must not drift.
@@ -3277,7 +3303,7 @@ def conversing(
             # message rather than at the step, so the screen still draws, still lists the two plugins,
             # and still has the switch that fixes it.
             try:
-                refuse_collisions(live.enrolled)
+                refuse_collisions(live.enrolled, leaders=LEADERS)
             except Collides as raised:
                 clashed = records.Refused(why=str(raised))
                 await run.step(refused_key(at.turn, 0), partial(as_recorded, clashed), parse_refused)

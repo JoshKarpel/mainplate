@@ -86,6 +86,7 @@ from mainplate.commands import UNFINISHED
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
+from mainplate.conversation import KEEP
 from mainplate.conversation import NETWORK_FIELD
 from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
 from mainplate.conversation import THINKING_FIELD
@@ -2302,6 +2303,87 @@ def laid_out(said: str) -> str:
         return said
 
 
+@dataclass(frozen=True, slots=True)
+class Subject:
+    """
+    What one call was about, as the words a folded call shows beside the tool's name.
+
+    `said` is the thing the call acted on - a path, a command - and `extent` is how much of it, where
+    the tool has a way of saying less than all: which lines of a file, how many operations, how deep
+    a listing went. Two slots rather than one sentence so the stylesheet can let the first give way
+    to an ellipsis while the second stays whole.
+    """
+
+    said: str
+    extent: str | None = None
+
+
+def lines_of(offset: object, limit: object) -> str | None:
+    """
+    Which lines a `read` asked for, or nothing where it asked for all of them.
+
+    Both figures are taken as the model sent them, which is JSON and so could be anything: a figure
+    that is not an integer is treated as not given rather than refused, because what is being drawn
+    is a summary of a call and the call itself is a press away, exactly as it arrived.
+    """
+    from_line = offset if isinstance(offset, int) and not isinstance(offset, bool) else None
+    at_most = limit if isinstance(limit, int) and not isinstance(limit, bool) else None
+    if from_line is not None and at_most is not None:
+        return f"lines {from_line}\N{EN DASH}{from_line + at_most - 1}"
+    if from_line is not None:
+        return f"from line {from_line}"
+    if at_most is not None:
+        return f"first {at_most} lines"
+    return None
+
+
+def subject_of(tool: str, arguments: str) -> Subject | None:
+    """
+    What a call to one of this console's own tools was about, read off what the model handed it.
+
+    Named per tool rather than guessed from whichever field looks like a subject, because the four
+    file tools and `bash` are the whole of what this console defines and each has one field that is
+    the point of the call. A plugin's tool is not here: its arguments are its own vocabulary and
+    nothing here can say which of them is the subject, so a call to one is named and nothing more.
+
+    Nothing that is not a well-formed object with the expected field in it produces a subject. A
+    malformed call is the one a reader most needs to open, and `laid_out` shows it unchanged in the
+    body; a summary that guessed at it would be a second rendering of the thing that went wrong.
+    """
+    try:
+        handed = json.loads(arguments)
+    except ValueError:
+        return None
+    if not isinstance(handed, dict):
+        return None
+    if tool == "bash":
+        command = handed.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return None
+        first, _, rest = command.strip().partition("\n")
+        more = rest.count("\n") + 1 if rest else 0
+        return Subject(first, extent=f"{more} more line{'s' if more != 1 else ''}" if more else None)
+    if tool not in ("read", "edit", "create", "list"):
+        return None
+    path = handed.get("path", "." if tool == "list" else None)
+    if not isinstance(path, str) or not path:
+        return None
+    root = handed.get("root")
+    said = f"{root}:{path}" if isinstance(root, str) and root else path
+    if tool == "read":
+        return Subject(said, extent=lines_of(handed.get("offset"), handed.get("limit")))
+    if tool == "edit":
+        operations = handed.get("operations")
+        if not isinstance(operations, list):
+            return Subject(said)
+        return Subject(said, extent=f"{len(operations)} operation{'s' if len(operations) != 1 else ''}")
+    if tool == "list":
+        depth = handed.get("depth")
+        deep = depth if isinstance(depth, int) and not isinstance(depth, bool) else None
+        return Subject(said, extent=f"depth {deep}" if deep is not None else None)
+    return Subject(said)
+
+
 def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     """
     One call, folded, with what it was handed and what it gave back.
@@ -2310,25 +2392,41 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     prose they read through, and a real `<details>` because that is what works with no script at
     all and what the dock's fold controls act on.
 
+    **Folded whether or not it has come back.** A call still out is drawn working, with the dots in
+    its summary, and drawn shut like every other, because the script keeps every toggle as the
+    reader's decision: a call drawn open while it was out would stay open once it returned, and a
+    turn of twenty reads would be twenty open boxes. What the summary says is what makes shut
+    affordable, since the subject of the call - the path, the command - is on the line a reader
+    scans without a press.
+
     The id is the panel's own plus this block's place in it, which is stable in both halves: a
     panel's blocks only ever grow at the end, so a call keeps its place once made whether or not it
     has come back, and everything a turn draws after a response - a later response, a command -
     lands after the panel rather than in front of it, so the panel's own `at` does not move either.
     A command's fold cannot be named this way for exactly that reason; see `command_block`. The
-    script needs it to put a reader's unfolded calls back after a swap, since the server renders
-    `open` for one state only and morphing removes an attribute the new markup does not carry.
-
-    A call with no result is drawn open and working, which is what a call still out looks like
-    while the turn that made it runs, and what a turn whose run ended between the call and its
-    return looks like afterwards.
+    script needs it to put a reader's unfolded calls back after a swap, since morphing removes an
+    attribute the new markup does not carry.
     """
+    subject = subject_of(used.tool, used.arguments)
     return details(
         cls="tool",
-        attrs={"id": f"{anchor}-tool-{at}", **opens(used.returned is None)},
+        attrs={"id": f"{anchor}-tool-{at}", **opens(False)},
         children=[
             summary(
                 children=[
                     span(cls="tool__name", children=used.tool),
+                    *(
+                        ()
+                        if subject is None
+                        else (
+                            span(cls="tool__subject", attrs={"title": subject.said}, children=subject.said),
+                            *(
+                                (span(cls="tool__extent", children=subject.extent),)
+                                if subject.extent is not None
+                                else ()
+                            ),
+                        )
+                    ),
                     # Beside the outcome rather than in the body, because how long a call ran is what
                     # a reader scanning a folded turn wants and the body is what they open when they
                     # want the rest. Absent while a call is still out: a figure there would have to
@@ -4370,9 +4468,9 @@ def sending_answers(returning: bool, answering: bool, runs_in: str | None) -> tu
             else ()
         ),
         Answer(
-            leader="keep",
+            leader=KEEP,
             saying="Put it on the shelf, unsent, and clear the box",
-            posts={"type": "button", "data-shelf": "keep"},
+            posts={"type": "button", "data-shelf": KEEP},
             staying=False,
         ),
     )

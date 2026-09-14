@@ -447,8 +447,8 @@ CONVERSATION: list[ModelMessage] = [
             ),
             TextPart(content="Let me look at how the region is swapped."),
             ToolCallPart(
-                tool_name="read_file",
-                args={"path": "src/mainplate/pages.py", "pattern": "hx-trigger"},
+                tool_name="read",
+                args={"path": "src/mainplate/pages.py", "offset": 140, "limit": 40},
                 tool_call_id="call-1",
             ),
         ],
@@ -458,7 +458,7 @@ CONVERSATION: list[ModelMessage] = [
     ModelRequest(
         parts=[
             ToolReturnPart(
-                tool_name="read_file",
+                tool_name="read",
                 content=READ,
                 tool_call_id="call-1",
             ),
@@ -527,7 +527,13 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
         timestamp=WHEN,
         parts=[
             TextPart(content="Checking."),
-            ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-2"),
+            # A `bash` call whose command runs to a second line, because the folded summary shows
+            # the first line and says how many follow, and a shot has to show both halves.
+            ToolCallPart(
+                tool_name="bash",
+                args={"command": "grep -n 'overflow-x' src/mainplate/assets/mainplate.css \\\n  | head -20"},
+                tool_call_id="call-2",
+            ),
         ],
         usage=spending(asked=96_300, answered=88, cached=44_600, cost="0.1698"),
         metadata=timing(1.2),

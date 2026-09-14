@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Collection
 from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -342,7 +343,7 @@ def leader_names(plugin: Enrolled) -> tuple[str, ...]:
     return tuple(named for named, _ in plugin.answers())
 
 
-def refuse_collisions(enrolled: Sequence[Enrolled]) -> None:
+def refuse_collisions(enrolled: Sequence[Enrolled], *, leaders: Collection[str]) -> None:
     """
     Refuse a set of running plugins that cannot agree on a tool name or a leader.
 
@@ -350,13 +351,20 @@ def refuse_collisions(enrolled: Sequence[Enrolled]) -> None:
     two claimants are both listed on the settings step with a switch apiece, and turning either off
     is what fixes it.
 
+    `leaders` is every word the console's own composer answers to, and a plugin claiming one of
+    those is refused the same way, naming the console as the other claimant. It is handed in rather
+    than imported because the console's words are the conversation's to declare and this module is
+    below it. A repository's leader carries the separator and none of the console's does, so that
+    tier cannot reach one.
+
     The cost, stated: **two tiers, two rules.** The uniform alternative, prefixing every plugin's
     tools, was not taken because it renames `hand_off` to something worse in every session's prefix
     to solve a collision the operator can already see and fix.
     """
     unprefixed = [plugin for plugin in enrolled if plugin.installed.tier is not Tier.REPOSITORY]
-    for space, claiming in (("tool", tool_names), ("leader", leader_names)):
-        claimed: dict[str, str] = {}
+    tools: dict[str, str] = {}
+    console: dict[str, str] = dict.fromkeys(leaders, "this console")
+    for space, claiming, claimed in (("tool", tool_names, tools), ("leader", leader_names, console)):
         for plugin in unprefixed:
             for named in claiming(plugin):
                 held = claimed.get(named)

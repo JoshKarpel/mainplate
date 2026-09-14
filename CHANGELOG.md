@@ -316,6 +316,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A tool call's row says what it acted on**, beside the tool's name: the path a `read` or an
+  `edit` took, with which lines or how many operations, and the first line of what `bash` ran, with
+  how many lines follow. That is what makes the other half affordable: **every call is drawn shut,
+  whether or not it has come back.** The page keeps every toggle as the reader's decision, so a call
+  that opened itself while it was out stayed open for good once a reader had watched it arrive, and
+  a turn of twenty reads was twenty open boxes. What says a call is out is the working mark on its
+  row; the dock's third button still puts every fold back where the console had it.
+- **A plugin claiming one of the console's own leaders is refused**, at the first message, naming
+  both parties, exactly as two plugins claiming one tool are. Unrefused, an operator's plugin
+  answering to `/run` is a second row under the console's own word and a second mode button lit by
+  `!`, with whichever the page drew first getting the keyboard. A repository's leaders carry its
+  name and a colon, so they never could; and a leader is typed with every character a plugin's name
+  may carry, so `/pre-commit:run` reaches the keyboard rather than only the menu.
 - **The OpenAI wire speaks the responses API.** OpenAI's current models refuse function tools with
   reasoning on over chat completions, and GPT-5.6 reasons by default, so a coding session on it was
   a refused turn or a model with its reasoning switched off. The conversation is still sent whole on
