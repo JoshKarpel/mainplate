@@ -462,6 +462,13 @@ Python-Markdown passes raw HTML through untouched and never looks at URL schemes
 by whatever was pasted into the box, and this project's direction is an agent that reads
 repositories.
 
+Command and tool output is not Markdown, because its punctuation is the program's own text.
+`linked_text` keeps that text verbatim while making each `http` or `https` URL an anchor, so a
+`git push` pull-request URL can be followed without a reader having to select and paste it.
+It suppresses the source page as a referrer.
+Every other run is escaped before the anchor is built: output can name a URL, but it cannot supply
+markup or a different URL scheme.
+
 Fenced code is highlighted, and the sanitiser is where that gets interesting. `codehilite` emits
 classes, `nh3` strips `class` by default, and the fix is **`allowed_classes` with Pygments' own
 `STANDARD_TYPES` vocabulary** rather than allowing the attribute. The difference is the whole point:

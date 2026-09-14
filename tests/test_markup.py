@@ -9,6 +9,7 @@ from mainplate.markup import HIGHLIGHT
 from mainplate.markup import TOKENS
 from mainplate.markup import as_document
 from mainplate.markup import as_message
+from mainplate.markup import linked_text
 
 PYTHON = """```python
 async def handler(session: str) -> int:
@@ -31,6 +32,12 @@ class TestWhatReachesThePage:
         assert f'class="{HIGHLIGHT}"' in rendered
         assert 'class="k"' in rendered, "keywords carry a token class"
         assert 'class="c1"' in rendered, "comments carry a token class"
+
+    def test_verbatim_text_links_http_urls_without_turning_the_rest_into_markup(self) -> None:
+        url = "https://github.com/JoshKarpel/mainplate/compare/main...feature"
+        assert (
+            linked_text(f"<script> {url}.") == f'&lt;script&gt; <a href="{url}" referrerpolicy="no-referrer">{url}</a>.'
+        )
 
     def test_an_unlabelled_fence_is_left_alone_rather_than_guessed_at(self) -> None:
         """
