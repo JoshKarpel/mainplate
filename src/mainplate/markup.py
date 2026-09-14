@@ -13,12 +13,14 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Final
 
 import nh3
 from markdown import Markdown
 from markupsafe import Markup
+from markupsafe import escape
 from pygments.token import STANDARD_TYPES
 
 # The wrapper `codehilite` puts around a highlighted block, which is the one class here that is not
@@ -30,6 +32,11 @@ HIGHLIGHT: Final = "codehilite"
 # first time a language used a token nobody thought of, and wrong silently: the class would be
 # stripped and that run of code would render unhighlighted with nothing saying why.
 TOKENS: Final[frozenset[str]] = frozenset({name for name in STANDARD_TYPES.values() if name} | {HIGHLIGHT})
+
+# Only web URLs are links. Command and tool output is untrusted text, so every non-URL run is escaped
+# before it becomes markup and the URL is the only part given an `href`.
+URL: Final = re.compile(r"""https?://[^\s<>()\[\]{}"']+""")
+TRAILING_URL_PUNCTUATION: Final = ".,;:!?"
 
 # Which classes survive sanitising, per tag. `allowed_classes` rather than allowing the `class`
 # attribute itself, and the difference is the whole point: this text is shaped by a model, so
@@ -81,6 +88,21 @@ def converted(converter: Markdown, text: str) -> Markup:
     """`text` through one converter, rendered and then sanitised into markup a page can carry."""
     converter.reset()
     return Markup(nh3.clean(converter.convert(text), allowed_classes=ALLOWED_CLASSES))
+
+
+@lru_cache(maxsize=2048)
+def linked_text(text: str) -> Markup:
+    """Verbatim text with its HTTP(S) URLs rendered as links."""
+    parts: list[Markup] = []
+    at = 0
+    for found in URL.finditer(text):
+        url = found.group().rstrip(TRAILING_URL_PUNCTUATION)
+        parts.append(escape(text[at : found.start()]))
+        parts.append(Markup('<a href="{}" referrerpolicy="no-referrer">{}</a>').format(url, url))
+        parts.append(escape(found.group()[len(url) :]))
+        at = found.end()
+    parts.append(escape(text[at:]))
+    return Markup().join(parts)
 
 
 @lru_cache(maxsize=2048)
