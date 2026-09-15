@@ -187,32 +187,40 @@ class Settings(BaseSettings):
     """
     How many live model requests one pass may make before it hands the turn back.
 
-    One, so a pass is one round trip and the tool batch that follows it rather than a whole
-    conversation. That is what takes the lease below off a bet about the longest turn anybody will
-    ever ask for: a turn of forty round trips is forty passes under a lease sized for one, where a
-    pass that was the whole turn had to fit inside it or be fenced, redelivered, and replayed into
-    the same wall.
+    One because a pass reads one checkpoint snapshot. A message typed while its request is running
+    is visible to the next pass, so at one it reaches the next model request; a pass allowed several
+    live requests would make that message wait behind however many it had left. Heartbeats make the
+    wider pass safe from liveness expiry, but they do not refresh its snapshot.
 
-    `None` is unbounded, which is exactly what a pass was before there was a number here. What
-    raising it trades is replay against steer latency: a pass replays every step of the turn behind
-    it, so fewer passes is less replay, and a pass reads the checkpoint once, so a steer typed
-    mid-turn waits behind however many requests the pass has left. See `draining_inbox`.
+    Raising the allowance trades that steering latency for less replay: every pass replays the
+    recorded steps behind the next live request, so fewer passes do less graph work and fewer store
+    reads. `None` lets one pass answer a whole turn, bounded only by `budget`.
 
     A number and not a second code path, which is what keeps it a thing to turn.
     """
 
-    lease: timedelta = Field(default=timedelta(hours=1), gt=timedelta())
+    lease: timedelta = Field(default=timedelta(minutes=1), gt=timedelta())
     """
-    How long a pass may take before another worker may take the session over.
+    How long a worker's last sign of life keeps its pass from being taken over.
 
-    It has to exceed one model request and the batch of tool calls that follows it, which is what a
-    pass is at the allowance above. Set it too short and a request in flight is fenced and re-run,
-    too long and a crashed process leaves its session waiting that long.
+    The worker renews the claim and its queue delivery while the pass runs, so this measures how
+    quickly another worker recovers a session after the process answering it dies. It does not have
+    to cover any model request or tool call; `budget` is that separate deadline.
 
-    An hour, and it is the *model* that decides it: a request is sent with the model's whole output
-    limit, which on the frontier models is a hundred and twenty-eight thousand tokens, and that is
-    the figure Anthropic's own SDK budgets an hour of generation for. `bash` is the other ceiling,
-    at `MAX_SECONDS`, which is ten minutes. The only thing the length costs is how long a session
-    waits after the process answering it dies, which is failure recovery and not the ordinary case,
-    so it is sized for the one honest worst case rather than shaved to make that rare wait shorter.
+    One minute matches the durability layer's default. Shortening it detects a dead worker sooner
+    but spends more writes on renewal; lengthening it writes less often but leaves an interrupted
+    session waiting longer.
+    """
+
+    budget: timedelta = Field(default=timedelta(hours=1), gt=timedelta())
+    """
+    How long one pass may hold a session however often its worker reports life.
+
+    This is the deadline renewal cannot lift, so a pass stuck in work that never returns eventually
+    loses its claim. It has to exceed the longest honest step: one model request, because a request
+    is sent with the model's whole output limit and Anthropic's SDK budgets an hour to generate it.
+    `bash` and plugin processes have shorter timeouts of their own.
+
+    Set it too short and healthy work can be fenced and repeated; set it too long and a live process
+    stuck inside one step holds the session for that long. A dead process still costs only `lease`.
     """

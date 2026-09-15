@@ -45,15 +45,20 @@ somewhere wrong. An arbitrary shell command has no such defence and re-runs sile
 
 ## What one pass does
 
-**A pass is one live model request and the tool batch behind it**, not a whole turn, and the lease
-is why. A pass that was a whole conversation had to fit inside `Settings.lease`, which made that
-number a bet on the longest turn anybody would ever ask for: a turn with enough round trips to cross
-it is fenced on its next write, redelivered, replayed, and runs into the same wall again. Cut per
-request, what the lease has to cover is one round trip and the batch after it, which is a bound that
-can be reasoned about rather than guessed at: an hour, because a request is sent with the model's
-whole output limit and that is what Anthropic's own SDK budgets for generating it. The length costs
-only how long a session waits after the process answering it dies, which is failure recovery and not
-the ordinary case.
+**A pass is one live model request and the tool batch behind it**, not a whole turn. Two deadlines
+cover it, and separating them makes each answerable. `Settings.lease` is a one-minute liveness
+window: the worker renews both its claim and queue delivery while the pass runs, and another worker
+may take the session over one lease after those heartbeats stop. It is sized for how quickly a dead
+process should be noticed and has nothing to do with how long a request takes. The cost is two
+store writes, one for the claim and one for the delivery, three times per lease while a pass is
+live.
+
+`Settings.budget` is the hour a pass may hold a session however alive its worker looks. Renewal
+cannot lift it, so a live process stuck in work that never returns eventually loses its claim. It has
+to exceed the longest honest step, which is one request sent with the model's whole output limit:
+Anthropic's SDK budgets an hour for generating it. Set it too short and a healthy effect may finish
+after another pass has taken the session and be repeated; set it too long and a wedged live process
+holds the session for that long. A dead process still costs only the lease.
 
 `Settings.allowance` is the whole of it: **one setting with a live value, never a second code
 path.** `CheckpointedModel.request` spends one on each *live* request and `Allowance.take` refuses
@@ -61,6 +66,13 @@ the one that would go past it, which raises `AllowanceSpent` and unwinds `agent.
 catches that outside the run and returns `Progressed`. An allowance of `None` is unbounded, which is
 exactly what a pass was before there was a number here, so the tradeoff is a dial rather than a
 branch.
+
+The console ships an allowance of one because **a heartbeat renews a claim, not its checkpoint
+snapshot**. A message typed while one request is running is absent from that pass's snapshot and
+becomes visible when the next pass loads one. At one, that boundary sits before the next model
+request; raised to four, the message can wait behind three more requests made from the old snapshot.
+A wider pass is safe from liveness expiry, but it is not equivalent: it trades steering latency for
+fewer passes, store reads, and graph replays.
 
 Six things there are decided rather than incidental:
 
@@ -80,18 +92,19 @@ Six things there are decided rather than incidental:
   what keeps `resume`'s `Swallowed` check live: a body that returns having caught a real suspension
   is refused, and a `-> Never` body could never trigger that at all.
 - **The request stays inside the pass.** Dispatching it to a pool and suspending on `Run.awaiting`
-  works and is worse, because the lease is what recovers interrupted work: a request outside the
-  pass is a request outside the lease, and a pass that dispatched and reported `Blocked` has had its
+  works and is worse, because the claim is what recovers interrupted work: a request outside the
+  pass is a request outside the claim, and a pass that dispatched and reported `Blocked` has had its
   delivery acknowledged with nothing scheduled, so a process that dies with work in flight leaves a
   session waiting for ever. Recovering that needs a reconciler, idempotent dispatch, and a durable
-  leased in-flight marker, which is a second queue. Under the claim, a dead process is an expired
-  claim and `reclaim` redelivers. **Never write a placeholder record for a model request** if that
+  leased in-flight marker, which is a second queue. Under the claim, a dead process is a liveness
+  window that stops being renewed and a delivery that becomes visible again. **Never write a
+  placeholder record for a model request** if that
   is ever revisited: `supply` keeps the first value, so an `UNFINISHED` under `turn:{n}:model:{i}`
   is permanent and the turn can never be retried. `Commands` writes one from `aclose` and that
   precedent does not transfer, because a command's result is terminal where a request's is not.
 - **The allowance is the pass's, not the turn's.** A pass that finds two prompts already recorded
   answers two turns, and a fresh count per turn would let it make one live request for each under a
-  lease sized for one. So `conversing` makes one `Allowance` per pass and hands the same one to
+  budget sized for one. So `conversing` makes one `Allowance` per pass and hands the same one to
   every `stepping` scope in it.
 - **The turn itself is unbounded.** Pydantic AI caps a run at fifty requests by default, and
   `answering_turn` turns that off rather than raising it. The cap counts replayed requests as well
@@ -220,9 +233,10 @@ reads the claim and the queue beside the record count, and `attention_of` turns 
 four: `Claimed`, `Queued`, `Delayed`, `Idle`.
 
 The claim settles it first, because a live claim *is* a pass in flight and the queue row beside one
-is only the delivery that pass is answering for. A claim outliving the process that took it reads as
-held until its lease elapses, which is honest rather than wrong: for that interval the claim is what
-stops another worker starting, and `reclaim` is what ends it.
+is only the delivery that pass is answering for. `Service.attended` reads the earlier of its
+liveness and budget deadlines. A claim outliving the process that took it therefore reads as held
+until its one-minute liveness window elapses, while a live worker renews that window no further than
+the pass's budget.
 
 **`Delayed` with a recorded failure is the signature of the whole problem.** The worker deliberately
 leaves a failed pass's delivery unanswered, so the queue keeps the row it reserved and reclaims it
@@ -258,9 +272,11 @@ frozen `RunContext` once per capability per hook, which is upstream's. Absolute 
 per pass, 2.2s spread across a 40-round turn that costs minutes of provider time.
 
 **Do not build a record cache or a fetch-only-what-is-missing store for this**: loads are already
-linear and parsing is 1.4%, so the quadratic is somewhere a store-level cache cannot reach, and
-raising the allowance cuts the pass count, the graph replay and the re-loading together. Revisit
-only if very large `read` returns become common.
+linear and parsing is 1.4%, so the quadratic is somewhere a store-level cache cannot reach. Raising
+the allowance cuts the pass count, graph replay, and re-loading together, but makes a steer wait
+behind the live requests left in the pass. Keep the default at one unless measured replay cost is
+worth that loss of responsiveness; revisit the store only if very large `read` returns become
+common.
 
 **The tests default to unbounded and the console ships one.** A test about a conversation drives a
 whole turn in one pass and says nothing about how a pass is cut; `TestWhatOnePassDoes` is where the

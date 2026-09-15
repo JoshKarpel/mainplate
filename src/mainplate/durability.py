@@ -252,12 +252,12 @@ class Allowance:
     How many live model requests one pass may make, and how many it has made.
 
     One per *pass* rather than one per turn, which is why it is threaded in rather than made inside
-    `stepping`: a pass that finds two prompts already recorded answers two turns, and the lease
+    `stepping`: a pass that finds two prompts already recorded answers two turns, and the budget
     covers the pass rather than either of them.
 
     `limit` of `None` is unbounded, which is what a pass was before there was an allowance: it runs
     the whole turn, however many round trips that takes. What the number trades is replay against
-    the lease and against how long a steer waits, since a pass reads the checkpoint once: see
+    the pass budget and against how long a steer waits, since a pass reads the checkpoint once: see
     `Settings.allowance`.
 
     Only *live* requests count. A pass replaying what an earlier one recorded pays no provider and

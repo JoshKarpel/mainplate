@@ -161,8 +161,8 @@ reading only the event name would not guess that the answer is the whole registr
 fetches and builds - a hook environment per entry in a `.pre-commit-config.yaml`, an interpreter, a
 model - and that is minutes on a cold cache. A request somebody is waiting on is the wrong place for
 minutes, which is the argument this console [already made about the
-clone](workspace.md#where-a-repository-comes-from): a pass is where slow work lives, under a lease,
-with a worker slot and a page that says it is working.
+clone](workspace.md#where-a-repository-comes-from): a pass is where slow work lives, under a pass
+budget, with a worker slot and a page that says it is working.
 
 Three things follow, and each is worth stating because each is a change from the draft where the
 press did the work:

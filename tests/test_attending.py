@@ -56,33 +56,33 @@ class TestReadingWhatTheWorkerIsDoing:
         And it settles the answer whatever the queue says, because the row beside a live claim is the
         delivery that pass is answering for.
         """
-        attended = Attended(recorded=9, held_until=NOW + 120, due_at=NOW + 600, asked_at=NOW)
+        attended = Attended(recorded=9, claimed_until=NOW + 120, due_at=NOW + 600, asked_at=NOW)
 
         assert attention_of(attended) == Claimed()
 
     def test_a_claim_whose_lease_has_run_out_is_not_one(self) -> None:
         """
-        The claim is released by setting it to now, so `held_until` in the past is the ordinary state
+        The claim is released by setting it to now, so `claimed_until` in the past is the ordinary state
         of a session nothing holds rather than an exceptional one.
         """
-        attended = Attended(recorded=9, held_until=NOW - 1, due_at=NOW - 1, asked_at=NOW)
+        attended = Attended(recorded=9, claimed_until=NOW - 1, due_at=NOW - 1, asked_at=NOW)
 
         assert attention_of(attended) == Queued()
 
     def test_a_delivery_already_due_is_queued(self) -> None:
-        assert attention_of(Attended(recorded=2, held_until=None, due_at=NOW, asked_at=NOW)) == Queued()
+        assert attention_of(Attended(recorded=2, claimed_until=None, due_at=NOW, asked_at=NOW)) == Queued()
 
     def test_a_delivery_held_back_says_how_long_for(self) -> None:
         """
         Which is what the worker leaving a failed pass's delivery unanswered produces, and the one arm
         with a figure on it.
         """
-        attended = Attended(recorded=2, held_until=None, due_at=NOW + 504, asked_at=NOW)
+        attended = Attended(recorded=2, claimed_until=None, due_at=NOW + 504, asked_at=NOW)
 
         assert attention_of(attended) == Delayed(until=timedelta(seconds=504))
 
     def test_no_row_at_all_is_a_session_nothing_is_coming_for(self) -> None:
-        assert attention_of(Attended(recorded=2, held_until=None, due_at=None, asked_at=NOW)) == Idle()
+        assert attention_of(Attended(recorded=2, claimed_until=None, due_at=None, asked_at=NOW)) == Idle()
 
 
 class TestReadingItOutOfTheStore:
@@ -116,6 +116,26 @@ class TestReadingItOutOfTheStore:
             await service.checkpointer.release(holder)
 
         assert await service.attention(session.id) == Queued(), "and stops being claimed when released"
+
+    async def test_a_stopped_heartbeat_ends_a_claim_before_its_budget(self, service: Service) -> None:
+        session = await started(service, "hello")
+        holder = await claimed(service.checkpointer, session.id)
+        try:
+            await service.database.run(
+                lambda connection: connection.execute(
+                    """
+                    UPDATE workflow_claim
+                    SET held_until = unixepoch('now', 'subsec') + 600,
+                        alive_until = unixepoch('now', 'subsec') - 1
+                    WHERE workflow = :workflow
+                    """,
+                    {"workflow": session.id},
+                )
+            )
+
+            assert not isinstance(await service.attention(session.id), Claimed)
+        finally:
+            await service.checkpointer.release(holder)
 
     async def test_a_session_nothing_has_ever_queued_is_idle(self, service: Service) -> None:
         """
@@ -158,8 +178,8 @@ class TestTheTokenAPageWatchesOn:
         reads of a real store a moment apart: the store's clock has millisecond resolution, so two
         consecutive reads land in the same millisecond often enough that the bug passes such a test.
         """
-        earlier = Attended(recorded=4, held_until=NOW - 30, due_at=NOW + 600, asked_at=NOW)
-        later = Attended(recorded=4, held_until=NOW - 30, due_at=NOW + 600, asked_at=NOW + 90)
+        earlier = Attended(recorded=4, claimed_until=NOW - 30, due_at=NOW + 600, asked_at=NOW)
+        later = Attended(recorded=4, claimed_until=NOW - 30, due_at=NOW + 600, asked_at=NOW + 90)
 
         assert token_of(earlier) == token_of(later)
         assert attention_of(earlier) != attention_of(later), (
@@ -169,10 +189,10 @@ class TestTheTokenAPageWatchesOn:
 
     def test_it_moves_on_every_field_the_store_actually_wrote(self) -> None:
         """Each of the three, one at a time, so a token that quietly dropped one would fail here."""
-        settled = Attended(recorded=4, held_until=NOW - 30, due_at=NOW + 600, asked_at=NOW)
+        settled = Attended(recorded=4, claimed_until=NOW - 30, due_at=NOW + 600, asked_at=NOW)
 
         assert token_of(replace(settled, recorded=5)) != token_of(settled)
-        assert token_of(replace(settled, held_until=NOW + 300)) != token_of(settled)
+        assert token_of(replace(settled, claimed_until=NOW + 300)) != token_of(settled)
         assert token_of(replace(settled, due_at=None)) != token_of(settled)
 
     async def test_it_moves_when_something_is_recorded(self, service: Service) -> None:

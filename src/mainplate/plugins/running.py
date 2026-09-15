@@ -45,8 +45,8 @@ PATIENCE: Final = timedelta(minutes=5)
 How long one plugin has to answer one event before it is stopped.
 
 Bounded because nothing else bounds it: a plugin that never returns would hold a pass for the whole
-lease and take the session's worker slot with it. Five minutes rather than the ten a person's own
-command gets, because this runs *inside* a pass and the lease covers the pass: a plugin that needs
+budget and take the session's worker slot with it. Five minutes rather than the ten a person's own
+command gets, because this runs *inside* a pass and the budget covers the pass: a plugin that needs
 longer than a model round trip and a batch of tool calls is doing something the console should be
 told about rather than waiting for.
 """
