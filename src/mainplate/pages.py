@@ -106,6 +106,7 @@ from mainplate.conversation import Transcript
 from mainplate.forge import Reachable
 from mainplate.markup import as_document
 from mainplate.markup import as_message
+from mainplate.markup import linked_text
 from mainplate.plugins.asking import running
 from mainplate.plugins.installed import ON
 from mainplate.plugins.installed import Enrolled
@@ -2467,7 +2468,7 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
                     *(
                         ()
                         if used.returned is None
-                        else (dt(children="returned"), dd(children=pre(children=used.returned.content)))
+                        else (dt(children="returned"), dd(children=pre(children=linked_text(used.returned.content))))
                     ),
                 ],
             ),
@@ -2563,7 +2564,7 @@ def command_block(ran: Command) -> Element:
                 else (
                     div(
                         cls="ran__body",
-                        children=pre(children=code(children=said))
+                        children=pre(children=code(children=linked_text(said)))
                         if said
                         else span(cls="ran__silent", children="said nothing"),
                     ),

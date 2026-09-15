@@ -922,13 +922,16 @@ pre > .copy {
     text-align: left;
 }
 
+.text a,
+.tool__body pre a,
+.ran__body pre a {
+    color: var(--person-edge);
+}
+
 .text th {
     background: var(--sunk);
 }
 
-.text a {
-    color: var(--person-edge);
-}
 
 .text img {
     max-width: 100%;

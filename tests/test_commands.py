@@ -244,6 +244,21 @@ class TestHowACommandIsDrawn:
         assert f'<details class="ran" id="ran-{entry.key}" open data-opens="open">' in drawn.text
         assert " M pages.py" in drawn.text
 
+    async def test_a_url_in_command_output_is_a_link(self, app: ASGIApp, service: Service) -> None:
+        session = await started(service, "have a look", DEFAULT_CHOICE)
+        entry = await service.checkpointer.append(session.id, recorded_command("git push"))
+        url = "https://github.com/JoshKarpel/mainplate/compare/main...feature"
+        await service.checkpointer.supply(
+            session.id,
+            result_key(entry.key),
+            recorded_result(Result(status=0, output=f"Create a pull request: {url}\n", took=timedelta(seconds=0.1))),
+        )
+
+        async with calling(app) as caller:
+            drawn = await caller.get(f"/sessions/{session.id}")
+
+        assert f'<a href="{url}" referrerpolicy="no-referrer">{url}</a>' in drawn.text
+
     async def test_a_command_that_said_nothing_says_so_rather_than_drawing_an_empty_box(
         self, app: ASGIApp, service: Service
     ) -> None:
