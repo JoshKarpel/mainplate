@@ -166,7 +166,7 @@ class TestBuildingEndpoints:
         endpoint = Endpoint.model_validate({"format": wire, "url": "https://gateway.example.invalid/v1"})
         assert isinstance(build_wire(endpoint), built)
 
-    def test_the_openai_wire_speaks_the_responses_api_and_keeps_nothing_at_the_provider(self) -> None:
+    def test_the_openai_wire_keeps_nothing_at_the_provider_and_asks_what_it_thought(self) -> None:
         """
         The checkpoint is the conversation, said to the one API that offers to hold it instead.
 
@@ -174,12 +174,20 @@ class TestBuildingEndpoints:
         AI's: what this console decides is which API, and that the exchange is not stored, which is
         what server-side chaining would depend on. The two chaining settings are pinned absent, since
         either would have the provider reconstruct the history and this console send only what is new.
+
+        The summary is the other half, and it is here because unasked this API reasons in private: a
+        reasoning item comes back as encrypted content and nothing else, which Pydantic AI reads into
+        a `ThinkingPart` carrying no text and `blocks_in` passes over, so a session on this wire
+        showed none of the thinking a session on the Anthropic one showed throughout.
+
+        The whole set rather than a key apiece, so a third thing said to this wire is a line somebody
+        wrote here rather than a setting that arrived with nothing to explain it.
         """
         wire = build_wire(Endpoint.model_validate({"format": "openai", "url": "https://gw.invalid/v1"}))
         built = wire.model("openai/gpt-5.6-sol")
 
         assert isinstance(built, OpenAIResponsesModel)
-        assert built.settings == {"openai_store": False}
+        assert built.settings == {"openai_store": False, "openai_reasoning_summary": "auto"}
         assert "openai_previous_response_id" not in (built.settings or {})
         assert "openai_conversation_id" not in (built.settings or {})
 

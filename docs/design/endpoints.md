@@ -47,6 +47,19 @@ still carries across turns, as encrypted items replayed out of the history. The 
 gateway model that only speaks chat completions stops working on this wire, and the provider's own
 refusal is what says so.
 
+**It also asks for a reasoning summary, because unasked this API reasons in private.** A reasoning
+item comes back as encrypted content and nothing else unless the request asks for a summary, and
+Pydantic AI reads one of those into a `ThinkingPart` carrying no text, which `blocks_in` passes over
+for the same reason it passes over an empty reply. So a session here drew no thinking at all while
+the same conversation on the Anthropic wire drew it throughout, and the panel was not missing: there
+was nothing in the checkpoint to put in it. `auto` rather than `detailed`, because which summaries a
+model offers is the provider's answer to give and a model with only the shorter one still answers.
+The cost, stated twice over: `thinking` means the model's own words on one wire and a precis of them
+on this one, which is a kind that does not mean quite the same thing depending on the endpoint above
+it; and the summary is recorded and replayed back as summary text on later turns, so it is part of
+the conversation rather than a note about it, which is the right side of the line to be on but it
+does mean the wire's own reading of what was said now includes text the model never wrote.
+
 **`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
 conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input
 price for everything said so far, over and over: on a long turn that is most of the bill, and
