@@ -226,10 +226,11 @@ next turn. Neither the page nor the handler has to guess, because the pass is th
 at the instant the answer is true.
 
 A pass is **one live model request and the tool batch behind it** rather than a whole turn, so a
-turn of forty round trips is forty passes and the lease bounds one round trip instead of betting on
-how long the longest conversation might run. Every model request and every tool call is a recorded
-step, so a pass that reaches the provider and then dies does not pay for that answer twice, and a
-tool that already read a file is not run again against a directory that has moved since.
+turn of forty round trips is forty passes. A live worker renews a short lease while each pass runs:
+a dead process loses its session after that liveness window, while a separate budget caps a pass
+that stays alive but never finishes. Every model request and every tool call is a recorded step, so
+a pass that reaches the provider and then dies does not pay for that answer twice, and a tool that
+already read a file is not run again against a directory that has moved since.
 
 ## How the agent edits files
 

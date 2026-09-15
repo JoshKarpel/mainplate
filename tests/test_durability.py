@@ -22,6 +22,7 @@ from pydantic_ai.usage import RequestUsage
 from without_durability.interfaces import claimed
 from without_durability.memory import MemoryCheckpointer
 from without_durability.stepwise import Run
+from without_durability.stepwise import extending
 
 from mainplate.conversation import draining_inbox
 from mainplate.conversation import recorded_steer
@@ -52,7 +53,12 @@ async def a_pass(checkpointer: MemoryCheckpointer) -> AsyncIterator[Run]:
     """One claimed pass, released on the way out so the next one in a test can take the workflow."""
     holder = await claimed(checkpointer, WORKFLOW)
     try:
-        yield Run(holder=holder, checkpointer=checkpointer, recorded=await checkpointer.load(WORKFLOW))
+        yield Run(
+            holder=holder,
+            checkpointer=checkpointer,
+            recorded=await checkpointer.load(WORKFLOW),
+            extend=extending(checkpointer),
+        )
     finally:
         await checkpointer.release(holder)
 

@@ -11,7 +11,7 @@
 # They are in one process today because a personal console should be one command, and because
 # SQLite is one machine anyway. The cost is stated rather than hidden: a worker holding the one
 # connection through a commit is a connection a page render queues behind, and a model call that
-# hangs holds a pass for the whole lease.
+# hangs holds a pass for the whole budget.
 
 from __future__ import annotations
 
@@ -359,6 +359,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                 )
             ),
             limit=settings.passes,
+            budget=settings.budget,
         )
         keeping_current = refreshing(catalogues, endpoints, config, settings.refresh)
         # A stack rather than nested `async with`, because one of these tasks is conditional and
