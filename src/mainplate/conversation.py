@@ -3208,7 +3208,7 @@ def conversing(
         pricer = None if prices is None else prices.pricer(chosen)
         # One per pass and shared by every turn in it, because what it bounds is how long this pass
         # runs. A pass that finds two prompts waiting answers two turns, and a fresh count per turn
-        # would let it make one live request for each of them under a lease sized for one.
+        # would let it make one live request for each of them under a budget sized for one.
         spending = Allowance(limit=allowance)
         # Once, at the top, and held as a value for the rest of the pass. A setting re-read at each
         # turn boundary would be a place two writers share, so a switch flicked while a turn was in
@@ -3218,7 +3218,7 @@ def conversing(
         at = reached(run.recorded)
         # Cloning and checking out happen *here* rather than when the session was created, because
         # creating one is a request somebody is waiting on and a clone is a network fetch that can
-        # take minutes. A pass is where slow work already lives and where a lease already covers it.
+        # take minutes. A pass is where slow work already lives and where a pass budget already covers it.
         # Both halves are idempotent, so every later pass reaches this and does nothing.
         #
         # It is an effect outside a step, and that is sound rather than an exception: what it does is

@@ -49,6 +49,7 @@ from without_durability.stepwise import Blocked
 from without_durability.stepwise import Completed
 from without_durability.stepwise import Run
 from without_durability.stepwise import Sleeping
+from without_durability.stepwise import extending
 from without_durability.stepwise import resume
 
 from mainplate import records
@@ -1190,7 +1191,12 @@ class TestAnsweringASession:
         agent = provider.agent()
         await waiting(service, said="hello")
         holder = await claimed(service.checkpointer, SESSION)
-        run = Run(holder=holder, checkpointer=service.checkpointer, recorded=await service.checkpointer.load(SESSION))
+        run = Run(
+            holder=holder,
+            checkpointer=service.checkpointer,
+            recorded=await service.checkpointer.load(SESSION),
+            extend=extending(service.checkpointer),
+        )
         with stepping(run, turn_prefix(0)):
             await agent.run("hello")
         await service.checkpointer.release(holder)

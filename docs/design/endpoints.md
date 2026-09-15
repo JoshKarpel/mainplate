@@ -201,7 +201,8 @@ What it costs: sent above the endpoint's ceiling a request is refused outright r
 so a wrong record is a refused turn where a missing one was a card without a number. That is why the
 listing wins where it speaks, and why nothing is sent where neither source knows. And a request
 asking for the whole limit is one Anthropic's SDK will only make as a stream, which Pydantic AI
-falls back to on its own; the lease is sized for it ([durability](durability.md#what-one-pass-does)).
+falls back to on its own; the pass budget is sized for it
+([durability](durability.md#what-one-pass-does)).
 
 **Where neither source knows, the picker has a box.** `Choice.output_override` is a number somebody
 typed, recorded with the choice and fixed for the session's life like the thinking level beside it,

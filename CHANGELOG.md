@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **A live pass renews its durability lease.** The lease is a short liveness window, so a session
+  whose worker dies is available again quickly, while a separate one-hour budget still covers the
+  longest model request and stops a live pass that never finishes.
 
 - **A max output tokens override on the picker**, under the thinking level, for the model the
   console has no number for: a resold model behind a gateway with no reference configured, or one

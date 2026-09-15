@@ -92,19 +92,20 @@ from mainplate.settings import DEFAULT_WATCHING
 # over. A count rather than a hash of the steps, because what it is asked for is whether to look again
 # rather than what changed, and the store's own primary key already orders the rows this scans.
 #
-# The two moments come back as the store wrote them, with the store's own now beside them, rather
-# than as durations already subtracted. Both readings need them that way: `attention` subtracts, so
-# that the one clock either moment was written against is the one it is measured against and no two
-# machines' clocks ever meet; and `token` must not, because a duration shrinks between two polls with
-# nothing having happened, and a token that moves on its own is a page that re-renders for ever.
-# `NULL` from either subquery is a row that does not exist, which is its own answer in both cases.
+# The effective claim deadline is the earlier of the store's liveness and budget deadlines. It and
+# the delivery moment come back with the store's own now beside them, rather than as durations
+# already subtracted. Both readings need them that way: `attention` subtracts, so that the one clock
+# each moment was written against is the one it is measured against and no two machines' clocks ever
+# meet; and `token` must not, because a duration shrinks between two polls with nothing having
+# happened, and a token that moves on its own is a page that re-renders for ever. `NULL` from either
+# subquery is a row that does not exist, which is its own answer in both cases.
 #
 # NOTE: `workflow_claim` and `workflow_queue` are `without-durability-sqlite`'s own tables, read here
 # for the same reason and with the same cost as the count above. See `Service.attended`.
 ATTENDED = """
 SELECT
     (SELECT COUNT(*) FROM workflow_checkpoint WHERE workflow = :workflow),
-    (SELECT held_until FROM workflow_claim WHERE workflow = :workflow),
+    (SELECT MIN(held_until, alive_until) FROM workflow_claim WHERE workflow = :workflow),
     (SELECT visible_at FROM workflow_queue WHERE namespace = :namespace AND workflow = :workflow),
     unixepoch('now', 'subsec')
 """
@@ -167,16 +168,16 @@ class Attended:
     """
     One reading of what the store holds about a session outside its checkpoint values.
 
-    The raw four, so that the two things made of them are made of the same one: `attention_of` reads a
-    state and `Service.token` reads a change token, and a token built from the state would have to be
-    built from words.
+    The four readings, so that the two things made of them are made of the same one:
+    `attention_of` reads a state and `Service.token` reads a change token, and a token built from the
+    state would have to be built from words.
 
     Unix seconds and not `datetime`s, because they are the store's own numbers and the only thing done
     with them is comparing two of them against a third that came back beside them.
     """
 
     recorded: int
-    held_until: float | None
+    claimed_until: float | None
     due_at: float | None
     asked_at: float
 
@@ -187,9 +188,9 @@ def attention_of(attended: Attended) -> Attention:
 
     The claim is asked first and settles it, because a live claim *is* a pass in flight and a queue row
     beside one is only the delivery that pass is answering for. A claim outliving the process that took
-    it reads as held until its lease elapses, which is the honest answer rather than a wrong one: the
-    claim is what stops another worker starting, so for that interval a pass genuinely does hold the
-    session, and `reclaim` is what ends it.
+    it reads as held until its liveness window elapses, which is honest rather than wrong: for that
+    interval the claim is what stops another worker starting. A live worker renews that window, but
+    never past the pass's budget.
 
     With no claim, the delivery says the rest. Due already is a session the next worker read will take;
     due later is one held back, which is what the worker leaving a failed pass's delivery unanswered
@@ -198,7 +199,7 @@ def attention_of(attended: Attended) -> Attention:
     Pure, and taking the reading rather than the session, so the states a page draws are testable
     without a store: four values in, one arm out.
     """
-    if attended.held_until is not None and attended.held_until > attended.asked_at:
+    if attended.claimed_until is not None and attended.claimed_until > attended.asked_at:
         return Claimed()
     if attended.due_at is None:
         return Idle()
@@ -217,7 +218,7 @@ def token_of(attended: Attended) -> str:
     for exactly that reason: the difference between the two is which fields each is allowed to touch,
     which is a thing a test can hold rather than a thing a reader has to notice.
     """
-    return f"{attended.recorded}:{attended.held_until}:{attended.due_at}"
+    return f"{attended.recorded}:{attended.claimed_until}:{attended.due_at}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -637,7 +638,7 @@ class Service:
         recorded, held, due, asked = row
         return Attended(
             recorded=int(recorded),
-            held_until=None if held is None else float(held),
+            claimed_until=None if held is None else float(held),
             due_at=None if due is None else float(due),
             asked_at=float(asked),
         )
