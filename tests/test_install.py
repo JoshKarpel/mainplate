@@ -174,14 +174,15 @@ class TestWritingTheFiles:
         """
         One hostname, one endpoint per wire, because each reaches models the other does not.
 
-        The Anthropic wire is the default of the two, since its list is the one written to be read:
-        every entry carries a display name and none of them is an embedding model.
+        The OpenAI wire is the default of the two, and the first, since the picker draws them in
+        the order the file declares.
         """
         path = tmp_path / "config.yaml"
         write_config(path, (Gateway(name="llm", base_url="https://llm.int.exe.xyz"),))
         assert usable_config(path) is True
         config = read_config(path)
-        assert config.default == "llm-anthropic"
+        assert config.default == "llm-openai"
+        assert list(config.endpoints) == ["llm-openai", "llm-anthropic"]
         assert config.endpoints["llm-anthropic"].url == "https://llm.int.exe.xyz"
         assert config.endpoints["llm-openai"].url == "https://llm.int.exe.xyz/v1", "only the OpenAI SDK wants /v1"
         assert all(endpoint.api_key is None for endpoint in config.endpoints.values())

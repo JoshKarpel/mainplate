@@ -126,8 +126,8 @@ GATEWAY: Final = """\
 # timer after that, and offers whatever comes back.
 #
 # One hostname, two endpoints, because exe.dev answers both API formats there and each reaches
-# models the other does not. The Anthropic format serves every Claude and the Fireworks models; the
-# OpenAI format serves GPT, Grok, and the Fireworks models again. Note the `/v1`, which only the
+# models the other does not. The OpenAI format serves GPT, Grok, and the Fireworks models; the
+# Anthropic format serves every Claude and the Fireworks models again. Note the `/v1`, which only the
 # OpenAI SDK wants: it appends `/responses` where the Anthropic SDK appends `/v1/messages`.
 #
 # The *provider* of a model (anthropic, fireworks, xai) is not configured here and is not a level of
@@ -158,15 +158,16 @@ model_reference:
   format: models.dev
 """
 
-# Two entries per gateway, indented to sit under `endpoints:`.
+# Two entries per gateway, indented to sit under `endpoints:`, OpenAI first for `render_config`'s
+# reason.
 GATEWAY_ENDPOINTS: Final = """\
-  {name}-anthropic:
-    format: anthropic
-    url: {base_url}
-
   {name}-openai:
     format: openai
     url: {base_url}/v1
+
+  {name}-anthropic:
+    format: anthropic
+    url: {base_url}
 """
 
 
@@ -455,10 +456,9 @@ def render_config(gateways: Sequence[Gateway]) -> str:
     endpoints = "\n".join(
         GATEWAY_ENDPOINTS.format(name=gateway.name, base_url=gateway.base_url) for gateway in gateways
     )
-    # The Anthropic wire is the default of the two, because its list is the one written for a
-    # person to read: every entry carries a display name, and none of them is an embedding model
-    # or the same model under a second id.
-    return GATEWAY.format(default=f"{gateways[0].name}-anthropic", endpoints=endpoints, reference=reference)
+    # The OpenAI wire is the default of the two. What it costs is the picker: that list carries no
+    # display names, where the Anthropic one is written to be read.
+    return GATEWAY.format(default=f"{gateways[0].name}-openai", endpoints=endpoints, reference=reference)
 
 
 def write_config(path: Path, gateways: Sequence[Gateway]) -> bool:

@@ -332,6 +332,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `!`, with whichever the page drew first getting the keyboard. A repository's leaders carry its
   name and a colon, so they never could; and a leader is typed with every character a plugin's name
   may carry, so `/pre-commit:run` reaches the keyboard rather than only the menu.
+- **Every wire asks for its answer as a stream**, and collects it before anything above sees it, so
+  nothing on a page arrives sooner than it did. A plain request is one some endpoints will not take
+  at all: exe.dev's OpenAI wire refuses one outright, and Anthropic's SDK refuses a request asking
+  for a model's whole output limit the same way.
+- **A discovered exe.dev gateway writes its OpenAI endpoint first, and defaults to it.** The
+  Anthropic endpoint is one line below, and the picker's model list is the cleaner of the two there.
 - **The OpenAI wire speaks the responses API.** OpenAI's current models refuse function tools with
   reasoning on over chat completions, and GPT-5.6 reasons by default, so a coding session on it was
   a refused turn or a model with its reasoning switched off. The conversation is still sent whole on

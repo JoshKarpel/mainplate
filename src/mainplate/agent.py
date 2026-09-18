@@ -49,11 +49,15 @@ from typing import assert_never
 from anthropic import AsyncAnthropic
 from anthropic.types import ModelInfo
 from pydantic_ai import Agent
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models import Model
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.models.openai import OpenAIResponsesModelSettings
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -399,7 +403,12 @@ class Wire(Protocol):
     """
 
     def model(self, name: str) -> Model:
-        """The named model over this wire's own client, so every model shares one pool."""
+        """
+        The named model over this wire's own client, so every model shares one pool.
+
+        **`Streamed`, on every format**: a wire handing back a bare adapter is one some endpoints
+        refuse outright. See that class.
+        """
         ...
 
     async def listed(self) -> tuple[Listed, ...]:
@@ -421,6 +430,39 @@ class Wire(Protocol):
         is a method somebody has to answer rather than a setting somebody might forget.
         """
         ...
+
+
+class Streamed(WrapperModel):
+    """
+    A model asked over a streaming request and answered with the whole response anyway.
+
+    **Every request this console makes goes out as a stream**, whatever the format, because a
+    non-streamed one is not a request every endpoint will take: exe.dev's OpenAI wire refuses one
+    outright - `{"detail": "Stream must be set to true"}` - and Anthropic's SDK refuses a long
+    generation the same way.
+
+    Collecting it here is the half that will go. The events are drained and thrown away, so nothing
+    above this can tell the difference and an answer is no closer to a reader than it was. What it
+    buys is that the day the page reads a turn as it arrives, the events already exist and the work
+    is `CheckpointedModel.request_stream` recording them; see `StreamingNotRecorded`.
+    """
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        """
+        The stream, drained to its end, as the response it came to.
+
+        Both halves are load-bearing: a drain broken off part-way answers `incomplete` rather than
+        `complete`, and `get()` after the block would read a response off a torn-down stream.
+        """
+        async with self.wrapped.request_stream(messages, model_settings, model_request_parameters) as streaming:
+            async for _ in streaming:
+                pass
+            return streaming.get()
 
 
 # An id whose last segment says it is an embedding model. The OpenAI list carries no capability to
@@ -491,7 +533,7 @@ class AnthropicWire:
     sdk: AnthropicProvider
 
     def model(self, name: str) -> Model:
-        return AnthropicModel(name, provider=self.sdk)
+        return Streamed(AnthropicModel(name, provider=self.sdk))
 
     async def listed(self) -> tuple[Listed, ...]:
         # `limit` is the page size, and one page is asked for rather than paginated: a gateway
@@ -594,7 +636,9 @@ class OpenAIWire:
         On the model rather than in the settings a session composes, because it is a fact about
         how this wire may be spoken to rather than anything a session asks for.
         """
-        return OpenAIResponsesModel(name, provider=self.sdk, settings=OpenAIResponsesModelSettings(openai_store=False))
+        return Streamed(
+            OpenAIResponsesModel(name, provider=self.sdk, settings=OpenAIResponsesModelSettings(openai_store=False))
+        )
 
     async def listed(self) -> tuple[Listed, ...]:
         page = await self.sdk.client.models.list()
