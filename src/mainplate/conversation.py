@@ -2445,10 +2445,15 @@ def blocks_from(
     inbox each request had read, so a steer goes above the response it shaped, exactly where the
     settled reading will put it.
 
-    Anything no request has carried goes at the end, which covers the steer nobody has read yet and
-    the one a redirect took at the end of a run. That is its right place while it is pending, since
-    nothing has been said since; a redirected one moves above its answer when that answer lands,
-    which is the one reorder this reading performs.
+    Anything with no answer above it goes at the end, and that is two cases: the steer nobody has
+    read yet, and **the one the request in flight has already taken**. The second is the cursor's own
+    window: `heard:{i}` is written before request `i` goes out and `model:{i}` when it comes back, so
+    between the two a steer belongs to a request that has said nothing, and a walk that drew only the
+    cursors it had answers for would take somebody's message and show nothing at all for as long as
+    that request ran - the very disappearance the cursors are read for, moved from the end of a turn
+    into the middle of it, where a request is the longest thing this console waits on. The end is
+    the right place for both while they are pending, since nothing has been said since; the taken one
+    moves above its answer when that answer lands, which is the one reorder this reading performs.
 
     What a plugin said to keep the turn going is drawn the same way, by the response count the record
     carries: above the response it shaped once that has landed, and at the end while it is still
@@ -2469,6 +2474,9 @@ def blocks_from(
         blocks.extend((Steering(text=text), None) for text in (told[at] if at < len(told) else ()))
         blocks.extend((block, at) for block in blocks_in(response, returned, took))
     blocks.extend((Guidance(text=text), None) for each in ends if each.at == len(responses) for text in each.said)
+    # The cursors past the last answer first, then what no cursor accounts for, which is the order
+    # they were said in: a steer a request has taken arrived before one nobody has read.
+    blocks.extend((Steering(text=text), None) for carried in told[len(responses) :] for text in carried)
     blocks.extend((Steering(text=text), None) for text in taking)
     return tuple(blocks)
 

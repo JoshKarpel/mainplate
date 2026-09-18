@@ -429,8 +429,16 @@ would take somebody's message and show nothing at all until the reply finished, 
 steering is a button somebody presses deliberately and not fine at all when every `Send` may become
 one. So `blocks_from` walks the entries too: `told_in` turns the cursors into the steers each
 request carried, and one is drawn above the response it shaped, exactly where the settled reading
-will put it. What no cursor accounts for goes at the end, which is where a message nobody has read
-belongs since nothing has been said since it.
+will put it.
+
+**What has no answer above it goes at the end, and the cursor's own window is why that is two cases
+rather than one.** A cursor is written *before* the request it is for and the response only when that
+request comes back, so between the two there is a steer belonging to a request that has said nothing.
+Drawn above answers alone it would disappear for as long as that request ran, which is the vanishing
+these cursors are read for happening in the middle of a turn rather than at the end of it, and a
+request is the longest thing this console waits on. So the end holds the steer nobody has read and
+the one the request in flight has already taken, and the second moves above its answer when that
+answer lands.
 
 **A prompt is where that stops, and `unread_in` is the rule.** A steer past the last cursor is drawn
 as one the running turn may still take; a prompt cannot be folded in by anybody, so it and
