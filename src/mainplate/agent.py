@@ -621,7 +621,7 @@ class OpenAIWire:
 
     def model(self, name: str) -> Model:
         """
-        The named model, told never to keep the conversation at the provider.
+        The named model, told never to keep the conversation at the provider and to say what it thought.
 
         **The checkpoint is the conversation, and this is where that has to be said to this API.**
         The responses API can hold a conversation server-side and be handed only what is new, by a
@@ -633,11 +633,26 @@ class OpenAIWire:
         costs is nothing this console wanted: the reasoning across turns still travels, as encrypted
         items replayed out of the history.
 
-        On the model rather than in the settings a session composes, because it is a fact about
+        **A summary is asked for because otherwise this wire reasons in private.** A reasoning item
+        comes back as encrypted content and nothing else unless the request asks for a summary, and
+        Pydantic AI reads one of those into a `ThinkingPart` carrying no text, which is a thinking
+        panel with nothing in it and so is no panel at all: a session on this wire drew none, while
+        the same conversation on the Anthropic one drew the model's thinking throughout. `auto` and
+        not `detailed`, because which summaries a model offers is the provider's answer to give and a
+        model with only the shorter one still answers. The cost, stated: what a panel shows here is a
+        summary of the reasoning rather than the reasoning, so `thinking` means the model's own words
+        on one wire and a precis of them on this one, and the summary is recorded in the checkpoint
+        and replayed back as summary text on later turns, which makes it part of the conversation.
+
+        On the model rather than in the settings a session composes, because both are facts about
         how this wire may be spoken to rather than anything a session asks for.
         """
         return Streamed(
-            OpenAIResponsesModel(name, provider=self.sdk, settings=OpenAIResponsesModelSettings(openai_store=False))
+            OpenAIResponsesModel(
+                name,
+                provider=self.sdk,
+                settings=OpenAIResponsesModelSettings(openai_store=False, openai_reasoning_summary="auto"),
+            )
         )
 
     async def listed(self) -> tuple[Listed, ...]:
