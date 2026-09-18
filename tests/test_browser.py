@@ -2758,7 +2758,7 @@ class TestNamingAModeFromTheKeyboard:
         """
         url, service = console
         checks = Enrolled(
-            installed=Installed(tier=Tier.REPOSITORY, name="pre-commit", path=Path("/nowhere")),
+            installed=Installed(tier=Tier.REPOSITORY, name="quality-check", path=Path("/nowhere")),
             described=Described.model_validate(
                 {"answers": [{"leader": "run", "saying": "run the hooks over what has changed", "demands": False}]}
             ),
@@ -2767,10 +2767,10 @@ class TestNamingAModeFromTheKeyboard:
         await taking(service, session.id)
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         await page.click(".composer textarea")
-        await page.keyboard.type("/pre-commit:run ")
+        await page.keyboard.type("/quality-check:run ")
 
-        await expect(page.locator(".composer")).to_have_attribute("data-leading", "pre-commit:run")
-        await expect(page.locator('.sender__leader[data-leader="pre-commit:run"]')).to_be_visible()
+        await expect(page.locator(".composer")).to_have_attribute("data-leading", "quality-check:run")
+        await expect(page.locator('.sender__leader[data-leader="quality-check:run"]')).to_be_visible()
         assert await page.input_value(".composer textarea") == ""
 
     async def test_every_answer_the_server_drew_has_a_mode_to_be_in(
