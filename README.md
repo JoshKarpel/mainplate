@@ -171,8 +171,8 @@ mainplate is installed and restarted
 ```
 
 One hostname gets two endpoints, one per API format, because each reaches models the other does not.
-`llm-anthropic` offers every Claude and every Fireworks model, all answered over `/v1/messages`;
-`llm-openai` offers GPT, Grok, and Fireworks again over `/v1/responses`. Between them a
+`llm-openai` offers GPT, Grok, and every Fireworks model, all answered over `/v1/responses`;
+`llm-anthropic` offers every Claude and Fireworks again over `/v1/messages`. Between them a
 default VM offers around seventy models with nothing configured.
 
 Off exe.dev the lookup finds nothing and the install writes a template to edit. Either way an

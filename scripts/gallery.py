@@ -839,11 +839,20 @@ def pages() -> dict[str, str]:
         returned="# The one connection a page holds open, and what goes down it.",
         took=timedelta(seconds=TIMINGS["call-7"]),
     ).recorded()
-    # A steer sent into that turn and not yet put to any model, which is the state Send now reaches
-    # every time somebody types while a reply is coming. It is drawn from the entry rather than from
-    # messages that do not exist yet, so a screenshot is where you find out whether a message that has
-    # been sent and not yet heard reads as one.
-    answering[inbox_key(6)] = recorded_steer("and while you are there, check the phone width")
+    # A steer the request in flight has already taken, and one sent into the same turn that no request
+    # has, which are the two states Send reaches every time somebody types while a reply is coming.
+    # Both are drawn from the entry rather than from messages that do not exist yet, and the first is
+    # here because the cursor is written *before* its request and the response only when that request
+    # comes back: for as long as that runs it has no answer to sit above, and a page that drew only
+    # the cursors it had answers for would show nothing at all where it is.
+    #
+    # What the screenshot shows is that the two read as one run of steers while neither has an answer,
+    # which is the honest state and not a distinction being lost: what separates them is which request
+    # took them, and a request that has said nothing is not somewhere a panel can sit above. The taken
+    # one moves up to its own answer when that lands, which is the one reorder this reading performs.
+    answering[inbox_key(6)] = recorded_steer("use the endpoint's own name for it, not the wire's")
+    answering[heard_key(2, 1)] = inbox_key(6)
+    answering[inbox_key(7)] = recorded_steer("and while you are there, check the phone width")
 
     # A handoff, which is two panels of a kind nobody in the conversation typed: the bundled plugin's
     # own ask, and the document that came back and starts the model's history again. Turn 1's opener

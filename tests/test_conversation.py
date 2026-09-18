@@ -852,6 +852,16 @@ class TestWatchingATurnHappen:
         told = {**REASONED, **steered_at(1, "be brief"), **read_to(0, 0, 1)}
         assert so_far(told, 0)[0] == Steering(text="be brief")
 
+    def test_a_steer_the_request_in_flight_took_is_drawn_at_the_end_until_that_answer_lands(self) -> None:
+        """
+        The cursor is written before the request and the response when it comes back, so between them
+        a steer belongs to a request that has said nothing. Drawn only above answers that exist, it
+        would vanish from the page for as long as that request ran, which is the disappearance the
+        cursors are read for happening in the middle of the turn instead of at the end of it.
+        """
+        in_flight = {**REASONED, **steered_at(1, "be brief"), **read_to(0, 0, 0), **read_to(0, 1, 1)}
+        assert so_far(in_flight, 0)[-1] == Steering(text="be brief")
+
     def test_a_steer_is_drawn_once_whether_it_has_been_told_or_not(self) -> None:
         """The two halves of the walk cannot both claim it, or the page shows one message twice."""
         told = {**REASONED, **steered_at(1, "be brief"), **read_to(0, 0, 1)}

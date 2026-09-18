@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -13,6 +14,15 @@ from conftest import CONFIG
 from conftest import OFFERED
 from conftest import Stand
 from conftest import Watching
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelRequest
+from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import UserPromptPart
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.function import AgentInfo
+from pydantic_ai.models.function import DeltaToolCall
+from pydantic_ai.models.function import DeltaToolCalls
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.settings import ModelSettings
@@ -25,6 +35,7 @@ from mainplate.agent import AnthropicWire
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.agent import OpenAIWire
+from mainplate.agent import Streamed
 from mainplate.agent import UnknownChoice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
@@ -186,10 +197,18 @@ class TestBuildingEndpoints:
         wire = build_wire(Endpoint.model_validate({"format": "openai", "url": "https://gw.invalid/v1"}))
         built = wire.model("openai/gpt-5.6-sol")
 
-        assert isinstance(built, OpenAIResponsesModel)
+        assert isinstance(built, Streamed)
+        assert isinstance(built.wrapped, OpenAIResponsesModel)
         assert built.settings == {"openai_store": False, "openai_reasoning_summary": "auto"}
         assert "openai_previous_response_id" not in (built.settings or {})
         assert "openai_conversation_id" not in (built.settings or {})
+
+    @pytest.mark.parametrize("format_name", ["anthropic", "openai"])
+    def test_every_format_asks_for_its_answer_as_a_stream(self, format_name: str) -> None:
+        """Pinned per format, because the wrapping is each wire's own line to forget."""
+        wire = build_wire(Endpoint.model_validate({"format": format_name, "url": "https://gw.invalid/v1"}))
+
+        assert isinstance(wire.model("whichever"), Streamed)
 
     def test_every_profile_gets_one_before_anything_takes_traffic(self) -> None:
         """Eager, so a credential an SDK refuses names its own endpoint instead of a later session."""
@@ -280,6 +299,57 @@ class TestBuildingEndpoints:
         # this console's, so what is pinned is the absence of the key rather than the shape.
         assert len(watcher.seen) == 1
         assert "max_tokens" not in (watcher.seen[0] or {})
+
+
+class TestCollectingAStreamedAnswer:
+    """
+    What `Streamed` hands back, which is a whole response over a request that was a stream.
+
+    Over `FunctionModel`'s streaming arm rather than a provider, because the stand-ins the rest of
+    the suite runs on answer whole responses and never reach this.
+    """
+
+    def parameters(self) -> ModelRequestParameters:
+        return ModelRequestParameters()
+
+    async def test_the_text_a_stream_arrived_in_pieces_is_one_part(self) -> None:
+        async def saying(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+            yield "the answer "
+            yield "in three "
+            yield "pieces"
+
+        answered = await Streamed(FunctionModel(stream_function=saying)).request(
+            [ModelRequest(parts=[UserPromptPart(content="go")])], None, self.parameters()
+        )
+
+        assert answered.parts == [TextPart(content="the answer in three pieces")]
+
+    async def test_a_tool_call_split_across_chunks_arrives_whole(self) -> None:
+        """The case a half-drained stream would ruin quietly: arguments are assembled from deltas."""
+
+        async def calling(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[DeltaToolCalls]:
+            yield {0: DeltaToolCall(name="read", json_args='{"path":')}
+            yield {0: DeltaToolCall(json_args=' "README.md"}')}
+
+        answered = await Streamed(FunctionModel(stream_function=calling)).request(
+            [ModelRequest(parts=[UserPromptPart(content="go")])], None, self.parameters()
+        )
+
+        assert [(part.tool_name, part.args) for part in answered.parts if isinstance(part, ToolCallPart)] == [
+            ("read", '{"path": "README.md"}')
+        ]
+
+    async def test_a_stream_drained_to_its_end_is_a_complete_response(self) -> None:
+        """A stream broken off part-way answers `incomplete`, which would record a response the console cut short."""
+
+        async def saying(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+            yield "done"
+
+        answered = await Streamed(FunctionModel(stream_function=saying)).request(
+            [ModelRequest(parts=[UserPromptPart(content="go")])], None, self.parameters()
+        )
+
+        assert answered.state == "complete"
 
 
 class TestReadingAnAnthropicListing:

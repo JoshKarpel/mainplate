@@ -332,6 +332,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `!`, with whichever the page drew first getting the keyboard. A repository's leaders carry its
   name and a colon, so they never could; and a leader is typed with every character a plugin's name
   may carry, so `/pre-commit:run` reaches the keyboard rather than only the menu.
+- **Every wire asks for its answer as a stream**, and collects it before anything above sees it, so
+  nothing on a page arrives sooner than it did. A plain request is one some endpoints will not take
+  at all: exe.dev's OpenAI wire refuses one outright, and Anthropic's SDK refuses a request asking
+  for a model's whole output limit the same way.
+- **A discovered exe.dev gateway writes its OpenAI endpoint first, and defaults to it.** The
+  Anthropic endpoint is one line below, and the picker's model list is the cleaner of the two there.
 - **The OpenAI wire speaks the responses API.** OpenAI's current models refuse function tools with
   reasoning on over chat completions, and GPT-5.6 reasons by default, so a coding session on it was
   a refused turn or a model with its reasoning switched off. The conversation is still sent whole on
@@ -490,23 +496,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parent kept, which the script copies because the server is never told a draft exists. It lives in
   the browser, so it is per machine for now.
 - **Steering**: a message put to the model in the turn it is answering now, rather than queued for
-  the next one. It is written into the checkpoint from outside the pass, because the worker may be
-  another process, and appended to the request the agent is about to make, so it travels up with
-  whatever tool results are going the same way and shapes the very next answer rather than the one
-  after it. A steer arriving as the turn would end has no request left to carry it, so it redirects
-  the run into one more instead of being stranded. Both are recorded steps, so a resumed pass asks
-  the same questions rather than whatever is queued by then. It reads back as a `steer` panel below
-  the tool results it travelled with and above the answer it shaped, and it is on the page the
-  instant it is sent rather than when the turn ends.
+  the next one. It is appended to the session's inbox from outside the pass, because the worker may
+  be another process and the store is the only channel to it, and the pass appends what it finds
+  there to the request the agent is about to make, so it travels up with whatever tool results are
+  going the same way and shapes the very next answer rather than the one after it. A message no
+  request carried is not stranded and nothing has to claim it: it is still in the queue, and
+  whichever turn opens next opens on it. How far down that queue each request had read is recorded
+  as a cursor, so a resumed pass asks the question the first pass asked rather than whatever is
+  queued by then. It reads back as a `steer` panel below the tool results it travelled with and
+  above the answer it shaped, and it is on the page the instant it is sent rather than when the turn
+  ends.
 - **`Send` decides for itself whether a message steers**, because neither the button nor the reader
   can know: the page was rendered from a checkpoint that has moved by the time a paragraph has been
   typed into it, so choosing between two moments on the page is choosing against a state that no
-  longer holds. The server reads the record and writes to it in one place instead, steering a turn
-  that is being answered and starting one where none is. `Wait for the next turn` stays in the menu
-  as the one answer the record cannot settle. A turn stops listening by *claiming* the next steer
-  slot rather than by reading it, so the pass and whoever is typing contend for one key that the
-  store settles: whoever loses is told what the winner put there, and a message sent as a turn ends
-  becomes a turn of its own instead of going somewhere nothing would ever read.
+  longer holds. Neither can the server, which read the checkpoint and then chose which of two writes
+  to make, with a turn free to end between the two. So nobody decides and the answer is the same
+  write either way: the message goes into the queue, and where it lands is wherever the pass finds
+  it, folded into the request the turn is about to make or opening the next turn. The pass is the
+  only party reading at the moment that answer is true. `Next` stays in the menu as the one answer
+  nothing can settle for you, since wanting to be taken up *after* the reply that is coming is an
+  intent no record carries.
 - **A rule at every model request**, carrying the worktree taken before it, how long it took, what
   its answer cost, and the raw record behind it, which is the unit the checkpoint actually has a key
   for: a panel is a run of blocks of one kind and a request is a round trip, so a panel's record was

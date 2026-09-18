@@ -287,6 +287,10 @@ class StreamingNotRecorded(NotImplementedError):
     Closing it means recording the completed response *and* the events the stream produced, then
     handing both back as a `CompletedStreamedResponse` so the agent replays them. Nothing here
     needs it yet: the console drives `agent.run`, which asks for a whole response.
+
+    Half of that is already done a layer down. `agent.Streamed` makes every request a streaming one
+    and drains it, because a plain request is not one every endpoint takes, so what is missing is
+    the recording rather than the stream.
     """
 
 

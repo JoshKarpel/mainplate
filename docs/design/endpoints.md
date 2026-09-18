@@ -31,7 +31,9 @@ each reaches models the other does not. It also decides what `url` means: the An
 
 `agent.py` holds one `Wire` class per format, and it holds *all three* format-specific things: how
 to name a model over it, how to ask it what it serves, and what it has to be told to reuse a
-conversation's prefix. A third format is one class, not an edit in three files.
+conversation's prefix. A third format is one class, not an edit in three files. On exe.dev
+`install` writes the OpenAI endpoint first and defaults to it; the Anthropic one is a line below,
+and its model list is the cleaner of the two.
 
 **The OpenAI wire speaks the responses API, and is told to keep nothing.** Chat completions was the
 wire until OpenAI's current models stopped taking function tools with reasoning on over it: GPT-5.6
@@ -59,6 +61,16 @@ on this one, which is a kind that does not mean quite the same thing depending o
 it; and the summary is recorded and replayed back as summary text on later turns, so it is part of
 the conversation rather than a note about it, which is the right side of the line to be on but it
 does mean the wire's own reading of what was said now includes text the model never wrote.
+
+**Every wire streams, and no wire chooses.** `Wire.model` hands back a `Streamed`, whose `request`
+opens a streaming request, drains every event, and returns the finished `ModelResponse`, so
+`CheckpointedModel` records a whole response and `agent.run` is still what the console drives. A
+plain request is not one every endpoint takes: exe.dev's OpenAI wire refuses every model with
+`{"detail": "Stream must be set to true"}`, and Anthropic's SDK refuses a request asking for a
+model's whole output limit the same way. The cost, stated: nothing reaches a reader any sooner,
+because the events are thrown away as they arrive. What it buys is that the day a page reads a turn
+as it arrives, the events exist and the work left is `CheckpointedModel.request_stream` recording
+them ([durability](durability.md)).
 
 **`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
 conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input
