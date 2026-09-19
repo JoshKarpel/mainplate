@@ -284,8 +284,8 @@ than three rules: `setup` is connected, reaches the session's scratch, and names
 file; every event after it is shut, alone and silent.
 
 **What reaches the session's commands reaches no plugin's namespace**, the namespace of the plugin
-that wrote it included. A repository's `PATH` set for every plugin would redirect what that
-repository's own `pre-commit` plugin executes whenever the model tries to stop, which is the hazard
+that wrote it included. A repository-controlled `PATH` set for every plugin would redirect what
+those plugins execute, which is the hazard
 [a private scratch](#a-scratch-of-its-own-which-is-not-the-sessions) exists to close, arriving
 through a new door.
 
@@ -1054,12 +1054,9 @@ removes.
 Two costs, both real:
 
 - **It is per session and never shared.** A repository plugin that pulls its own interpreter pays for
-  it once per session. Measured on `.mainplate/pre-commit`, which fetches CPython 3.14, `pre-commit`
-  and a hook environment per entry in this repository's config, that is about 120MB and twenty
-  seconds against a warm `uv` cache. A shared cache would be quicker and would have to be keyed by
-  repository as well as by name, or two repositories declaring a plugin under one name would share a
-  directory - which is exactly the channel the split above closes. Not worth reopening for the
-  seconds.
+  it once per session. A shared cache would be quicker and would have to be keyed by repository as
+  well as by name, or two repositories declaring a plugin under one name would share a directory,
+  which is exactly the channel the split above closes.
 - **Nothing removes it.** Neither this nor a session's worktree is collected today, so the disk a
   session takes is the disk it keeps. This is a new line item on a bill that already exists rather
   than a new bill, and whatever eventually answers for worktrees answers for these.
@@ -1302,11 +1299,9 @@ What neither reaches is `before_tool` and `refuse`, which no bundled plugin has 
 `tests/plugins/gatekeeper` is the fixture that exercises them: a plugin that turns away any call whose
 arguments say `forbidden`, run for real through the whole pass, so that the refusal being recorded in
 the call's place and replayed without a second asking are claims the suite makes rather than this
-page. Nor `before_turn_end`, which `tests/plugins/stickler` exercises the same way: a plugin that sends the
-model back until `attempt` reaches a number it is told, so that the turn going on inside itself, the
-count on the payload, and a replay asking nothing are the suite's claims too. [This repository's
-own plugin](#and-this-repository-carries-two-which-is-the-rest-of-the-proof) is the one that wants
-it for real.
+page. Nor `before_turn_end`, which `tests/plugins/stickler` exercises the same way: a plugin that sends
+the model back until `attempt` reaches a number it is told, so that the turn going on inside itself,
+the count on the payload, and a replay asking nothing are the suite's claims too.
 
 Neither of them installs anything, which is the ordinary case and worth saying: a plugin whose
 `setup` is one `return` of a constant is a plugin that had nothing to fetch, not one that skipped a
@@ -1320,48 +1315,16 @@ own tiers, so it proves three claims that would otherwise only be asserted in pr
 reaches nothing it was not handed, and a repository's own script can contribute to what a session is
 told.
 
-### And this repository carries two, which is the rest of the proof
+### This repository carries the setup example
 
-`.mainplate/pre-commit` runs this project's own hooks over what a session has changed whenever the
-model tries to stop, and sends it back with what is still failing. It is a port of a Claude Code
-`Stop` hook that keeps the hook's shape, and **it is what put `before_turn_end` into the protocol**: an
-`after_turn` delivery said the same thing one turn late, with a note nobody typed standing between
-the mistake and the fix, and the port was not honest until the check stood where the hook had.
-
-It is also the only thing here that exercises what a repository plugin is *for*, end to end and on
-real work:
-
-- **It installs at `setup`**, both halves. Its shebang is `uv run --script`, so the console executing
-  it is what resolves the interpreter and `pre-commit` itself; what its `setup` then does is build a
-  hook environment per entry in the config, which is the part `uv` knows nothing about.
-- **It runs confined for the rest of the session**, with the network shut, out of a scratch nothing
-  else can write. That is why it contributes a `tool`: it holds the only `pre-commit` a session can
-  reach, so the model cannot run one from `bash` and has to ask.
-- **It bounds itself.** Every time the model is sent back is a model request, so a hook the model
-  cannot satisfy would bill for itself until somebody noticed. `most` is a number on its card saying
-  how many times in one turn it will do that before letting the model stop, read against the `attempt`
-  on the payload. The hook it came from needed no such thing, because the thing it interrupted was a
-  person.
-
-Three things it does *not* do, each because the console already answers them: it never stages, since
-`--files` needs no index and the clone is read-only anyway; it never announces a run that only fixed
-things, since `edit` is anchored on what was read and a stale anchor is refused; and it remembers
-nothing between attempts, since `attempt` carries the count and a `set` would not reach the turn it was
-made in anyway.
-
-**And `.mainplate/setup` beside it, which is the worked example of the other half.** It installs mise
-into the session's scratch, runs `mise install` for the tools `mise.toml` pins, runs `just
-dependencies` under them, appends one `PATH` line to `$MAINPLATE_ENV` putting mise's shims first,
-then mise's own directory, then the system's, and **prints nothing**. So it declares no events and is
-never asked anything again, and nothing in the console knows what a shim is, where mise keeps them,
-or that Python has an interpreter directory. `just dependencies` and not `just setup`, because the
-other half of that recipe installs a git hook into the clone's common directory, which is shared by
-every worktree of it and bound read-only in a session: that step is a person's to run once per clone,
-from [the composer's `Run`](composer.md#run).
-
-Between them the two cover the tier: one installs into the session's scratch and goes quiet, the
-other installs into its own and answers a turn boundary for the rest of the session, and neither
-needed a word of console added for it.
+`.mainplate/setup` installs mise into the session's scratch, runs `mise install` for the tools
+`mise.toml` pins, runs `just dependencies` under them, appends one `PATH` line to
+`$MAINPLATE_ENV` putting mise's shims first, then mise's own directory, then the system's, and
+**prints nothing**. So it declares no events and is never asked anything again, and nothing in the
+console knows what a shim is, where mise keeps them, or that Python has an interpreter directory.
+`just dependencies` and not `just setup`, because the other half of that recipe installs a git hook
+into the clone's common directory, which is shared by every worktree of it and bound read-only in a
+session: that step is a person's to run once per clone, from [the composer's `Run`](composer.md#run).
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
 ours and turns ours off with one switch on the settings step. The two are separate plugins with

@@ -179,7 +179,7 @@ async def working(service: Service, workspaces: Workspaces, places: Places) -> t
     scratch = workspaces.scratch_at(session.id)
     scratch.mkdir(parents=True)
     (scratch / "fetched.bin").write_bytes(b"f" * 30_000)
-    plugin = places.plugins / session.id / "repository" / "pre-commit"
+    plugin = places.plugins / session.id / "repository" / "example"
     plugin.mkdir(parents=True)
     (plugin / "env").write_text("PATH=/x\n")
     return planting, session.id

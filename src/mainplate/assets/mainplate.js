@@ -501,7 +501,7 @@
     // the paths anybody types.
 
     // What may follow the slash is what a leader may be spelled with: a plugin's name is one path
-    // segment, and a repository's leader is that name, a colon and the word, so `/pre-commit:run`
+    // segment, and a repository's leader is that name, a colon and the word, so `/quality-check:run`
     // has to match or a repository's answers could only ever be reached from the menu. A second
     // slash is deliberately not in the class, which is what keeps `/etc/hosts` a path rather than a
     // leader nobody answers to being looked up on every keystroke.

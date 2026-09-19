@@ -56,9 +56,8 @@ constructs. What actually catches it is `ruff check` under the pin, so raising t
 in `pyproject.toml` and this paragraph.
 
 **A PEP 723 block does not settle this, and that was checked rather than assumed:** ruff 0.16 ignores
-`requires-python` in inline script metadata when it picks a target version. What the block *does*
-settle is which interpreter actually runs the script, which is why `.mainplate/pre-commit` needs no
-entry in that table - it says `uv run --script` and gets the Python this project pins. These two say
+`requires-python` in inline script metadata when it picks a target version. A plugin with a
+`uv run --script` shebang still gets the interpreter its PEP 723 block names, but these two say
 `python3` because they must run before `uv` is known to be anywhere on the machine.
 
 They are also *executables*: `pre-commit` identifies them as Python by shebang, where a path-based

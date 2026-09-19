@@ -143,14 +143,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   been sent back, so a plugin can bound itself; what was said is recorded per attempt and drawn
   above the answer it shaped. The cost: every time the model is sent back is a model request, on the
   largest context the turn has had, and the console sets no bound of its own.
-- **This repository carries a `pre-commit` plugin too**, in `.mainplate/`, so a mainplate session
-  working on mainplate runs the project's own hooks over what it has changed whenever the model
-  tries to stop, and sends it back with what is still failing. Ported from a Claude Code `Stop` hook,
-  keeping its shape, and different from it in the three ways a console is different from a terminal:
-  it stages nothing, because the clone is read-only and `--files` needs no index; it installs itself
-  at setup, because the namespace has nothing of the machine in it; and it lets the model stop after
-  a set number of attempts in one turn, because every time it sends the model back is a model
-  request somebody pays for.
 - **A plugin may refuse a tool call.** A plugin that asks for `before_tool` is told every call the
   model makes, of any toolset, before it runs, and may answer `refuse` with a reason; the call then
   does not run and the model is handed the reason in its place, naming the plugin, so that what a
@@ -335,7 +327,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answering to `/run` is a second row under the console's own word and a second mode button lit by
   `!`, with whichever the page drew first getting the keyboard. A repository's leaders carry its
   name and a colon, so they never could; and a leader is typed with every character a plugin's name
-  may carry, so `/pre-commit:run` reaches the keyboard rather than only the menu.
+  may carry, so `/quality-check:run` reaches the keyboard rather than only the menu.
 - **Every wire asks for its answer as a stream**, and collects it before anything above sees it, so
   nothing on a page arrives sooner than it did. A plain request is one some endpoints will not take
   at all: exe.dev's OpenAI wire refuses one outright, and Anthropic's SDK refuses a request asking
@@ -386,8 +378,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   number's `Set` is a mark against its own box, drawn only while the box holds something
   unrecorded; the card-wide button is gone. The rail is 16rem at every shape, held short of a
   phone's far edge, where a wide window's column was 11rem. A number's box drops to the line under
-  a label too long to share one rather than breaking the label beside it. This repository's `pre-commit` card says `attempts per turn` beside its box, where it said
-  `attempts` before the box and `per turn` after it.
+  a label too long to share one rather than breaking the label beside it.
 - The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
   this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
   rather than multiplied, since the pitches on either side of the answer are a pixel apart.

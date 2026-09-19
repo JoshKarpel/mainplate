@@ -169,13 +169,6 @@ the actual signal.
 claim that matters. Its repository-tier tests need `bwrap` and fail loudly without it, for
 `test_sandbox.py`'s reason - what they assert is what a mount namespace actually does.
 
-**`TestThisRepositorysOwnPlugin` runs `.mainplate/pre-commit` and never installs anything.** What its
-`setup` does for real is fetch - an interpreter, `pre-commit`, and a hook environment per entry in
-the config - which is minutes on a cold cache and a dependency on an index, so a stub `pre_commit`
-module goes on `PYTHONPATH` and the two runs it makes are driven by exit codes. The `uv run --script`
-shebang still resolves the plugin's own dependency, so a cold machine pays for that once, like the
-browsers.
-
 **`TestWhatASetupActuallyReaches` runs setup plugins of its own through the real sandbox, and never
 this repository's.** What `.mainplate/setup` here does is fetch a toolchain; what the suite asserts
 is the mechanism - what it installs lands in the *session's* scratch, only the environment file

@@ -135,8 +135,8 @@ change:
   not a loading order. **Handoff and what a session is told are both plugins**, so a change to either
   is a change to a script in `src/mainplate/plugins/bundled/` rather than to the console. **Getting a
   repository ready to work in is a plugin too**, which is where the two grants a repository's plugin
-  has at `setup` and at no other event are written down. **And this repository carries two of its
-  own**, in `.mainplate/`, described below.
+  has at `setup` and at no other event are written down. **This repository carries that plugin in
+  `.mainplate/`**, described below.
 - [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
   picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
@@ -159,31 +159,12 @@ a browser, and `scripts/` for the gallery and the seeder.
 the file beside `anchors.py` says do not make it three, so write a new constraint beside the code
 and its reasoning on the page, rather than either in both.
 
-## This repository runs two plugins of its own
+## This repository runs a plugin of its own
 
-`.mainplate/mainplate.yaml` declares both, and they are repository-tier plugins like anybody else's:
-they run behind the sandbox, with a network only at `setup`, out of a scratch directory nothing else
-can write.
+`.mainplate/mainplate.yaml` declares a repository-tier plugin like anybody else's: it runs behind
+the sandbox, with a network only at `setup`, out of a scratch directory nothing else can write.
 
-### `pre-commit`, which runs the checks
-
-`.mainplate/pre-commit` means **a mainplate session working on mainplate runs this project's own
-hooks whenever the model tries to stop** and is sent back with what is still failing, inside the same
-turn, up to a number of times its card says.
-
-Two things follow for anybody changing it:
-
-- **It is the only `pre-commit` a session can reach.** The model's `bash` has no network to install
-  one and no way into that scratch, so the plugin's `repo_pre-commit_run` tool is the whole of how a
-  session checks itself. Removing the tool would leave a session unable to run the checks this
-  repository asks for before saying anything is done.
-- **Changing it changes nothing about a session already running.** A repository's plugin is read once
-  and set up once, so an edit reaches the next *new* session and no turn of any existing one.
-
-Try it by hand rather than by starting a session:
-`echo '{"event":"setup","session":"x","plugin":"repository:pre-commit","worktree":"'$PWD'","scratch":"/tmp/x"}' | .mainplate/pre-commit`.
-
-### `setup`, which fetches the toolchain
+### `setup` fetches the toolchain
 
 `.mainplate/setup` is what a mainplate session runs, once, to be able to run `just test` here: it
 installs mise into the session's scratch, `mise install`s the tools `mise.toml` pins, and runs `just
