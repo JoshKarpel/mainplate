@@ -77,15 +77,23 @@ conversation is re-sent whole on every turn, so a session with no cache breakpoi
 price for everything said so far, over and over: on a long turn that is most of the bill, and
 nothing about the request looks any different. It is opt-in on the Anthropic wire
 (`anthropic_cache`, a top-level `cache_control` whose breakpoint the server moves forward as the
-conversation grows) and automatic and uncontrollable on the OpenAI one, which answers with an empty
-`ModelSettings`. Empty rather than absent, because what has to be true is that every wire *answers*:
-a format added later is then a `caching` somebody had to write rather than a session quietly paying
-full price.
+conversation grows) and automatic on the OpenAI one, which answers with an empty `ModelSettings`.
+Empty rather than absent, because what has to be true is that every wire *answers*: a format added
+later is then a `caching` somebody had to write rather than a session quietly paying full price.
+
+**Nothing to ask for there is not the same as nothing to know.** That format's breakpoint is placed
+for you and its `prompt_cache_options.ttl` accepts one value, so asking would send the duration that
+already applies; what stays out of reach is *routing*, since on GPT-5.6 and later a request is
+placed by machine load and a hash of its leading tokens. So a warm prefix is found or missed on a
+decision nothing here takes part in, which is why a miss between two requests seconds apart is the
+provider's placement rather than a prefix this console broke.
 
 `CACHE_FOR` is `1h` rather than the default five minutes, and the trade is stated because it is
 real: an hour's retention is written at 2x base input against 1.25x, so it pays only where a
 conversation is picked up again after a pause. That is what a chat console *is*, somebody reads an
-answer, thinks, and replies, where five minutes barely outlasts one long turn.
+answer, thinks, and replies, where five minutes barely outlasts one long turn. The OpenAI wire's
+thirty minutes is read rather than asked for, and what both durations are for is [the line above the
+message box](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth).
 
 `agent_for` merges the wire's answer under the session's own, so a recorded choice always wins. The
 two do not overlap today; if they ever do, the thing somebody picked should be the thing that

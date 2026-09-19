@@ -243,7 +243,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now that there is one: a conversation picked up after lunch pays full input price for everything said
   in it, and nothing about the request looks any different. One-sided, always - past the retention a
   prefix is cold and this says so, and under it what it says is when the prefix was last *written*,
-  because eviction cannot be observed from here. Both ends are priced - with the whole prefix cached
+  because eviction cannot be observed from here. The retention is the answering wire's own: the hour
+  this console asks the Anthropic wire for, and the half hour OpenAI publishes and offers no way to
+  change. A session on the shorter of them goes cold when it actually does, rather than spending the
+  difference drawing a dropped prefix as one written a little while ago, which is exactly the
+  interval somebody comes back in. Both ends are priced - with the whole prefix cached
   and with none of it - because the gap between them is what waiting actually costs, and on a long
   conversation it is a tenfold jump. Both are floors and carry a `+`: they price the input of the next
   turn's first request, where the answer, the tools it runs and any further requests are all on top.

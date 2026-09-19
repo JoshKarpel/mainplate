@@ -33,6 +33,7 @@ from without_durability_sqlite import SqliteDurable
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
+from mainplate.catalogue import retention_for
 from mainplate.commands import Commands
 from mainplate.commands import Slot
 from mainplate.conversation import ARCHIVED_KEY
@@ -344,6 +345,21 @@ class Conversation:
     keeps it current; see `cache_note`.
     """
 
+    retention: timedelta | None = None
+    """
+    How long the wire answering this session holds a prefix, or nothing at all where nobody can say.
+
+    Read beside `since` because the pair is one question - whether the prefix can still be there -
+    and answering it from two reads is how a page comes to measure one wire's age against another's
+    threshold. It is the *format's* and not the model's, so it comes off the endpoint's offering
+    rather than out of the reference database; see `retention_of`.
+
+    `None` where the recorded choice names an endpoint the catalogue no longer offers, which is the
+    same hole `window` and `resending` have and is handled the same way: the note says when the
+    prefix was written and never says `cold`, since an unknown retention is one nothing has run out
+    of. That keeps the one-sidedness intact rather than guessing at a duration.
+    """
+
     declared: tuple[Installed, ...] | None = None
     """
     Every plugin this session *may* run, read out of files, or nothing while its worktree is planted.
@@ -602,6 +618,7 @@ class Service:
             runnable=self.commands is not None and self.workspaces is not None and working,
             window=facts.context if facts is not None else None,
             since=since,
+            retention=retention_for(self.catalogues.current, chosen),
             resending=(
                 resending(facts.cost, said.total.context)
                 if facts is not None and facts.cost is not None and said.total.context

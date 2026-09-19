@@ -207,7 +207,7 @@ class TestTheVocabulary:
 
         `EVENTS` is a value because some readers enumerate rather than match, and deriving it from
         the type would be a runtime reading of a static thing. So the pair is asserted instead, which
-        is the bargain `RETENTION` and `CACHE_FOR` already take.
+        is the bargain `ANTHROPIC_RETENTION` and `CACHE_FOR` already take.
         """
         assert set(EVENTS) == set(get_args(Event.__value__))
 
