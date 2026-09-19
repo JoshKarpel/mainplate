@@ -1,7 +1,7 @@
 # How a model reaches a file
 
-What a session's agent is given to work with: which tools it gets, how a line is addressed, and why
-`edit` takes a batch rather than a search and a replacement.
+What a session's agent is given to work with: which tools it gets, how it stages work, how a line is
+addressed, and why `edit` takes a batch rather than a search and a replacement.
 
 Where those tools may reach, and the mount namespace `bash` runs behind, is [where a command
 runs](sandbox.md). This is what the tools themselves are.
@@ -20,12 +20,12 @@ lets the interesting half be tested with a list of strings.
 
 ## Which tools a session gets
 
-**Over its *files*, that is decided by its `isolation`, not by whether it picked a repository.** A
-session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree and its scratch;
-one on `EVERYTHING` gets the same four over `/`, where `list` refuses because nothing there is in
-git; one on `NOTHING` gets **none of them**, because tools that can only fail are worse than none
-and cost a description on every request. `bash` is added to the first two wherever there is a
-sandbox to run it in.
+**Over its *files*, that is decided by its `isolation`, not by whether it picked a repository.**
+A session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree and its scratch,
+plus `git` over the worktree's real index; one on `EVERYTHING` gets the four file tools over `/`,
+where `list` refuses because nothing there is in git; one on `NOTHING` gets **none of them**, because
+tools that can only fail are worse than none and cost a description on every request. `bash` is
+added to the first two wherever there is a sandbox to run it in.
 
 **`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
 with no files still has exactly one toolset rather than none. It is not an exception to the rule
@@ -39,6 +39,31 @@ window, where a permanent one costs its own description at cache-read prices on 
 orders of magnitude. It takes the document as an argument rather than reading one out of the turn's
 prose, because a model asked for a handoff in words leaks the framing around it into what the next
 model is told. Both are argued in full on [the handoff plugin's page](../plugins/handoff.md).
+
+## `git`
+
+**It changes the real index through four closed operations: `stage`, `stage-tracked`, `stage-all`
+and `intent-to-add`.** It takes no command string and no Git options. Path operations put literal
+paths after `--`, with pathspec expansion disabled, so a path named `*.txt` stages that file rather
+than every text file. `stage-tracked` stages every modification and deletion without sweeping in
+untracked files; `stage-all` includes those files too. Both are separate because a bulk operation is
+a materially wider request than naming paths, and whether new files join it is a further choice.
+
+`intent-to-add` exists for pre-commit hooks that generate a new file. Registering the path without
+staging its content leaves a diff for pre-commit to observe, where a full `git add` can make the first
+run pass with the generated content already hidden in the index.
+
+**The console performs these operations through `Worktree.git`.** Running a command in the sandbox
+cannot write the clone, and letting a plugin or a second subprocess implementation discover Git's
+directory would reopen the configuration-execution path described in [what runs, and as
+whom](security.md). The tool is therefore console-owned and is offered only when the session has a
+real worktree.
+
+Snapshots still use a fresh shadow index. The `git` tool deliberately changes the real one, so its
+staging is visible to pre-commit and to a person using the worktree, while checkpoint capture neither
+adds to nor removes from that staging. The cost, stated: the model may expand the person's staged
+selection in this session's worktree to every change with `stage-all`. Commit history, branches,
+remotes and Git configuration remain out of reach; `Run` is where a person changes those.
 
 ## `list`
 

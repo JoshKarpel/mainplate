@@ -86,6 +86,7 @@ from mainplate.tools import Scratch
 from mainplate.tools import System
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
+from mainplate.tools import git_tools
 from mainplate.tools.files.tools import Root
 
 
@@ -1027,6 +1028,8 @@ def agent_for(
         tools.append(PluginTools(contributed, asking_through(plugins)))
     if reach.roots:
         tools.append(file_tools(Files(roots=reach.roots)))
+        if worktree is not None and any(isinstance(root, GitTracked) for root in reach.roots):
+            tools.append(git_tools(worktree))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(

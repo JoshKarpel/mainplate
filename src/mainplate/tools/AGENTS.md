@@ -27,11 +27,11 @@ whole of the rule.
 
 Read off `Choice.isolation`, not off whether the session picked a repository:
 
-| Filesystem | Over its files | `bash` |
-|---|---|---|
-| `WORKTREE` | `list`, `read`, `edit`, `create` over the worktree and the scratch | where there is a sandbox |
-| `EVERYTHING` | the same four over `/`, and `list` refuses since nothing there is in git | where there is a sandbox |
-| `NOTHING` | none of them | no |
+| Filesystem | Over its files | Git index | `bash` |
+|---|---|---|---|
+| `WORKTREE` | `list`, `read`, `edit`, `create` over the worktree and the scratch | `git` over the worktree | where there is a sandbox |
+| `EVERYTHING` | the same four over `/`, and `list` refuses since nothing there is in git | none | where there is a sandbox |
+| `NOTHING` | none | none | no |
 
 `NOTHING` gets none rather than four that can only fail, because a tool that cannot work still costs
 its description on every request.
@@ -40,6 +40,14 @@ its description on every request.
 plugin reaches is decided by its own tier rather than by what the *model* may touch. They are settled
 at `describe` and never added mid-conversation, because a tool definition sits above the cached
 prefix and introducing one late invalidates the whole conversation beneath it.
+
+## `git` changes only the index
+
+The tool accepts `stage`, `stage-tracked`, `stage-all` and `intent-to-add`, not a command string or
+options. Keep the arguments fixed, literal pathspecs after `--`, and the execution through
+`Worktree.git`: a second Git subprocess implementation is a second copy of the safety boundary
+described below. It changes the real index so pre-commit and the person using the worktree see the
+result; snapshots keep using their shadow indexes.
 
 ## `list` runs a program in the parent
 
