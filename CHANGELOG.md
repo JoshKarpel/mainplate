@@ -153,7 +153,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   again. The cost: a process per tool call, per plugin that asked.
 - Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
   `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
-  guidance** is the project's own `AGENTS.md`, read out of the worktree the session works in.
+  guidance** is the project's own Git-tracked `AGENTS.md`, read out of the worktree the session works
+  in.
   The repository is concatenated last and so wins where the two disagree, because a repository is
   right about itself. `AGENTS.md` rather than a name this console invented, with `CLAUDE.md` as the
   fallback where a directory has no `AGENTS.md`: a file only mainplate can read is knowledge that
@@ -163,10 +164,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An index of the guidance elsewhere in the repository, one row per directory with the `description`
   from that file's own frontmatter, carried in the instructions on every request. That a directory
   *has* conventions is one line and what they are is a page, so the line rides in the prompt and the
-  page is read when it is wanted. It is asked of git rather than walked, so a `.venv` is never
-  descended. A directory holding both names is indexed once, under the same first-name-wins rule
-  that decides which one is read: a repository pairing an `AGENTS.md` with a `CLAUDE.md` importing
-  it would otherwise get a second row pointing at a file whose whole content names the first.
+  page is read when it is wanted. The Git index is the ownership boundary: ignored and other
+  untracked files are never read as guidance. A directory holding both names is indexed once, under
+  the same first-name-wins rule that decides which one is read: a repository pairing an `AGENTS.md`
+  with a `CLAUDE.md` importing it would otherwise get a second row pointing at a file whose whole
+  content names the first.
 - The guidance covering a directory, handed over on the request after a file tool reaches into it,
   as a system-voice message rather than an edit to the instructions, so the cached prefix is left
   alone. Whether it has already been handed over is asked of the history the model is about to be
