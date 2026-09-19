@@ -850,8 +850,12 @@
       if (!note || !state || note.dataset.since === undefined) return;
       if (note.seenAt === undefined) note.seenAt = Date.now();
       const since = Number(note.dataset.since) + (Date.now() - note.seenAt) / 1000;
-      const retention = Number(note.dataset.retention);
-      state.textContent = since >= retention ? "cold" : `warm as of ${ago(since)}`;
+      // The retention is the answering wire's and the server leaves it off where it has none to
+      // give, so an absent one says `warm as of` for ever rather than comparing against a NaN that
+      // happens to fall the right way. Nothing has outlasted a duration nobody knows.
+      const retention = note.dataset.retention;
+      const cold = retention !== undefined && since >= Number(retention);
+      state.textContent = cold ? "cold" : `warm as of ${ago(since)}`;
     };
 
     // How long until, in the words the attention line uses. `ago`'s shape with seconds kept, because

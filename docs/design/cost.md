@@ -85,9 +85,23 @@ the reader's. It says what is true and stops.
 **One-sided, always.** Past the retention a prefix is cold and this says so; under it nothing can be
 asserted, because eviction is unobservable from here. What it says instead is `warm as of 12m`,
 which is a claim about when the prefix was last *written*, a response landing being exactly that
-moment, and is true on any wire whatever that wire's own TTL. `RETENTION` works as the one threshold
-for the same reason: it is the longest this console asks for anywhere, so past it the prefix is gone
-everywhere and no format has to be threaded to the page to know it.
+moment, and is true on any wire whatever that wire's own TTL.
+
+**The threshold is the answering wire's own**, and `retention_of` is where the two are written: an
+hour on the Anthropic wire, which is what `CACHE_FOR` asks for, and thirty minutes on the OpenAI
+one, which is what that provider publishes and offers no way to change. One console-wide constant
+looks cheaper and is not, because it has to be the *longest* of them or `cold` stops being sound,
+and the shorter-retaining wire then spends the difference drawing a prefix it has certainly dropped
+as one written a little while ago. That was half an hour of every OpenAI session, centred on exactly
+when a reader comes back to one. The cost, stated: the format now has to reach the page, which is
+`Conversation.retention` and the `retention_for` lookup behind it, where before the page imported a
+constant and asked nothing.
+
+**An endpoint the catalogue no longer offers has no retention, and that is not a hole to fill.** A
+recorded choice outlives the configuration that offered it, so there is no format to ask and no
+duration to be past; the note says when the prefix was written, omits `data-retention` so the script
+has nothing to compare against either, and never says `cold`. Defaulting to one of the two durations
+would put the single assertion this console makes about a cache on top of an endpoint it cannot see.
 
 **The server renders an absolute time and the script renders the relative one.** Nothing here
 re-renders on the clock, since the stream sends when the session *records* something and the
@@ -154,13 +168,19 @@ reach it, and what it says goes stale on every turn: the context it prices grows
 measures moves. `outerHTML` rather than the transcript's morph, since it is one short line with
 nothing in it worth preserving.
 
-**`RETENTION` and `CACHE_FOR` are [one fact in two
+**`ANTHROPIC_RETENTION` and `CACHE_FOR` are [one fact in two
 places](../philosophy.md#one-fact-in-two-places).** The parameter has to be a literal, because the
 SDK types the field as `Literal['5m', '1h']` and a string rendered from a `timedelta` is a `str`;
 the duration has to be a `timedelta`, because that is what the comparison takes. So they are written
 twice with nothing enforcing the agreement, and
 `test_the_retention_and_the_wire_parameter_are_one_duration` is what turns a drift into a failure
 rather than a console confidently calling a dead prefix warm.
+
+`OPENAI_RETENTION` has no such pair, because nothing sends it: `prompt_cache_options.ttl` is that
+format's only knob and `30m` its only accepted value, so asking would transmit the duration that
+already applies. It is a constant copied out of somebody else's documentation, which is a different
+risk from the one above and worth naming: it goes quietly wrong the day OpenAI publishes a second
+value, where the Anthropic figure cannot, because this console is what sends it.
 
 **Every response fixture carries a timestamp**, in `conftest.recorded_turn` and in
 `scripts/gallery.py`. `ModelResponse.timestamp` defaults to the moment it was constructed, so a

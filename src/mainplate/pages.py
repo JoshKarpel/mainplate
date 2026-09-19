@@ -76,7 +76,6 @@ from without_html import ul
 from without_web import Reversible
 from without_web import url_for
 
-from mainplate.agent import RETENTION
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
@@ -3162,8 +3161,14 @@ def cache_note(showing: Conversation) -> Element:
     **One-sided, always.** Past the retention a prefix is cold and this says so; under it nothing can
     be asserted, because eviction is unobservable from here, so what it says is `warm as of 12m` - a
     claim about when the prefix was last *written*, which is what a response landing is, and which is
-    true on any wire whatever that wire's own TTL. `RETENTION` works as the one threshold for the same
-    reason: it is the longest this console asks for anywhere, so past it the prefix is gone everywhere.
+    true on any wire whatever that wire's own TTL.
+
+    **The threshold is the answering wire's own**, which `Conversation.retention` carries, rather than
+    one duration for every session. A single constant has to be the longest of them or `cold` stops
+    being sound, and the shorter-retaining wire then spends the difference drawing a prefix it has
+    certainly dropped as one written a little while ago - half an hour of it, on the OpenAI wire.
+    Without a retention to read, nothing is asserted at all: the state is the write time and
+    `data-retention` is left off, since an unknown duration is one nothing has outlasted.
 
     **The server renders an absolute time and the script renders the relative one.** Nothing here is
     re-rendered on the clock - the stream sends this when the session *records* something, and the
@@ -3193,11 +3198,12 @@ def cache_note(showing: Conversation) -> Element:
     if showing.said.answered_at is None or showing.since is None:
         return p(cls="cache", attrs={"id": CACHE_ID})
     context = showing.said.total.context
+    cold = showing.retention is not None and showing.since >= showing.retention
     figures: list[Element] = [
         span(
             cls="cache__state",
             attrs={"title": f"This conversation's prefix was last written at {showing.said.answered_at:%H:%M}"},
-            children="cold" if showing.since >= RETENTION else f"cached at {showing.said.answered_at:%H:%M}",
+            children="cold" if cold else f"cached at {showing.said.answered_at:%H:%M}",
         )
     ]
     if showing.resending is not None:
@@ -3244,7 +3250,9 @@ def cache_note(showing: Conversation) -> Element:
             # Seconds rather than the absolute time, so the script adds to a duration the server
             # measured instead of subtracting one clock from another. See the docstring.
             "data-since": str(int(showing.since.total_seconds())),
-            "data-retention": str(int(RETENTION.total_seconds())),
+            # Absent where no retention is known, which drops the attribute and leaves the script
+            # with nothing to call cold against - the same one-sidedness the server keeps.
+            "data-retention": None if showing.retention is None else str(int(showing.retention.total_seconds())),
         },
         children=figures,
     )

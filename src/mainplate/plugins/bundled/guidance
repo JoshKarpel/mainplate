@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -129,12 +130,54 @@ def described(text: str) -> str | None:
     return None
 
 
-def guidance_at(here: Path) -> Path | None:
-    """The one guidance file a directory holds, or nothing where it holds none."""
+def tracked_guidance(root: Path) -> frozenset[Path]:
+    """
+    Every guidance path Git tracks, relative to the repository root.
+
+    The index is the boundary: ignored and other untracked files may belong to an environment rather
+    than the repository, so none of them may become instructions. `--cached` asks only what the index
+    knows and does not add files the session has created since.
+
+    Nothing on a failed command, because a directory that is not a checkout has no repository-owned
+    guidance to contribute. `core.fsmonitor` is disabled so asking which paths are tracked cannot run
+    a program named by repository configuration.
+    """
+    try:
+        listed = subprocess.run(
+            (
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "-C",
+                str(root),
+                "ls-files",
+                "--cached",
+                "-z",
+            ),
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        return frozenset()
+    if listed.returncode != 0:
+        return frozenset()
+    return frozenset(
+        Path(os.fsdecode(path))
+        for path in listed.stdout.split(b"\0")
+        if path and Path(os.fsdecode(path)).name in GUIDANCE_NAMES
+    )
+
+
+def guidance_at(root: Path, here: Path, tracked: frozenset[Path]) -> Path | None:
+    """The one tracked guidance file a directory holds, or nothing where it holds none."""
+    try:
+        relative = here.relative_to(root)
+    except ValueError:
+        return None
     for name in GUIDANCE_NAMES:
-        found = here / name
-        if found.is_file():
-            return found
+        found = relative / name
+        if found in tracked and (root / found).is_file():
+            return root / found
     return None
 
 
@@ -152,7 +195,7 @@ def console_guidance(config_home: Path) -> str:
     return "\n\n".join(block for block in said if block)
 
 
-def repository_guidance(root: Path) -> str | None:
+def repository_guidance(root: Path, tracked: frozenset[Path]) -> str | None:
     """
     What the repository says about itself, named so the model knows whose words these are.
 
@@ -160,7 +203,7 @@ def repository_guidance(root: Path) -> str | None:
     and should know which one it is already holding. It is also what keeps the block honest about
     being the project's rather than this console's, which matters where the two disagree.
     """
-    found = guidance_at(root)
+    found = guidance_at(root, root, tracked)
     if found is None:
         return None
     said = readable(found)
@@ -170,14 +213,9 @@ def repository_guidance(root: Path) -> str | None:
     return f"`{found.name}`, this repository's own guidance:\n\n{body}" if body else None
 
 
-def elsewhere_in(root: Path) -> tuple[Path, ...]:
+def elsewhere_in(tracked: frozenset[Path]) -> tuple[Path, ...]:
     """
-    Every guidance file in the repository below its root, as paths relative to it.
-
-    Walked with `rglob` and pruned, rather than asked of git: a plugin runs in a namespace with the
-    clone bound read-only and `git` reachable, but the walk is what makes this work in a directory
-    that is not a checkout at all. The pruning is what keeps it affordable, since the directories
-    that make a walk expensive are the ones a guidance file is never in.
+    Every tracked guidance file below the repository root, as a relative path.
 
     Sorted, so an index composed twice is the same index. The root's own file is left out because it
     is already in the instructions whole; what this is for is the ones that are not.
@@ -187,16 +225,13 @@ def elsewhere_in(root: Path) -> tuple[Path, ...]:
     Claude Code to the file every other harness reads - would otherwise index each directory twice,
     and the second row would point at a file whose whole content is a line naming the first.
     """
-    skipped = {".git", ".venv", "node_modules", "__pycache__", "target", "dist", "build", ".tox", ".mypy_cache"}
-    found: list[Path] = []
-    for here, directories, files in os.walk(root):
-        directories[:] = sorted(name for name in directories if name not in skipped and not name.startswith("."))
-        at = Path(here)
-        if at == root:
-            continue
+    directories = {path.parent for path in tracked if path.parent != Path()}
+    found = []
+    for directory in directories:
         for name in GUIDANCE_NAMES:
-            if name in files:
-                found.append(at.relative_to(root) / name)
+            candidate = directory / name
+            if candidate in tracked:
+                found.append(candidate)
                 break
     return tuple(sorted(found))
 
@@ -307,7 +342,7 @@ def delivered_in(prompts: tuple[str, ...], said: str) -> bool:
     return any(prompt.startswith(said) for prompt in prompts)
 
 
-def covering(settled: Path, here: Path) -> tuple[Path, ...]:
+def covering(settled: Path, here: Path, tracked: frozenset[Path]) -> tuple[Path, ...]:
     """
     The guidance files that apply inside one directory, from the top down, relative to the root.
 
@@ -338,7 +373,7 @@ def covering(settled: Path, here: Path) -> tuple[Path, ...]:
     at = settled
     for part in here.relative_to(settled).parts:
         at = at / part
-        guidance = guidance_at(at)
+        guidance = guidance_at(settled, at, tracked)
         if guidance is not None:
             found.append(guidance.relative_to(settled))
     return tuple(found)
@@ -362,13 +397,14 @@ def approaching(root: Path, messages: list[Any]) -> tuple[str, ...]:
     """
     settled = root.resolve()
     prompts = system_prompts_in(messages)
+    tracked = tracked_guidance(root)
     covers: dict[Path, tuple[Path, ...]] = {}
     blocks: list[str] = []
     said: set[Path] = set()
     for path in dict.fromkeys(touched_in(messages)):
         here = (root / path).resolve().parent
         if here not in covers:
-            covers[here] = covering(settled, here)
+            covers[here] = covering(settled, here, tracked)
         for found in covers[here]:
             if found in said:
                 continue
@@ -411,10 +447,11 @@ def describing(payload: dict[str, Any]) -> dict[str, Any]:
     home = os.environ.get(CONFIG_HOME)
     where = payload.get("worktree")
     root = Path(where) if isinstance(where, str) else None
+    tracked = tracked_guidance(root) if root is not None else frozenset()
     said = instructing(
         console_guidance(Path(home)) if home else None,
-        repository_guidance(root) if root is not None else None,
-        indexing(root, elsewhere_in(root)) if root is not None else None,
+        repository_guidance(root, tracked) if root is not None else None,
+        indexing(root, elsewhere_in(tracked)) if root is not None else None,
     )
     return {
         # Only where there is a worktree to reach into. A session with no repository has no nested
