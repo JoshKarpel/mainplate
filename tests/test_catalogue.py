@@ -14,6 +14,7 @@ from conftest import CONFIG
 from conftest import OFFERED
 from conftest import Stand
 from conftest import Watching
+from conftest import ask
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import TextPart
@@ -294,9 +295,19 @@ class TestBuildingEndpoints:
         caching = Stand(offers=OFFERED["here"], responding=watcher, asking=ModelSettings(temperature=0.5))
         endpoints = Wires(by_endpoint={"here": caching})
 
-        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful", thinking="high"), "be terse").run("hi")
+        await ask(
+            agent_for(endpoints, Choice(endpoint="here", model="ripe/careful", thinking="high"), "be terse"), "hi"
+        )
 
         assert watcher.seen == [{"temperature": 0.5, "thinking": "high"}]
+
+    async def test_recorded_instructions_reach_the_request(self) -> None:
+        watcher = Watching()
+        endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
+
+        await ask(agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse"), "hi")
+
+        assert watcher.instructions == [("be terse",)]
 
     async def test_the_output_limit_reaches_the_request_as_the_models_whole_maximum(self) -> None:
         """
@@ -306,8 +317,14 @@ class TestBuildingEndpoints:
         watcher = Watching()
         endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
 
-        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse", output_cap=128_000).run(
-            "hi"
+        await ask(
+            agent_for(
+                endpoints,
+                Choice(endpoint="here", model="ripe/careful"),
+                "be terse",
+                output_cap=128_000,
+            ),
+            "hi",
         )
 
         assert watcher.seen == [{"max_tokens": 128_000}]
@@ -321,7 +338,7 @@ class TestBuildingEndpoints:
         endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
         chosen = Choice(endpoint="here", model="ripe/careful", output_override=20_000)
 
-        await agent_for(endpoints, chosen, "be terse", output_cap=128_000).run("hi")
+        await ask(agent_for(endpoints, chosen, "be terse", output_cap=128_000), "hi")
 
         assert watcher.seen == [{"max_tokens": 20_000}]
 
@@ -330,7 +347,7 @@ class TestBuildingEndpoints:
         watcher = Watching()
         endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
 
-        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse").run("hi")
+        await ask(agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), "be terse"), "hi")
 
         # Empty settings reach the model as `None`, which is Pydantic AI's normalisation and not
         # this console's, so what is pinned is the absence of the key rather than the shape.

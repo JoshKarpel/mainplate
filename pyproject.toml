@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "mainplate"
 version = "0.0.1"
-description = "A coding agent that keeps its own sessions: a Pydantic AI agent made durable over a SQLite checkpoint, with a chat console in front of it."
+description = "A coding agent that keeps its own sessions: a durable model-and-tool loop over Pydantic AI provider requests, with a chat console in front of it."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

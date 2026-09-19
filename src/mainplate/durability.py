@@ -1,69 +1,43 @@
-# Durability as a Pydantic AI capability, over `without-durability`'s stepwise mechanism.
+# The durable effects in mainplate's model-and-tool loop, over `without-durability`'s stepwise
+# mechanism.
 #
-# The shape is the one the bundled Temporal, DBOS, and Prefect capabilities use: a capability
-# whose `wrap_model_request` swaps a wrapper model in for the request's, so every model call the
-# agent makes goes through the engine's unit of durable work instead of straight to the provider.
-# Here that unit is `Run.step`, so a model response is written to the checkpoint before the agent
-# proceeds on it, and a pass that re-runs the same conversation is handed the recorded response
-# rather than paying for a second one.
+# The loop in `loop.py` owns its order explicitly. Before each model request it records the inbox
+# cursor and plugin injections here, then `Stepping.request` records the response before the loop
+# acts on it. Tool calls come back through `Stepping.call`, keyed by the call id the recorded response
+# supplied. A later pass drives the same loop over those records and reaches the first effect that has
+# not happened without paying for or repeating anything before it.
 #
-# It is built on `AbstractCapability` and `WrapperModel`, the surface Pydantic AI documents for
-# third-party integrations, rather than on `durable_exec._base`, whose module docstring reserves
-# it for the three bundled engines. Almost everything that base class carries is about crossing a
-# *serialization* boundary: a `Model` cannot be pickled into a Temporal activity, so a request
-# carries a `model_id` string and the worker rebuilds the model on the far side. There is no such
-# boundary here. `without-durability` runs the workflow body in this process, and only a step's
-# *result* is ever encoded, so the model instance is simply in scope and none of that machinery
-# has anything to do.
-#
-# What the capability cannot get from Pydantic AI is which checkpoint it is writing to, because
-# no hook carries one. That arrives through a context variable the conversation sets around its
-# `agent.run(...)`, which is the same mechanism DBOS reads (`DBOS.workflow_id`) and Pydantic AI
-# uses for its own ambient run context. Outside such a scope the capability is transparent and
-# the agent is an ordinary, non-durable agent.
+# Effects live inside `Run.step`; everything around them must be deterministic. A model response and
+# a tool return are lowered to JSON before the write and parsed on the way out, on the pass that made
+# them as much as on a replay. Tool calls remain at-least-once across the window between the effect
+# returning and its record landing.
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import AsyncGenerator
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
-from contextlib import asynccontextmanager
 from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import timedelta
 from decimal import Decimal
 from time import monotonic
-from typing import Any
 from typing import Final
 
 from pydantic import TypeAdapter
-from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.capabilities import CapabilityOrdering
-from pydantic_ai.capabilities import WrapModelRequestHandler
-from pydantic_ai.capabilities.abstract import ValidatedToolArgs
-from pydantic_ai.capabilities.abstract import WrapToolExecuteHandler
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
-from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
-from pydantic_ai.messages import SystemPromptPart
 from pydantic_ai.messages import ToolCallPart
-from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.models import Model
-from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.models import ModelRequestParameters
-from pydantic_ai.models import StreamedResponse
-from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.tools import RunContext
-from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.toolsets import ToolsetTool
 from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_jsonable_python
 from without_durability.stepwise import Parse
@@ -182,8 +156,8 @@ class RequestRefused(Exception):
     """
     The provider will not accept this request, and will not accept it on a later pass either.
 
-    Raised from `CheckpointedModel.request` after the refusal has been recorded, so it unwinds
-    `agent.run` the way `AllowanceSpent` does and `conversing` catches it outside the run. What it
+    Raised from `Stepping.request` after the refusal has been recorded, so it unwinds
+    the model loop the way `AllowanceSpent` does and `conversing` catches it outside the run. What it
     reports is not the same thing, though: an allowance spent means the session is owed another pass
     at once, and this means the session is owed nothing, because another pass would ask the identical
     question and get the identical answer.
@@ -234,8 +208,8 @@ class AllowanceSpent(Exception):
     """
     The pass has made as many live model requests as it may, and the turn is not finished.
 
-    Raised from `CheckpointedModel.request` at the point a further request would be made, so it
-    unwinds `agent.run` and every node above it. `conversing` catches it outside that call and
+    Raised before `Stepping.request` at the point a further request would be made, so it
+    unwinds the model loop. `conversing` catches it outside that call and
     returns, which ends the pass with the turn part-answered and the session owed another one.
 
     Deliberately **not** a `Suspended`. Nothing is owed by the outside world here - no key is
@@ -273,25 +247,6 @@ class Allowance:
         if self.limit is not None and self.spent >= self.limit:
             raise AllowanceSpent(f"this pass has made its {self.limit} live model request(s)")
         self.spent += 1
-
-
-class StreamingNotRecorded(NotImplementedError):
-    """
-    A streamed model request was made inside a checkpointed scope, which records nothing.
-
-    Loud rather than transparent, and that is the whole reason this exists. `WrapperModel`
-    delegates `request_stream` to the model it wraps, so an unimplemented streaming path is not
-    a missing feature but a model call that happens for real and leaves no record: a crash after
-    it re-runs it, and a resumed conversation pays for it twice. Refusing says so at the call.
-
-    Closing it means recording the completed response *and* the events the stream produced, then
-    handing both back as a `CompletedStreamedResponse` so the agent replays them. Nothing here
-    needs it yet: the console drives `agent.run`, which asks for a whole response.
-
-    Half of that is already done a layer down. `agent.Streamed` makes every request a streaming one
-    and drains it, because a plain request is not one every endpoint takes, so what is missing is
-    the recording rather than the stream.
-    """
 
 
 type Draining = Callable[[StepKey], Awaitable[Sequence[str]]]
@@ -398,9 +353,9 @@ class Stepping:
     """
     Which requests this pass has already spent an allowance on, so that no request spends two.
 
-    The allowance is checked twice per request and the two are not redundant. `before_model_request`
-    checks it *first*, before anything is recorded for a request that is about to be refused; the
-    model's own `request` checks it because that is the request. Keyed by the step name, which is the
+    The allowance is checked twice per request and the two are not redundant. `Agent.before_request`
+    checks it *first*, before anything is recorded for a request that is about to be refused;
+    `Stepping.request` checks it because that is the request. Keyed by the step name, which is the
     request's identity, so whichever runs first is the one that spends.
     """
 
@@ -457,7 +412,7 @@ class Stepping:
         """
         Record what the worktree holds right now, at a point where nothing is writing to it.
 
-        Called from `CheckpointedModel.request`, which is the only place that can honestly call it.
+        Called from `Stepping.request`, which is the only place that can honestly call it.
         A model request is the boundary at which every tool of the previous batch has returned by
         construction, and it is the only such boundary inside a turn: capture after each tool call
         instead and `git add -A` walks a tree the *other* calls in that batch are still writing to,
@@ -531,33 +486,73 @@ class Stepping:
         What to hand the model in this call's place, or nothing where the session's plugins let it run.
 
         No key of its own, unlike the drain and the injection: this is asked from inside
-        `wrap_tool_execute`'s step, so the answer lands in the call's own `Returned` and needs no
+        `Stepping.call`'s step, so the answer lands in the call's own `Returned` and needs no
         second record to be replayed from.
         """
         if self.gating is None:
             return None
         return await self.gating(call.tool_name, call.args_as_dict())
 
+    async def request(
+        self,
+        model: Model,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        at = self.at("model")
+        if (already := self.refused(at)) is not None:
+            raise RequestRefused(already.why)
+        key = self.key("model")
+        self.allow(key)
+        await self.snapshot()
+
+        async def ask() -> object:
+            started = monotonic()
+            answered = await model.request(messages, model_settings, model_request_parameters)
+            self.stamp(answered, timedelta(seconds=monotonic() - started))
+            self.price(answered)
+            return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
+
+        try:
+            return await self.step(key, ask, parse_model_response)
+        except Exception as error:
+            refused = terminally(error)
+            if refused is None:
+                raise
+            await self.refuse(at, refused)
+            raise RequestRefused(refused.why) from error
+
+    async def call(
+        self,
+        call: ToolCallPart,
+        arguments: dict[str, object],
+        context: RunContext[None],
+        tool: ToolsetTool[None],
+    ) -> object:
+        async def perform() -> object:
+            refused = await self.gated(call)
+            if refused is not None:
+                return records.Returned(returned=refused).recorded()
+            started = monotonic()
+            came_back = to_jsonable_python(await tool.toolset.call_tool(call.tool_name, arguments, context, tool))
+            return records.Returned(
+                returned=came_back,
+                took=timedelta(seconds=monotonic() - started),
+            ).recorded()
+
+        recorded = await self.step(self.identified("tool", call.tool_call_id), perform, parse_returned)
+        return recorded.returned
+
     def price(self, answered: ModelResponse) -> None:
         """
         Fill in what this request cost, **before** it is recorded rather than after.
 
-        Pydantic AI fills `usage.cost` too, from `genai-prices`, but it does so in the agent graph,
-        which is outside the step that records the response. So the cost of a turn lands in
-        `turn:{n}:messages` and never in `turn:{n}:model:{i}`, and a turn being watched has no cost
-        at all until the instant it ends. Written here it is in both, and the reading of a turn in
-        flight stays the prefix of the settled reading that the console depends on it being.
+        Filled before the response is recorded, so `turn:{n}:model:{i}` and the settled turn carry
+        the same value and a reader watching a turn never waits until its end to see the cost.
 
-        Recorded rather than looked up when a page is drawn, because what a turn cost is settled the
-        moment the request is answered and nothing will ever rewrite it, where the rates behind it
-        are configuration that moves. Priced again next month the same turn would show a different
-        number, and two sessions would stop being comparable. It is the fork's bargain rather than
-        the catalogue's: a value that happens to have been true, not a view of something that changes.
-
-        What it is not is authoritative. Nothing on either wire reports what was actually charged, so
-        this is an estimate made immutable rather than a bill. Never overwriting an existing cost is
-        what leaves room for that to improve: a wire that one day says what it took wins over any
-        estimate of it, exactly as Pydantic AI's own filling is written to allow.
+        Recorded rather than looked up when a page is drawn because the rates move while what one
+        request cost is settled. An existing provider-reported cost wins over the estimate.
         """
         if self.pricer is None or answered.usage.cost is not None:
             return
@@ -587,9 +582,6 @@ class Stepping:
         answered.metadata = stamped | {TOOK: took.total_seconds()}
 
 
-current_stepping: ContextVar[Stepping | None] = ContextVar("mainplate_stepping", default=None)
-
-
 @contextmanager
 def stepping(
     run: Run,
@@ -601,20 +593,8 @@ def stepping(
     injecting: Injecting | None = None,
     gating: Gating | None = None,
 ) -> Iterator[Stepping]:
-    """
-    Make every model request and tool call in this block a step of `run`, named under `prefix`.
-
-    A context variable rather than an argument because the hooks that read it
-    (`StepwiseDurability.wrap_model_request` and `wrap_tool_execute`) are called by Pydantic AI,
-    not by us: there is no parameter anywhere between here and there to thread a checkpoint
-    through. It is the same place DBOS reads its workflow id from, and the same place Pydantic AI
-    keeps its own ambient run context.
-
-    No allowance is an unbounded one, which is what a block outside a worker wants: a script or a
-    test driving one `agent.run` has no driver to hand the rest of the turn to, so a pass that cut
-    itself short there would simply leave the turn unfinished.
-    """
-    scope = Stepping(
+    """The durable model requests and tool calls of one turn in one workflow pass."""
+    yield Stepping(
         run=run,
         prefix=prefix,
         worktree=worktree,
@@ -624,281 +604,3 @@ def stepping(
         gating=gating,
         allowance=allowance if allowance is not None else Allowance(limit=None),
     )
-    token = current_stepping.set(scope)
-    try:
-        yield scope
-    finally:
-        current_stepping.reset(token)
-
-
-class CheckpointedModel(WrapperModel):
-    """
-    A model whose every request is a recorded step of one workflow pass.
-
-    Swapped in for the request's model by `StepwiseDurability`, so the agent, the toolsets, and
-    every other capability are untouched: what changes is only where the request goes.
-    """
-
-    def __init__(self, wrapped: Model, *, scope: Stepping) -> None:
-        super().__init__(wrapped)
-        self.scope = scope
-
-    async def request(
-        self,
-        messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
-        model_request_parameters: ModelRequestParameters,
-    ) -> ModelResponse:
-        """
-        The provider's answer, asked for once across every pass at this conversation.
-
-        The step records what the *codec* will take, so the response is lowered to JSON here
-        rather than handed over as a dataclass: `JsonCodec` is the standard library's `json`, and
-        a `ModelResponse` is not something it can encode. `parse_model_response` is the other
-        half, and it is required rather than a convenience, since what comes back out of the
-        store is an `object` on the pass that ran the request as much as on the one that
-        resumed it.
-
-        It is priced and timed on the way past for the same reason it is recorded at all: see
-        `Stepping.price` and `Stepping.stamp`, both of which have to run here because everything
-        further out happens after the record is written.
-
-        The worktree is snapshotted first, because this is the moment it is worth snapshotting:
-        no tool is running, so the tree is a coherent thing to read, and what is recorded is the
-        state the model is about to be asked to reason about. A pass that replays this request
-        replays the snapshot too and runs no git, so the pair stay in step whatever happens
-        between them.
-
-        The allowance is spent *before* any of that, so a request that was never made leaves no tree
-        recorded in front of it. It is ordinarily spent earlier still, in `before_model_request`,
-        because that runs before this and records a cursor of its own; see `Stepping.allowed`.
-
-        A refusal the provider will never take back is recorded here and re-raised as
-        `RequestRefused`, which is the one failure this console answers for rather than letting the
-        worker retry: see that exception for the loop it closes. Everything else propagates exactly
-        as it did, because a redelivery is the right answer to an error that might come out
-        differently.
-
-        A request already known to be refused is not made again, which is the first thing checked
-        and therefore ahead of the allowance and the snapshot alike: a pass must spend nothing on a
-        question whose answer is recorded, and a tree captured in front of a request nobody makes is
-        a record of a moment that did not happen.
-        """
-        at = self.scope.at("model")
-        if (already := self.scope.refused(at)) is not None:
-            raise RequestRefused(already.why)
-        key = self.scope.key("model")
-        self.scope.allow(key)
-        await self.scope.snapshot()
-
-        async def ask() -> object:
-            started = monotonic()
-            answered = await self.wrapped.request(messages, model_settings, model_request_parameters)
-            self.scope.stamp(answered, timedelta(seconds=monotonic() - started))
-            self.scope.price(answered)
-            return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
-
-        try:
-            return await self.scope.step(key, ask, parse_model_response)
-        except Exception as error:
-            refused = terminally(error)
-            if refused is None:
-                raise
-            await self.scope.refuse(at, refused)
-            raise RequestRefused(refused.why) from error
-
-    @asynccontextmanager
-    async def request_stream(
-        self,
-        messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
-        model_request_parameters: ModelRequestParameters,
-        run_context: RunContext[Any] | None = None,
-    ) -> AsyncGenerator[StreamedResponse]:
-        raise StreamingNotRecorded(
-            "a streamed model request inside a checkpointed conversation would not be recorded; "
-            "drive the agent with `agent.run` until this records the stream's events too"
-        )
-        # Unreachable, and here so that this is a generator: `asynccontextmanager` takes one, and
-        # a method that raised without being one would fail at the decorator rather than at the
-        # call. The pinned code is the assertion: implement the stream and mypy fails this line.
-        yield  # type: ignore[unreachable]
-
-
-class StepwiseDurability(AbstractCapability[AgentDepsT]):
-    """
-    Route an agent's model requests through the checkpoint of the conversation running it.
-
-    Attach it once, at construction:
-
-    ```python
-    agent = Agent("anthropic:claude-sonnet-5", name="mainplate", capabilities=[StepwiseDurability()])
-    ```
-
-    Inside a `stepping(run, prefix)` block the agent's requests become recorded steps of `run`;
-    outside one the capability does nothing at all and the agent behaves normally. That split is
-    deliberate and matches the bundled engines: a durable-capable agent stays usable in a script,
-    a test, or a one-off call with no workflow around it.
-
-    It holds no state, so one instance serves every conversation: what varies is the checkpoint,
-    and that arrives through the context variable rather than through the capability.
-    """
-
-    def get_ordering(self) -> CapabilityOrdering:
-        """
-        Innermost, so every other capability's contribution is already applied when the step runs.
-
-        A step records what the model was actually asked, so anything that edits the request has
-        to have edited it by then; recorded from further out, a later capability's change would
-        be absent from the record and present in the live call.
-        """
-        return CapabilityOrdering(position="innermost")
-
-    @classmethod
-    def get_serialization_name(cls) -> str | None:
-        """
-        Not loadable from an agent spec, because a spec cannot carry what makes this work.
-
-        The checkpoint is supplied at run time by the conversation, not at construction, so an
-        agent built from a spec with this attached would look durable and record nothing.
-        """
-        return None
-
-    async def before_model_request(
-        self, ctx: RunContext[AgentDepsT], request_context: ModelRequestContext
-    ) -> ModelRequestContext:
-        """
-        Put anything the person has said mid-turn to the model, in *this* request.
-
-        Appended to `request_context.messages`, and emphatically not `ctx.enqueue`, which was tried
-        and delivered every steer one round trip late. Pydantic AI's own drain capability is ordered
-        **outermost**, so it empties the queue in its `before_model_request` before this one runs: a
-        message enqueued here misses the request it was read for and reaches the next one, which
-        costs a round trip nobody asked for, puts the steer's panel below the answer it was meant to
-        shape, and makes `turn:{n}:heard:{i}` a claim about a request that never heard it.
-
-        Appending is sound for the two reasons the enqueue was reached for. The list is a *copy* of
-        the run's history and what this returns is adopted whole (`ctx.state.message_history[:] =
-        messages`), so the steer lands in `turn:{n}:messages` and the transcript draws it with
-        nothing taught about it; and a new message is added rather than an existing one mutated,
-        which is the thing the docs actually forbid. Pydantic AI merges consecutive trailing requests
-        for the wire with the tool parts first, so a steer travelling beside a batch of results
-        arrives after them in one request and is recorded as its own message.
-
-        What it is *told* comes from a recorded step, because a live read of the queue is an effect
-        and a resumed pass would see a different one. See `Stepping.steering`.
-
-        **The allowance is spent here rather than at the request**, and that is not tidying: the
-        drain below records how far this turn has read, so a pass that recorded one and *then*
-        refused the request would leave a cursor for a request nobody made. The next pass replays
-        that cursor, so a message delivered while the refused request was being decided waits a
-        further round trip - or, if the turn ends first, opens a turn of its own. Refusing before
-        the drain is what makes a message reach the very next request the pass after this one makes.
-        """
-        scope = current_stepping.get()
-        if scope is None:
-            return request_context
-        scope.allow(scope.coming("model"))
-        # What a plugin injects first, then the steer, which is the order they were produced in: what
-        # a plugin has to say about the request was true before the person typed anything into it.
-        #
-        # A `SystemPromptPart` and not a `UserPromptPart`, because nobody typed it: it is the console
-        # speaking on a plugin's behalf, so a reader has to be able to tell it from a message and
-        # `interjected` draws the two apart by which part carried them.
-        #
-        # What it costs the cached prefix is nothing, and that is the load-bearing half: appended it
-        # is one more entry at the end, where an instruction re-prices every request from the system
-        # block onward. How it *reaches* the model is the provider's business and varies - a real
-        # `{"role": "system"}` entry on the OpenAI wire and on the four Anthropic models that honour
-        # one, `<system>`-tagged user text everywhere else - so do not write code here that depends on
-        # which. See `docs/plugins/guidance.md`.
-        for said in await scope.injected(request_context.messages):
-            request_context.messages.append(ModelRequest(parts=[SystemPromptPart(content=said)]))
-        if scope.draining is None:
-            return request_context
-        steered = await scope.steering()
-        if steered:
-            request_context.messages.append(ModelRequest(parts=[UserPromptPart(content=text) for text in steered]))
-        return request_context
-
-    # There was an `after_node_run` here, and the inbox is what deleted it. It drained again where a
-    # run would otherwise have ended, so that a message arriving during the last response could
-    # redirect the run into one more request rather than being answered by nobody. Two things it
-    # answered are now answered better. A message can no longer be lost at the end of a turn, because
-    # there is no slot for a pass to shut - what nobody took is still in the queue. And nothing can
-    # arrive *during* a pass at all: a pass reads its own snapshot, fixed the moment it started, so
-    # the drain before the first request already sees everything this pass ever will. What used to
-    # cost the ending turn an extra round trip now opens the turn after it.
-
-    async def wrap_model_request(
-        self,
-        ctx: RunContext[AgentDepsT],
-        *,
-        request_context: ModelRequestContext,
-        handler: WrapModelRequestHandler,
-    ) -> ModelResponse:
-        scope = current_stepping.get()
-        if scope is None:
-            return await handler(request_context)
-        request_context.model = CheckpointedModel(request_context.model, scope=scope)
-        return await handler(request_context)
-
-    async def wrap_tool_execute(
-        self,
-        ctx: RunContext[AgentDepsT],
-        *,
-        call: ToolCallPart,
-        tool_def: ToolDefinition,
-        args: ValidatedToolArgs,
-        handler: WrapToolExecuteHandler,
-    ) -> object:
-        """
-        Run a tool once across every pass of this conversation, recording what it came back with.
-
-        Required rather than an optimisation, and for both halves of what a tool does. A tool that
-        *reads* returns a different answer every time it is asked, so a pass that re-ran one would
-        resume the conversation against a file that has moved since the model was told what it
-        said. A tool that *writes* has already written: running it again would either repeat the
-        effect or, here, fail against anchors its own first run invalidated, which is a refusal
-        for an edit that actually succeeded.
-
-        Keyed by the call's own id rather than by position, because a model may ask for several
-        tools in one response and they run concurrently: which reaches this first is a race, so a
-        counter would hand a pass another call's record. The id is part of the model response this
-        conversation recorded, so a replay is handed the same one.
-
-        This is `step` and not `transact`, so it is at-least-once: a crash between the tool
-        returning and the record landing re-runs it on the next pass. That window is one store
-        round trip, and the failure it produces is the mild one, because an anchored edit whose
-        anchors no longer resolve is refused rather than applied somewhere wrong.
-
-        **How long it took is a field of the same record**, written by the same step. It was a
-        `turn:{n}:took:{id}` of its own for as long as a tool return was stored bare, because a
-        duration beside somebody else's value would have been indistinguishable from a tool that
-        happened to return a field of that name. An envelope removes that objection, and with it the
-        window where a return was recorded and its duration was not.
-
-        Timed around the handler alone, so what is recorded is the call rather than the store write
-        after it. A tool that raises records nothing at all - the `ModelRetry` propagates out of the
-        step and the call stays out until a retry lands - so a failed call has no duration for the
-        same reason it has no return.
-
-        **A call a plugin refused is recorded as one that returned the refusal**, inside this same
-        step, so the record is the whole of what a replay needs and the plugin is never asked twice.
-        It has no duration, because nothing ran: what took time was the asking, which is the
-        plugin's and not the tool's.
-        """
-        scope = current_stepping.get()
-        if scope is None:
-            return await handler(args)
-
-        async def perform() -> object:
-            refused = await scope.gated(call)
-            if refused is not None:
-                return records.Returned(returned=refused).recorded()
-            started = monotonic()
-            came_back = to_jsonable_python(await handler(args))
-            return records.Returned(returned=came_back, took=timedelta(seconds=monotonic() - started)).recorded()
-
-        recorded = await scope.step(scope.identified("tool", call.tool_call_id), perform, parse_returned)
-        return recorded.returned

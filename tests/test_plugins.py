@@ -1428,7 +1428,7 @@ class TestASessionsPlugins:
     ) -> None:
         """
         **Tools are the safest thing a plugin can contribute, not a forbidden one.**
-        `wrap_tool_execute` wraps every call in a step, so a plugin-provided tool's answer is recorded
+        `Stepping.call` records every call as a step, so a plugin-provided tool's answer is recorded
         and a resumed pass replays it without running the script again.
         """
         session = await set_up(service, declaring)

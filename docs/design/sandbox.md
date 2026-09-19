@@ -13,7 +13,7 @@ and a release next year adds something nobody has classified. A mount says what 
 repository's own build script runs. `test_sandbox.py` pins that with `git stash` specifically.
 
 **Per call, never a long-lived executor**, and the reason is replay rather than cost. A pass re-runs
-the conversation body from the top and `wrap_tool_execute` replays recorded results instead of
+the conversation body from the top and `Stepping.call` replays recorded results instead of
 re-running them, so a sandbox holding state between calls would offer that state on a first pass and
 withhold it on a resumed one, with nothing to tell the agent which it is in. State that survives
 *sometimes* is worse than state that never survives, because it invites reliance and then breaks

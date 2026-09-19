@@ -1207,8 +1207,8 @@ class TestAnsweringASession:
             recorded=await service.checkpointer.load(SESSION),
             extend=extending(service.checkpointer),
         )
-        with stepping(run, turn_prefix(0)):
-            await agent.run("hello")
+        with stepping(run, turn_prefix(0)) as scope:
+            await agent.run("hello", (), scope)
         await service.checkpointer.release(holder)
         recorded = await service.checkpointer.load(SESSION)
         assert messages_key(0) not in recorded
@@ -1866,5 +1866,5 @@ class TestAnAnswerCutOffAtTheOutputLimit:
 
 
 def kept(answered: ModelResponse) -> object:
-    """One answer as `CheckpointedModel.request` records it, so a reading is tested against the real shape."""
+    """One answer as `Stepping.request` records it, so a reading is tested against the real shape."""
     return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()

@@ -229,7 +229,7 @@ their staged changes, not `HEAD`, not a branch, not `git log`. Four things there
   after each tool call. A model can issue several calls in one response and they run at once; while
   they do, `git add -A` walks a tree somebody is still writing to and records a mixture that never
   existed. Between one model request and the next, every tool of the previous batch has returned by
-  construction. That is why `Stepping.snapshot` is called from `CheckpointedModel.request` and
+  construction. That is why `Stepping.snapshot` is called from `Stepping.request` and
   nowhere else: it is the one place in the process that stands at that boundary. A replayed request
   replays its snapshot too, so a later pass runs no git at all and the pair cannot drift.
 

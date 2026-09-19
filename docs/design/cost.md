@@ -7,10 +7,8 @@ this page is where and how.
 ## Pricing a response
 
 **A response is priced before the step records it**, in `Stepping.price`, called from
-`CheckpointedModel.request`. That is not where Pydantic AI does it: `fill_response_cost` runs in the
-agent graph, which is *outside* the step, so left to it the cost reaches `turn:{n}:messages` and
-never `turn:{n}:model:{i}`, and a turn being watched has no cost until the instant it ends. Priced
-here it is in both, and `so_far` stays the prefix of `blocks_of` that the console depends on.
+`Stepping.request`. The estimate therefore reaches both `turn:{n}:model:{i}` and
+`turn:{n}:messages`, and `so_far` stays the prefix of `blocks_of` that the console depends on.
 
 **The reference and not `genai-prices`, and the coverage gap is why.** Pydantic AI's pricing knows
 `claude-sonnet-4-6` and returns nothing for `accounts/fireworks/models/glm-5p3`, which is exactly
@@ -24,10 +22,8 @@ session is being answered and both are reloadable configuration underneath it.
 is the usage.
 
 **`Pricer` is a function because the alternative is an import cycle.** `reference.py` reads
-`agent.py`, which builds the agent `durability.py`'s capability is attached to, so `durability.py`
-cannot import what prices a model. Injecting the one question it has keeps the capability ignorant
-of endpoints, catalogues and databases, which is the same ignorance that lets one instance serve
-every session.
+`agent.py`, while `durability.py` records the loop that agent is built for. Injecting the one
+question it has keeps durability ignorant of endpoints, catalogues and databases.
 
 **`priced` is pure, and the token counts nest rather than partition.** Pydantic AI normalises every
 wire so `input_tokens` *includes* the cache reads and writes, which Anthropic's own numbers exclude,
@@ -47,7 +43,7 @@ cannot catch.
 ## How long it took
 
 The same argument as the cost, one field along. `Stepping.stamp` writes it beside `Stepping.price`
-in `CheckpointedModel.request`, timing the wrapped model's own call and nothing around it, so the
+in `Stepping.request`, timing the wrapped model's own call and nothing around it, so the
 figure is the round trip to the provider and not the snapshot before it or the store write after.
 
 **Where each one is recorded is decided by the value, not by symmetry.** A `ModelResponse` has

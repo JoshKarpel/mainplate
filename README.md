@@ -2,10 +2,9 @@
 
 A coding agent that keeps its own sessions.
 
-A chat console in front of a [Pydantic AI](https://ai.pydantic.dev) agent, where a conversation is
-a durable workflow rather than a process's memory. Ask it something, kill the server, start it
-again: the session is where you left it, and the reply that was in flight is answered rather than
-lost.
+A chat console over a durable model-and-tool loop, using [Pydantic AI](https://ai.pydantic.dev) for
+provider requests and normalized messages. A conversation is a workflow rather than a process's
+memory: kill the server during a reply, start it again, and the session resumes where it stopped.
 
 It is early and it is experimental. A session that picks a repository gets a git worktree of its
 own and the agent can read, edit and create files in it; the work so far is mostly about the

@@ -1,7 +1,8 @@
 # AGENTS.md
 
-mainplate is a chat console over a Pydantic AI agent whose sessions are durable workflows.
-[`README.md`](README.md) is what it does and why; this is the map for changing it.
+mainplate is a chat console over its own durable model-and-tool loop, using Pydantic AI for provider
+requests and normalized messages. [`README.md`](README.md) is what it does and why; this is the map
+for changing it.
 
 `CLAUDE.md` beside it is one line importing this file, so Claude Code reads the same words every
 other harness does. `AGENTS.md` is the one that holds them, because it is the name the ecosystem

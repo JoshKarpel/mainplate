@@ -452,9 +452,9 @@ class PluginTools(AbstractToolset[Any]):
     Every tool this session's plugins contribute, as one toolset the agent knows nothing else about.
 
     **Tools are the safest thing a plugin can contribute, not a forbidden one.**
-    `StepwiseDurability.wrap_tool_execute` wraps every call in a step and writes a `records.Returned`,
-    so a plugin-provided tool's answer is recorded and a resumed pass replays it without running the
-    script again. That is what puts a tool call inside the line the durability layer draws.
+    `Stepping.call` records every call as a `records.Returned`, so a plugin-provided tool's answer is
+    replayed on a resumed pass without running the script again.
+    That is what puts a tool call inside the line the durability layer draws.
 
     The arguments are passed to the plugin as the model produced them, validated against nothing
     here: the schema is the plugin's and what would refuse a bad call is the plugin, whose refusal
@@ -540,8 +540,8 @@ def asking_through(live: Live) -> Asking:
     recorded.
 
     The delivery is made from **inside** the call rather than handed back, and that is sound rather
-    than an exception to the rule at the top of this module: `wrap_tool_execute` wraps this whole
-    call in a step, so a resumed pass replays the recorded return and writes no second entry.
+    than an exception to the rule at the top of this module: `Stepping.call` wraps this whole call in
+    a step, so a resumed pass replays the recorded return and writes no second entry.
     """
 
     async def call(qualified: str, declared: str, arguments: Mapping[str, object]) -> object:

@@ -244,16 +244,16 @@ symptom, at the price of a per-repository configuration decision on every write.
 
 The at-least-once window. Anchored `edit` has one, since a re-run edit fails loudly on anchors its
 own first run invalidated; an arbitrary shell command re-runs silently. That is the cost of `step`
-rather than `transact`, see [durability](durability.md#the-capability), and it is unchanged by the
+rather than `transact`, see [durability](durability.md#the-loop-and-its-steps), and it is unchanged by the
 sandbox, which bounds where a command reaches and says nothing about how many times it runs.
 
 ## Refusals reach the model
 
 Everything a tool turns down arrives as a `ModelRetry`, because all of it is correctable from the
-message: a stale anchor, a `find` occurring twice, a batch that overlaps. `RETRIES` is above
-Pydantic AI's default of one for that reason, and the reason is observed rather than theoretical: a
-smaller model got an operation's shape wrong once and the default turned a correctable mistake into
-a failed turn.
+message: a stale anchor, a `find` occurring twice, a batch that overlaps. `RETRIES` is above the
+loop's default of one for that reason, and the reason is observed rather than theoretical: a smaller
+model got an operation's shape wrong once and the default turned a correctable mistake into a failed
+turn.
 
 A call a *plugin* turns away is the other kind, and arrives as the call's return rather than as a
 retry: the call was well-formed and is not happening, which is an answer to act on rather than a

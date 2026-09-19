@@ -607,7 +607,7 @@ turn left unfinished for reasons that are the console's rather than the conversa
 loop, which is the split `Crossed` made and `Noting` now makes for every plugin: putting a message in
 an inbox *queues* the session, and that is a fact about the queue in front of a pass rather than
 about answering one. A `tool` answer is the exception and is written where it is asked, because
-`wrap_tool_execute` wraps the whole call in a step - so a resumed pass replays the recorded return
+`Stepping.call` records the whole call in a step - so a resumed pass replays the recorded return
 and writes no second entry. A `before_turn_end` answer is a step of its own and is performed inside it
 for the same reason.
 
@@ -762,10 +762,9 @@ time. That is a constraint on the console rather than a hazard to warn plugin au
 > answer through a mechanism it already has.**
 
 **Tool calls already satisfy this, which is the permissive half and the one that is easy to get
-wrong.** `StepwiseDurability.wrap_tool_execute` wraps every tool call in a step and writes a
-`records.Returned`, so a plugin-provided tool's answer is recorded and a resumed pass replays it
-without running the script again. Tools are the *safest* thing a plugin can contribute, not a
-forbidden one.
+wrong.** `Stepping.call` writes every tool call as a `records.Returned`, so a plugin-provided
+answer is recorded and a resumed pass replays it without running the script again. Tools are the
+*safest* thing a plugin can contribute, not a forbidden one.
 
 **So the line is not "outside the agent's loop", which is where this was first drawn and is too
 tight.** What decides is whether the answer is a *value the console can write down*, and two points
@@ -776,7 +775,7 @@ inside a turn qualify:
   record a return would have been, so a call that was turned away and a call that ran are replayed
   by one mechanism. [Refusing a call](#refusing-a-call) is what that buys.
 - **Whatever is added to a request before it is sent.** `guiding` already does exactly this: it
-  appends system-voice guidance in `before_model_request`, cheaply, because an appended message
+  appends system-voice guidance in `Agent.before_request`, cheaply, because an appended message
   costs the cached prefix nothing where an edited instruction re-prices every request under it.
   Today that is safe by being a pure function of the history it is handed. A plugin cannot be
   trusted to be pure, so the same point offered to a plugin records what was injected and replays
@@ -1268,7 +1267,7 @@ Two costs, both real:
 
 One question sorts them: **can you describe mainplate with this absent and still have mainplate?**
 
-- **`StepwiseDurability`: no.** It is the checkpoint, and the checkpoint is the conversation.
+- **The durable model-and-tool loop: no.** It is the checkpoint, and the checkpoint is the conversation.
 - **The file tools' isolation table: no.** [Which tools a session gets is a pure function of its
   recorded `Choice.isolation`](tools.md#which-tools-a-session-gets), and a registry would make it a
   function of the choice *and* the configuration at the moment of the pass.
