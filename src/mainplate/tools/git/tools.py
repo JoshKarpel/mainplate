@@ -12,7 +12,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.snapshots import Worktree
 
-type Operation = Literal["stage", "stage-all", "intent-to-add"]
+type Operation = Literal["stage", "stage-tracked", "stage-all", "intent-to-add"]
 
 RETRIES = 3
 
@@ -34,6 +34,11 @@ class GitIndex:
             case "stage":
                 arguments = self.paths_for(("add",), paths)
                 reported = f"Staged changes selected by {len(paths)} path{'s' if len(paths) != 1 else ''}."
+            case "stage-tracked":
+                if paths:
+                    raise Refused("stage-tracked takes no paths; it stages every tracked change in the worktree")
+                arguments = ("add", "-u")
+                reported = "Staged every tracked change in the worktree."
             case "stage-all":
                 if paths:
                     raise Refused("stage-all takes no paths; it stages every change in the worktree")
@@ -81,6 +86,7 @@ def git_tools(worktree: Worktree) -> FunctionToolset[None]:
         This tool does not accept Git commands or options. Choose one operation:
 
         - `stage`: stage changes selected by the literal paths in `paths`.
+        - `stage-tracked`: stage every modification and deletion to tracked files. `paths` must be empty.
         - `stage-all`: stage every modification, deletion, and untracked file. `paths` must be empty.
         - `intent-to-add`: register new literal paths without staging their content. Use this when a
           pre-commit hook needs to see a newly generated file while leaving its content as an unstaged

@@ -9,10 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - **A worktree session can stage files through a closed `git` tool.** It stages named literal paths,
-  stages every change, or registers new files with intent to add so pre-commit hooks can see generated
-  output without hiding its content in the index. It accepts no command string or Git options, runs
-  through the same pinned Git directory snapshots use, and cannot commit, change branches or remotes,
-  or push.
+  every tracked change, every change including untracked files, or registers new files with intent
+  to add so pre-commit hooks can see generated output without hiding its content in the index. It
+  accepts no command string or Git options, runs through the same pinned Git directory snapshots
+  use, and cannot commit, change branches or remotes, or push.
 - **A live pass renews its durability lease.** The lease is a short liveness window, so a session
   whose worker dies is available again quickly, while a separate one-hour budget still covers the
   longest model request and stops a live pass that never finishes.

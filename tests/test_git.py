@@ -41,6 +41,16 @@ class TestChangingTheIndex:
         assert said == "Staged changes selected by 1 path."
         assert await staged(worktree) == {literal.name}
 
+    async def test_stage_tracked_leaves_untracked_files_out(self, worktree: Worktree) -> None:
+        (worktree.root / "src" / "kept.txt").unlink()
+        (worktree.root / ".gitignore").write_text(".env\nbuilt/\n*.tmp\n")
+        (worktree.root / "new.txt").write_text("new\n")
+
+        said = await GitIndex(worktree).apply("stage-tracked")
+
+        assert said == "Staged every tracked change in the worktree."
+        assert await staged(worktree) == {".gitignore", "src/kept.txt"}
+
     async def test_stage_all_takes_every_non_ignored_change(self, worktree: Worktree) -> None:
         (worktree.root / "src" / "kept.txt").unlink()
         (worktree.root / ".gitignore").write_text(".env\nbuilt/\n*.tmp\n")
@@ -68,6 +78,10 @@ class TestRefusingAnUnboundedOperation:
     async def test_a_path_operation_needs_a_path(self, worktree: Worktree) -> None:
         with pytest.raises(ModelRetry, match="needs at least one path"):
             await guarded(GitIndex(worktree).apply("stage"))
+
+    async def test_stage_tracked_refuses_paths_instead_of_ignoring_them(self, worktree: Worktree) -> None:
+        with pytest.raises(ModelRetry, match="stage-tracked takes no paths"):
+            await guarded(GitIndex(worktree).apply("stage-tracked", ("src/kept.txt",)))
 
     async def test_stage_all_refuses_paths_instead_of_ignoring_them(self, worktree: Worktree) -> None:
         with pytest.raises(ModelRetry, match="stage-all takes no paths"):
@@ -105,6 +119,6 @@ class TestWhatTheToolsetOffers:
         schema = toolset.tools["git"].function_schema.json_schema
 
         assert set(toolset.tools) == {"git"}
-        assert schema["$defs"]["Operation"]["enum"] == ["stage", "stage-all", "intent-to-add"]
+        assert schema["$defs"]["Operation"]["enum"] == ["stage", "stage-tracked", "stage-all", "intent-to-add"]
         assert "command" not in schema["properties"]
         assert "options" not in schema["properties"]

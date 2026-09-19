@@ -43,11 +43,11 @@ prefix and introducing one late invalidates the whole conversation beneath it.
 
 ## `git` changes only the index
 
-The tool accepts `stage`, `stage-all` and `intent-to-add`, not a command string or options. Keep the
-arguments fixed, literal pathspecs after `--`, and the execution through `Worktree.git`: a second Git
-subprocess implementation is a second copy of the safety boundary described below. It changes the
-real index so pre-commit and the person using the worktree see the result; snapshots keep using their
-shadow indexes.
+The tool accepts `stage`, `stage-tracked`, `stage-all` and `intent-to-add`, not a command string or
+options. Keep the arguments fixed, literal pathspecs after `--`, and the execution through
+`Worktree.git`: a second Git subprocess implementation is a second copy of the safety boundary
+described below. It changes the real index so pre-commit and the person using the worktree see the
+result; snapshots keep using their shadow indexes.
 
 ## `list` runs a program in the parent
 

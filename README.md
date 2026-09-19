@@ -249,9 +249,9 @@ needs to run its tests, once, before the first message. Inside a worktree the re
 read-only: `status`, `diff`, `log` and `blame` all answer, while `commit` and `stash` fail. That is
 deliberate, because the conversation is how work is recorded here and committing is yours to do.
 
-A separate `git` tool can stage named paths, stage every change, or register a new path with
-`--intent-to-add` so pre-commit sees generated files. It accepts no command string or Git options,
-and cannot commit, change branches or remotes, or push.
+A separate `git` tool can stage named paths, every tracked change, every change including untracked
+files, or register a new path with `--intent-to-add` so pre-commit sees generated files. It accepts
+no command string or Git options, and cannot commit, change branches or remotes, or push.
 
 **Run** in the composer is where you do it: the same command from there runs outside all of this, as
 you, in the same worktree.

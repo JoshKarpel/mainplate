@@ -42,11 +42,12 @@ model is told. Both are argued in full on [the handoff plugin's page](../plugins
 
 ## `git`
 
-**It changes the real index through three closed operations: `stage`, `stage-all` and
-`intent-to-add`.** It takes no command string and no Git options. Path operations put literal paths
-after `--`, with pathspec expansion disabled, so a path named `*.txt` stages that file rather than
-every text file. `stage-all` is separate because staging every modification, deletion and untracked
-file is a materially wider request than naming paths.
+**It changes the real index through four closed operations: `stage`, `stage-tracked`, `stage-all`
+and `intent-to-add`.** It takes no command string and no Git options. Path operations put literal
+paths after `--`, with pathspec expansion disabled, so a path named `*.txt` stages that file rather
+than every text file. `stage-tracked` stages every modification and deletion without sweeping in
+untracked files; `stage-all` includes those files too. Both are separate because a bulk operation is
+a materially wider request than naming paths, and whether new files join it is a further choice.
 
 `intent-to-add` exists for pre-commit hooks that generate a new file. Registering the path without
 staging its content leaves a diff for pre-commit to observe, where a full `git add` can make the first
