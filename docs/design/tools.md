@@ -21,11 +21,11 @@ lets the interesting half be tested with a list of strings.
 ## Which tools a session gets
 
 **Over its *files*, that is decided by its `isolation`, not by whether it picked a repository.** A
-session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its worktree and its scratch;
-one on `EVERYTHING` gets the same four over `/`, where `list` refuses because nothing there is in
-git; one on `NOTHING` gets **none of them**, because tools that can only fail are worse than none
-and cost a description on every request. `bash` is added to the first two wherever there is a
-sandbox to run it in.
+session on `WORKTREE` gets `read`, `edit` and `create` over its worktree and scratch, and `list` and
+`grep` over the worktree. One on `EVERYTHING` gets the first three over `/`, while `list` and `grep`
+refuse because nothing there is in git. One on `NOTHING` gets **none of them**, because tools that can
+only fail are worse than none and cost a description on every request. `bash` is added to the first
+two wherever there is a sandbox to run it in.
 
 **`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
 with no files still has exactly one toolset rather than none. It is not an exception to the rule
@@ -84,6 +84,35 @@ of its own: that is the one place that names git's directory instead of letting 
 in a tree the session writes, and builds an environment instead of inheriting this process's. It is
 why `GitTracked` holds a `Worktree` instead of a path. See [what runs, and as
 whom](security.md).
+
+## `grep`
+
+**It is the search whose answer `edit` can use directly.** A shell `rg` or `grep` returns line
+numbers, so finding a line to change takes a second `read` solely to acquire its anchor. `grep`
+returns each matching region through the same `Anchored.rendered` as `read`, with the anchor computed
+over the whole file rather than over the slice being shown. The next call can edit the result, and a
+file that changed meanwhile gets the ordinary stale-anchor refusal rather than a special search
+case.
+
+It asks `GitTracked.entries`, like `list`, so a directory search covers tracked and new files while
+leaving ignored environments and build trees out. It is repository-only for the same reason:
+scratch and whole-machine searches already have `rg` or `grep` under `bash`, and walking them in the
+parent would add a second unbounded enumerator. A path naming one file may still search it directly.
+
+The expression is a line-oriented Python regular expression. An optional repository-relative glob
+narrows the file set, context is bounded to three lines on each side, and at most one hundred
+matching lines come back. Binary, oversized, vanished and otherwise unreadable files are skipped and
+counted rather than making a repository-wide search fail on an unrelated artifact. Multiline,
+structural and unusually configured searches stay with `bash`.
+
+**Its standing cost is another tool definition in every filesystem-enabled request**, plus a second
+search interface beside the shell. That is bought for the observed common sequence it removes:
+`bash` finds a line, `read` repeats the read to get an anchor, and only then can `edit` act.
+
+`grep_tools` and `file_tools` receive the same `Files` value, not equivalent ones. The value carries
+the per-path locks, so sharing it prevents an edit from writing while grep is reading. Once the lock
+is released the result is only a value; anchors make later staleness fail loudly without keeping any
+search state.
 
 ## A line is addressed by a hash of its own content
 

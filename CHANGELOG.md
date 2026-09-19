@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **An anchored `grep` tool** searches Git-known repository text with a line-oriented regular
+  expression and returns bounded matching regions carrying the same anchors as `read`, so a match can
+  go straight to `edit` without a second call solely to acquire its address. An optional glob narrows
+  files, context and result counts are bounded, ignored trees stay out, and shell search remains for
+  multiline, structural and unusually configured queries.
 - **A live pass renews its durability lease.** The lease is a short liveness window, so a session
   whose worker dies is available again quickly, while a separate one-hour budget still covers the
   longest model request and stops a live pass that never finishes.

@@ -235,10 +235,11 @@ already read a file is not run again against a directory that has moved since.
 ## How the agent edits files
 
 What a session's tools reach is one of the things it picks when it is created. A session working in
-a repository gets `list`, `read`, `edit` and `create` over its own git worktree and a scratch
-directory beside it, refusing any path outside the two. One working on the whole machine gets the
-same four with no such boundary. One reaching nothing gets no tools at all, which is what this
-console was before there were repositories: a place to talk.
+a repository gets `read`, `edit` and `create` over its own git worktree and a scratch directory
+beside it, and repository-only `list` and `grep` over the worktree. One working on the whole machine
+gets the first three with no such boundary, while the repository-only pair refuse. One reaching
+nothing gets no tools at all, which is what this console was before there were repositories: a place
+to talk.
 
 Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
 Every command runs in a mount namespace of its own holding exactly what that session reaches and a
@@ -254,6 +255,11 @@ you, in the same worktree.
 `list` asks git what is there rather than walking the directory, so a `.gitignore` is obeyed and an
 installed environment never reaches the model, while a file the agent itself just wrote does. A
 directory past the depth you asked for is summarised by a count rather than opened.
+
+`grep` searches those same Git-known files with a line-oriented regular expression and returns
+matching regions with the anchors `edit` accepts. That removes the second read a shell `rg` needs
+before a match can be changed. Its result count and context are bounded; multiline, structural and
+unusually configured searches remain shell commands.
 
 **A line is addressed by a hash of its own content, not by its position.** A read puts a four-letter
 anchor in front of every line:

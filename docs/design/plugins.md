@@ -1389,8 +1389,8 @@ after the fact, because the checkpoint is written once.
 
 ### The file tools are excluded by a rule rather than by difficulty
 
-`read`, `edit`, `list` and `bash` are not awkward to port. They are **forbidden by this design's own
-constraint**: [which tools a session gets is a pure function of its recorded
+`read`, `edit`, `list`, `grep` and `bash` are not awkward to port. They are **forbidden by this
+design's own constraint**: [which tools a session gets is a pure function of its recorded
 `Choice.isolation`](tools.md#which-tools-a-session-gets), and routing that through a registry would
 make it a function of the choice *and* whatever configuration held at the moment of the pass, so a
 replayed pass would build a different agent than the one whose answers are recorded. They stay the
