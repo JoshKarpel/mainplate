@@ -31,7 +31,7 @@ from without_asgi import ASGIApp
 from without_durability.interfaces import INBOX
 
 from mainplate import records
-from mainplate.agent import RETENTION
+from mainplate.agent import ANTHROPIC_RETENTION
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.app import build_app
@@ -144,7 +144,13 @@ async def said_to_at(service: Service, session: str, when: datetime) -> None:
     )
 
 
-async def a_session(app: ASGIApp, service: Service, said: str = "what is a mainplate", title: str | None = None) -> str:
+async def a_session(
+    app: ASGIApp,
+    service: Service,
+    said: str = "what is a mainplate",
+    title: str | None = None,
+    chosen: Choice = DEFAULT_CHOICE,
+) -> str:
     """
     A session started the way a browser starts one, with its first message in it.
 
@@ -159,7 +165,7 @@ async def a_session(app: ASGIApp, service: Service, said: str = "what is a mainp
     `TestLoadingASessionsPlugins` is where the step itself is driven, through the route.
     """
     async with calling(app) as caller:
-        answered = await caller.post("/sessions", starting_form(title=title))
+        answered = await caller.post("/sessions", starting_form(chosen, title=title))
         assert answered.status == 303
         session = answered.location.rsplit("/", 1)[-1]
         assert (await caller.post(f"/sessions/{session}/messages", {"prompt": said})).status == 200
@@ -1563,6 +1569,11 @@ class TestSayingWhetherTheCacheIsStillWarm:
 
     Read from the last response's own timestamp against the service's clock, so what these fix is the
     one-sided rule: `cold` is asserted where it is certain, and `warm` never is.
+
+    **Certain is per wire**, which is what the pair of threshold tests below is for: the default
+    endpoint speaks the Anthropic format and is asked for an hour, the `gateway` endpoint speaks the
+    OpenAI one and gets that provider's half hour. One conversation of one age is cold on the second
+    and not on the first, and a single console-wide threshold could not say both.
     """
 
     async def test_a_conversation_answered_just_now_says_when_its_prefix_was_written(
@@ -1593,13 +1604,56 @@ class TestSayingWhetherTheCacheIsStillWarm:
         """
         service.references.current = a_reference(context=200_000)
         session = await a_session(app, service)
-        stale = WHEN - RETENTION - timedelta(seconds=1)
+        stale = WHEN - ANTHROPIC_RETENTION - timedelta(seconds=1)
         await answered(service, session, {**ANSWERED[0], "timestamp": stale.isoformat()})
 
         region = await watched(app, session)
 
         assert "cold" in region
         assert "cached at" not in region
+
+    async def test_the_threshold_is_the_answering_wires_own(self, app: ASGIApp, service: Service) -> None:
+        """
+        The half hour between the two formats, which one console-wide constant spent calling a dropped
+        prefix warm.
+
+        One age, forty minutes, put to two sessions that differ only in the endpoint they were
+        started on. It is past the OpenAI wire's thirty minutes and inside the Anthropic wire's hour,
+        so the same conversation is cold on one and not on the other - and forty minutes is exactly
+        when somebody comes back to a session, which is why this is worth a wire apiece.
+        """
+        aged = WHEN - timedelta(minutes=40)
+        response = {**ANSWERED[0], "timestamp": aged.isoformat()}
+
+        anthropic = await a_session(app, service, chosen=DEFAULT_CHOICE)
+        await answered(service, anthropic, response)
+        openai = await a_session(app, service, chosen=Choice(endpoint="gateway", model="wide/steady"))
+        await answered(service, openai, response)
+
+        assert "cold" not in await watched(app, anthropic), "an hour was asked for and forty minutes is inside it"
+        assert "cold" in await watched(app, openai), "thirty minutes is all that wire holds"
+
+    async def test_an_endpoint_the_catalogue_no_longer_offers_is_never_called_cold(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The one-sidedness held at the hole: an unknown retention is one nothing has outlasted.
+
+        A recorded choice outlives the configuration that offered it, and with the endpoint gone
+        there is no format to ask and so no duration to be past. Guessing one would put the single
+        assertion this console makes about a cache on top of an endpoint it can no longer see, so the
+        state stays the write time and the attribute the script reads is left off entirely.
+        """
+        session = await a_session(app, service)
+        ancient = WHEN - timedelta(days=1)
+        await answered(service, session, {**ANSWERED[0], "timestamp": ancient.isoformat()})
+        service.catalogues.current = Catalogue(offered={}, default=DEFAULT_CHOICE)
+
+        region = await watched(app, session)
+
+        assert "cold" not in region
+        assert f"cached at {ancient:%H:%M}" in region
+        assert "data-retention" not in region, "nothing for the script to call cold against either"
 
     async def test_it_prices_re_sending_at_both_ends_of_what_a_cache_might_hold(
         self, app: ASGIApp, service: Service

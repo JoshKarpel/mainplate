@@ -66,6 +66,7 @@ from pydantic_ai.toolsets import AbstractToolset
 
 from mainplate.config import Config
 from mainplate.config import Endpoint
+from mainplate.config import Format
 from mainplate.durability import StepwiseDurability
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import PluginTools
@@ -473,9 +474,9 @@ class Streamed(WrapperModel):
 # carry them at all.
 EMBEDDING: Final = "embedding"
 
-RETENTION: Final = timedelta(hours=1)
+ANTHROPIC_RETENTION: Final = timedelta(hours=1)
 """
-How long a cached prefix is kept where the format lets this console ask.
+How long a cached prefix is kept on the Anthropic wire, which is the one this console gets to choose.
 
 An hour rather than the five minutes that is the default, and the trade is stated because it is a
 real one: an hour's retention is written at 2x base input against 1.25x, so it pays only where a
@@ -484,16 +485,50 @@ answer, thinks, and replies - and five minutes barely outlasts one long turn, le
 the kettle.
 
 A duration rather than the string the wire takes, because two things read it: the parameter below,
-and the page saying whether the next request will pay full price. It is **the longest retention this
-console asks for on any wire**, which is what makes it usable as one threshold everywhere - past it
-a prefix is cold whatever answered the conversation, where under it nothing can be asserted at all.
+and the page saying whether the next request will pay full price.
 """
+
+OPENAI_RETENTION: Final = timedelta(minutes=30)
+"""
+How long a cached prefix is kept on the OpenAI wire, which is that provider's answer and not this console's.
+
+**Written down because it is published, and asked for nowhere.** `prompt_cache_options.ttl` is the
+only knob this format offers and `30m` is currently the only value it accepts, so unlike
+`ANTHROPIC_RETENTION` this is a fact to read rather than a bet to place: `OpenAIWire.caching` still
+asks for nothing and still gets this. The cost, stated: it is a constant copied out of somebody
+else's documentation, so it goes quietly wrong the day OpenAI publishes a second value, where the
+Anthropic one cannot because this console is what sends it.
+"""
+
+
+def retention_of(format_name: Format) -> timedelta:
+    """
+    How long a prefix answered over this format may still be believed to be held.
+
+    **A question per format rather than one constant, and the half hour between them is why.** One
+    threshold has to be the *longest* of the two for `cold` to stay sound, and every wire retaining
+    less then spends the difference drawing an evicted prefix as one written recently - which on the
+    OpenAI wire was the whole stretch between its thirty minutes and Anthropic's hour, exactly the
+    interval a reader comes back in. Asked per format, each wire goes cold when its own retention
+    runs out and the note is one-sided on both.
+
+    Total over `Format`, so a third one is a case somebody has to answer here rather than a wire
+    quietly inheriting whichever duration happened to be written first.
+    """
+    match format_name:
+        case "anthropic":
+            return ANTHROPIC_RETENTION
+        case "openai":
+            return OPENAI_RETENTION
+        case _ as unreachable:
+            assert_never(unreachable)
+
 
 CACHE_FOR: Final = "1h"
 """
 The same duration as the parameter the Anthropic wire takes, in the vocabulary that wire accepts.
 
-Written out rather than rendered from `RETENTION`, because the SDK types this field as
+Written out rather than rendered from `ANTHROPIC_RETENTION`, because the SDK types this field as
 `Literal['5m', '1h'] | bool` and a derived string is a `str`: deriving it would trade a checked value
 for an unchecked one to save a line. So the two are one fact in two places with nothing enforcing the
 agreement, which is the bargain `tree_key` and `Stepping.key` already take, and
@@ -666,9 +701,16 @@ class OpenAIWire:
 
         An empty answer rather than an absent method: what has to be true is that every wire answers
         the question, so that a format added later is a `caching` somebody had to write rather than a
-        session quietly paying full price on every request. The retention is the provider's and is
-        neither documented nor controllable, which is why the console's own reading of whether a
-        prefix is still warm can only ever be one-sided here.
+        session quietly paying full price on every request.
+
+        **Nothing to ask for is not the same as nothing to know.** The retention is the provider's,
+        but it is published - `OPENAI_RETENTION` - and `prompt_cache_options.ttl` is a knob with one
+        accepted value, so asking would send back the duration that already applies. What stays the
+        provider's alone is *routing*: on GPT-5.6 and later a request is placed by machine load and a
+        hash of its leading tokens, `prompt_cache_key` having become cache accounting rather than
+        stickiness, so a warm prefix is found or missed on a decision nothing here participates in.
+        That is why whether a prefix is still held can only ever be read one-sidedly, and why a
+        request landing on a cold machine is an unpriced miss rather than a console bug.
         """
         return ModelSettings()
 

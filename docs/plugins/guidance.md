@@ -2,8 +2,8 @@
 
 The words a session is answered under, and there are two scopes. **Console guidance** is the
 operator's own, every `.md` file under `<config home>/mainplate/guidance/`, sorted by path and
-concatenated. **Repository guidance** is the project's own `AGENTS.md`, read out of the worktree the
-session works in. Both go into the agent's `instructions`.
+concatenated. **Repository guidance** is the project's own tracked `AGENTS.md`, read out of the
+worktree the session works in. Both go into the agent's `instructions`.
 
 **All of it is a [plugin](../design/plugins.md)**, in `src/mainplate/plugins/bundled/guidance`, and it is the
 half of the protocol handoff does not exercise: `instructions` contributed at `setup`, and an
@@ -187,14 +187,14 @@ always yes, where the question is whether *this session* is working on it, which
 at load time can answer. So nesting is not a scoping mechanism this console implements. It is a
 placement convention repositories already have, and two things carry it.
 
-**An index, in the instructions, on every request.** One row per nested guidance file: its path, and
-a `description` from its own frontmatter where it has one. That `apps/web` has conventions is one
-line and what they are is a page, so the line rides in the prefix and the page is read when it is
-wanted. It also serves the goal path scoping never did, which is knowing a part of the repository
-*has* rules before reaching in and breaking them. Walked with the noisy directories pruned rather
-than asked of git: a plugin runs in a namespace with git reachable, but the walk is what makes this
-work in a directory that is not a checkout at all, and the pruning is what keeps it affordable, since
-the directories that make a walk expensive are the ones a guidance file is never in.
+**An index, in the instructions, on every request.** One row per nested guidance file tracked by
+Git: its path, and a `description` from its own frontmatter where it has one. That `apps/web` has
+conventions is one line and what they are is a page, so the line rides in the prefix and the page is
+read when it is wanted. It also serves the goal path scoping never did, which is knowing a part of
+the repository *has* rules before reaching in and breaking them. The Git index is the ownership
+boundary: an ignored virtual environment or other untracked directory may carry an `AGENTS.md`, but
+that file belongs to the environment rather than the repository and never becomes instructions.
+The cost is that a directory that is not a Git checkout contributes no repository guidance.
 
 **And the file itself, handed over on approach.** The plugin reads which paths the model has named to
 a file tool and asks for the guidance covering them to be injected, from the root down. Six things
