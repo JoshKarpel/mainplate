@@ -29,11 +29,11 @@ Read off `Choice.isolation`, not off whether the session picked a repository:
 
 | Filesystem | Over its files | `bash` |
 |---|---|---|
-| `WORKTREE` | `list`, `read`, `edit`, `create` over the worktree and the scratch | where there is a sandbox |
-| `EVERYTHING` | the same four over `/`, and `list` refuses since nothing there is in git | where there is a sandbox |
+| `WORKTREE` | `read`, `edit`, `create` over the worktree and scratch; `list`, `grep` over the worktree | where there is a sandbox |
+| `EVERYTHING` | `read`, `edit`, `create` over `/`; `list` and `grep` refuse | where there is a sandbox |
 | `NOTHING` | none of them | no |
 
-`NOTHING` gets none rather than four that can only fail, because a tool that cannot work still costs
+`NOTHING` gets none rather than five that can only fail, because a tool that cannot work still costs
 its description on every request.
 
 **A plugin's tools are outside that table**, and a session with `NOTHING` still gets them: what a
@@ -54,13 +54,29 @@ to run git safely: named git directory, built environment. Do not build a git su
 `entries` needs beyond the default is `at=` and `Ran.stdout`, and anything else should be one more
 argument there rather than a subprocess of its own.
 
+## `grep` reads what `edit` can address
+
+`grep` asks the same `GitTracked.entries` as `list`, then reads matching text in the parent and
+renders it through `Anchored` computed over each whole file. Keep all three parts: asking git keeps
+ignored trees out, whole-file anchors are the names `edit` actually resolves, and the parent-side
+read means it shares `Files`' path checks and per-file locks rather than trusting a command's output.
+
+The `Files` value passed to `file_tools` and `grep_tools` must be the same value. Two values with the
+same roots carry different lock maps, so an edit could otherwise write while grep was reading. Search
+results may be stale after the lock is released, and that is safe: `edit` resolves the returned
+anchor against the current file and refuses one that moved.
+
+`grep` is repository-only, like `list`. The scratch and the whole-machine root already have `bash`,
+and walking either in the parent would add a second, unbounded directory traversal to answer a
+question the shell already answers.
+
 ## These tools do not pass through the sandbox
 
-`read`, `edit` and `create` write from the parent, so **no bind protects anything from them**. The
-sandbox binds the worktree's `.git` read-only and that stops `bash` replacing the pointer; it does
-nothing here, which is why `GitTracked.sealed` names `.git` and `Files.resolved` refuses it. The two
-are one decision in two places because the two paths are genuinely different, not a check written
-twice: remove either and the vector is open again through the other.
+`read`, `grep`, `edit` and `create` access files from the parent, so **no bind protects anything
+from them**. The sandbox binds the worktree's `.git` read-only and that stops `bash` replacing the
+pointer; it does nothing here, which is why `GitTracked.sealed` names `.git` and `Files.resolved`
+refuses it. The two are one decision in two places because the two paths are genuinely different,
+not a check written twice: remove either and the vector is open again through the other.
 
 `sealed` is a property on each root arm, beside `name`, so a new kind of place brings its own answer
 rather than needing an entry in `resolved`. Keep the refusal to a root's *top level*: a `.gitignore`,

@@ -85,6 +85,7 @@ from mainplate.tools import Scratch
 from mainplate.tools import System
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
+from mainplate.tools import grep_tools
 from mainplate.tools.files.tools import Root
 
 
@@ -984,7 +985,8 @@ def agent_for(
     if plugins is not None and (contributed := contributions(plugins)):
         tools.append(PluginTools(contributed, asking_through(plugins)))
     if reach.roots:
-        tools.append(file_tools(Files(roots=reach.roots)))
+        files = Files(roots=reach.roots)
+        tools.extend((file_tools(files), grep_tools(files)))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(

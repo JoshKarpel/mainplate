@@ -85,9 +85,9 @@ fork gets its own, empty: copying it would be copying mutable state, and sharing
 sessions writing one directory. That matches the worktree, which a fork plants fresh at a recorded
 tree and therefore without any ignored file either.
 
-**`read`, `edit` and `create` reach it; `list` does not.** The point of extending them at all is a
-plan or a notes file kept across turns, which is the one thing in a scratch directory that wants a
-line editor; a build cache never does.
+**`read`, `edit` and `create` reach it; `list` and `grep` do not.** The point of extending them at all
+is a plan or a notes file kept across turns, which is the one thing in a scratch directory that wants
+a line editor; a build cache never does.
 
 It is also most of [what a session takes on disk](workspace.md#what-a-session-takes-on-disk), which
 is the figure on the session's row: a toolchain fetched in here is tens of thousands of files, where
@@ -110,10 +110,10 @@ Where the file tools may reach. What they *are* is [how a model reaches a file](
 
 `Files` holds `roots`, a tuple of *typed* places rather than one path and a list of extras. The type
 is what decides: a `GitTracked` is files a conversation is about and is the only kind git can be
-asked about, so it owns `entries` and answers `list`; a `Scratch` answers no question git answers,
-which is why it exists, so it carries no way to enumerate itself and `listing` refuses it in its own
-arm of a `match` that `assert_never` closes. Adding a kind is one arm, and adding a *second
-worktree* is one more element, where a `root` plus an `also` would have hardcoded exactly one.
+asked about, so it owns `entries` and answers `list` and `grep`; a `Scratch` answers no question git
+answers, which is why it exists, so it carries no way to enumerate itself and both tools refuse it
+before asking git. Adding a kind is one arm, and adding a *second worktree* is one more element, where
+a `root` plus an `also` would have hardcoded exactly one.
 
 `resolved` returns a `Located`, which is the resolved path **and** the root it landed in. Both
 halves, because the caller needs both and working the second one out twice is how they come to
@@ -123,9 +123,9 @@ from a condition inside the tool into a property of the root.
 
 The **first** root is where a relative path lands, and that stays well defined however many roots a
 session ends up with. So a bare `notes.md` is about the repository, because that is what a
-conversation is about. Refusing `list` in the tool rather than leaving it to `entries` is the usual
-reason: "not a repository" arrives from git as a `ListingFailed` fault and ends the turn, where a
-`Refused` tells the model to reach for `bash` instead.
+conversation is about. Refusing `list` or `grep` in the tool rather than leaving it to `entries` is
+the usual reason: "not a repository" arrives from git as a `ListingFailed` fault and ends the turn,
+where a `Refused` tells the model to reach for `bash` instead.
 
 **Anywhere else is reached by naming the root, not by writing its path out.** `read`, `edit` and
 `create` take a `root`, which says which place a *relative* path joins and nothing else: an absolute
