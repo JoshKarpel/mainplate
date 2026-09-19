@@ -37,7 +37,7 @@ from playwright.async_api import expect
 from without_durability.interfaces import INBOX
 from without_http import serving
 
-from mainplate.agent import RETENTION
+from mainplate.agent import ANTHROPIC_RETENTION
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
@@ -2204,7 +2204,7 @@ class TestSayingWhetherTheCacheIsStillWarm:
         """
         _, service = console
         session = await a_conversation(console, page)
-        stale = datetime.now(UTC) - RETENTION - timedelta(minutes=1)
+        stale = datetime.now(UTC) - ANTHROPIC_RETENTION - timedelta(minutes=1)
         await service.checkpointer.supply(
             session,
             messages_key(0),

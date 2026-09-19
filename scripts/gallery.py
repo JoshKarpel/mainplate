@@ -41,6 +41,7 @@ from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
+from mainplate.catalogue import retention_for
 from mainplate.console import LINKS
 from mainplate.conversation import Result
 from mainplate.conversation import heard_key
@@ -791,6 +792,9 @@ def showing(
         # on every rule is drawn against the same number the model's own card shows.
         window=facts.context if facts is not None else None,
         since=since if said.answered_at is not None else None,
+        # Looked up for the same reason the window is: the cache note's threshold is the answering
+        # wire's, so a gallery that wrote one down would draw a state no console renders.
+        retention=retention_for(CATALOGUE, chosen),
         resending=(
             resending(facts.cost, said.total.context)
             if facts is not None and facts.cost is not None and said.total.context

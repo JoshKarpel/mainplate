@@ -30,6 +30,7 @@ from datetime import timedelta
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.agent import Wires
+from mainplate.agent import retention_of
 from mainplate.config import Config
 from mainplate.config import Format
 from mainplate.thinking import thinking_named
@@ -140,6 +141,26 @@ class Catalogue:
         """
         found = self.models_of(endpoint)
         return found is not None and any(model == offered.id for offered in found)
+
+
+def retention_for(catalogue: Catalogue, chosen: Choice | None) -> timedelta | None:
+    """
+    How long the wire this session is answered over holds a prefix, or nothing where that is unknown.
+
+    The lookup `facts_of` makes, one field shallower: a recorded choice names an endpoint, the
+    catalogue says which format that endpoint speaks, and `retention_of` turns the format into a
+    duration. It stops at the endpoint rather than going on to the model, because the retention is
+    the *format's* - every model reached over one wire is cached on that wire's terms.
+
+    Nothing chosen and an endpoint no longer offered are both `None`, and the page draws them the
+    same way it draws a missing price: it says when the prefix was written and declines to call it
+    cold. Guessing a duration here would put the one assertion this console makes about a cache on
+    top of an endpoint it can no longer see.
+    """
+    if chosen is None:
+        return None
+    offering = catalogue.offering_of(chosen.endpoint)
+    return None if offering is None else retention_of(offering.format)
 
 
 async def discover(wires: Wires, config: Config) -> Catalogue:

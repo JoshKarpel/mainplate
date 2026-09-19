@@ -203,8 +203,8 @@ ago the last response landed, and `now()` is not an already-answered question, s
 ## One fact in two places
 
 Sometimes a value genuinely has to be written twice in two forms that nothing can unify: `tree_key`
-and `Stepping.key` build one string from opposite ends, and `RETENTION` and `CACHE_FOR` are one
-duration as a `timedelta` and as the string literal an SDK's type demands.
+and `Stepping.key` build one string from opposite ends, and `ANTHROPIC_RETENTION` and `CACHE_FOR`
+are one duration as a `timedelta` and as the string literal an SDK's type demands.
 
 That is a bargain rather than a mistake, and it is paid the same way each time. **Name it where both
 halves are written, and give it a test that turns a drift into a failure** rather than into a

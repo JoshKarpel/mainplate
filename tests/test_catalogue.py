@@ -28,9 +28,10 @@ from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.settings import ModelSettings
 from without_async import background_task
 
+from mainplate.agent import ANTHROPIC_RETENTION
 from mainplate.agent import CACHE_FOR
 from mainplate.agent import EMBEDDING
-from mainplate.agent import RETENTION
+from mainplate.agent import OPENAI_RETENTION
 from mainplate.agent import AnthropicWire
 from mainplate.agent import Choice
 from mainplate.agent import Listed
@@ -44,6 +45,7 @@ from mainplate.agent import build_wire
 from mainplate.agent import build_wires
 from mainplate.agent import chat_models
 from mainplate.agent import provider_of
+from mainplate.agent import retention_of
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import NothingOffered
@@ -52,6 +54,7 @@ from mainplate.catalogue import default_choice
 from mainplate.catalogue import discover
 from mainplate.catalogue import grouped
 from mainplate.catalogue import refreshing
+from mainplate.catalogue import retention_for
 from mainplate.catalogue import summarise
 from mainplate.config import Config
 from mainplate.config import Endpoint
@@ -244,7 +247,41 @@ class TestBuildingEndpoints:
         they are written twice, and this is what turns a drift into a failure rather than a console
         confidently calling a dead prefix warm for as long as somebody left the two disagreeing.
         """
-        assert f"{RETENTION // timedelta(hours=1)}h" == CACHE_FOR
+        assert f"{ANTHROPIC_RETENTION // timedelta(hours=1)}h" == CACHE_FOR
+
+    def test_each_format_is_believed_for_exactly_as_long_as_it_holds_a_prefix(self) -> None:
+        """
+        The two durations apart, because one constant for both is what drew an evicted prefix as warm.
+
+        The Anthropic figure is what this console *asks* for and the OpenAI one is what that provider
+        publishes and offers no way to change, so they are different kinds of fact that happen to be
+        read at the same place. What must not drift is which is which.
+        """
+        assert retention_of("anthropic") == ANTHROPIC_RETENTION
+        assert retention_of("openai") == OPENAI_RETENTION
+        assert OPENAI_RETENTION < ANTHROPIC_RETENTION, "the reason one threshold could not serve both"
+
+    def test_the_retention_a_session_is_read_against_comes_off_its_endpoint(self) -> None:
+        """
+        The format and never the model: every model reached over one wire is cached on that wire's terms.
+
+        `wide/steady` is offered by both fixture endpoints, so a lookup that keyed off the model would
+        pass this by accident. Asking for the same id twice, once per endpoint, is what pins that the
+        answer follows the endpoint.
+        """
+        assert retention_for(CATALOGUE, Choice(endpoint="here", model="wide/steady")) == ANTHROPIC_RETENTION
+        assert retention_for(CATALOGUE, Choice(endpoint="gateway", model="wide/steady")) == OPENAI_RETENTION
+
+    @pytest.mark.parametrize(
+        ("chosen", "why"),
+        [
+            (None, "a session with no choice recorded has no wire to be read against"),
+            (Choice(endpoint="retired", model="wide/steady"), "a recorded choice outlives the configuration"),
+        ],
+    )
+    def test_nothing_is_known_about_a_wire_the_catalogue_cannot_name(self, chosen: Choice | None, why: str) -> None:
+        """Both holes answer `None`, which the page draws as a write time it declines to call cold."""
+        assert retention_for(CATALOGUE, chosen) is None, why
 
     async def test_what_a_wire_asks_for_reaches_the_request(self) -> None:
         """
