@@ -7,11 +7,16 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
 from typing import assert_never
 from urllib.parse import parse_qs
+from urllib.parse import unquote
+from zoneinfo import ZoneInfo
 
 from pydantic_ai.settings import ThinkingLevel
 from without_asgi import Response
@@ -25,6 +30,7 @@ from without_web import Reply
 from without_web import Route
 from without_web import body
 from without_web import get
+from without_web import header_param
 from without_web import once
 from without_web import optional
 from without_web import path_param
@@ -45,6 +51,7 @@ from mainplate.pages import PLUGIN_LEADER
 from mainplate.pages import SETTLING
 from mainplate.pages import SHAPE_FIELD
 from mainplate.pages import WORKSPACE_FIELD
+from mainplate.pages import ZONE_COOKIE
 from mainplate.pages import Links
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
@@ -101,6 +108,98 @@ watched = query_param("session", optional(str), schema={"type": "string"})
 # Which conversation a page has just been shown, which unlike `watched` is never absent: a page with
 # no session has nothing to acknowledge and is given nowhere to do it.
 acknowledged = query_param("session", once(str), schema={"type": "string"})
+
+# Where the zone database keeps its files, and the symlink a Linux machine names its own zone with.
+# Read rather than configured, because the answer is already on the machine and a setting for it
+# would be a second place for it to be wrong.
+ZONEINFO: Final = Path("/usr/share/zoneinfo")
+LOCALTIME: Final = Path("/etc/localtime")
+
+
+def named_zone(named: str | None) -> ZoneInfo | None:
+    """
+    One IANA name as the zone it means, or nothing at all for a name this machine cannot resolve.
+
+    `ZoneInfo` is what validates, and it is worth knowing that it *does*: one of the names this is
+    asked about arrived in a cookie, so a key it took at face value would be a path this process
+    opens on a stranger's say-so. It refuses an absolute path and anything with `..` in it before it
+    looks at the filesystem at all, which is why nothing here re-checks what it already refuses.
+    """
+    if not named:
+        return None
+    try:
+        return ZoneInfo(named)
+    except ValueError, KeyError, OSError:
+        return None
+
+
+def here() -> ZoneInfo:
+    """
+    Which clock this console keeps, for a page whose reader has not said which one they keep.
+
+    The right answer for the install this console documents, where the unit runs on the machine
+    somebody is reading it from: `TZ` if the unit sets one, and otherwise whatever `/etc/localtime`
+    points at, which is where a Linux machine records the answer. UTC where neither says, which is
+    what a container with no zone configured is actually keeping.
+
+    A name and not an offset, because the page hands one to the script to compare against the
+    browser's own, and an offset is the same in Chicago in December as in Bogotá in June.
+    """
+    resolved = LOCALTIME.resolve() if LOCALTIME.exists() else None
+    system = str(resolved.relative_to(ZONEINFO)) if resolved is not None and resolved.is_relative_to(ZONEINFO) else None
+    return named_zone(os.environ.get("TZ")) or named_zone(system) or ZoneInfo("UTC")
+
+
+HERE: Final = here()
+"""
+This console's own clock, settled once at import.
+
+Once, because it cannot change under a running process in any way this console would notice: the
+zone database is read at startup by every other program on the machine too, and a page drawn against
+a stale one is an hour wrong for as long as it takes to restart. What it costs is that moving a
+machine between zones needs the service restarted, which is the same thing a shell needs.
+"""
+
+
+def zone_in(values: tuple[bytes, ...]) -> ZoneInfo:
+    """
+    Which clock to draw this request's moments against: the reader's, where their browser has said.
+
+    **It promises not to raise**, which is `forge.offers`' arm rather than `catalogue.discover`'s: a
+    cookie nobody can read costs a page the reader's own clock and costs it nothing else, where
+    refusing the request would answer a browser with a 400 over a value the reader never typed.
+    Anything unreadable - no cookie, a name this machine's zone database does not have, a value
+    somebody made up - falls back to this console's own, which the page says it did.
+    """
+    return named_zone(cookie_value(ZONE_COOKIE, values)) or HERE
+
+
+def cookie_value(name: str, values: tuple[bytes, ...]) -> str | None:
+    """
+    One cookie out of however many `Cookie` headers a client sent, or nothing where it sent none.
+
+    Hand-parsed rather than through `http.cookies`, because what is wanted here is one name out of a
+    header: `SimpleCookie` builds a mapping of every cookie on the request, drops the whole header on
+    a value it dislikes, and carries the attribute grammar of the `Set-Cookie` direction, which a
+    request never sends. The pairs are `name=value` separated by `;` and that is the whole grammar
+    this needs.
+
+    `latin-1` because that is what a header's bytes are, and `unquote` because the script writes the
+    value with `encodeURIComponent`, which turns the `/` in every zone name into `%2F`.
+    """
+    for raw in values:
+        for pair in raw.decode("latin-1").split(";"):
+            key, _, value = pair.partition("=")
+            if key.strip() == name:
+                return unquote(value.strip())
+    return None
+
+
+# Which clock this request's moments are drawn against, off the cookie the script writes. On every
+# route that renders a moment, which is every page with the session list on it, and on the stream,
+# which renders the same regions from the same functions and would otherwise swap UTC into a page
+# drawn in Chicago.
+zoned = header_param("cookie", zone_in, schema={"type": "string"})
 
 
 def parse_shape(value: str) -> bool:
@@ -536,8 +635,17 @@ def parse_form_fork(raw: bytes) -> Forking:
 forking = body(parse_form_fork, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
 
 
+# What every page and every fragment this console renders depends on besides its URL, which is the
+# reader's clock and nothing else: the same address renders different moments for a reader in Tokyo
+# and one in Chicago. These responses carry no `cache-control` at all, so a cache with nothing said
+# to it falls back to its own heuristic, and the one this closes is the browser's: a page cached
+# before the script wrote the cookie, served again from that cache, is a reader looking at the
+# console's clock for ever - the script has already asked once and will not ask again.
+VARIES: Final = ((b"vary", b"cookie"),)
+
+
 def page_response(status: int, markup: str) -> Response:
-    return Response.from_content(status, html_content(markup))
+    return Response.from_content(status, html_content(markup), headers=VARIES)
 
 
 async def recover(raised: Exception) -> Response | None:
@@ -592,7 +700,7 @@ def navigating(where: str) -> Response:
     return Response(status=200, headers=((b"hx-redirect", where.encode()),))
 
 
-async def redrawn(service: Service, session: str) -> Response:
+async def redrawn(service: Service, session: str, zone: ZoneInfo) -> Response:
     """
     The transcript as it now stands, which is what every arm that changed one answers with.
 
@@ -603,15 +711,16 @@ async def redrawn(service: Service, session: str) -> Response:
     asked = await service.read(session)
     if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(transcript_region(LINKS, asked)))
+    return page_response(200, fragment(transcript_region(LINKS, zone, asked)))
 
 
-@get("/", summary="Start a session")
-async def start_here(service: Service) -> Response:
+@get("/", zoned, summary="Start a session")
+async def start_here(service: Service, zone: ZoneInfo) -> Response:
     return page_response(
         200,
         start_page(
             LINKS,
+            zone,
             await service.listed(),
             service.catalogues.current,
             service.reachable,
@@ -655,8 +764,8 @@ async def start(service: Service, started: Started) -> Response:
     return seeing(LINKS.to_session(session.id))
 
 
-@get(t"/sessions/{session_id}/forks/new", session_id, at_turn, summary="Where a fork would start")
-async def fork_form(service: Service, session: str, at: int) -> Response:
+@get(t"/sessions/{session_id}/forks/new", session_id, at_turn, zoned, summary="Where a fork would start")
+async def fork_form(service: Service, session: str, at: int, zone: ZoneInfo) -> Response:
     """
     The page that asks what to answer a branch with, before anything is created.
 
@@ -675,6 +784,7 @@ async def fork_form(service: Service, session: str, at: int) -> Response:
         200,
         fork_page(
             LINKS,
+            zone,
             await service.listed(),
             found,
             at,
@@ -765,19 +875,19 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     return page_response(200, fragment(starting_at(repository, None, None, branches)))
 
 
-@get(t"/sessions/{session_id}", session_id, summary="One session, whole")
-async def show_session(service: Service, session: str) -> Response:
+@get(t"/sessions/{session_id}", session_id, zoned, summary="One session, whole")
+async def show_session(service: Service, session: str, zone: ZoneInfo) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     # Serving the page is showing it to somebody, which is what the mark means; before the list is
     # read, so the row for this session is drawn as looked at. See `Service.saw`.
     await service.saw(session)
-    return page_response(200, session_page(LINKS, await service.listed(), found, service.reachable))
+    return page_response(200, session_page(LINKS, zone, await service.listed(), found, service.reachable))
 
 
-@get("/fragments/stream", watched, shaped, summary="What a page is watching, sent as it changes")
-async def stream(service: Service, session: str | None, on_step: bool | None) -> Reply:
+@get("/fragments/stream", watched, shaped, zoned, summary="What a page is watching, sent as it changes")
+async def stream(service: Service, session: str | None, on_step: bool | None, zone: ZoneInfo) -> Reply:
     """
     The live connection a page holds open, carrying whatever it is watching as that changes.
 
@@ -802,7 +912,9 @@ async def stream(service: Service, session: str | None, on_step: bool | None) ->
     """
     if session is not None and await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return event_stream(with_heartbeat(watching(service, LINKS, session, service.watching, on_step=bool(on_step))))
+    return event_stream(
+        with_heartbeat(watching(service, LINKS, zone, session, service.watching, on_step=bool(on_step)))
+    )
 
 
 @post("/fragments/seen", acknowledged, summary="A page has shown what its connection just sent")
@@ -850,8 +962,8 @@ async def request_record(service: Service, session: str, turn: int, at: int) -> 
     return page_response(200, fragment(record_json(held)))
 
 
-@post(t"/sessions/{session_id}/messages", session_id, sending, summary="Say something to a session")
-async def say(service: Service, session: str, sending: Sending) -> Response:
+@post(t"/sessions/{session_id}/messages", session_id, sending, zoned, summary="Say something to a session")
+async def say(service: Service, session: str, sending: Sending, zone: ZoneInfo) -> Response:
     """
     Send the message the composer posted wherever it was addressed.
 
@@ -891,7 +1003,7 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
     # nothing will ever answer is a panel that waits for ever - the one state the stall sentence
     # exists to prevent, reached from the other direction.
     if isinstance(sending.where, ToPlugin):
-        if stalled_by(found) is not None:
+        if stalled_by(found, zone) is not None:
             return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
         delivered = await service.compose(session, found, sending.where.leader, sending.said)
         if delivered is None:
@@ -902,8 +1014,8 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
         # `set` and nothing else left the checkpoint exactly as it is above, and the conversation is
         # what a full decode of it costs.
         if not delivered:
-            return page_response(200, fragment(transcript_region(LINKS, found)))
-        return await redrawn(service, session)
+            return page_response(200, fragment(transcript_region(LINKS, zone, found)))
+        return await redrawn(service, session, zone)
     match sending.where:
         case Disposition.HERE:
             # Nobody here decides between a steer and a turn of its own, and that is the point: the
@@ -911,13 +1023,13 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
             # thing reading at the moment the answer is true. The page this was posted from was
             # rendered from a state that has since moved, and so was any read this could make.
             await service.send(session, sending.said)
-            return await redrawn(service, session)
+            return await redrawn(service, session, zone)
         case Disposition.NEXT | Disposition.FORGET:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
             # next free turn and differ only in what that turn opens on. A forget never reaches
             # `send`, because a boundary between turns is the only place one can be.
             await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
-            return await redrawn(service, session)
+            return await redrawn(service, session, zone)
         case Disposition.RUN:
             # Not a message at all: the text is run in this session's worktree, as the person, and
             # the record of it is never told to a model. Refused rather than silently ignored where
@@ -928,7 +1040,7 @@ async def say(service: Service, session: str, sending: Sending) -> Response:
                     422, refusal_page(LINKS, 422, f"session {session} has no files to run a command in")
                 )
             await service.run(session, sending.said)
-            return await redrawn(service, session)
+            return await redrawn(service, session, zone)
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 from without_asgi.sse import Event
 from without_asgi.sse import ServerSentEvent
@@ -69,13 +70,23 @@ async def token(service: Service, session: str | None) -> str:
 
 
 async def watching(
-    service: Service, links: Links, session: str | None, every: timedelta, on_step: bool = False
+    service: Service,
+    links: Links,
+    zone: ZoneInfo,
+    session: str | None,
+    every: timedelta,
+    on_step: bool = False,
 ) -> AsyncIterator[ServerSentEvent]:
     """
     What one page is showing, sent whenever any of it has recorded anything new.
 
     `session` is the conversation the page is looking at, or nothing for the start page, which looks at
     none; the session list is on every page and is sent to every one.
+
+    `zone` is the clock the page it is talking to was drawn against, taken from that page's own
+    connecting request rather than from this process: every region here is rendered by the same
+    function the page was, so a stream that used the console's own clock would morph UTC moments into
+    a transcript whose rules are in Chicago, one turn at a time.
 
     `on_step` is the shape the page was drawn in, which the page states when it connects: whether it
     is the settings step or the conversation. The regions sent are that shape's, and the moment the
@@ -150,15 +161,15 @@ async def watching(
                     [partial(SETUP_ID, "outerHTML", setup_step(links, showing))]
                     if settling(showing)
                     else [
-                        partial(TRANSCRIPT_ID, SWAP, transcript_region(links, showing)),
-                        partial(CACHE_ID, "outerHTML", cache_note(showing)),
+                        partial(TRANSCRIPT_ID, SWAP, transcript_region(links, zone, showing)),
+                        partial(CACHE_ID, "outerHTML", cache_note(showing, zone)),
                     ]
                 )
             seen = now
             # The list on every page, morphed like the transcript because a row's archive disclosure
             # may be open under somebody's pointer when another session moves the list.
             regions.append(
-                partial(LISTED_ID, SWAP, listed_region(links, await service.listed(), session, service.reachable))
+                partial(LISTED_ID, SWAP, listed_region(links, zone, await service.listed(), session, service.reachable))
             )
             yield Event(data=render(regions), id=now)
         await asyncio.sleep(every.total_seconds())

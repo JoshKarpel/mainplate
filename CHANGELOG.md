@@ -8,6 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Every rule says when its answer came back**, leading the figures it already carried, so a
+  conversation reads as a timeline rather than as a pile of counts: `09:32 · 3.4s · ↑96K …`. The
+  turn's own rule says when its first answer landed, so the moments read down the page in the order
+  they happened, and the whole moment down to the second is in the hover. Nothing new is recorded
+  for it, since a response has always carried its own timestamp. On a phone the fraction of the
+  window goes to make room, because the gauge along the rule already says it.
+- **Moments are printed in your own timezone.** Everything stays recorded in UTC; the browser tells
+  the console which clock it keeps, in a cookie, and the console draws every moment against it - the
+  rules, the session list's dates, the cache note and the archived sentence alike. Without the
+  script a page is drawn against the console's own zone, which for a unit on your own machine is the
+  same answer. A reader in another timezone pays one reload on their first visit.
+- **A session told to come back later waits for exactly that long.** A provider that turns a request
+  down for *now* and says when - a subscription's usage limit with its `resets_at`, or a standard
+  `Retry-After` - parks the session until that moment instead of being retried every lease for
+  however many days that is, and the page says which limit was reached and when the next attempt
+  goes out. A 429 that names no moment is retried as it was before.
 - **An anchored `grep` tool** searches Git-known repository text with a line-oriented regular
   expression and returns bounded matching regions carrying the same anchors as `read`, so a match can
   go straight to `edit` without a second call solely to acquire its address. An optional glob narrows

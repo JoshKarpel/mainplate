@@ -262,8 +262,8 @@ control is refused.** A bare `clear` names nothing, so beside a transcript that 
 reads as a claim about the transcript; naming the *context* says the one thing that was cleared and
 leaves the phrase true. That is [the plain technical word](../philosophy.md#the-words) at the one
 place a reader meets this mechanism, and it is two words rather than a sentence because a rule now
-carries six figures beside it: what a reader needs there is the noun and the verb, and the fork link
-under the same finger already says what to do about it.
+carries seven figures beside it: what a reader needs there is the noun and the verb, and the fork
+link under the same finger already says what to do about it.
 
 **It sits in the middle of the rule, between two of the gaps that hold the line apart.** A rule has
 the turn's own controls at one end and its figures at the other, and a boundary belongs to neither:

@@ -30,6 +30,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Final
 from typing import assert_never
+from zoneinfo import ZoneInfo
 
 from pydantic_ai.settings import ThinkingLevel
 from without_html import DOCTYPE
@@ -578,6 +579,7 @@ def document(
     links: Links,
     heading: str,
     children: Element,
+    zone: ZoneInfo | None = None,
     session: str | None = None,
     forked_from: str | None = None,
     settling: bool = False,
@@ -585,6 +587,13 @@ def document(
 ) -> str:
     """
     The whole document, which every page is this with something different in the middle.
+
+    `zone` is the clock this page's moments were drawn against, said on the body so the script can
+    tell whether it is the reader's. It is on the page rather than asked for by it: the server has
+    already answered the question by the time anything is rendered, and a page that arrived drawn
+    against the wrong clock is one the script asks for again rather than one it rewrites. See
+    `paintZone`, and `zone_in` for where the answer comes from. A page with no moment on it says
+    nothing, which is a refusal.
 
     `settling` is which shape the session page was drawn in, and it goes on the stream element so
     the connection can say when that shape is over; see `Links.to_stream`. `live` is whether the page
@@ -681,7 +690,11 @@ def document(
                         ]
                     ),
                     body(
-                        attrs={"data-session": session, "data-forked-from": forked_from},
+                        attrs={
+                            "data-session": session,
+                            "data-forked-from": forked_from,
+                            ZONE_FIELD: None if zone is None else zone.key,
+                        },
                         children=[*((stream_element(links, session, settling),) if live else ()), children],
                     ),
                 ],
@@ -726,7 +739,9 @@ def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
     return tuple(arranged)
 
 
-def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reachable: Reachable) -> Element:
+def sidebar(
+    links: Links, zone: ZoneInfo, listed: tuple[Session, ...], showing: str | None, reachable: Reachable
+) -> Element:
     """
     Every session, the one most recently written to first, with branches under what they branched
     from and the current one marked.
@@ -773,14 +788,16 @@ def sidebar(links: Links, listed: tuple[Session, ...], showing: str | None, reac
                 cls="sessions__sheet",
                 children=[
                     a(cls="start", attrs={"href": links.to_home()}, children=NEW_SESSION),
-                    listed_region(links, listed, showing, reachable),
+                    listed_region(links, zone, listed, showing, reachable),
                 ],
             ),
         ],
     )
 
 
-def listed_region(links: Links, listed: tuple[Session, ...], showing: str | None, reachable: Reachable) -> Element:
+def listed_region(
+    links: Links, zone: ZoneInfo, listed: tuple[Session, ...], showing: str | None, reachable: Reachable
+) -> Element:
     """
     The rows of the session list, which is what the live connection sends when any session moves.
 
@@ -794,7 +811,7 @@ def listed_region(links: Links, listed: tuple[Session, ...], showing: str | None
             li(
                 attrs={"id": f"listed-{session.id}", "data-depth": str(depth)},
                 children=[
-                    session_row(links, session, showing, depth, reachable),
+                    session_row(links, zone, session, showing, depth, reachable),
                     *((archive_action(links, session.id),) if session.archived is None else ()),
                 ],
             )
@@ -803,7 +820,9 @@ def listed_region(links: Links, listed: tuple[Session, ...], showing: str | None
     )
 
 
-def session_row(links: Links, session: Session, showing: str | None, depth: int, reachable: Reachable) -> Element:
+def session_row(
+    links: Links, zone: ZoneInfo, session: Session, showing: str | None, depth: int, reachable: Reachable
+) -> Element:
     """One session as the link to it, which is the row apart from the action laid over it."""
     return a(
         cls=(
@@ -835,10 +854,12 @@ def session_row(links: Links, session: Session, showing: str | None, depth: int,
                         if session.unseen and session.archived is None
                         else ()
                     ),
-                    time(
+                    when_element(
+                        session.latest,
+                        zone,
                         cls="when",
-                        attrs={"datetime": session.latest.isoformat(), "title": moments(session)},
-                        children=session.latest.strftime("%b %d, %H:%M"),
+                        title=moments(session, zone),
+                        said=dated(session.latest, zone),
                     ),
                     # Said in a word as well as by muting the name, because a
                     # muted row on its own reads as a styling accident, and the
@@ -848,7 +869,7 @@ def session_row(links: Links, session: Session, showing: str | None, depth: int,
                         (
                             span(
                                 cls="archived",
-                                attrs={"title": f"Archived {dated(session.archived)}"},
+                                attrs={"title": f"Archived {stamped(session.archived, zone)}"},
                                 children="archived",
                             ),
                         )
@@ -889,7 +910,7 @@ def session_row(links: Links, session: Session, showing: str | None, depth: int,
                         (
                             span(
                                 cls="footprint",
-                                attrs={"title": footprint_note(session.footprint)},
+                                attrs={"title": footprint_note(session.footprint, zone)},
                                 children=sized(session.footprint.allocated),
                             ),
                         )
@@ -953,7 +974,7 @@ def sized(allocated: int) -> str:
     return f"{figure} {unit}"
 
 
-def footprint_note(footprint: Footprint) -> str:
+def footprint_note(footprint: Footprint, zone: ZoneInfo) -> str:
     """
     What the figure on a row is a figure of, and when it was true, as the sentence behind it.
 
@@ -963,7 +984,7 @@ def footprint_note(footprint: Footprint) -> str:
     """
     return (
         f"{sized(footprint.allocated)} on disk across this session's worktree, scratch and plugins, "
-        f"measured at {footprint.measured_at.strftime('%H:%M')}"
+        f"measured at {timed(footprint.measured_at, zone)}"
     )
 
 
@@ -1014,6 +1035,12 @@ def elapsed(took: timedelta) -> str:
     A second is the boundary because it is where the digit that matters moves: under one, the whole
     figure is in the milliseconds, and over it a tenth is the finest thing worth reporting about a
     round trip whose length nobody controls.
+
+    **Five widths now rather than three**, and the two on the end are the wait a provider asks for
+    rather than anything a turn does: a subscription's allowance resets days out, and `6623m 0s` is a
+    figure a reader has to divide twice before it means anything. Each step drops the finest unit it
+    had, which is the same rule the first three follow: nobody reading a four-day wait is counting
+    its seconds.
     """
     seconds = took.total_seconds()
     if seconds < 1:
@@ -1021,7 +1048,13 @@ def elapsed(took: timedelta) -> str:
     if seconds < 60:
         return f"{seconds:.1f}s"
     minutes, rest = divmod(seconds, 60)
-    return f"{minutes:.0f}m {rest:.0f}s"
+    if minutes < 60:
+        return f"{minutes:.0f}m {rest:.0f}s"
+    hours, spare = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours:.0f}h {spare:.0f}m"
+    days, left = divmod(hours, 24)
+    return f"{days:.0f}d {left:.0f}h"
 
 
 def consumed(context: int, window: int | None) -> float | None:
@@ -1065,11 +1098,17 @@ def portion(fraction: float) -> str:
     return f"{fraction:.0%}"
 
 
-def spend_element(
-    spent: Spent, whose: str, window: int | None = None, running: Decimal | None = None
+def figures_element(
+    spent: Spent,
+    whose: str,
+    zone: ZoneInfo,
+    when: datetime | None = None,
+    opens: bool = False,
+    window: int | None = None,
+    running: Decimal | None = None,
 ) -> tuple[Element, ...]:
     """
-    What something cost, as counts and money, or nothing at all where it has not answered yet.
+    What something cost and when it landed, or nothing at all where it has not answered yet.
 
     The counts are always drawn and the money only where something priced it, because they fail
     independently: the tokens are on the response itself and are known for every turn on every wire,
@@ -1082,9 +1121,18 @@ def spend_element(
     round trip and visibly different where it took several, so the title is what settles which is
     being read rather than the reader inferring it from the size of the number.
 
-    The time leads the figures because it is the one a reader is usually waiting on, and it says in
-    its title what it is the time *of*: the round trips to the provider and not the turn from end to
-    end, since the calls a turn made in between are timed on their own panels.
+    **The moment leads, and the duration follows it**, which is the pair read together: the answer
+    landed at 09:32 and the provider was waited on for 3.4s of that. Both are about the round trips
+    to the provider rather than the turn from end to end, since the calls a turn made in between are
+    timed on their own panels.
+
+    The moment is when the provider's answer came back, which is `ModelResponse.timestamp` and the
+    only moment a request records. What it is *not* is when the request went out: that is this figure
+    less the one beside it, and deriving it here would put a moment on the page that nothing wrote
+    down. `opens` says this is a turn rule, where the moment is the turn's **first** answer rather
+    than the whole turn's: it is the one figure a turn rule takes from a request instead of from the
+    turn, and it is that way round so that the moments read down the page in the order they happened.
+    A turn's last answer on the rule that opens it would run backwards against the requests below.
 
     **The input figure is the context and not the sum**, which is `Spent.context`'s whole argument
     said on the page: what a reader wants off a rule is how full the window is, and a turn's
@@ -1092,7 +1140,7 @@ def spend_element(
     percentage, and the gauge on the rule itself is the same fact again as a picture - one number
     said three ways because the question it answers is the one a long conversation ends on.
 
-    **Symbols and not words.** A rule is a single line that must not wrap, and it now carries six
+    **Symbols and not words.** A rule is a single line that must not wrap, and it now carries seven
     figures where it carried three. `\N{UPWARDS ARROW}` and `\N{DOWNWARDS ARROW}` are a count of
     tokens going up to the model and coming back, `\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}` is how much of
     the first came out of the provider's cache instead, and `\N{GREEK CAPITAL LETTER DELTA}` against
@@ -1111,6 +1159,10 @@ def spend_element(
     appears or disappears with it: baked in, the time had none and the count after it had one, and a
     turn nothing timed then opened with a dot standing for nothing. Interleaving it here is the one
     place that knows what is actually being drawn.
+
+    It is carried *inside* each figure all the same, which is what a narrow window asks for: the
+    stylesheet drops three of these on a phone, and a dot standing between them as an element of its
+    own would be left behind by the figure it belonged to.
     """
     if not spent.asked and not spent.answered:
         return ()
@@ -1172,13 +1224,28 @@ def spend_element(
                 (f"\N{N-ARY SUMMATION}{charged(running)}",),
             )
         )
-    return tuple(
-        span(
-            cls=f"rule__{named}",
-            attrs={"title": title},
-            children=list(said) if at == 0 else ["\N{MIDDLE DOT} ", *said],
-        )
-        for at, (named, title, said) in enumerate(figures)
+    return (
+        *(
+            (
+                when_element(
+                    when,
+                    zone,
+                    cls="rule__when",
+                    title=f"{whose} was {'first ' if opens else ''}answered at {stamped(when, zone)}",
+                    said=timed(when, zone),
+                ),
+            )
+            if when is not None
+            else ()
+        ),
+        *(
+            span(
+                cls=f"rule__{named}",
+                attrs={"title": title},
+                children=list(said) if at == 0 and when is None else ["\N{MIDDLE DOT} ", *said],
+            )
+            for at, (named, title, said) in enumerate(figures)
+        ),
     )
 
 
@@ -2146,6 +2213,7 @@ def where_it_works(repository: str, branch: str | None) -> str:
 
 
 def about_card(
+    zone: ZoneInfo,
     chosen: Choice | None,
     repository: str | None = None,
     worktree: Path | None = None,
@@ -2228,7 +2296,7 @@ def about_card(
             *(
                 # On the same terms as the sidebar's figure, which is the same sentence
                 # behind it, so a row and its page agree.
-                fact("disk", sized(footprint.allocated), cls="footprint", title=footprint_note(footprint))
+                fact("disk", sized(footprint.allocated), cls="footprint", title=footprint_note(footprint, zone))
                 if footprint is not None and footprint.allocated
                 else ()
             ),
@@ -2732,11 +2800,13 @@ def ordinal(at: int) -> str:
 
 def rule_element(
     links: Links,
+    zone: ZoneInfo,
     session: str,
     turn: int,
     asked: int | None = None,
     tree: str | None = None,
     spent: Spent | None = None,
+    when: datetime | None = None,
     opens: bool = False,
     forget: bool = False,
     window: int | None = None,
@@ -2863,7 +2933,15 @@ def rule_element(
             # one more thing about the turn rather than as the thing the rule is saying.
             *((span(cls="rule__forget", children="context cleared"), span(cls="rule__span")) if forget else ()),
             *(
-                spend_element(spent, f"Turn {turn}" if opens else f"Request {turn}.{asked}", window, running)
+                figures_element(
+                    spent,
+                    f"Turn {turn}" if opens else f"Request {turn}.{asked}",
+                    zone,
+                    when=when,
+                    opens=opens,
+                    window=window,
+                    running=running,
+                )
                 if spent is not None
                 else ()
             ),
@@ -3146,7 +3224,7 @@ def running_to(before: Decimal | None, spent: Spent | None) -> Decimal | None:
     return before + spent.cost
 
 
-def cache_note(showing: Conversation) -> Element:
+def cache_note(showing: Conversation, zone: ZoneInfo) -> Element:
     """
     Whether the provider still holds this conversation's prefix, and what the next request pays if not.
 
@@ -3178,6 +3256,9 @@ def cache_note(showing: Conversation) -> Element:
     needs to say `cold` or `warm as of 12m`, and it measures the rest against its own clock from the
     moment it first saw them, so no two machines' clocks are ever subtracted. See `wireCache`.
 
+    That absolute time is the reader's own clock rather than the console's, which is the same `zone`
+    every other moment on the page is drawn against and arrives the same way; see `ZONE_COOKIE`.
+
     Cold is the one state the server *can* assert, since it was already true when this was rendered
     and nothing makes a cold prefix warm again.
 
@@ -3202,8 +3283,10 @@ def cache_note(showing: Conversation) -> Element:
     figures: list[Element] = [
         span(
             cls="cache__state",
-            attrs={"title": f"This conversation's prefix was last written at {showing.said.answered_at:%H:%M}"},
-            children="cold" if cold else f"cached at {showing.said.answered_at:%H:%M}",
+            attrs={
+                "title": (f"This conversation's prefix was last written at {stamped(showing.said.answered_at, zone)}")
+            },
+            children="cold" if cold else f"cached at {timed(showing.said.answered_at, zone)}",
         )
     ]
     if showing.resending is not None:
@@ -3292,7 +3375,7 @@ def end_rule(links: Links, session: str, turns: int) -> Element:
     )
 
 
-def transcript_region(links: Links, showing: Conversation) -> Element:
+def transcript_region(links: Links, zone: ZoneInfo, showing: Conversation) -> Element:
     """
     The conversation, and whether it is still waiting on the rest of it.
 
@@ -3320,11 +3403,15 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
     A turn's own rule takes its tree from the turn's first panel rather than from request 0, which
     holds the same key. The panel has it a request earlier: `turn:{n}:tree:0` is written *before* the
     model is asked, so a turn whose first answer has not landed yet still says what it started on.
+
+    Its moment comes the other way, off request 0 itself, because there is no such thing as a turn
+    that has been answered at a moment nothing recorded: a turn whose first answer has not landed
+    has no moment yet, and no figures either.
     """
     session = showing.session.id
     said = showing.said
     window = showing.window
-    stalled = stalled_by(showing)
+    stalled = stalled_by(showing, zone)
     drawn: list[Element] = []
     # What the conversation has cost by the time each rule is drawn. A turn rule carries the total
     # through the turn it opens, exactly as it already carries that turn's own spend: both figures on
@@ -3346,11 +3433,13 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
         drawn.append(
             rule_element(
                 links,
+                zone,
                 session,
                 turn,
                 asked=0 if asking else None,
                 tree=within[0].tree,
                 spent=spent,
+                when=asking[0].when if asking else None,
                 opens=True,
                 # Off the turn's first panel beside its tree, which is where both facts about a turn
                 # rather than about a request are carried.
@@ -3372,11 +3461,13 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
                     drawn.append(
                         rule_element(
                             links,
+                            zone,
                             session,
                             turn,
                             asked=at,
                             tree=asking[at].tree,
                             spent=asking[at].spent,
+                            when=asking[at].when,
                             window=window,
                             running=climbing[at],
                         )
@@ -3400,7 +3491,7 @@ def transcript_region(links: Links, showing: Conversation) -> Element:
     if stalled is not None:
         drawn.append(p(cls="stalled", children=stalled))
     elif waiting is not None:
-        drawn.append(attention_element(showing, waiting))
+        drawn.append(attention_element(showing, waiting, zone))
     elif said.awaiting and not out_on_a_call(said):
         drawn.append(waiting_panel())
     return div(
@@ -4090,7 +4181,7 @@ def plugin_id(qualified: str) -> str:
     return f"plugin-{qualified.replace(':', '-')}"
 
 
-def archive_card(links: Links, session: str, archived: datetime | None) -> Element:
+def archive_card(links: Links, zone: ZoneInfo, session: str, archived: datetime | None) -> Element:
     """
     The one control that closes a session, or the fact that somebody already did.
 
@@ -4121,7 +4212,7 @@ def archive_card(links: Links, session: str, archived: datetime | None) -> Eleme
             },
             children=[
                 div(cls="archive__head", children="archived"),
-                dl(cls="facts", children=[*fact("since", dated(archived))]),
+                dl(cls="facts", children=[*fact("since", dated(archived, zone), title=stamped(archived, zone))]),
             ],
         )
     return details(
@@ -4189,6 +4280,7 @@ def archive_action(links: Links, session: str) -> Element:
 
 def rail(
     links: Links,
+    zone: ZoneInfo,
     session: str,
     tended: Tending,
     plugins: Sequence[Enrolled] = (),
@@ -4270,7 +4362,7 @@ def rail(
                         children=[
                             div(cls="about__head", children="session"),
                             about,
-                            archive_card(links, session, archived),
+                            archive_card(links, zone, session, archived),
                         ],
                     ),
                     theme_card(),
@@ -4779,6 +4871,7 @@ def composer(
 
 def shell(
     links: Links,
+    zone: ZoneInfo,
     listed: tuple[Session, ...],
     showing: str | None,
     reachable: Reachable,
@@ -4788,7 +4881,7 @@ def shell(
     return div(
         cls="shell",
         children=[
-            sidebar(links, listed, showing, reachable),
+            sidebar(links, zone, listed, showing, reachable),
             # No banner over the pane on a wide window, and that is room rather than an omission:
             # the console's own name was a row on every page saying nothing the tab title does not.
             # What names the page is `<title>`, and what gets somebody back to the start is the
@@ -4805,6 +4898,7 @@ def shell(
 
 def start_page(
     links: Links,
+    zone: ZoneInfo,
     listed: tuple[Session, ...],
     catalogue: Catalogue,
     reachable: Reachable,
@@ -4832,6 +4926,7 @@ def start_page(
         NEW_SESSION,
         shell(
             links,
+            zone,
             listed,
             showing=None,
             reachable=reachable,
@@ -4858,28 +4953,63 @@ def start_page(
                 )
             ],
         ),
+        zone=zone,
     )
 
 
-def dated(when: datetime) -> str:
+def timed(when: datetime, zone: ZoneInfo) -> str:
+    """
+    The time of day a moment fell at, which is the shortest true thing a rule can say about one.
+
+    No date, because a rule stands inside a conversation a reader is already reading down: the date
+    is the same for almost every rule in one and the minute is the part that moves. The whole moment
+    is in the title beside it, which is where a conversation that ran overnight is told apart.
+    """
+    return when.astimezone(zone).strftime("%H:%M")
+
+
+def dated(when: datetime, zone: ZoneInfo) -> str:
     """A moment in the words the sidebar dates a session in, so every date on a row agrees."""
-    return when.strftime("%b %d, %H:%M")
+    return when.astimezone(zone).strftime("%b %d, %H:%M")
 
 
-def moments(session: Session) -> str:
+def stamped(when: datetime, zone: ZoneInfo) -> str:
+    """
+    A moment whole, for a title: the date, the second, and the clock it is being read against.
+
+    The zone is named here and nowhere else, because a title is the one place with room for it. What
+    it answers is the question a bare `09:32` cannot: whose nine thirty-two, the reader's or the
+    console's, which on a page read from another country is the difference between two answers.
+    """
+    return when.astimezone(zone).strftime("%b %d, %H:%M:%S %Z")
+
+
+def when_element(when: datetime, zone: ZoneInfo, cls: str, title: str, said: str) -> Element:
+    """
+    One moment on the page, drawn against `zone` and carrying the instant itself beside it.
+
+    `<time>` rather than a span, and the `datetime` attribute is the point rather than the tag:
+    the text is the reader's clock and the attribute is the moment, so anything reading this page
+    back - a browser's own tooling, a reader copying a value at something else - gets what was
+    recorded rather than a rendering of it.
+    """
+    return time(cls=cls, attrs={"datetime": when.isoformat(), "title": title}, children=said)
+
+
+def moments(session: Session, zone: ZoneInfo) -> str:
     """
     Both of a row's moments, for the title over the one it prints.
 
     The row prints the one it is ordered by, and for a session written to that is not when it was
     made; somebody wondering which of two conversations is the older one hovers rather than guesses.
     """
-    created = f"Created {dated(session.created_at)}"
+    created = f"Created {stamped(session.created_at, zone)}"
     if session.last_said_at is None:
         return created
-    return f"Last message {dated(session.last_said_at)}. {created}"
+    return f"Last message {stamped(session.last_said_at, zone)}. {created}"
 
 
-def stalled_by(showing: Conversation) -> str | None:
+def stalled_by(showing: Conversation, zone: ZoneInfo) -> str | None:
     """
     Why this session cannot be answered, or nothing at all when it can.
 
@@ -4900,7 +5030,7 @@ def stalled_by(showing: Conversation) -> str | None:
     # a fork past a refusal would carry on a session that was deliberately closed.
     if showing.session.archived is not None:
         return (
-            f"Archived {dated(showing.session.archived)}: nothing more is said in it, and its worktree "
+            f"Archived {stamped(showing.session.archived, zone)}: nothing more is said in it, and its worktree "
             f"and scratch are taken off the disk. Fork it to carry on from where it left off."
         )
     if showing.chosen is None:
@@ -4935,6 +5065,30 @@ here rather than at both ends, for `CACHE_ID`'s reason.
 ATTENTION_ID: Final = "attention"
 """The one line saying why nothing is happening, where nothing is and something should be."""
 
+ZONE_COOKIE: Final = "zone"
+"""
+What the browser calls the clock its reader keeps, as an IANA name in a cookie.
+
+A cookie rather than a header or a query parameter, because the question has to be answered on the
+request for the *document*: a header the script adds reaches the swaps and not the page they land
+in, and a page drawn against one clock that then swapped in regions drawn against another would be
+a transcript disagreeing with itself down the column.
+
+Named here beside the field the page writes back, because the two are one loop with the script in
+the middle of it, and the third spelling is in `mainplate.js` where there is nowhere else it could
+be. `TestTheClockAPageIsDrawnAgainst` is what fails when they drift.
+"""
+
+ZONE_FIELD: Final = "data-zone"
+"""
+Which clock this page's moments were actually drawn against, said on the body.
+
+The other half of the cookie: the script compares it with the browser's own zone, and a page drawn
+against a different one is asked for again rather than rewritten in place. Writing it back is what
+stops that being a loop, since a console with no record of the zone it was asked for renders in its
+own and says so, and the script sees its request was not honoured rather than asking for ever.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class Waiting:
@@ -4949,11 +5103,17 @@ class Waiting:
     `then` is what happens next, which is the half that makes this different from a refusal: the
     session is coming back, and saying so is what turns an error into a wait. Absent only where the
     statement is already the whole of it.
+
+    `until` is the moment a provider named for coming back, on the one arm that has one. It is a
+    moment rather than words because it is the answer to *when*, and a duration counted down beside
+    it says how far off that is; the two together are what a four-day wait needs, since `in 3d 4h`
+    alone is a figure nobody can plan around.
     """
 
     said: str
     reason: str | None = None
     then: str | None = None
+    until: datetime | None = None
 
 
 def waiting_for(showing: Conversation) -> Waiting | None:
@@ -4979,11 +5139,24 @@ def waiting_for(showing: Conversation) -> Waiting | None:
     Nothing at all where nothing is outstanding and nothing failed, which is a settled conversation:
     there is nothing to be stuck about, so there is nothing to say.
 
-    It says why the session is stopped and not *when* it resumes, which is `attention_element`'s half:
-    one of these is a fact that will read the same in an hour and the other is a figure that is wrong
-    a second later, so only the second needs the script.
+    It says why the session is stopped and not *how long* until it resumes, which is
+    `attention_element`'s half: one of these is a fact that will read the same in an hour and the
+    other is a figure that is wrong a second later, so only the second needs the script. A moment a
+    provider named is the exception and belongs here, because it is a fact of exactly the first kind.
+
+    **A wait the provider asked for outranks everything below it**, and it is the one arm here that
+    is not about something going wrong. Nothing failed, nothing is refused, and the session is coming
+    back at a moment somebody else chose; what the page owes a reader is that moment, rather than
+    three dots for however many days a subscription's limit takes to reset.
     """
     failed = showing.failed
+    if (held := showing.deferred) is not None:
+        return Waiting(
+            said="The provider will not take another request from this session yet.",
+            reason=held.why,
+            then="It is scheduled for another pass at",
+            until=held.until,
+        )
     if not showing.said.awaiting and failed is None:
         return None
     fell = "The last pass at this session failed." if failed is not None else None
@@ -5010,7 +5183,7 @@ def waiting_for(showing: Conversation) -> Waiting | None:
             assert_never(unreachable)
 
 
-def attention_element(showing: Conversation, waiting: Waiting) -> Element:
+def attention_element(showing: Conversation, waiting: Waiting, zone: ZoneInfo) -> Element:
     """
     Why nothing is happening and how long until something does, with the reason set apart.
 
@@ -5028,13 +5201,34 @@ def attention_element(showing: Conversation, waiting: Waiting) -> Element:
     which is a figure that goes stale rather than a sentence that is missing.
 
     The figure is only on the one arm that has one, and the sentence before it reads correctly alone.
+
+    **A moment goes in beside it where the wait is one somebody named**, and the pair is the point: a
+    provider deferring a session until Tuesday makes `in 3d 4h` a figure nobody can plan around,
+    where the moment is what a reader actually wants and the countdown is what says how far off it
+    is. It is drawn against the reader's own clock exactly as a rule's is.
     """
     due = showing.attention.until if isinstance(showing.attention, Delayed) else None
     then: list[Element | str] = [] if waiting.then is None else [waiting.then]
+    if waiting.until is not None and waiting.then is not None:
+        then.extend(
+            (
+                " ",
+                when_element(
+                    waiting.until,
+                    zone,
+                    cls="attention__when",
+                    title=stamped(waiting.until, zone),
+                    said=dated(waiting.until, zone),
+                ),
+                ".",
+            )
+        )
     if due is not None and waiting.then is not None:
         then.extend((" Due in ", span(cls="attention__due", children=elapsed(due)), "."))
     return div(
-        cls="attention",
+        # A wait somebody named is not a fault, and the stylesheet draws it in the ordinary ink
+        # rather than the red one: what the red means on this page is that something went wrong.
+        cls=("attention", "attention--waiting" if waiting.until is not None else None),
         attrs={"id": ATTENTION_ID, **({DUE_FIELD: f"{due.total_seconds():.0f}"} if due is not None else {})},
         children=[
             p(cls="attention__said", children=waiting.said),
@@ -5087,7 +5281,9 @@ def running_plugins(showing: Conversation) -> tuple[Enrolled, ...]:
     return running(showing.plugins, showing.session.tending)
 
 
-def session_page(links: Links, listed: tuple[Session, ...], showing: Conversation, reachable: Reachable) -> str:
+def session_page(
+    links: Links, zone: ZoneInfo, listed: tuple[Session, ...], showing: Conversation, reachable: Reachable
+) -> str:
     """
     One session, in whichever of its two shapes it is in.
 
@@ -5107,6 +5303,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             showing.session.title or UNTITLED,
             shell(
                 links,
+                zone,
                 listed,
                 showing=showing.session.id,
                 reachable=reachable,
@@ -5115,14 +5312,15 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                 # the step is answered.
                 pane=[
                     setup_step(links, showing),
-                    archive_card(links, showing.session.id, showing.session.archived),
+                    archive_card(links, zone, showing.session.id, showing.session.archived),
                 ],
             ),
+            zone=zone,
             session=showing.session.id,
             forked_from=showing.session.forked.session if showing.session.forked is not None else None,
             settling=True,
         )
-    stalled = stalled_by(showing)
+    stalled = stalled_by(showing, zone)
     # Once for both readers, so the composer's menu and the rail's cards cannot be built from two
     # answers to the same question, and the thinning behind it is done once per render.
     plugins = running_plugins(showing)
@@ -5131,11 +5329,12 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
         showing.session.title or UNTITLED,
         shell(
             links,
+            zone,
             listed,
             showing=showing.session.id,
             reachable=reachable,
             pane=[
-                transcript_region(links, showing),
+                transcript_region(links, zone, showing),
                 # No box at all on an archived session, rather than one that refuses. A disabled
                 # control is honest only where something on the page could enable it, and nothing
                 # un-archives a session: the box would be a promise the page cannot keep, and the
@@ -5167,7 +5366,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                             # sentence: this is a standing fact about the conversation and that is
                             # what the next press does, so the transient one sits closest to the
                             # thing it describes.
-                            above=cache_note(showing),
+                            above=cache_note(showing, zone),
                             # What this session's own plugins offer in the composer, each under the
                             # leader somebody types. Declared once by the plugin and rendered by the
                             # console, so a menu row, the button the box shows in that mode, and the
@@ -5182,10 +5381,12 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
             aside_rail=[
                 rail(
                     links,
+                    zone,
                     showing.session.id,
                     showing.session.tending,
                     plugins,
                     about=about_card(
+                        zone,
                         showing.chosen,
                         showing.repository,
                         showing.worktree,
@@ -5195,6 +5396,7 @@ def session_page(links: Links, listed: tuple[Session, ...], showing: Conversatio
                 )
             ],
         ),
+        zone=zone,
         session=showing.session.id,
         forked_from=showing.session.forked.session if showing.session.forked is not None else None,
     )
@@ -5269,6 +5471,7 @@ def branching_files(at: int, repository: str) -> str:
 
 def fork_page(
     links: Links,
+    zone: ZoneInfo,
     listed: tuple[Session, ...],
     showing: Conversation,
     at: int,
@@ -5295,6 +5498,7 @@ def fork_page(
         f"Fork {showing.session.title or UNTITLED}",
         shell(
             links,
+            zone,
             listed,
             showing=showing.session.id,
             reachable=reachable,
@@ -5363,6 +5567,7 @@ def fork_page(
                 ),
             ],
         ),
+        zone=zone,
         session=showing.session.id,
     )
 

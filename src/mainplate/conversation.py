@@ -25,6 +25,7 @@
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
 #     turn:{n}:tool:{id}   what one tool call returned and how long it took, named by the call's
 #                          own id
+#     turn:{n}:deferred:{i} the i-th time this turn was told to come back later, and when
 #     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
 #
 # **Every one of those holds a record from `records.py` rather than a bare value**, which is what
@@ -79,6 +80,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -120,6 +122,7 @@ from pydantic_core import to_json
 from without_durability.interfaces import INBOX
 from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
+from without_durability.stepwise import ScheduledWakeup
 from without_durability.stepwise import StepKey
 
 from mainplate import records
@@ -133,6 +136,7 @@ from mainplate.durability import AllowanceSpent
 from mainplate.durability import Draining
 from mainplate.durability import Gating
 from mainplate.durability import Injecting
+from mainplate.durability import RequestDeferred
 from mainplate.durability import RequestRefused
 from mainplate.durability import as_recorded
 from mainplate.durability import parse_injected
@@ -804,6 +808,67 @@ def refused_key(turn: int, at: int) -> StepKey:
     the same drift hazard as `model_key`.
     """
     return f"{turn_prefix(turn)}:refused:{at}"
+
+
+def deferred_key(turn: int, at: int) -> StepKey:
+    """
+    That this turn waited, the `at`-th time it has, and until when.
+
+    **Counted by how many waits this turn has already taken, and not by the request that caused
+    one**, which is the difference from `refused_key` and the whole of what makes the wait work. A
+    refusal is settled, so the request's own position names it once and every later pass finds the
+    answer already there. A wait is not: the pass that comes back when the deadline passes asks the
+    same request again, and a provider that defers it a second time has named a *new* moment. Keyed
+    by the request, that moment would land on a key already holding the old one, the store would keep
+    the first value, and `Run.sleep` would read a deadline already past - so the session would ask
+    again as fast as the queue could turn it around, which is the loop the wait exists to close.
+
+    Counted instead, each wait is its own record, and the count advances because the record itself
+    is what advances it. What a session against a limit that keeps being reached accumulates is one
+    of these per wait, which is one per reset rather than one per lease.
+    """
+    return f"{turn_prefix(turn)}:deferred:{at}"
+
+
+def deferrals_in(recorded: Mapping[str, object], turn: int) -> int:
+    """How many times this turn has already waited, which is the key the next wait takes."""
+    at = 0
+    while deferred_key(turn, at) in recorded:
+        at += 1
+    return at
+
+
+def parse_deferred(recorded: object) -> records.Deferred:
+    """When a provider said a deferred request could be made again, as the record holding it."""
+    return records.Deferred.model_validate(recorded)
+
+
+def deferred_in(recorded: Mapping[str, object]) -> records.Deferred | None:
+    """
+    The last thing this session was told to wait for, or nothing where it has never been told to.
+
+    Whether that wait is still *on* is a question about the clock, which a page may not ask: see
+    `Conversation.deferred`, where the moment is compared against a `now()` the service takes. Here
+    it is the newest record and nothing more.
+
+    One walk in store order, `failure_in`'s way: the order is the property being used and the store
+    already guarantees it, so the newest wait is the last one this sees.
+    """
+    found: records.Deferred | None = None
+    for key, held in recorded.items():
+        if DEFERRED_IN_TURN.match(key):
+            found = parse_deferred(held)
+    return found
+
+
+DEFERRED_IN_TURN: Final = re.compile(r"^turn:\d+:deferred:\d+$")
+"""
+Which keys `deferred_in` walks, spelled as the shape `deferred_key` builds.
+
+One fact in two places, and paid the way that rule asks: named here beside the builder, with
+`test_the_key_a_wait_is_recorded_under` reading one against the other so a drift is a failure rather
+than a page that quietly says a session is waiting for nothing.
+"""
 
 
 def tool_key(turn: int, call: str) -> StepKey:
@@ -1626,26 +1691,46 @@ class Request:
     """
     One round trip to the model, as the rule at its boundary reports.
 
-    A request is the unit three recorded things are actually about - the tree taken before it, the
-    response it came back with, and what that response cost - and none of them is about a panel. That
-    is the whole reason a rule stands here: hung on panels, each had to be attributed to a chosen one.
+    A request is the unit four recorded things are actually about - the tree taken before it, the
+    response it came back with, what that response cost and when it landed - and none of them is
+    about a panel. That is the whole reason a rule stands here: hung on panels, each had to be
+    attributed to a chosen one.
     """
 
     at: int
     tree: str | None
     spent: Spent
+    when: datetime
+    """
+    When the provider's answer to this request came back.
+
+    `ModelResponse.timestamp` and no key of its own, for `response_took`'s reason one field along:
+    Pydantic AI stamps every response it builds, it survives the checkpoint round trip, and it is on
+    the response whether that came back from `turn:{n}:messages` or from the `turn:{n}:model:{i}`
+    step behind it. `Transcript.answered_at` is the same field read at the other end of a session.
+
+    **The clock is whichever process ran the pass**, which is this console's, so it is a moment to
+    print rather than a moment to subtract another from: see `Conversation.since` for the one place
+    this console does subtract two clocks and what that costs.
+    """
 
 
 def requests_in(recorded: Mapping[str, object], turn: int, responses: Sequence[ModelResponse]) -> tuple[Request, ...]:
     """
     What each of a turn's model requests is worth saying, in the order they were made.
 
-    The tree comes from `turn:{n}:tree:{i}` and the spend from the response's own usage, which are
-    the two halves of one request written by opposite ends: the snapshot is taken before the ask and
-    the usage comes back with the answer. Reading them together here is what lets one rule say both.
+    The tree comes from `turn:{n}:tree:{i}` and the spend and the moment from the response itself,
+    which are the two halves of one request written by opposite ends: the snapshot is taken before
+    the ask and the answer arrives with its own usage and stamp. Reading them together here is what
+    lets one rule say all three.
     """
     return tuple(
-        Request(at=at, tree=parse_tree(recorded.get(tree_key(turn, at))), spent=spent_on([response]))
+        Request(
+            at=at,
+            tree=parse_tree(recorded.get(tree_key(turn, at))),
+            spent=spent_on([response]),
+            when=response.timestamp,
+        )
         for at, response in enumerate(responses)
     )
 
@@ -3406,6 +3491,19 @@ def conversing(
                     # asking to be refused again; the reason is already recorded, so the page can
                     # say what happened without this carrying anything back.
                     return Stalled()
+                except RequestDeferred as deferred:
+                    # And the third answer: the request is fine and the provider named a minute to
+                    # come back in. Written down and then *suspended*, which is why this returns
+                    # nothing at all - a `ScheduledWakeup` is how a pass says it is owed a clock, and
+                    # the worker answers it by scheduling the delivery for exactly that moment. The
+                    # alternative is the worker's own redelivery, which is this console asking a
+                    # provider that is already saying no, once a lease, until the limit lifts.
+                    #
+                    # Raised from out here rather than from inside `agent.run`, which is the same
+                    # reason `AllowanceSpent` is caught out here: a suspension is a `BaseException`
+                    # and the agent graph is somebody else's code to unwind it through, where this
+                    # stands after the run has already come apart.
+                    await deferring(run, at.turn, deferred)
                 except UnexpectedModelBehavior as error:
                     # Raised by Pydantic AI *after* an answer was recorded rather than by the
                     # provider on the request: the model was cut off at its output limit before it
@@ -3442,6 +3540,31 @@ def conversing(
                 return Noting(notes)
 
     return converse
+
+
+async def deferring(run: Run, turn: int, deferred: RequestDeferred) -> None:
+    """
+    Record the moment a provider named, then suspend this pass until it comes round.
+
+    Two acts that have to be this way round. The record is what the page reads, so a session waiting
+    four days says so rather than drawing three dots for four days; and the suspension is what the
+    worker answers, by scheduling the delivery for exactly `until` instead of redelivering onto a
+    provider that is still saying no.
+
+    **`ScheduledWakeup` raised here rather than `Run.sleep` taken above**, which is the same
+    mechanism with the deadline supplied instead of computed. `sleep` records a deadline of its own,
+    `now + duration`, which would be this console writing down a moment it was *told* as though it
+    had chosen it - two records of one fact, and the recorded one would be the copy the page does not
+    read. `stopped_at` takes a suspension the workflow raised itself, which is exactly what this is.
+
+    It returns nothing because it never returns: the raise is the point, and the signature says the
+    caller has nothing to do afterwards.
+    """
+    at = deferrals_in(run.recorded, turn)
+    held = records.Deferred(until=deferred.until, why=deferred.why)
+    key = deferred_key(turn, at)
+    await run.step(key, partial(as_recorded, held), parse_deferred)
+    raise ScheduledWakeup(key, due=deferred.until)
 
 
 def injecting_through(run: Run, live: Live) -> Injecting:

@@ -1472,6 +1472,20 @@ pre > .copy {
     text-align: center;
 }
 
+/* The one thing this line says where nothing has gone wrong: a provider named a moment to come back
+   in, and the session is waiting it out. Drawn in the ordinary edge and ground rather than the red
+   one, because the red one means a fault and this is the console doing exactly what it should. The
+   shape stays, since what a reader needs is the same - a statement, the provider's own words, and
+   when - and a second box would be a second thing to keep in step with this one. */
+.attention--waiting {
+    border-color: var(--edge);
+    background: var(--raised);
+}
+
+.attention--waiting .attention__reason {
+    background: var(--sunk);
+}
+
 .attention__said,
 .attention__then {
     margin: 0;
@@ -3447,7 +3461,7 @@ summary.archive__head {
     padding-top: var(--space-2);
     border-top: 1px solid var(--edge);
     font-family: var(--mono);
-    /* A figure has to be read rather than noticed, and a rule now carries six of them where it
+    /* A figure has to be read rather than noticed, and a rule now carries seven of them where it
        carried three. Under about this the digits stop being legible at a glance, which for a line
        whose whole job is figures is the wrong economy: what a rule saves by being small is a couple
        of pixels of height. Still well under the transcript's own size, since these are facts about
@@ -3542,12 +3556,12 @@ summary.archive__head {
 }
 
 /* Every figure on a rule is drawn in the rule's own ink, and none of them is picked out. The cost
-   used to take a stronger one, which read as the figure to look at, and there are six of them now:
-   the time, how much context there is, how full the window is, what came out of the cache, what
-   came back, and what it cost. None is more the point than the others - which one somebody is
-   reading changes with what they are doing - so picking one is deciding that for them. What
-   emphasis this line has left is the gauge, which is about the conversation rather than about any
-   figure on it. */
+   used to take a stronger one, which read as the figure to look at, and there are seven of them
+   now: when the answer landed, how long it took, how much context there is, how full the window is,
+   what came out of the cache, what came back, and what it cost. None is more the point than the
+   others - which one somebody is reading changes with what they are doing - so picking one is
+   deciding that for them. What emphasis this line has left is the gauge, which is about the
+   conversation rather than about any figure on it. */
 
 /* Marked the same way a panel is, because a rule is landed on by the same arrows and the same
    permalink machinery. Drawn on the line rather than as a filled block: a rule is a hairline and a
@@ -4191,15 +4205,22 @@ main:has(> .forking) {
         /* --- The rules --- */
 
         /* A rule is one line that must not wrap, and a phone has room for about half of what it
-           says. These two are the halves a reader can do without: what was cached is a fact about
-           how a request was billed rather than about the conversation, and the running total is on
-           the line under the message box as the session's own. What stays is the time, how much
-           context there is and how full the window is, what came back and what this turn cost -
-           and the gauge, which needs no room at all. The cached count is inside the context figure
-           rather than beside it, so what goes here is the bracket and the count it qualifies
-           stays. */
+           says. These three are the ones a reader can do without: what was cached is a fact about
+           how a request was billed rather than about the conversation, the running total is on the
+           line under the message box as the session's own, and the fraction of the window is the
+           one figure here that is already drawn twice - the gauge along the rule itself says it as
+           a picture, for no room at all. What stays is when the answer landed and how long it was
+           waited on, how much context there is, what came back, and what this turn cost. The cached
+           count is inside the context figure rather than beside it, so what goes here is the
+           bracket and the count it qualifies stays.
+
+           The fraction went when the moment arrived, and that is the trade said out loud: the row
+           holds six cells at this width and the seventh dropped `Δ` to a line of its own. Of the
+           two, the moment is the one a reader on a phone actually came for, and the one the gauge
+           cannot say. */
         .rule__cached,
-        .rule__running {
+        .rule__running,
+        .rule__full {
             display: none;
         }
 

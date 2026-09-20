@@ -70,6 +70,12 @@ The theme is the reader's across every session; the other two are facts about on
 they are keyed by session id. That scoping is load-bearing rather than tidy: every session shares
 one origin, so an unscoped key would be one conversation's decisions imposed on all of them.
 
+**The zone cookie is the one thing that goes the other way**, and it is not an exception to any of
+this. It carries what the *browser* knows rather than what the reader decided, it is a cookie rather
+than storage because the server is what has to read it, and what it is for is drawing a recorded
+moment against the right clock rather than keeping a second copy of one. Every moment stays in the
+checkpoint in UTC, and the cookie decides nothing but how it is printed.
+
 Two things the script holds are deliberately *not* stored, and the line between them is worth
 keeping. What a reader has folded, and whether they are following the end, are modes within a visit
 rather than decisions about a conversation: unfolding a call is how you read one answer, and

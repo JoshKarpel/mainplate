@@ -77,3 +77,9 @@ The manifest's `192x192` and `512x512` PNGs and the `180x180` Apple touch icon a
 - **Everything `mainplate.js` does stays an enhancement.** With the file absent the page must still
   render, still post, and still fold. What it holds is what cannot live in the markup, reapplied
   after every swap through one idempotent `repaint()`.
+- **Do not format a moment here.** `wireClock` writes the reader's zone into a cookie and asks for
+  the page again where the one it got was drawn against another; every date and time on the page is
+  rendered by `pages.py`. Rewriting `<time>` elements instead looks like the smaller change and is
+  the larger one: half the moments on this page are inside sentences a tooltip holds, so it buys a
+  second implementation of what a date looks like, in a language that cannot see the first. See
+  [which clock a moment is printed against](https://joshkarpel.github.io/mainplate/design/console/#which-clock-a-moment-is-printed-against).

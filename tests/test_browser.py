@@ -28,6 +28,7 @@ from conftest import registered
 from conftest import run
 from conftest import started
 from playwright.async_api import Browser
+from playwright.async_api import BrowserContext
 from playwright.async_api import Locator
 from playwright.async_api import Page
 from playwright.async_api import Route
@@ -64,6 +65,7 @@ from mainplate.plugins.running import Spawned
 from mainplate.service import Service
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
+from scripts.gallery import ZONE
 from scripts.gallery import pages
 from scripts.gallery import write
 
@@ -178,6 +180,21 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
             yield f"http://{server.host}:{server.port}", service
 
 
+async def reading(browser: Browser, viewport: ViewportSize, java_script_enabled: bool = True) -> BrowserContext:
+    """
+    A context in the gallery's own zone, which is what keeps `wireClock` out of every test here.
+
+    The script asks for the page again when the zone it was drawn against is not the reader's, so a
+    browser left on the runner's zone would reload the first page of every test that opens one - a
+    navigation in the middle of a fixture, arriving at whichever moment the machine was slow enough
+    to allow. Pinned to what `gallery.ZONE` renders, the two agree and nothing reloads.
+
+    `TestTheClockAPageIsDrawnAgainst` is where the reload itself is under test, and it asks for a
+    context of its own for exactly this reason.
+    """
+    return await browser.new_context(viewport=viewport, java_script_enabled=java_script_enabled, timezone_id=ZONE.key)
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def page(browser: Browser) -> AsyncIterator[Page]:
     """
@@ -187,7 +204,7 @@ async def page(browser: Browser) -> AsyncIterator[Page]:
     origin, so a shared context would let one test's folds, theme and muted kinds decide what
     the next test renders.
     """
-    context = await browser.new_context(viewport=VIEWPORT)
+    context = await reading(browser, viewport=VIEWPORT)
     try:
         yield await context.new_page()
     finally:
@@ -197,7 +214,7 @@ async def page(browser: Browser) -> AsyncIterator[Page]:
 @pytest_asyncio.fixture(loop_scope="session")
 async def phone(browser: Browser) -> AsyncIterator[Page]:
     """The same thing on a phone, in a context of its own for the reason `page` is."""
-    context = await browser.new_context(viewport=PHONE)
+    context = await reading(browser, viewport=PHONE)
     try:
         yield await context.new_page()
     finally:
@@ -212,7 +229,7 @@ async def unscripted(browser: Browser) -> AsyncIterator[Page]:
     Its own context because `javaScriptEnabled` is a context setting rather than a page one, and it
     is the only fixture here that wants the console's own file *not* to run.
     """
-    context = await browser.new_context(viewport=VIEWPORT, java_script_enabled=False)
+    context = await reading(browser, viewport=VIEWPORT, java_script_enabled=False)
     try:
         yield await context.new_page()
     finally:
@@ -3511,6 +3528,20 @@ class TestTheLineWhereNothingIsHappening:
         assert moved > 0, "the control: the server really did hand over a figure to count down from"
         await expect(due).not_to_have_text(before)
 
+    async def test_a_wait_the_provider_asked_for_carries_the_moment_and_counts_down_to_it(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        The pair, on the one arm that has both: a countdown reading `4d 14h` is not a plan, and a
+        moment with nothing beside it does not say how far off it is.
+        """
+        await page.goto(f"{gallery}/deferred.html", wait_until="load")
+        line = page.locator("#attention")
+
+        await expect(line.locator(".attention__when")).to_have_attribute("datetime", re.compile(r"^2031-03-19T"))
+        await expect(line.locator(".attention__due")).to_have_text(re.compile(r"^\d+d \d+h$"))
+        assert "attention--waiting" in (await line.get_attribute("class") or ""), "and it is not drawn as a fault"
+
     async def test_a_page_with_nothing_wrong_draws_no_such_line(self, page: Page, gallery: str) -> None:
         """
         The control the rest of this rests on. A line drawn through healthy turns would be a console
@@ -3519,3 +3550,83 @@ class TestTheLineWhereNothingIsHappening:
         await page.goto(f"{gallery}/answering.html", wait_until="load")
 
         await expect(page.locator("#attention")).to_have_count(0)
+
+
+class TestTheClockAPageIsDrawnAgainst:
+    """
+    The script's half of the zone loop, which has to be a browser: nothing else knows a reader's zone.
+
+    What a markup assertion can see is that the server honours a cookie, and `test_console.py` pins
+    that. What only a browser can show is the rest of the loop - that the cookie gets *written*, that
+    a page drawn against another clock is asked for again, and that a page already drawn against the
+    reader's is left alone. The last one is what every other fixture here depends on, which is why it
+    is pinned rather than assumed.
+    """
+
+    async def navigating(self, page: Page) -> str:
+        """Whether this document was loaded or reloaded, which is how the loop is observed at all."""
+        return str(await page.evaluate("() => performance.getEntriesByType('navigation')[0].type"))
+
+    async def test_a_page_drawn_against_another_clock_is_asked_for_again_in_the_readers(
+        self, browser: Browser, console: tuple[str, Service]
+    ) -> None:
+        """
+        The console renders in its own zone until a browser says otherwise, and then in the browser's.
+
+        Tokyo because it is nobody's console zone on any runner this suite is likely to meet, so the
+        first render really is against a different clock from the reader's.
+        """
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+        context = await browser.new_context(viewport=VIEWPORT, timezone_id="Asia/Tokyo")
+        try:
+            page = await context.new_page()
+            await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+
+            await expect(page.locator("body")).to_have_attribute("data-zone", "Asia/Tokyo")
+            assert await self.navigating(page) == "reload", "which it reached by asking for the page again"
+            # Percent-encoded, which is what the slash in every zone name is written with and what
+            # the server's own parse undoes.
+            assert [one["value"] for one in await context.cookies() if one["name"] == "zone"] == ["Asia%2FTokyo"]
+        finally:
+            await context.close()
+
+    async def test_a_page_already_in_the_readers_clock_is_left_alone(self, page: Page, gallery: str) -> None:
+        """
+        The state every other fixture here depends on, which is why it is pinned rather than assumed.
+
+        The gallery is drawn against `ZONE` and these contexts read in it, so there is nothing to
+        fix: a reload landing in the middle of a fixture would arrive at whichever moment the machine
+        was slow enough to allow, and every test that opens a page would be racing it.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(page.locator("body")).to_have_attribute("data-zone", ZONE.key)
+
+        assert await self.navigating(page) == "navigate", "nothing to fix, so nothing was asked for again"
+
+    async def test_two_spellings_of_one_clock_are_not_a_difference(
+        self, browser: Browser, console: tuple[str, Service]
+    ) -> None:
+        """
+        A machine's zone database and a browser frequently name the same clock differently.
+
+        `Etc/UTC` is what `/etc/localtime` says on a server and `UTC` is what the browser calls it,
+        and `Asia/Calcutta` against `Asia/Kolkata` is the same thing one alias along. Compared as
+        strings, every console running in UTC would hand every browser one reload per visit for a
+        page that was already printing exactly the right time.
+        """
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+        context = await browser.new_context(viewport=VIEWPORT, timezone_id="Etc/UTC")
+        # The console asked for by its other name, which is what a machine whose `/etc/localtime`
+        # points at `Etc/UTC` serves without being asked at all. Said in the cookie rather than left
+        # to the runner's own clock, so this is the same test on a laptop in Chicago.
+        await context.add_cookies([{"name": "zone", "value": "Etc/UTC", "url": url}])
+        try:
+            page = await context.new_page()
+            await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+            await expect(page.locator("body")).to_have_attribute("data-zone", "Etc/UTC")
+
+            assert await self.navigating(page) == "navigate", "one clock, two spellings, no reload"
+        finally:
+            await context.close()

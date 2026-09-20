@@ -280,7 +280,10 @@ class TestWhatThePageDoesWithAnArchivedSession:
         assert '<p class="stalled">Archived Mar 14,' in answered_with.text
         # The card is the fact, as one row: when, in the words the sidebar dates a session in.
         assert '<div class="archive__head">archived</div>' in answered_with.text
-        assert '<div class="fact"><dt>since</dt><dd>Mar 14,' in answered_with.text
+        # Whole in the title, down to the second and naming the clock, and the words the sidebar
+        # dates a row in beside it. The second is the store's own and is not asserted.
+        assert '<div class="fact"><dt>since</dt><dd title="Mar 14, 15:09:' in answered_with.text
+        assert ' UTC">Mar 14, 15:09</dd>' in answered_with.text
         assert f'href="/sessions/{session.id}/forks/new?at=1"' in answered_with.text
         assert '<details class="archive">' not in answered_with.text
 

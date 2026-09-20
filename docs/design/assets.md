@@ -45,6 +45,14 @@ transcript, the search marks, the panel landed on, which kinds are muted, what i
 live in the markup, so the script holds it as values and reapplies it after every swap through one
 idempotent `repaint()` serving the first render, every swap, and every press.
 
+The one thing it tells the *server* is which clock its reader keeps, because the browser is the only
+party that knows and a cookie is the only carrier that reaches the request for the document itself.
+It writes the name and asks for the page again where what it got was drawn against another clock;
+it formats nothing, because the moments are already drawn and half of them are inside sentences. See
+[which clock a moment is printed against](console.md#which-clock-a-moment-is-printed-against). With
+the script absent a page is drawn against the console's own zone, which for a unit on the machine
+somebody is reading it from is the right answer anyway.
+
 ## The two shapes, and one width that decides between them
 
 Over 78rem the shell is three columns, the session list and the rail standing either side of the

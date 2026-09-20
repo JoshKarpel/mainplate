@@ -70,6 +70,14 @@ the switches said. A test asserting that a plugin left off was never launched mu
 was constructed, so a fixture without one is the moment the test ran, and an assertion over a whole
 `Transcript` becomes a comparison against the wall clock.
 
+**Every caller says which clock it reads moments against**, because the console draws them in the
+zone the request asks for and falls back to the machine's own. `calling(app)` sends `zone=UTC` on
+every request and `calling(app, "Asia/Tokyo")` is how a test about the conversion asks for another,
+so nothing here asserts `15:09` on a UTC runner and `10:09` on a laptop in Chicago. The browser
+fixtures are pinned to the *gallery's* zone for the same reason and one more: the script asks for a
+page again when it was drawn against another clock, so an unpinned context would put a reload in the
+middle of every test that opens a page.
+
 **The store stamps an inbox row off its own clock, and the suite's clock does not turn it.** The
 session list is ordered by that stamp, so two sessions written to in one test are stamped within a
 millisecond of each other and ordered by the tiebreak, and a session nobody has written to is dated

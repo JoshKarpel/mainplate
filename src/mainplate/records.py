@@ -63,6 +63,7 @@ type StepKind = Literal[
     "heard",
     "model",
     "refused",
+    "deferred",
     "failed",
     "tool",
     "messages",
@@ -383,6 +384,36 @@ class Refused(Record):
 
     why: str
     status: int | None = None
+
+
+class Deferred(Record):
+    """
+    A model request the provider would not take *now*, and the moment it said to come back.
+
+    **`Refused`'s other neighbour, and the difference is a clock.** A refusal is about the request:
+    the recorded history and the recorded message will never change, so no pass will ever be taken
+    and the session stops. This is about the minute: a usage limit reached, a rate limit hit, a
+    provider asking to be left alone for a while. The request is fine and will be made again.
+
+    What makes it worth recording rather than leaving to the worker's own redelivery is that the
+    provider said *when*. Left to the redelivery, a session against a subscription's weekly limit
+    asks the same question once a lease for however many days that is, and each attempt is a real
+    request to a provider already saying no. Recorded, the pass suspends until `until` and the queue
+    wakes it then - which is `Run.sleep`'s shape with a deadline somebody else chose.
+
+    **A settled value, like every other record here**: a moment that was named, by a provider, at a
+    request that had already been made. A later attempt that is deferred again is a new record under
+    the next position, because it is a new answer to a new question.
+
+    `why` is the provider's own words, so a page can say a plan's limit was reached rather than
+    "deferred". It carries no status: what is acted on here is the moment, and the code that came
+    with it is in `why` where the provider put it.
+    """
+
+    kind: Literal["deferred"] = "deferred"
+
+    until: datetime
+    why: str
 
 
 class Archived(Record):

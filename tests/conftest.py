@@ -325,6 +325,56 @@ class Refusing:
         return conversing(self.endpoints(), INSTRUCTIONS)
 
 
+@dataclass(slots=True)
+class Deferring:
+    """
+    A stand-in model that will not answer *now* and says when it will.
+
+    `Refusing` one answer along: the request is fine and the provider is busy, over quota, or on a
+    plan whose allowance is spent. Which of those it is arrives in the body or the headers, so both
+    are settable and a test says the shape it is about rather than this deciding for it.
+
+    `asked` counts what reached it, which is what tells a pass that waited from one that asked again:
+    a session suspended on a deadline must reach no provider at all until that deadline passes.
+    """
+
+    body: object = None
+    headers: Mapping[str, str] | None = None
+    asked: int = 0
+
+    def model(self) -> FunctionModel:
+        def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            self.asked += 1
+            raise ModelHTTPError(status_code=429, model_name="fixture", body=self.body, headers=self.headers)
+
+        return FunctionModel(respond)
+
+    def endpoints(self) -> Wires:
+        shared = self.model()
+        return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    def body_of(self) -> Callable[[Run], Awaitable[Ended]]:
+        return conversing(self.endpoints(), INSTRUCTIONS)
+
+
+def usage_limit_reached(resets_at: datetime) -> dict[str, object]:
+    """
+    The body an OpenAI subscription answers a spent allowance with, as it actually arrives.
+
+    Written out whole rather than trimmed to the field that is read, because what these tests are
+    about is picking one moment out of somebody else's shape: a body cut down to `resets_at` would
+    pass whatever the parse did with the rest of it.
+    """
+    return {
+        "type": "usage_limit_reached",
+        "message": "The usage limit has been reached",
+        "plan_type": "plus",
+        "resets_at": int(resets_at.timestamp()),
+        "eligible_promo": None,
+        "resets_in_seconds": int((resets_at - datetime.now(UTC)).total_seconds()),
+    }
+
+
 def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:
     """
     One response asking for a batch of tool calls, each named by an id a test can assert on.

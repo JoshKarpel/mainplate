@@ -42,6 +42,7 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import declared_in
+from mainplate.conversation import deferred_in
 from mainplate.conversation import failure_in
 from mainplate.conversation import latest_tree
 from mainplate.conversation import opening_tree_key
@@ -183,6 +184,16 @@ class Attended:
     asked_at: float
 
 
+def waiting_out(deferred: records.Deferred | None, now: datetime) -> records.Deferred | None:
+    """
+    A recorded wait, where it is still ahead of `now`, and nothing at all where it has passed.
+
+    Pure and separate from the read for `attention_of`'s reason: what a page draws is decided by one
+    comparison, and a comparison is a thing a test can hold without a store anywhere near it.
+    """
+    return deferred if deferred is not None and deferred.until > now else None
+
+
 def attention_of(attended: Attended) -> Attention:
     """
     What the worker is doing about a session, out of what the store said about it.
@@ -255,6 +266,22 @@ class Conversation:
     It is about the turn being answered rather than about any turn in the conversation. A refusal
     recorded against a turn that later answered is history, and history is what the transcript is
     for; only a refusal on the turn nothing has got past says the session has stopped.
+    """
+
+    deferred: records.Deferred | None = None
+    """
+    What this session is waiting out, where it is waiting out anything, and when that ends.
+
+    **The fifth way to be stopped, and the only one where nothing is wrong at all.** A missing
+    endpoint needs a configuration file put back, a refused request needs a fork, a setup that would
+    not run needs a switch moved, and a failed pass needs whatever fell over fixed. This one needs a
+    clock: a provider said when it would take the request again, the queue is holding the delivery
+    until then, and the page says so instead of drawing three dots for the four days a weekly limit
+    takes to reset.
+
+    Already filtered to a moment still ahead of now, because whether a wait is on is a question about
+    the clock and a page may not ask one; see `Conversation.since` for the rule and `read` for where
+    the comparison is made.
     """
 
     failed: records.Failed | None = None
@@ -612,6 +639,11 @@ class Service:
             # pair is deliberate: the reason is a fact about a pass that is over and the attention is
             # true only at this instant, so one is in the checkpoint and the other is a read.
             failed=failure_in(recorded),
+            # A wait is on while the moment it names is still ahead, which is a question about the
+            # clock and so is answered here rather than on the page - the same rule `since` follows
+            # one field along. A moment already passed is a wait that is over, whether or not the
+            # pass it belongs to has run again.
+            deferred=waiting_out(deferred_in(recorded), self.now()),
             attention=await self.attention(session),
             repository=self.repository_of(chosen),
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
