@@ -3528,6 +3528,42 @@ class TestTheLineWhereNothingIsHappening:
         assert moved > 0, "the control: the server really did hand over a figure to count down from"
         await expect(due).not_to_have_text(before)
 
+    @pytest.mark.parametrize(
+        ("remaining", "said"),
+        [
+            pytest.param(3600, "1h 0m", id="a whole hour keeps its zero"),
+            pytest.param(86_400, "1d 0h", id="a whole day keeps its zero"),
+        ],
+    )
+    async def test_a_zero_unit_is_worded_the_way_the_server_words_it(
+        self, page: Page, gallery: str, remaining: int, said: str
+    ) -> None:
+        """
+        The server draws the first figure with `elapsed` and this repaints the same element a second
+        later with `soon`, so a width the two word differently is a countdown that changes shape
+        while somebody is looking at it, which reads as the figure having moved when nothing has.
+
+        `TestHowLongAWaitIsWordedIn` in `test_attending.py` pins the server's side of these two, and
+        it has to be a second test rather than a shared one: neither half can see the other.
+        """
+        await page.goto(f"{gallery}/failed.html", wait_until="load")
+        due = page.locator("#attention .attention__due")
+
+        await page.evaluate(
+            """(remaining) => {
+                const line = document.getElementById("attention");
+                line.dataset.due = String(remaining);
+                // Seen five seconds from *now*, so what is left is a shade over the boundary however
+                // long the repaint takes to run rather than a shade under it on a slow machine,
+                // which would be this test asserting on the width below the one it is about.
+                line.seenAt = Date.now() + 5_000;
+            }""",
+            remaining,
+        )
+        await page.evaluate("() => document.dispatchEvent(new CustomEvent('htmx:after:swap'))")
+
+        await expect(due).to_have_text(said)
+
     async def test_a_wait_the_provider_asked_for_carries_the_moment_and_counts_down_to_it(
         self, page: Page, gallery: str
     ) -> None:

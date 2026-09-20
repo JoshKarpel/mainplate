@@ -59,7 +59,6 @@ from without_durability.stepwise import resume
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.conversation import CHOICE_KEY
-from mainplate.conversation import DEFERRED_IN_TURN
 from mainplate.conversation import Ended
 from mainplate.conversation import Guidance
 from mainplate.conversation import NeverStarted
@@ -256,6 +255,8 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.Tree(tree="a" * 40),
     records.Response(response={"kind": "response", "parts": []}),
     records.Refused(why="prompt is too long", status=400),
+    records.Deferred(until=WHEN + timedelta(days=3), why="429: the usage limit has been reached"),
+    records.Failed(why="OSError('the store went away')", at=9),
     records.Returned(returned={"lines": [1, 2]}, took=timedelta(seconds=0.25)),
     records.Messages(messages=[]),
     records.Instructions(said="answer as a fixture would"),
@@ -273,6 +274,8 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.Confirmed(),
     records.Injected(said=("`apps/web/AGENTS.md`, guidance for this part of the repository:",)),
     records.End(said=("the quality checks are failing:",), at=2),
+    records.Environment(values={"PATH": "/opt/mise/shims:/usr/bin"}),
+    records.Archived(at=WHEN + timedelta(hours=5)),
 )
 
 
@@ -2013,11 +2016,40 @@ class TestARequestTheProviderWillNotTakeYet:
 
         assert deferred_until(behind, now) is None
 
-    def test_the_key_a_wait_is_recorded_under_is_the_one_the_reader_walks(self) -> None:
+    def test_a_header_is_still_read_where_the_body_names_a_moment_already_gone(self) -> None:
         """
-        One fact in two places, paid the way that rule asks: the builder and the pattern that finds
-        what it built, read against each other so a drift fails here.
+        Both spellings held against the clock on their own, because a provider echoing the window
+        that has just closed would otherwise take the answer and throw away a usable header on the
+        same response - which puts the session back on the redelivery the wait exists to end.
         """
-        assert DEFERRED_IN_TURN.match(deferred_key(7, 2))
-        assert not DEFERRED_IN_TURN.match(f"{deferred_key(7, 2)}:more")
-        assert not DEFERRED_IN_TURN.match("plugins:setup:0:deferred:0")
+        now = datetime.now(UTC)
+        both = ModelHTTPError(
+            status_code=429,
+            model_name="fixture",
+            body={"resets_at": (now - timedelta(minutes=1)).timestamp()},
+            headers={"retry-after": "90"},
+        )
+
+        named = deferred_until(both, now)
+
+        assert named is not None
+        assert timedelta(seconds=80) < named - now <= timedelta(seconds=90)
+
+    async def test_a_wait_the_turn_that_took_it_got_past_is_history(self, service: Service) -> None:
+        """
+        **The wait belongs to a turn, and a turn reaches its messages by getting past every wait it
+        took.** Any message a person sends makes the delivery ready at once, so a short wait is
+        routinely outlived by the turn that took it: read on the clock alone, the moment would keep
+        the page saying the provider will not take another request for the rest of its window, of a
+        session that has already been answered.
+        """
+        await waiting(service, "hello")
+        await pass_at(service, Deferring(body=usage_limit_reached(in_a_while())).body_of())
+
+        assert deferred_in(await service.checkpointer.load(SESSION)) is not None, "the control: the turn is owed one"
+
+        await pass_at(service, Provider().body())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert messages_key(0) in recorded, "the turn this waited under has answered"
+        assert deferred_in(recorded) is None

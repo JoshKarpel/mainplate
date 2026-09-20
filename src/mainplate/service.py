@@ -279,9 +279,11 @@ class Conversation:
     until then, and the page says so instead of drawing three dots for the four days a weekly limit
     takes to reset.
 
-    Already filtered to a moment still ahead of now, because whether a wait is on is a question about
-    the clock and a page may not ask one; see `Conversation.since` for the rule and `read` for where
-    the comparison is made.
+    **Two tests stand between the record and this field, and they answer different questions.**
+    `deferred_in` asks whose wait it is, so a moment named for a turn that has since answered is
+    history rather than a sentence on the page; `waiting_out` asks whether it is still on, because
+    whether a wait has passed is a question about the clock and a page may not ask one. See
+    `Conversation.since` for the second rule and `read` for where both comparisons are made.
     """
 
     failed: records.Failed | None = None

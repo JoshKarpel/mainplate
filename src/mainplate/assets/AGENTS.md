@@ -77,12 +77,19 @@ The manifest's `192x192` and `512x512` PNGs and the `180x180` Apple touch icon a
 - **Everything `mainplate.js` does stays an enhancement.** With the file absent the page must still
   render, still post, and still fold. What it holds is what cannot live in the markup, reapplied
   after every swap through one idempotent `repaint()`.
+- **`soon` words a duration exactly as `elapsed` in `pages.py` does, including the unit that is
+  zero.** The server draws the first figure and this repaints it a second later, into the same
+  element, so dropping a `0m` here is a countdown that changes shape while a reader is looking at it.
+  Two units at every width above a minute, on both sides. See
+  [the format is canonical, and the zone is the only thing that varies](https://joshkarpel.github.io/mainplate/design/console/#the-format-is-canonical-and-the-zone-is-the-only-thing-that-varies).
 - **Do not format a moment here.** `paintClock` writes the reader's zone into a cookie and asks for
   the page again where the one it got was drawn against another; every date and time on the page is
   rendered by `pages.py`. Rewriting `<time>` elements instead looks like the smaller change and is
   the larger one: half the moments on this page are inside sentences a tooltip holds, so it buys a
   second implementation of what a date looks like, in a language that cannot see the first. See
   [which clock a moment is printed against](https://joshkarpel.github.io/mainplate/design/console/#which-clock-a-moment-is-printed-against).
+  There is also nothing here to localise: the format is canonical `%Y-%m-%d %H:%M` at every reader,
+  so only *which instant* follows the browser and never how it is written.
 - **`paintClock` runs beside `applyTheme`, before the document exists, and needs to.** It reads the
   zone the page was drawn against off `<html>`, whose open tag the parser has already passed; moved
   into `start` with the rest of the wiring it would read `document.body`, which is `null` there, so

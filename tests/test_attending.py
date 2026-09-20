@@ -27,6 +27,7 @@ from mainplate.conversation import deferred_key
 from mainplate.conversation import failed_key
 from mainplate.conversation import failure_in
 from mainplate.conversation import parse_failed
+from mainplate.pages import elapsed
 from mainplate.pages import waiting_for
 from mainplate.service import Attended
 from mainplate.service import Claimed
@@ -453,3 +454,29 @@ class TestWhatThePageSaysAboutIt:
         assert said.reason == "Boom('x')"
         assert "Boom" not in said.said, "and nowhere else"
         assert "Boom" not in (said.then or ""), "nor in the way out"
+
+
+class TestHowLongAWaitIsWordedIn:
+    """
+    The server's half of the one figure on this page written twice.
+
+    `soon` in `mainplate.js` is the other half and repaints this element a second after the page
+    lands, so the two have to agree unit for unit. The zero unit is where they part company most
+    easily, and `TestTheCountdownOnAWait` in `test_browser.py` pins the script's side of exactly
+    these widths.
+    """
+
+    @pytest.mark.parametrize(
+        ("took", "said"),
+        [
+            pytest.param(timedelta(milliseconds=80), "80ms", id="under a second"),
+            pytest.param(timedelta(seconds=12.34), "12.3s", id="seconds"),
+            pytest.param(timedelta(minutes=9, seconds=7), "9m 7s", id="minutes"),
+            pytest.param(timedelta(hours=3, minutes=25), "3h 25m", id="hours"),
+            pytest.param(timedelta(days=4, hours=14), "4d 14h", id="days"),
+            pytest.param(timedelta(hours=1), "1h 0m", id="a whole hour keeps its zero"),
+            pytest.param(timedelta(days=1), "1d 0h", id="a whole day keeps its zero"),
+        ],
+    )
+    def test_each_width_drops_the_finest_unit_the_one_below_it_had(self, took: timedelta, said: str) -> None:
+        assert elapsed(took) == said

@@ -338,6 +338,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every date is printed `2031-03-14 10:20`**, where it was `Mar 14, 10:20`, and a full stamp in a
+  hover carries the offset rather than a zone abbreviation: `2031-03-14 10:09:26-05:00` where it was
+  `Mar 14, 10:09:26 CDT`. One canonical form at every reader, on the grounds that this is a console
+  for programmers: it sorts lexicographically, it reads the same in Berlin as in Chicago, and an
+  offset cannot be resolved two ways where `CST` is both US Central and China Standard. Which
+  *instant* is shown still follows the reader's own clock; only how it is written no longer does.
 - **A tool call's row says what it acted on**, beside the tool's name: the path a `read` or an
   `edit` took, with which lines or how many operations, and the first line of what `bash` ran, with
   how many lines follow. That is what makes the other half affordable: **every call is drawn shut,

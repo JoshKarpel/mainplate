@@ -80,7 +80,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -845,30 +844,27 @@ def parse_deferred(recorded: object) -> records.Deferred:
 
 def deferred_in(recorded: Mapping[str, object]) -> records.Deferred | None:
     """
-    The last thing this session was told to wait for, or nothing where it has never been told to.
+    What the turn being answered is waiting out, or nothing where it is waiting out nothing.
 
-    Whether that wait is still *on* is a question about the clock, which a page may not ask: see
-    `Conversation.deferred`, where the moment is compared against a `now()` the service takes. Here
-    it is the newest record and nothing more.
+    **Asked of the turn being answered and of no other**, which is `refusal_in`'s rule and is the
+    whole of this function. A wait belongs to the turn that took it, and a turn only reaches its
+    `messages` by getting past every wait it took, so a wait under a turn that has answered is
+    history and the transcript is where history goes. Read without that test, a moment named for a
+    turn that has since completed keeps the page saying the provider will not take another request -
+    which it will, and already has: any message a person sends makes the delivery ready immediately,
+    so a short wait is routinely outlived by the turn that took it.
 
-    One walk in store order, `failure_in`'s way: the order is the property being used and the store
-    already guarantees it, so the newest wait is the last one this sees.
+    The turn is the first with no messages, which is what a pass would open next, and the wait is the
+    newest one under it, which is what `deferrals_in` already counts. Neither index is searched for.
+
+    Whether that wait is still *on* is a second question, about the clock, which a page may not ask:
+    see `Conversation.deferred`, where the moment is compared against a `now()` the service takes.
     """
-    found: records.Deferred | None = None
-    for key, held in recorded.items():
-        if DEFERRED_IN_TURN.match(key):
-            found = parse_deferred(held)
-    return found
-
-
-DEFERRED_IN_TURN: Final = re.compile(r"^turn:\d+:deferred:\d+$")
-"""
-Which keys `deferred_in` walks, spelled as the shape `deferred_key` builds.
-
-One fact in two places, and paid the way that rule asks: named here beside the builder, with
-`test_the_key_a_wait_is_recorded_under` reading one against the other so a drift is a failure rather
-than a page that quietly says a session is waiting for nothing.
-"""
+    turn = 0
+    while messages_key(turn) in recorded:
+        turn += 1
+    at = deferrals_in(recorded, turn)
+    return None if at == 0 else parse_deferred(recorded[deferred_key(turn, at - 1)])
 
 
 def tool_key(turn: int, call: str) -> StepKey:

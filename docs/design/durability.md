@@ -214,7 +214,10 @@ parses into seconds and which is the same statement in the other spelling - and
 which the worker answers by scheduling the delivery for exactly then. Only a moment *ahead of now*
 counts: one already past would schedule a wakeup for the past, be redelivered at once, and ask the
 same question as fast as the queue could turn it around, which is worse than the retry it replaces.
-An error naming no moment is raised exactly as it was, which is every 429 this console saw before.
+Each spelling is held against that test on its own and the first that passes is the answer, because
+a body echoing the window that has just closed would otherwise take the answer and discard a usable
+header on the same response. An error naming no moment is raised exactly as it was, which is every
+429 this console saw before.
 
 **The suspension is `ScheduledWakeup` raised directly rather than `Run.sleep` taken**, and the
 difference is which record holds the deadline. `sleep` computes and stores one of its own, `now +
@@ -233,10 +236,13 @@ exists to close, reached through the back door. Counted, each wait is its own re
 is what advances the count. A session against a limit that keeps being reached accumulates one of
 these per reset rather than one per lease.
 
-The page reads the newest one and draws it [as a wait rather than a
-fault](console.md#every-panel-folds-from-its-own-row), with the moment and a countdown to it.
-Whether the wait is still on is a comparison against a clock, so `Service.read` makes it and the
-page is handed the answer.
+The page reads the newest one **under the turn being answered** and draws it [as a wait rather than a
+fault](console.md#every-panel-folds-from-its-own-row), with the moment and a countdown to it. Two
+tests stand between the record and the page and they answer different questions. Whose wait it is,
+because a turn reaches its `messages` by getting past every wait it took, so a moment named for a
+turn that has since answered is history: any message a person sends makes the delivery ready at once,
+and a short wait is routinely outlived by the turn that took it. And whether the wait is still on,
+which is a comparison against a clock, so `Service.read` makes it and the page is handed the answer.
 
 The cost, stated: **the console believes the provider.** A gateway that names a moment far out
 parks the session until then, and nothing shortens that but a person writing a message, which queues

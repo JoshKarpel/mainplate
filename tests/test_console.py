@@ -905,7 +905,7 @@ class TestWhatIsNewInTheList:
         assert f'datetime="{(WHEN + timedelta(days=2)).isoformat()}"' in answered.text
         # Whole in the title, down to the second and naming the clock it was read against, because a
         # hover is the one place with room to say which nine-oh-nine this is.
-        assert 'title="Last message Mar 16, 15:09:26 UTC. Created Mar 14, 15:09:26 UTC"' in answered.text
+        assert 'title="Last message 2031-03-16 15:09:26+00:00. Created 2031-03-14 15:09:26+00:00"' in answered.text
 
     async def test_a_session_nobody_started_is_a_page_with_a_way_back(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
@@ -1952,7 +1952,7 @@ class TestWhatARuleSays:
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
         assert f'<time class="rule__when" datetime="{WHEN.isoformat()}"' in region
-        assert 'title="Turn 0 was first answered at Mar 14, 15:09:26 UTC">15:09</time>' in region
+        assert 'title="Turn 0 was first answered at 2031-03-14 15:09:26+00:00">15:09</time>' in region
 
     async def test_the_moment_a_turn_rule_says_is_its_first_answer_and_not_its_last(
         self, app: ASGIApp, service: Service
@@ -1977,8 +1977,8 @@ class TestWhatARuleSays:
             },
         )
         region = await watched(app, session)
-        assert 'title="Turn 0 was first answered at Mar 14, 15:09:26 UTC">15:09</time>' in region
-        assert 'title="Request 0.1 was answered at Mar 14, 15:16:26 UTC">15:16</time>' in region
+        assert 'title="Turn 0 was first answered at 2031-03-14 15:09:26+00:00">15:09</time>' in region
+        assert 'title="Request 0.1 was answered at 2031-03-14 15:16:26+00:00">15:16</time>' in region
 
     async def test_a_rule_says_how_full_the_window_is_and_draws_the_same_fact_as_a_gauge(
         self, app: ASGIApp, service: Service

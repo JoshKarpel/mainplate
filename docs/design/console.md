@@ -245,25 +245,47 @@ it, and the `Reader` it parses into is threaded to the page functions as one mor
 The rules, the session list's dates, the cache note and the archived sentence are all drawn from it,
 so nothing on the page is in a different clock from anything else on it.
 
-**A value rather than a parameter, because the second answer is already implied by the first.** The
-same `resolvedOptions()` this takes one field out of names a `locale` and an `hourCycle` beside it,
-and `timed` and `dated` print a 24-hour clock and an American month-day order at every reader
-whatever their browser said: a page drawn for Berlin currently gets the right instant in the wrong
-words. Filling that cell is a field on `Reader` and two lines in `timed`, where threading a second
-parameter would be two dozen signatures again. What does not go on it is anything that is not a
-rendering input: a credential shares the `Cookie` header and is a gate in *front* of drawing a page
-rather than something a page draws with, so it never becomes a field. That line is what keeps
-`Reader` a value and not a drawer.
+**A value rather than a parameter, because of the threading rather than any second field.** The
+clock reached two dozen page signatures as a parameter of its own, so the next reader-scoped answer
+would touch every one of them again; a field on `Reader` costs one line. What does not go on it is
+anything that is not a rendering input: a credential shares the `Cookie` header and is a gate in
+*front* of drawing a page rather than something a page draws with, so it never becomes a field. That
+line is what keeps `Reader` a value and not a drawer. The zone may well stay its only field, and
+that is fine - what the value buys is that a second one would be an edit in one place.
 
 One cookie per answer rather than one cookie carrying all of them. A single packed value would buy a
 format, a parser and a version to keep in step, where a name apiece stays independently writable by
 the script and independently readable by `cookie_value`, which already takes a name.
 
+## The format is canonical, and the zone is the only thing that varies
+
+`resolvedOptions()` names a `locale` and an `hourCycle` beside the `timeZone`, and **both are
+declined**. Every moment this console prints is `%Y-%m-%d %H:%M`, at everybody: this is a console
+for programmers, and a stamp that sorts lexicographically and reads the same to a reader in Berlin
+as to one in Chicago is worth more here than one in their own conventions. So only *which instant*
+follows the reader; *how it is written* never does.
+
+Three things fall out of that, and they are the reason it is worth stating rather than just doing:
+
+- **The axis is closed, not unfilled.** A locale field is not a cell waiting to be filled in later;
+  it is a thing decided against, so nobody should arrive at `Reader` and read one field as an
+  unfinished job.
+- **`strftime` stays sufficient.** A genuinely locale-aware render needs CLDR data through `babel`,
+  because Python's own `locale` module is process-global and so no use per request. Declining the
+  locale is what keeps that dependency out.
+- **The full stamp carries an offset, not an abbreviation.** `CST` is US Central and also China
+  Standard, so the abbreviation answers "whose 09:32" with a value two readers resolve differently.
+  `2031-03-14 10:09:26-05:00` cannot be read two ways, and it is the same text as the `datetime`
+  attribute beside it give or take the separator.
+
+The cost, stated: `2031-03-14 10:20` is three characters wider than `Mar 14, 10:20` in a 17rem
+sidebar column, and a reader who would rather see their own conventions does not get them.
+
 **The formatting stays on the server**, which is the whole reason for the cookie rather than a
-script that rewrites `<time>` elements after the fact. A moment inside a sentence - `Archived Mar 18,
-04:02 CDT: nothing more is said in it` - cannot be rewritten without composing that sentence in
-JavaScript too, so the alternative is two implementations of what a date looks like, in two
-languages, one of which cannot see the other. The `<time>` element is still there, carrying the
+script that rewrites `<time>` elements after the fact. A moment inside a sentence - `Archived
+2031-03-18 04:02:17-05:00: nothing more is said in it` - cannot be rewritten without composing that
+sentence in JavaScript too, so the alternative is two implementations of what a date looks like, in
+two languages, one of which cannot see the other. The `<time>` element is still there, carrying the
 instant in its `datetime` attribute while its text carries the reader's clock.
 
 **Without the cookie a page is drawn against the console's own zone**, which `here()` reads from `TZ`
@@ -310,9 +332,13 @@ neither half can see the other.
 this makes the other choice and the pair reads as an inconsistency otherwise. A fact that reads the
 same in an hour is the server's: a moment, a date, a rule's `09:32`. A figure that is wrong a second
 later is the script's: `Due in 4d 14h`, `warm as of 12m`. So `elapsed` in `pages.py` and `soon` in
-`mainplate.js` really do both implement how a duration is worded, and they have to step at the same
-places, which is the one piece of this deliberately written twice. A date is not in that category,
-which is the whole argument for the cookie: nothing about `Mar 18, 04:02` stops being true while
+`mainplate.js` really do both implement how a duration is worded, and they have to agree unit for
+unit, down to the unit that is zero: the server draws the first figure and the script repaints it a
+second later, so a wait landing on a whole hour written `1h 0m` and repainted `1h` changes shape
+while a reader is looking at it, which reads as the countdown having moved. That is the one piece of
+this deliberately written twice, and the width holding still is the price of it. A date is not in
+that category,
+which is the whole argument for the cookie: nothing about `2031-03-18 04:02` stops being true while
 somebody reads it, so there is no reason for a second implementation of it to exist.
 
 ## The picker

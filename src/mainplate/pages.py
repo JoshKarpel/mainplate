@@ -390,18 +390,26 @@ class Reader:
     UTC and printed in somebody's local time, and the question each page function has to answer is
     whose. This is that answer, settled once per request by `reader_in` and threaded down.
 
-    One value rather than a parameter apiece, because the second answer is already implied by the
-    first. `Intl.DateTimeFormat().resolvedOptions()` names a `locale` and an `hourCycle` beside the
-    `timeZone` this takes one field out of, and `timed` and `dated` print a 24-hour clock and an
-    American month-day order at every reader whatever their browser said - so a page drawn in Berlin
-    currently gets the right instant in the wrong words. Filling that cell is a field here and two
-    lines in `timed`, against threading a second parameter through two dozen signatures.
+    One value rather than a parameter apiece, and the reason is the threading rather than any
+    second field: the clock reached two dozen page signatures as a parameter of its own, so the next
+    reader-scoped answer would touch all of them again. A field here costs one line.
+
+    **`locale` is deliberately not one of them, and will not become one.** The same
+    `resolvedOptions()` this takes `timeZone` out of names a `locale` and an `hourCycle` beside it,
+    and both are declined: every moment on this console is printed `%Y-%m-%d %H:%M`, at everybody,
+    because this is a console for programmers and an unambiguous stamp reads the same to all of
+    them. That closes the axis rather than leaving it open - which is also what keeps `strftime`
+    sufficient, since a genuinely locale-aware render would need CLDR data through `babel`, the
+    `locale` module being process-global and so no use per request.
 
     **What does not belong here is anything that is not a rendering input.** It shares a `Cookie`
     header with whatever else this console ever sets, and that is not a reason to carry the rest: a
     credential is a gate in *front* of drawing a page rather than something a page draws with, so it
     never becomes a field no matter that it arrives alongside. That line is what keeps this a value
     and not a drawer.
+
+    So the zone may well stay the only field, and that is fine: what it buys is that finding a
+    second one is an edit here rather than an edit everywhere.
     """
 
     zone: ZoneInfo
@@ -888,7 +896,6 @@ def session_row(
                     ),
                     when_element(
                         session.latest,
-                        reader,
                         cls="when",
                         title=moments(session, reader),
                         said=dated(session.latest, reader),
@@ -1261,7 +1268,6 @@ def figures_element(
             (
                 when_element(
                     when,
-                    reader,
                     cls="rule__when",
                     title=f"{whose} was {'first ' if opens else ''}answered at {stamped(when, reader)}",
                     said=timed(when, reader),
@@ -4996,34 +5002,58 @@ def timed(when: datetime, reader: Reader) -> str:
     No date, because a rule stands inside a conversation a reader is already reading down: the date
     is the same for almost every rule in one and the minute is the part that moves. The whole moment
     is in the title beside it, which is where a conversation that ran overnight is told apart.
+
+    Already the canonical form, which is why it is the one of the three that never changed: a
+    24-hour `HH:MM` is what ISO 8601 asks for and what a reader of this console expects.
     """
     return when.astimezone(reader.zone).strftime("%H:%M")
 
 
 def dated(when: datetime, reader: Reader) -> str:
-    """A moment in the words the sidebar dates a session in, so every date on a row agrees."""
-    return when.astimezone(reader.zone).strftime("%b %d, %H:%M")
+    """
+    A moment in the form the sidebar dates a session in, so every date on a row agrees.
+
+    The year is carried rather than trimmed, at three characters against `03-14 10:20`. One format
+    everywhere is the whole point of choosing a canonical one, and a date that silently means "this
+    year" is the ambiguity the choice exists to remove; a console holding a conversation from last
+    December is exactly where it would bite.
+    """
+    return when.astimezone(reader.zone).strftime("%Y-%m-%d %H:%M")
 
 
 def stamped(when: datetime, reader: Reader) -> str:
     """
     A moment whole, for a title: the date, the second, and the clock it is being read against.
 
-    The zone is named here and nowhere else, because a title is the one place with room for it. What
-    it answers is the question a bare `09:32` cannot: whose nine thirty-two, the reader's or the
+    The zone is carried here and nowhere else, because a title is the one place with room for it.
+    What it answers is the question a bare `09:32` cannot: whose nine thirty-two, the reader's or the
     console's, which on a page read from another country is the difference between two answers.
+
+    **As an offset and not an abbreviation**, which is the one place the canonical form buys
+    correctness rather than only consistency: `CST` is US Central and it is also China Standard, so
+    the abbreviation answers "whose" with a value two readers resolve differently. `-05:00` cannot be
+    read two ways.
+
+    `isoformat` rather than a `strftime` pattern, because `%z` renders `-0500` without the colon and
+    the separator is the half of the offset that makes it RFC 3339. What comes back is the same text
+    as the `datetime` attribute `when_element` puts beside it, give or take the date-time separator.
     """
-    return when.astimezone(reader.zone).strftime("%b %d, %H:%M:%S %Z")
+    return when.astimezone(reader.zone).isoformat(sep=" ", timespec="seconds")
 
 
-def when_element(when: datetime, reader: Reader, cls: str, title: str, said: str) -> Element:
+def when_element(when: datetime, cls: str, title: str, said: str) -> Element:
     """
-    One moment on the page, drawn against the reader's clock and carrying the instant itself beside it.
+    One moment on the page, carrying the instant itself beside whatever was drawn from it.
 
     `<time>` rather than a span, and the `datetime` attribute is the point rather than the tag:
     the text is the reader's clock and the attribute is the moment, so anything reading this page
     back - a browser's own tooling, a reader copying a value at something else - gets what was
     recorded rather than a rendering of it.
+
+    **It takes no `Reader`, because it converts nothing.** `dated`, `timed` and `stamped` are where a
+    moment meets a clock, and every caller has already been through one by the time it gets here;
+    taking one would say this element does the conversion, and a second conversion is the one thing
+    this page cannot have two of.
     """
     return time(cls=cls, attrs={"datetime": when.isoformat(), "title": title}, children=said)
 
@@ -5250,7 +5280,6 @@ def attention_element(showing: Conversation, waiting: Waiting, reader: Reader) -
                 " ",
                 when_element(
                     waiting.until,
-                    reader,
                     cls="attention__when",
                     title=stamped(waiting.until, reader),
                     said=dated(waiting.until, reader),

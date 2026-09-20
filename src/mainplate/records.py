@@ -699,6 +699,8 @@ type Step = Annotated[
     | Tree
     | Response
     | Refused
+    | Deferred
+    | Failed
     | Messages
     | Returned
     | Instructions
@@ -706,7 +708,9 @@ type Step = Annotated[
     | Registered
     | Confirmed
     | Injected
-    | End,
+    | End
+    | Environment
+    | Archived,
     Field(discriminator="kind"),
 ]
 """
@@ -716,6 +720,13 @@ Any one record, told apart by its own tag.
 Everywhere else parses by key, because the caller already knows what it asked for and a type demanded
 is stronger than a type discovered - and because an unknown tag is a hard failure here, where an
 unknown field is not.
+
+**Every record a checkpoint key may hold, and so the session-scoped ones too.** An arm missing here
+is not a tag this reads loosely, it is a session this cannot read at all: a bag holding one raises,
+and the sessions holding the ones easiest to leave out - archived, failed, deferred - are exactly the
+ones a migration is being written for. `Named` and `Enrolled` are the other way round and are
+deliberately out: they are members of `Declared` and `Registered` and are never a checkpoint value on
+their own, so a bag will not hold one.
 
 `choice` is not an arm, and that is a decision rather than an oversight. It is already a record this
 console owns and has grown fields twice without a migration, so the shape argument that put an

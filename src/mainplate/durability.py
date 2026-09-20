@@ -269,14 +269,22 @@ def deferred_until(error: Exception, now: datetime) -> datetime | None:
     ask the provider the same question as fast as the queue can turn it around. Behind, or absent,
     the answer is nothing at all and the error is raised exactly as it was.
 
+    **Each spelling is held against that test on its own**, and the first one that passes is the
+    answer. Tried in turn, a body echoing the window that has just closed - or a clock a few seconds
+    apart from the provider's - takes the body's moment, fails the test, and throws away a perfectly
+    good header on the same response, which puts the session back on the worker's redelivery that
+    this exists to get it off.
+
     The body is read as a mapping and nothing more is assumed about it. A provider that sends a
     number where this expects one is honoured; anything else is an error with no moment in it, which
     is the common case and the safe one.
     """
     if not isinstance(error, ModelHTTPError):
         return None
-    named = resets_at(error.body) or retry_after(error, now)
-    return named if named is not None and named > now else None
+    for named in (resets_at(error.body), retry_after(error, now)):
+        if named is not None and named > now:
+            return named
+    return None
 
 
 def resets_at(body: object) -> datetime | None:

@@ -77,11 +77,16 @@ moment against the right clock rather than keeping a second copy of one. Every m
 checkpoint in UTC, and the cookie decides nothing but how it is printed.
 
 It arrives as a `Reader`, which is the value a page is handed to answer "who is this drawn for", and
-the test for what may join it there is that last clause. A locale and an hour cycle belong, because
-they decide how something already recorded is *printed* and decide nothing else. A credential shares
-the same header and does not belong, because it gates whether a page is drawn at all rather than
-being something a page draws with. Anything that would decide what the page *says* rather than how
-it reads is the thing to push back on, for the reason everything above it is.
+the test for what may join it there is that last clause: a credential shares the same header and does
+not belong, because it gates whether a page is drawn at all rather than being something a page draws
+with. Anything that would decide what the page *says* rather than how it reads is the thing to push
+back on, for the reason everything above it is.
+
+**A locale would pass that test and is declined anyway**, which is worth saying because it is the
+obvious next field and is not one. Every moment prints `%Y-%m-%d %H:%M` at everybody: this console
+is for programmers, and one unambiguous stamp that sorts lexicographically beats each reader's own
+conventions. So the *instant* follows the reader and the *writing* of it never does, and the zone
+may stay `Reader`'s only field for good.
 
 Two things the script holds are deliberately *not* stored, and the line between them is worth
 keeping. What a reader has folded, and whether they are following the end, are modes within a visit

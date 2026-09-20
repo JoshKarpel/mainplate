@@ -323,7 +323,8 @@ A **rule** stands at every round trip, carrying what is true of that request rat
 panel in it: the worktree it was made against, when the answer came back, how long it took, what it
 spent in tokens and money, and a fold showing the JSON the checkpoint actually holds for it. Every
 moment the console prints is recorded in UTC and drawn against your own clock, which your browser
-tells it in a cookie. Since the checkpoint *is* the
+tells it in a cookie, and written `2031-03-14 10:20` at everybody rather than in each reader's own
+conventions: one stamp that sorts and reads the same anywhere. Since the checkpoint *is* the
 conversation, that is the state itself rather than a debug view of it. The rule's own line is a
 **gauge** of how much of the model's context window the request carried, filled from the left and
 shading toward red, so scrolling down a long conversation shows the line lengthen and warm. What a

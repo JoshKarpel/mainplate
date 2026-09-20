@@ -937,19 +937,17 @@
       if (minutes < 1) return `${Math.ceil(seconds)}s`;
       // Days and hours as well, because what this counts down is no longer only a lease: a provider
       // deferring a session until its allowance resets is days out, and `6623m` is a figure a reader
-      // has to divide twice. `elapsed` in `pages.py` steps at the same places, since the server
-      // renders the first value of every one of these and this takes over from there.
-      if (minutes < 60) {
-        const spare = Math.floor(seconds % 60);
-        return spare ? `${minutes}m ${spare}s` : `${minutes}m`;
-      }
+      // has to divide twice.
+      //
+      // **`elapsed` in `pages.py`, unit for unit, including the unit that is zero.** The server
+      // renders the first value of every one of these and this takes over a second later, so a wait
+      // landing on a whole hour drawn as `1h 0m` and repainted as `1h` is a figure that changes
+      // shape while a reader is looking at it, which reads as the countdown having moved. Two units
+      // always, and the width holds still.
+      if (minutes < 60) return `${minutes}m ${Math.floor(seconds % 60)}s`;
       const hours = Math.floor(minutes / 60);
-      if (hours < 24) {
-        const spare = minutes % 60;
-        return spare ? `${hours}h ${spare}m` : `${hours}h`;
-      }
-      const left = hours % 24;
-      return left ? `${Math.floor(hours / 24)}d ${left}h` : `${Math.floor(hours / 24)}d`;
+      if (hours < 24) return `${hours}h ${minutes % 60}m`;
+      return `${Math.floor(hours / 24)}d ${hours % 24}h`;
     };
 
     // How long until the worker looks at this session again, counted here rather than on the server.
