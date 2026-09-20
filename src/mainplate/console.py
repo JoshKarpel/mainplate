@@ -53,6 +53,7 @@ from mainplate.pages import SHAPE_FIELD
 from mainplate.pages import WORKSPACE_FIELD
 from mainplate.pages import ZONE_COOKIE
 from mainplate.pages import Links
+from mainplate.pages import Reader
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
 from mainplate.pages import missing_record
@@ -161,17 +162,21 @@ machine between zones needs the service restarted, which is the same thing a she
 """
 
 
-def zone_in(values: tuple[bytes, ...]) -> ZoneInfo:
+def reader_in(values: tuple[bytes, ...]) -> Reader:
     """
-    Which clock to draw this request's moments against: the reader's, where their browser has said.
+    What this request's browser has said about its reader, out of the cookies it sent.
 
     **It promises not to raise**, which is `forge.offers`' arm rather than `catalogue.discover`'s: a
     cookie nobody can read costs a page the reader's own clock and costs it nothing else, where
     refusing the request would answer a browser with a 400 over a value the reader never typed.
     Anything unreadable - no cookie, a name this machine's zone database does not have, a value
     somebody made up - falls back to this console's own, which the page says it did.
+
+    One cookie per answer rather than one cookie carrying all of them. A single packed value would
+    buy a format, a parser and a version to keep in step, where a name apiece stays independently
+    writable by the script and independently readable here, and `cookie_value` already takes a name.
     """
-    return named_zone(cookie_value(ZONE_COOKIE, values)) or HERE
+    return Reader(zone=named_zone(cookie_value(ZONE_COOKIE, values)) or HERE)
 
 
 def cookie_value(name: str, values: tuple[bytes, ...]) -> str | None:
@@ -195,11 +200,11 @@ def cookie_value(name: str, values: tuple[bytes, ...]) -> str | None:
     return None
 
 
-# Which clock this request's moments are drawn against, off the cookie the script writes. On every
+# What this request's browser has said about its reader, off the cookies the script writes. On every
 # route that renders a moment, which is every page with the session list on it, and on the stream,
 # which renders the same regions from the same functions and would otherwise swap UTC into a page
 # drawn in Chicago.
-zoned = header_param("cookie", zone_in, schema={"type": "string"})
+reading = header_param("cookie", reader_in, schema={"type": "string"})
 
 
 def parse_shape(value: str) -> bool:
@@ -700,7 +705,7 @@ def navigating(where: str) -> Response:
     return Response(status=200, headers=((b"hx-redirect", where.encode()),))
 
 
-async def redrawn(service: Service, session: str, zone: ZoneInfo) -> Response:
+async def redrawn(service: Service, session: str, reader: Reader) -> Response:
     """
     The transcript as it now stands, which is what every arm that changed one answers with.
 
@@ -711,16 +716,16 @@ async def redrawn(service: Service, session: str, zone: ZoneInfo) -> Response:
     asked = await service.read(session)
     if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(transcript_region(LINKS, zone, asked)))
+    return page_response(200, fragment(transcript_region(LINKS, reader, asked)))
 
 
-@get("/", zoned, summary="Start a session")
-async def start_here(service: Service, zone: ZoneInfo) -> Response:
+@get("/", reading, summary="Start a session")
+async def start_here(service: Service, reader: Reader) -> Response:
     return page_response(
         200,
         start_page(
             LINKS,
-            zone,
+            reader,
             await service.listed(),
             service.catalogues.current,
             service.reachable,
@@ -764,8 +769,8 @@ async def start(service: Service, started: Started) -> Response:
     return seeing(LINKS.to_session(session.id))
 
 
-@get(t"/sessions/{session_id}/forks/new", session_id, at_turn, zoned, summary="Where a fork would start")
-async def fork_form(service: Service, session: str, at: int, zone: ZoneInfo) -> Response:
+@get(t"/sessions/{session_id}/forks/new", session_id, at_turn, reading, summary="Where a fork would start")
+async def fork_form(service: Service, session: str, at: int, reader: Reader) -> Response:
     """
     The page that asks what to answer a branch with, before anything is created.
 
@@ -784,7 +789,7 @@ async def fork_form(service: Service, session: str, at: int, zone: ZoneInfo) -> 
         200,
         fork_page(
             LINKS,
-            zone,
+            reader,
             await service.listed(),
             found,
             at,
@@ -875,19 +880,19 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     return page_response(200, fragment(starting_at(repository, None, None, branches)))
 
 
-@get(t"/sessions/{session_id}", session_id, zoned, summary="One session, whole")
-async def show_session(service: Service, session: str, zone: ZoneInfo) -> Response:
+@get(t"/sessions/{session_id}", session_id, reading, summary="One session, whole")
+async def show_session(service: Service, session: str, reader: Reader) -> Response:
     found = await service.read(session)
     if found is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     # Serving the page is showing it to somebody, which is what the mark means; before the list is
     # read, so the row for this session is drawn as looked at. See `Service.saw`.
     await service.saw(session)
-    return page_response(200, session_page(LINKS, zone, await service.listed(), found, service.reachable))
+    return page_response(200, session_page(LINKS, reader, await service.listed(), found, service.reachable))
 
 
-@get("/fragments/stream", watched, shaped, zoned, summary="What a page is watching, sent as it changes")
-async def stream(service: Service, session: str | None, on_step: bool | None, zone: ZoneInfo) -> Reply:
+@get("/fragments/stream", watched, shaped, reading, summary="What a page is watching, sent as it changes")
+async def stream(service: Service, session: str | None, on_step: bool | None, reader: Reader) -> Reply:
     """
     The live connection a page holds open, carrying whatever it is watching as that changes.
 
@@ -913,7 +918,7 @@ async def stream(service: Service, session: str | None, on_step: bool | None, zo
     if session is not None and await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return event_stream(
-        with_heartbeat(watching(service, LINKS, zone, session, service.watching, on_step=bool(on_step)))
+        with_heartbeat(watching(service, LINKS, reader, session, service.watching, on_step=bool(on_step)))
     )
 
 
@@ -962,8 +967,8 @@ async def request_record(service: Service, session: str, turn: int, at: int) -> 
     return page_response(200, fragment(record_json(held)))
 
 
-@post(t"/sessions/{session_id}/messages", session_id, sending, zoned, summary="Say something to a session")
-async def say(service: Service, session: str, sending: Sending, zone: ZoneInfo) -> Response:
+@post(t"/sessions/{session_id}/messages", session_id, sending, reading, summary="Say something to a session")
+async def say(service: Service, session: str, sending: Sending, reader: Reader) -> Response:
     """
     Send the message the composer posted wherever it was addressed.
 
@@ -1003,7 +1008,7 @@ async def say(service: Service, session: str, sending: Sending, zone: ZoneInfo) 
     # nothing will ever answer is a panel that waits for ever - the one state the stall sentence
     # exists to prevent, reached from the other direction.
     if isinstance(sending.where, ToPlugin):
-        if stalled_by(found, zone) is not None:
+        if stalled_by(found, reader) is not None:
             return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
         delivered = await service.compose(session, found, sending.where.leader, sending.said)
         if delivered is None:
@@ -1014,8 +1019,8 @@ async def say(service: Service, session: str, sending: Sending, zone: ZoneInfo) 
         # `set` and nothing else left the checkpoint exactly as it is above, and the conversation is
         # what a full decode of it costs.
         if not delivered:
-            return page_response(200, fragment(transcript_region(LINKS, zone, found)))
-        return await redrawn(service, session, zone)
+            return page_response(200, fragment(transcript_region(LINKS, reader, found)))
+        return await redrawn(service, session, reader)
     match sending.where:
         case Disposition.HERE:
             # Nobody here decides between a steer and a turn of its own, and that is the point: the
@@ -1023,13 +1028,13 @@ async def say(service: Service, session: str, sending: Sending, zone: ZoneInfo) 
             # thing reading at the moment the answer is true. The page this was posted from was
             # rendered from a state that has since moved, and so was any read this could make.
             await service.send(session, sending.said)
-            return await redrawn(service, session, zone)
+            return await redrawn(service, session, reader)
         case Disposition.NEXT | Disposition.FORGET:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
             # next free turn and differ only in what that turn opens on. A forget never reaches
             # `send`, because a boundary between turns is the only place one can be.
             await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
-            return await redrawn(service, session, zone)
+            return await redrawn(service, session, reader)
         case Disposition.RUN:
             # Not a message at all: the text is run in this session's worktree, as the person, and
             # the record of it is never told to a model. Refused rather than silently ignored where
@@ -1040,7 +1045,7 @@ async def say(service: Service, session: str, sending: Sending, zone: ZoneInfo) 
                     422, refusal_page(LINKS, 422, f"session {session} has no files to run a command in")
                 )
             await service.run(session, sending.said)
-            return await redrawn(service, session, zone)
+            return await redrawn(service, session, reader)
         case Disposition.PARENT:
             # Where this session came from, which is the only session a message may be sent to that
             # is not the one it was typed in. Read off the row rather than posted, so a form cannot

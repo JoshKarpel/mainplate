@@ -64,6 +64,7 @@ from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
+from mainplate.pages import Reader
 from mainplate.pages import fork_page
 from mainplate.pages import session_page
 from mainplate.pages import start_page
@@ -108,6 +109,14 @@ ran on and a shot taken in one zone would not match a shot taken in another; and
 UTC, because every moment in these fixtures is recorded in UTC, so a gallery drawn in UTC would
 render identically whether or not anything converted anything. 10:09 against `WHEN`'s 15:09 is the
 conversion visible in a screenshot.
+
+The zone itself rather than the `READER` below, because `shoot.py` and the browser tests point a
+real browser at it by name and neither has a page to draw.
+"""
+
+READER = Reader(zone=ZONE)
+"""
+Who every page below is drawn for, which is what the console answers off a cookie and this states.
 """
 
 # The session every page below is about, named here rather than on `PARENT` because the default
@@ -979,33 +988,33 @@ def pages() -> dict[str, str]:
     )
 
     return {
-        "start.html": start_page(LINKS, ZONE, LISTED, CATALOGUE, REACHABLE, REFERENCE),
+        "start.html": start_page(LINKS, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE),
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
-        "start-unreferenced.html": start_page(LINKS, ZONE, LISTED, CATALOGUE, REACHABLE, None),
-        "setting-up.html": session_page(LINKS, ZONE, LISTED, planting, REACHABLE),
-        "settings.html": session_page(LINKS, ZONE, LISTED, choosing_plugins, REACHABLE),
-        "settings-installing.html": session_page(LINKS, ZONE, LISTED, installing, REACHABLE),
-        "settings-refused.html": session_page(LINKS, ZONE, LISTED, failed_setup, REACHABLE),
-        "opening.html": session_page(LINKS, ZONE, LISTED, queued, REACHABLE),
-        "session.html": session_page(LINKS, ZONE, LISTED, showing(PARENT, settled), REACHABLE),
-        "waiting.html": session_page(LINKS, ZONE, LISTED, showing(PARENT, waiting), REACHABLE),
-        "answering.html": session_page(LINKS, ZONE, LISTED, showing(PARENT, answering), REACHABLE),
-        "handed-off.html": session_page(LINKS, ZONE, LISTED, showing(PARENT, handed), REACHABLE),
-        "stalled.html": session_page(LINKS, ZONE, LISTED, stalled, REACHABLE),
-        "refused.html": session_page(LINKS, ZONE, LISTED, turned_down, REACHABLE),
-        "failed.html": session_page(LINKS, ZONE, LISTED, fell_over, REACHABLE),
-        "deferred.html": session_page(LINKS, ZONE, LISTED, held_off, REACHABLE),
-        "dropped.html": session_page(LINKS, ZONE, LISTED, dropped, REACHABLE),
-        "archived.html": session_page(LINKS, ZONE, LISTED, archived, REACHABLE),
+        "start-unreferenced.html": start_page(LINKS, READER, LISTED, CATALOGUE, REACHABLE, None),
+        "setting-up.html": session_page(LINKS, READER, LISTED, planting, REACHABLE),
+        "settings.html": session_page(LINKS, READER, LISTED, choosing_plugins, REACHABLE),
+        "settings-installing.html": session_page(LINKS, READER, LISTED, installing, REACHABLE),
+        "settings-refused.html": session_page(LINKS, READER, LISTED, failed_setup, REACHABLE),
+        "opening.html": session_page(LINKS, READER, LISTED, queued, REACHABLE),
+        "session.html": session_page(LINKS, READER, LISTED, showing(PARENT, settled), REACHABLE),
+        "waiting.html": session_page(LINKS, READER, LISTED, showing(PARENT, waiting), REACHABLE),
+        "answering.html": session_page(LINKS, READER, LISTED, showing(PARENT, answering), REACHABLE),
+        "handed-off.html": session_page(LINKS, READER, LISTED, showing(PARENT, handed), REACHABLE),
+        "stalled.html": session_page(LINKS, READER, LISTED, stalled, REACHABLE),
+        "refused.html": session_page(LINKS, READER, LISTED, turned_down, REACHABLE),
+        "failed.html": session_page(LINKS, READER, LISTED, fell_over, REACHABLE),
+        "deferred.html": session_page(LINKS, READER, LISTED, held_off, REACHABLE),
+        "dropped.html": session_page(LINKS, READER, LISTED, dropped, REACHABLE),
+        "archived.html": session_page(LINKS, READER, LISTED, archived, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one.
-        "forking.html": fork_page(LINKS, ZONE, LISTED, showing(PARENT, settled), 1, CATALOGUE, REACHABLE, REFERENCE),
+        "forking.html": fork_page(LINKS, READER, LISTED, showing(PARENT, settled), 1, CATALOGUE, REACHABLE, REFERENCE),
         # And a fork of a session in *no* repository, which is the one that may pick one up: the
         # ordinary shape of having thought something through and then going to work on it.
         "forking-attach.html": fork_page(
-            LINKS, ZONE, LISTED, showing(PARENT, settled, working=False), 0, CATALOGUE, REACHABLE, REFERENCE
+            LINKS, READER, LISTED, showing(PARENT, settled, working=False), 0, CATALOGUE, REACHABLE, REFERENCE
         ),
     }
 

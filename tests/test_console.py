@@ -48,7 +48,7 @@ from mainplate.console import parse_form_prompt
 from mainplate.console import parse_form_send
 from mainplate.console import posted_isolation
 from mainplate.console import posted_workspace
-from mainplate.console import zone_in
+from mainplate.console import reader_in
 from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import LEADERS
 from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
@@ -1819,7 +1819,7 @@ class TestTheClockAPageIsDrawnAgainst:
         One checkpoint, two readers, two clocks - and the same instant under both of them.
 
         The rule and the cache note are the two moments a conversation draws, and they move together
-        because they are one `zone` threaded to both rather than two places that format a date.
+        because they are one `Reader` threaded to both rather than two places that format a date.
         """
         session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
@@ -1916,10 +1916,10 @@ class TestTheClockAPageIsDrawnAgainst:
         name has one in it, and a cookie value is not the place to find out what a browser does with
         an undecoded one.
         """
-        assert zone_in((b"theme=dark; zone=Asia%2FTokyo; other=1",)) == ZoneInfo("Asia/Tokyo")
-        assert zone_in((b"theme=dark", b"zone=Asia/Tokyo")) == ZoneInfo("Asia/Tokyo")
-        assert zone_in((b"zoned=Asia%2FTokyo",)) == HERE, "a name that merely starts the same is not it"
-        assert zone_in(()) == HERE
+        assert reader_in((b"theme=dark; zone=Asia%2FTokyo; other=1",)).zone == ZoneInfo("Asia/Tokyo")
+        assert reader_in((b"theme=dark", b"zone=Asia/Tokyo")).zone == ZoneInfo("Asia/Tokyo")
+        assert reader_in((b"zoned=Asia%2FTokyo",)).zone == HERE, "a name that merely starts the same is not it"
+        assert reader_in(()).zone == HERE
 
 
 class TestWhatARuleSays:

@@ -239,11 +239,25 @@ session is opened and closed from its rail there.
 Every moment this console shows is recorded in UTC and printed in somebody's local time, and the
 question is whose. The browser is the only party that knows, and it cannot say so in time to matter
 unless it says it on the request for the document itself, so it says it in a **cookie**: the script
-writes `zone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`, the `zoned` extractor reads
-it, and the `ZoneInfo` is threaded into the page functions as one more
+writes `zone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`, the `reading` extractor reads
+it, and the `Reader` it parses into is threaded to the page functions as one more
 [already-answered question](../philosophy.md#a-page-is-a-pure-function-of-already-answered-questions).
 The rules, the session list's dates, the cache note and the archived sentence are all drawn from it,
 so nothing on the page is in a different clock from anything else on it.
+
+**A value rather than a parameter, because the second answer is already implied by the first.** The
+same `resolvedOptions()` this takes one field out of names a `locale` and an `hourCycle` beside it,
+and `timed` and `dated` print a 24-hour clock and an American month-day order at every reader
+whatever their browser said: a page drawn for Berlin currently gets the right instant in the wrong
+words. Filling that cell is a field on `Reader` and two lines in `timed`, where threading a second
+parameter would be two dozen signatures again. What does not go on it is anything that is not a
+rendering input: a credential shares the `Cookie` header and is a gate in *front* of drawing a page
+rather than something a page draws with, so it never becomes a field. That line is what keeps
+`Reader` a value and not a drawer.
+
+One cookie per answer rather than one cookie carrying all of them. A single packed value would buy a
+format, a parser and a version to keep in step, where a name apiece stays independently writable by
+the script and independently readable by `cookie_value`, which already takes a name.
 
 **The formatting stays on the server**, which is the whole reason for the cookie rather than a
 script that rewrites `<time>` elements after the fact. A moment inside a sentence - `Archived Mar 18,
@@ -257,7 +271,7 @@ or `/etc/localtime`, and that is the right answer rather than a fallback: the in
 documents is a user unit on the machine somebody is reading it from. UTC where neither says, which
 is what a container with no zone configured is actually keeping.
 
-The page writes back the zone it *used*, on the body as `data-zone`, and that is what closes the
+The page writes back the zone it *used*, on `<html>` as `data-zone`, and that is what closes the
 loop rather than leaving one. A browser whose zone is not the one the page was drawn against asks for
 the page again, once; the cookie it wrote is what stops it asking twice, since a name this machine's
 zone database does not have comes back as the console's own and would otherwise be requested for
@@ -265,6 +279,20 @@ ever. Two spellings of one clock are not a difference, and that is asked of the 
 decided by comparing strings: `Etc/UTC` on a server is `UTC` in Chromium, and `Asia/Calcutta` is
 `Asia/Kolkata`, so a string comparison would hand every console running in UTC one reload per visit
 for a page that was already printing exactly the right time.
+
+**On `<html>` rather than on `<body>`, which is what keeps that reload from being seen.** `paintClock`
+runs in the script's first block, beside the theme and before the document exists, for the reason the
+theme is there: a page opened dark must not flash light on the way, and a page opened in Tokyo must
+not paint a column of London times on the way. The open tag of `<html>` has been parsed by the time
+that block runs and `document.body` is still `null`, so the answer has to be on the element that
+exists. Moved to the body the check does not fire late, it stops firing at all, and all four of
+`TestTheClockAPageIsDrawnAgainst`'s browser tests are what say so.
+
+The reload is a reload and not an htmx request, which is worth stating because the smaller-looking
+change does not work: `htmx.ajax` into `body` swaps the body and leaves `<head>` and the `data-zone`
+on `<html>` exactly as they were, so the page would keep saying it was drawn against a clock it no
+longer is. That is `hx-boost`'s known limitation arriving in a place nobody boosted. There is one
+document to replace, and `location.reload()` is what replaces it.
 
 **Every page and every fragment says `Vary: cookie`**, which is the one thing the cookie obliges
 beyond reading it. These responses carry no `cache-control` at all, so a cache with nothing said to
@@ -277,6 +305,15 @@ The cost, stated: **a reader in a zone the console is not in pays one reload on 
 and a reader with no script gets the console's clock. `TestTheClockAPageIsDrawnAgainst` exists in
 both suites, the server's half in `test_console.py` and the script's in a real browser, because
 neither half can see the other.
+
+**Where the line between the two halves falls** is worth saying once, because the countdown beside
+this makes the other choice and the pair reads as an inconsistency otherwise. A fact that reads the
+same in an hour is the server's: a moment, a date, a rule's `09:32`. A figure that is wrong a second
+later is the script's: `Due in 4d 14h`, `warm as of 12m`. So `elapsed` in `pages.py` and `soon` in
+`mainplate.js` really do both implement how a duration is worded, and they have to step at the same
+places, which is the one piece of this deliberately written twice. A date is not in that category,
+which is the whole argument for the cookie: nothing about `Mar 18, 04:02` stops being true while
+somebody reads it, so there is no reason for a second implementation of it to exist.
 
 ## The picker
 

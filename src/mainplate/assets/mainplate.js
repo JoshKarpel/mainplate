@@ -118,7 +118,7 @@
   // The one thing here the *server* reads back, which is why it is a cookie and not storage: the
   // zone a page's moments are printed in is decided while the page is being rendered, so the answer
   // has to ride on the request for the document itself. Everything else in this file is the reader's
-  // and stays in this browser. See `ZONE_COOKIE` in `pages.py`, and `wireClock` below.
+  // and stays in this browser. See `ZONE_COOKIE` in `pages.py`, and `paintClock` below.
   const ZONE_COOKIE = "zone";
 
   const cookieValue = (name) => {
@@ -149,11 +149,12 @@
     }
   };
 
-  // --- Theme -------------------------------------------------------------
+  // --- Theme and clock ---------------------------------------------------
   //
-  // The one thing that runs before the document exists. This script is a blocking tag in the head
-  // precisely so the reader's choice is pinned on <html> before the first paint: applied any later
-  // and a page opened dark flashes light on the way there.
+  // The two things that run before the document exists. This script is a blocking tag in the head
+  // precisely so both can: the reader's chosen theme is pinned on <html> before the first paint,
+  // because applied any later a page opened dark flashes light on the way there, and the clock a
+  // page was drawn against is checked here for the same reason one field along.
 
   const THEME_KEY = "mainplate:theme";
 
@@ -163,6 +164,41 @@
   };
 
   applyTheme(asTheme(held(THEME_KEY)));
+
+  const paintClock = () => {
+    // Which zone every moment on this page is printed in is the server's decision, and this is the
+    // whole of how it learns what to decide: the browser knows its reader's zone, the server does
+    // not, and a cookie is the one thing that reaches the request for the document itself. A header
+    // this file added would reach the swaps and not the page they land in, which is a transcript
+    // whose rules disagree with the rows beside them.
+    //
+    // **It formats nothing.** The page arrives with every moment already drawn - in a rule, in a
+    // hover, inside a sentence - so rewriting them here would mean a second implementation of what
+    // a date looks like, in a language that cannot see the first. Asking for the page again costs
+    // one load, once, and keeps the one implementation.
+    //
+    // **Here rather than in `start`**, which is what keeps that load from being seen: the server
+    // says which clock it drew against on <html>, whose open tag the parser has already read by the
+    // time this runs, so a page for the wrong zone is thrown away before it is painted rather than
+    // after. `document.body` does not exist yet, which is exactly why the answer is not on it.
+    const named = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!named) return;
+    const asked = cookieValue(ZONE_COOKIE);
+    if (asked !== named) {
+      // `secure` where the page was served over TLS and not otherwise, since a console reached over
+      // plain http on a machine somebody is sitting at would never see the cookie come back at all.
+      const safely = location.protocol === "https:" ? "; secure" : "";
+      document.cookie = `${ZONE_COOKIE}=${encodeURIComponent(named)}; path=/; max-age=31536000; samesite=lax${safely}`;
+    }
+    // Only where this browser had not already asked for this zone, which is what keeps it from
+    // being a loop: the server writes back the zone it *used*, so a name its own zone database
+    // does not have comes back as the console's own and would otherwise be asked for for ever.
+    // A page with no moment on it says nothing at all and is left alone.
+    const drawn = document.documentElement.dataset.zone;
+    if (drawn !== undefined && !sameClock(drawn, named) && asked !== named) location.reload();
+  };
+
+  paintClock();
 
   const start = () => {
     // The theme is the reader's and holds across every session; everything else below is a fact
@@ -1858,31 +1894,6 @@
       });
     };
 
-    const wireClock = () => {
-      // Which zone every moment on this page is printed in is the server's decision, and this is the
-      // whole of how it learns what to decide: the browser knows its reader's zone, the server does
-      // not, and a cookie is the one thing that reaches the request for the document itself. A
-      // header this file added would reach the swaps and not the page they land in, which is a
-      // transcript whose rules disagree with the rows beside them.
-      //
-      // **It formats nothing.** The page arrives with every moment already drawn - in a rule, in a
-      // hover, inside a sentence - so rewriting them here would mean a second implementation of what
-      // a date looks like, in a language that cannot see the first. Asking for the page again costs
-      // one load, once, and keeps the one implementation.
-      const named = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (!named) return;
-      const asked = cookieValue(ZONE_COOKIE);
-      if (asked !== named) {
-        document.cookie = `${ZONE_COOKIE}=${encodeURIComponent(named)}; path=/; max-age=31536000; samesite=lax`;
-      }
-      // Only where this browser had not already asked for this zone, which is what keeps it from
-      // being a loop: the server writes back the zone it *used*, so a name its own zone database
-      // does not have comes back as the console's own and would otherwise be asked for for ever.
-      // A page with no moment on it says nothing at all and is left alone.
-      const drawn = document.body.dataset.zone;
-      if (drawn !== undefined && !sameClock(drawn, named) && asked !== named) location.reload();
-    };
-
     const wireShapes = () => {
       // The one thing the stream says that is not a region: the page was drawn as the settings step
       // and the session has since loaded, so there is nothing on this page for the conversation to
@@ -1894,7 +1905,6 @@
       });
     };
 
-    wireClock();
     wireKey();
     wireShelf();
     wireSender();

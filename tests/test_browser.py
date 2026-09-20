@@ -182,7 +182,7 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
 
 async def reading(browser: Browser, viewport: ViewportSize, java_script_enabled: bool = True) -> BrowserContext:
     """
-    A context in the gallery's own zone, which is what keeps `wireClock` out of every test here.
+    A context in the gallery's own zone, which is what keeps `paintClock` out of every test here.
 
     The script asks for the page again when the zone it was drawn against is not the reader's, so a
     browser left on the runner's zone would reload the first page of every test that opens one - a
@@ -3583,13 +3583,28 @@ class TestTheClockAPageIsDrawnAgainst:
             page = await context.new_page()
             await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
 
-            await expect(page.locator("body")).to_have_attribute("data-zone", "Asia/Tokyo")
+            await expect(page.locator("html")).to_have_attribute("data-zone", "Asia/Tokyo")
             assert await self.navigating(page) == "reload", "which it reached by asking for the page again"
             # Percent-encoded, which is what the slash in every zone name is written with and what
             # the server's own parse undoes.
             assert [one["value"] for one in await context.cookies() if one["name"] == "zone"] == ["Asia%2FTokyo"]
         finally:
             await context.close()
+
+    async def test_the_clock_a_page_was_drawn_against_is_where_the_head_can_read_it(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        On `<html>`, which is what keeps the discarded load from ever being painted.
+
+        The script's first block runs before `<body>` exists - that is what pins the theme without a
+        flash - so an answer parked on the body is one the check cannot see, and the reload above
+        would never fire at all. The test above is what fails when this moves; this is what says why.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+
+        assert await page.evaluate("() => document.documentElement.dataset.zone") == ZONE.key
+        assert await page.evaluate("() => document.body.dataset.zone") is None, "and not where it cannot be read"
 
     async def test_a_page_already_in_the_readers_clock_is_left_alone(self, page: Page, gallery: str) -> None:
         """
@@ -3600,7 +3615,7 @@ class TestTheClockAPageIsDrawnAgainst:
         was slow enough to allow, and every test that opens a page would be racing it.
         """
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await expect(page.locator("body")).to_have_attribute("data-zone", ZONE.key)
+        await expect(page.locator("html")).to_have_attribute("data-zone", ZONE.key)
 
         assert await self.navigating(page) == "navigate", "nothing to fix, so nothing was asked for again"
 
@@ -3625,7 +3640,7 @@ class TestTheClockAPageIsDrawnAgainst:
         try:
             page = await context.new_page()
             await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
-            await expect(page.locator("body")).to_have_attribute("data-zone", "Etc/UTC")
+            await expect(page.locator("html")).to_have_attribute("data-zone", "Etc/UTC")
 
             assert await self.navigating(page) == "navigate", "one clock, two spellings, no reload"
         finally:

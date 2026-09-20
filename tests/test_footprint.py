@@ -21,6 +21,7 @@ from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
+from mainplate.pages import Reader
 from mainplate.pages import footprint_note
 from mainplate.pages import sized
 from mainplate.service import Service
@@ -55,9 +56,9 @@ class TestSizing:
         """The moment is the reader's clock, like every other moment the page prints."""
         swept = Footprint(allocated=46_400_000, measured_at=WHEN)
 
-        assert footprint_note(swept, ZoneInfo("UTC")).endswith("measured at 15:09")
-        assert footprint_note(swept, ZoneInfo("Asia/Tokyo")).endswith("measured at 00:09")
-        assert footprint_note(swept, ZoneInfo("UTC")).startswith(
+        assert footprint_note(swept, Reader(zone=ZoneInfo("UTC"))).endswith("measured at 15:09")
+        assert footprint_note(swept, Reader(zone=ZoneInfo("Asia/Tokyo"))).endswith("measured at 00:09")
+        assert footprint_note(swept, Reader(zone=ZoneInfo("UTC"))).startswith(
             "44 MiB on disk across this session's worktree, scratch and plugins,"
         )
 

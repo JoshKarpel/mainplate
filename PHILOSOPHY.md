@@ -76,6 +76,13 @@ than storage because the server is what has to read it, and what it is for is dr
 moment against the right clock rather than keeping a second copy of one. Every moment stays in the
 checkpoint in UTC, and the cookie decides nothing but how it is printed.
 
+It arrives as a `Reader`, which is the value a page is handed to answer "who is this drawn for", and
+the test for what may join it there is that last clause. A locale and an hour cycle belong, because
+they decide how something already recorded is *printed* and decide nothing else. A credential shares
+the same header and does not belong, because it gates whether a page is drawn at all rather than
+being something a page draws with. Anything that would decide what the page *says* rather than how
+it reads is the thing to push back on, for the reason everything above it is.
+
 Two things the script holds are deliberately *not* stored, and the line between them is worth
 keeping. What a reader has folded, and whether they are following the end, are modes within a visit
 rather than decisions about a conversation: unfolding a call is how you read one answer, and

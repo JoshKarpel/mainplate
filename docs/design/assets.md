@@ -53,6 +53,11 @@ it formats nothing, because the moments are already drawn and half of them are i
 the script absent a page is drawn against the console's own zone, which for a unit on the machine
 somebody is reading it from is the right answer anyway.
 
+That check is not part of `repaint()` and runs nowhere near it. `paintClock` sits in the same first
+block as the theme, before the document exists, reading what the page was drawn against off `<html>`
+because `document.body` does not exist yet: a page for the wrong zone is thrown away before it is
+painted rather than after, which is the theme's own reason one attribute along.
+
 ## The two shapes, and one width that decides between them
 
 Over 78rem the shell is three columns, the session list and the rail standing either side of the
