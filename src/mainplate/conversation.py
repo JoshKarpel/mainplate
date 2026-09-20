@@ -101,6 +101,7 @@ from typing import assert_never
 from typing import cast
 
 from pydantic_ai import Agent
+from pydantic_ai import ModelRequestNode
 from pydantic_ai.exceptions import IncompleteToolCall
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage
@@ -135,6 +136,7 @@ from mainplate.durability import Gating
 from mainplate.durability import Injecting
 from mainplate.durability import RequestRefused
 from mainplate.durability import as_recorded
+from mainplate.durability import ending_turn
 from mainplate.durability import parse_injected
 from mainplate.durability import parse_model_response
 from mainplate.durability import parse_refused
@@ -2717,8 +2719,50 @@ def keeping_through(run: Run, live: Live, turn: int, opened_on: Opening) -> Keep
     return keep
 
 
+type Halted = Callable[[], bool]
+"""
+Whether a plugin has asked for the turn being answered to stop, asked between one step and the next.
+
+A function rather than the scope holding the answer, for `Keeping`'s reason one effect along: the
+loop that carries a turn has no business knowing what a plugin is, so what it is handed is a question
+it can ask. What answers it reads each tool call's own record, so the answer is the same on the pass
+that asked and on every pass that replays.
+"""
+
+
+async def running_until(
+    agent: Agent[None, str], asked: str | None, history: Sequence[ModelMessage], halted: Halted
+) -> tuple[ModelMessage, ...]:
+    """
+    One agent run, stopped early where a plugin answered one of its tool calls with an `end`.
+
+    `iter` rather than `run`, which is the whole of why this function exists: Pydantic AI has no way
+    to end a run from inside a tool - `result.py` says as much where it imagines a future `EndRun` -
+    so the only place to stop is out here, between one node and the next. A node is **yielded before
+    it runs**, so asking at the top of the body asks about everything that has run so far, and the
+    node in hand when the answer is yes is the request that will now never be made.
+
+    **That node is carrying the tool returns, so it is recorded even though it is never sent.**
+    `ModelRequestNode` appends its own request to the history when it *runs*, which is one node later
+    than the call it is answering, so stopping without this leaves a turn whose last word is a call
+    nothing answered. That is a transcript with a spinner that never stops, and worse, a history the
+    next request cannot carry: a provider handed a tool call with no result refuses it outright.
+
+    What comes back is otherwise `new_messages`, which needs no `result` and so survives the early
+    exit: it reads the run's own message history rather than anything only a finished run has.
+    """
+    unbounded = UsageLimits(request_limit=None)
+    async with agent.iter(asked, message_history=list(history), usage_limits=unbounded) as running:
+        async for node in running:
+            if not halted():
+                continue
+            said = tuple(running.new_messages())
+            return (*said, node.request) if isinstance(node, ModelRequestNode) else said
+        return tuple(running.new_messages())
+
+
 async def answering_turn(
-    agent: Agent[None, str], asked: str, history: Sequence[ModelMessage], keeping: Keeping | None
+    agent: Agent[None, str], asked: str, history: Sequence[ModelMessage], keeping: Keeping | None, halted: Halted
 ) -> tuple[ModelMessage, ...]:
     """
     One turn's worth of messages: the run, and every run after it that a plugin kept going.
@@ -2746,18 +2790,23 @@ async def answering_turn(
     same pass however it was resumed, raise something no arm of `conversing` catches, and be
     redelivered into the same wall every lease. How much a session may spend is a question about
     money and not about round trips, and it will be answered where money is counted.
+
+    **A turn a plugin ended is not offered to the gate**, and the two would otherwise contradict each
+    other: `end` says this turn is over and `before_turn_end` exists to say it is not, so asking would
+    be inviting an injection into a turn whose next one is already queued. The end wins because it is
+    the more specific answer - a plugin that wants a turn kept going has the gate and is welcome to
+    it, where `end` is a plugin saying that the work it just did makes the rest of the turn worthless.
     """
-    unbounded = UsageLimits(request_limit=None)
-    said: list[ModelMessage] = list(
-        (await agent.run(asked, message_history=list(history), usage_limits=unbounded)).new_messages()
-    )
-    if keeping is None:
+    said: list[ModelMessage] = list(await running_until(agent, asked, history, halted))
+    if keeping is None or halted():
         return tuple(said)
     attempt = 0
     while injected := await keeping(attempt, sum(1 for each in said if isinstance(each, ModelResponse))):
         attempt += 1
         said.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
-        said.extend((await agent.run(None, message_history=[*history, *said], usage_limits=unbounded)).new_messages())
+        said.extend(await running_until(agent, None, [*history, *said], halted))
+        if halted():
+            break
     return tuple(said)
 
 
@@ -3281,6 +3330,10 @@ def conversing(
             storing=(
                 (lambda plugin, values: storings(run.workflow, plugin, values)) if storings is not None else unstored
             ),
+            # Unconditional, where the two above are capabilities a console may not have been given:
+            # ending a turn needs nothing of this console but the step that is already recording the
+            # call, so there is no console that can run a pass and cannot do it.
+            halting=ending_turn,
         )
         while True:
             asked = await opening_turn(run, at.turn)
@@ -3394,7 +3447,7 @@ def conversing(
             keeping = keeping_through(run, live, at.turn, opening_of(asked))
             with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating) as scope:
                 try:
-                    answered = await answering_turn(agent, asked.said, at.history, keeping)
+                    answered = await answering_turn(agent, asked.said, at.history, keeping, lambda: scope.halted)
                 except AllowanceSpent:
                     # Caught out here rather than anywhere inside the agent, because what it ends is
                     # the pass and not the request: every step this turn has taken is recorded, so

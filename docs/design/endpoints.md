@@ -64,7 +64,8 @@ does mean the wire's own reading of what was said now includes text the model ne
 
 **Every wire streams, and no wire chooses.** `Wire.model` hands back a `Streamed`, whose `request`
 opens a streaming request, drains every event, and returns the finished `ModelResponse`, so
-`CheckpointedModel` records a whole response and `agent.run` is still what the console drives. A
+`CheckpointedModel` records a whole response and the console still drives an ordinary, non-streaming
+agent run. A
 plain request is not one every endpoint takes: exe.dev's OpenAI wire refuses every model with
 `{"detail": "Stream must be set to true"}`, and Anthropic's SDK refuses a request asking for a
 model's whole output limit the same way. The cost, stated: nothing reaches a reader any sooner,
