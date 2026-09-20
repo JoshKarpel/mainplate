@@ -84,7 +84,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
   written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
   reaches nothing it was not handed. It may contribute a tool, instructions, a card of settings, an
-  answer in the composer, and a message put into the conversation; it may be shipped with the
+  answer in the composer, and a message put into the conversation, and it may end the turn one of its
+  tools was called in, for a call whose effect leaves the rest of that turn with nothing to do; it
+  may be shipped with the
   console, installed by the operator in `config.yaml`, or carried by the repository a session works
   in. Handoff and the guidance below are both plugins, which is what makes the pair a test of the
   protocol rather than two examples of it - and what makes either replaceable.
@@ -232,8 +234,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   may be empty: what it does with the text is point the handoff at something, appended to the standing
   ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
   it writes are drawn as their own `note` kind, because every other message in a conversation was
-  typed by somebody. It ships as a **plugin** rather than as part of the console, which is what makes
-  every word of it replaceable: install your own beside it and turn ours off with one switch.
+  typed by somebody. Handing over is the last thing its turn does: the document carries the boundary,
+  so the next turn starts from it, and anything the delivering turn went on to say would be written
+  into a history about to be thrown away. It ships as a **plugin** rather than as part of the console,
+  which is what makes every word of it replaceable: install your own beside it and turn ours off with
+  one switch.
 - **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
   writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
   handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
