@@ -494,6 +494,20 @@ class Stepping:
     injecting: Injecting | None = None
     gating: Gating | None = None
     allowance: Allowance = field(default_factory=lambda: Allowance(limit=None))
+
+    halted: bool = False
+    """
+    Whether a plugin has asked for this turn to end, which the loop carrying it reads after each step.
+
+    Here rather than anywhere wider because this scope is already fresh per turn, which is the
+    lifetime the answer has: a handoff ending turn 6 must not also end the turn that opens on its
+    document, and a scope that cannot outlive its turn cannot get that wrong.
+
+    Set from the *record* of each call rather than from what a plugin said, so it is set the same way
+    on the pass that asked and on every pass that replays. It only ever goes from false to true: two
+    calls in one response can both end the turn, and a later one that did not must not take it back.
+    """
+
     taken: Counter[str] = field(default_factory=Counter)
     allowed: set[StepKey] = field(default_factory=set)
     """
@@ -689,6 +703,30 @@ class Stepping:
 
 
 current_stepping: ContextVar[Stepping | None] = ContextVar("mainplate_stepping", default=None)
+
+ending_here: ContextVar[bool] = ContextVar("mainplate_ending_here", default=False)
+"""
+Whether the tool call running in this context asked for its turn to end.
+
+**A context variable and not a field on the scope, because the scope is shared and this is not.** A
+model can ask for several tools in one response and Pydantic AI runs each in a task of its own; a task
+inherits a copy of the context, so what one call sets here is invisible to its siblings and to the
+loop above them. That is exactly the attribution `wrap_tool_execute` needs, since what it records is
+one call's record and not the turn's: a `hand_off` running beside a `read` must not make the `read`'s
+record claim the turn stopped there.
+
+Read once, by the step that wraps the call that set it, and never by anything outside this module.
+"""
+
+
+def ending_turn() -> None:
+    """
+    Say that the tool call running right now is the last thing its turn does.
+
+    The whole of what the plugins layer is handed, so that nothing over there has to know that a call
+    is recorded at all, let alone under what key. See `plugins.asking.Halting`.
+    """
+    ending_here.set(True)
 
 
 @contextmanager
@@ -996,6 +1034,12 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
         step, so the record is the whole of what a replay needs and the plugin is never asked twice.
         It has no duration, because nothing ran: what took time was the asking, which is the
         plugin's and not the tool's.
+
+        **A call a plugin ended the turn on is recorded as one**, for the same reason and with the
+        same payoff: the turn stops once this call is answered, and a resumed pass stops it in the
+        same place without asking anybody. `ending_here` is what the call itself writes and this is
+        the only reader of it, so a call running beside one that ended the turn records nothing of
+        its neighbour's decision.
         """
         scope = current_stepping.get()
         if scope is None:
@@ -1006,8 +1050,15 @@ class StepwiseDurability(AbstractCapability[AgentDepsT]):
             if refused is not None:
                 return records.Returned(returned=refused).recorded()
             started = monotonic()
+            ending_here.set(False)
             came_back = to_jsonable_python(await handler(args))
-            return records.Returned(returned=came_back, took=timedelta(seconds=monotonic() - started)).recorded()
+            return records.Returned(
+                returned=came_back,
+                took=timedelta(seconds=monotonic() - started),
+                ended=ending_here.get(),
+            ).recorded()
 
         recorded = await scope.step(scope.identified("tool", call.tool_call_id), perform, parse_returned)
+        if recorded.ended:
+            scope.halted = True
         return recorded.returned

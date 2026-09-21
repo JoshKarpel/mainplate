@@ -490,6 +490,23 @@ class Returned(Record):
     returned: object
     took: timedelta | None = None
 
+    ended: bool = False
+    """
+    Whether the turn stopped here, because a plugin answered this call with an `end`.
+
+    **On the call's own record, so that where a turn stopped is a fact two passes agree on.** A turn
+    is cut short from inside the loop carrying it, and the plugin that asked is consulted once: a
+    resumed pass replays this record rather than asking again, so a flag held only in memory would
+    have the first pass end the turn here and every later one run on past it.
+
+    Positional rather than a record of its own per turn, because *where* is the whole of what it says:
+    a turn that ended after its third call has to replay two calls and then stop, which a fact about
+    the turn cannot express.
+
+    Defaulted, so every call recorded before this existed reads as one the turn ran on past, which is
+    what all of them were.
+    """
+
 
 class Messages(Record):
     """

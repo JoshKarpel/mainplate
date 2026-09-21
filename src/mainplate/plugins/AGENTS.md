@@ -23,7 +23,7 @@ is why `Declaring.runs` takes a repository and a boolean rather than a `Choice`.
 
 ## What must not change without deciding to
 
-- **The vocabulary is closed and the console owns it.** A fifth effect, a seventh event or a third
+- **The vocabulary is closed and the console owns it.** A seventh effect, a ninth event or a third
   kind of control is something somebody adds deliberately, in `protocol.py`, with a line in the
   design note saying what it costs. It is not something a plugin can add.
 - **`extra="forbid"` on everything crossing the boundary.** A plugin that wrote `tool` where the word
