@@ -7,10 +7,11 @@ document and nothing above it.
 
 It is `src/mainplate/plugins/bundled/handoff`, and it is [the plugin the protocol was read
 off](../design/plugins.md#handoff-is-the-specification): a tool with a schema, a correctable refusal,
-a delivery carrying a boundary and a tone, a value back to the model, a turn-boundary condition
-decided on numbers the payload carries, a card whose two controls are its two settings, and an answer
-in the composer under its own leader. So what follows describes a script this console speaks to over
-a pipe, and everything below is that script's rather than the console's unless it says otherwise.
+a delivery carrying a boundary and a tone, a turn ended from inside the call that ends it, state it
+keeps for itself between events, a value back to the model, a turn-boundary condition decided on
+numbers the payload carries, a card whose two controls are its two settings, and an answer in the
+composer under its own leader. So what follows describes a script this console speaks to over a pipe,
+and everything below is that script's rather than the console's unless it says otherwise.
 
 **Which means every word of it can be replaced.** Install your own `handoff` beside the bundled one
 and turn ours off with one switch on the settings step; the two are separate plugins with separate
@@ -95,6 +96,31 @@ What the plugin names is the `label` on the panel's role, the `title` saying wha
 at, and the `tone`, which is weight within the person's side rather than a hue competing with it: the
 ask is `quiet` and the document is `strong`.
 
+## Handing over is the last thing a turn does
+
+**The turn stops on the call**, which the plugin asks for with [an `end`](
+../design/plugins.md#ending-a-turn-from-inside-a-call) beside the delivery. The document carries the
+boundary, so the next turn opens on it and starts the model's history again from there; anything the
+delivering turn went on to say would be written into a history about to be thrown away. The call is
+still answered and the transcript still shows the result. What does not happen is asking the model
+again.
+
+The cost, stated: a model with something genuinely left to do on that turn does not get to do it. That
+is the right trade here and is not obviously right in general, which is why `end` is a plugin's to ask
+for rather than something the console infers from a delivery's boundary.
+
+**A second `hand_off` in the same response hands nothing over again.** The end stops the turn but not
+its own response: a model that asked for two calls at once has both run before anything stops. So the
+plugin writes `handed` into its own state as it delivers and reads it on the way in, which works
+because [a plugin's `set` is laid over the pass's snapshot for that plugin](
+../design/plugins.md#settings-are-already-a-place-so-state-is-a-setting-with-nothing-in-front-of-it).
+The second call is told the conversation has already been handed off, rather than corrected, since
+nothing about it was malformed and there is nothing to do differently.
+
+The flag is let go at the next turn boundary, on every path out of it. What it guards is one response,
+and the turn ends inside that response, so anything past the boundary is a turn of its own and starts
+clean.
+
 ## Handing off without being asked
 
 The same script, fired by a number rather than by a person: both are events into the same plugin,
@@ -153,7 +179,8 @@ which is a retry per human action rather than one per turn: the rule a refusal a
 plugin's](../design/plugins.md#settings-are-already-a-place-so-state-is-a-setting-with-nothing-in-front-of-it):
 a switch flicked while a turn was in flight would otherwise have that turn answered under one answer
 and judged under another. What it costs is that a change takes effect on the next pass, which is
-the next turn.
+the next turn. What that snapshot holds back is somebody else's write and not this plugin's own, which
+is what lets `handed` work at all.
 
 **The window is asked for at the boundary rather than at the top of the pass**, because the
 reference under it is reloadable configuration exactly as the rates are. `Prices.facts` is that one

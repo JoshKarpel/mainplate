@@ -63,6 +63,7 @@ type StepKind = Literal[
     "heard",
     "model",
     "refused",
+    "deferred",
     "failed",
     "tool",
     "messages",
@@ -385,6 +386,36 @@ class Refused(Record):
     status: int | None = None
 
 
+class Deferred(Record):
+    """
+    A model request the provider would not take *now*, and the moment it said to come back.
+
+    **`Refused`'s other neighbour, and the difference is a clock.** A refusal is about the request:
+    the recorded history and the recorded message will never change, so no pass will ever be taken
+    and the session stops. This is about the minute: a usage limit reached, a rate limit hit, a
+    provider asking to be left alone for a while. The request is fine and will be made again.
+
+    What makes it worth recording rather than leaving to the worker's own redelivery is that the
+    provider said *when*. Left to the redelivery, a session against a subscription's weekly limit
+    asks the same question once a lease for however many days that is, and each attempt is a real
+    request to a provider already saying no. Recorded, the pass suspends until `until` and the queue
+    wakes it then - which is `Run.sleep`'s shape with a deadline somebody else chose.
+
+    **A settled value, like every other record here**: a moment that was named, by a provider, at a
+    request that had already been made. A later attempt that is deferred again is a new record under
+    the next position, because it is a new answer to a new question.
+
+    `why` is the provider's own words, so a page can say a plan's limit was reached rather than
+    "deferred". It carries no status: what is acted on here is the moment, and the code that came
+    with it is in `why` where the provider put it.
+    """
+
+    kind: Literal["deferred"] = "deferred"
+
+    until: datetime
+    why: str
+
+
 class Archived(Record):
     """
     That somebody archived this session: nothing more is said in it, and its files come off the disk.
@@ -466,6 +497,23 @@ class Returned(Record):
     returned: object
     took: timedelta | None = None
     outcome: Literal["success", "failed"] = "success"
+
+    ended: bool = False
+    """
+    Whether the turn stopped here, because a plugin answered this call with an `end`.
+
+    **On the call's own record, so that where a turn stopped is a fact two passes agree on.** A turn
+    is cut short from inside the loop carrying it, and the plugin that asked is consulted once: a
+    resumed pass replays this record rather than asking again, so a flag held only in memory would
+    have the first pass end the turn here and every later one run on past it.
+
+    Positional rather than a record of its own per turn, because *where* is the whole of what it says:
+    a turn that ended after its third call has to replay two calls and then stop, which a fact about
+    the turn cannot express.
+
+    Defaulted, so every call recorded before this existed reads as one the turn ran on past, which is
+    what all of them were.
+    """
 
 
 class Messages(Record):
@@ -676,6 +724,8 @@ type Step = Annotated[
     | Tree
     | Response
     | Refused
+    | Deferred
+    | Failed
     | Messages
     | Returned
     | Instructions
@@ -683,7 +733,9 @@ type Step = Annotated[
     | Registered
     | Confirmed
     | Injected
-    | End,
+    | End
+    | Environment
+    | Archived,
     Field(discriminator="kind"),
 ]
 """
@@ -693,6 +745,13 @@ Any one record, told apart by its own tag.
 Everywhere else parses by key, because the caller already knows what it asked for and a type demanded
 is stronger than a type discovered - and because an unknown tag is a hard failure here, where an
 unknown field is not.
+
+**Every record a checkpoint key may hold, and so the session-scoped ones too.** An arm missing here
+is not a tag this reads loosely, it is a session this cannot read at all: a bag holding one raises,
+and the sessions holding the ones easiest to leave out - archived, failed, deferred - are exactly the
+ones a migration is being written for. `Named` and `Enrolled` are the other way round and are
+deliberately out: they are members of `Declared` and `Registered` and are never a checkpoint value on
+their own, so a bag will not hold one.
 
 `choice` is not an arm, and that is a decision rather than an oversight. It is already a record this
 console owns and has grown fields twice without a migration, so the shape argument that put an

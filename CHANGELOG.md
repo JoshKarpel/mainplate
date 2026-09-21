@@ -8,6 +8,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Every rule says when its answer came back**, leading the figures it already carried, so a
+  conversation reads as a timeline rather than as a pile of counts: `09:32 · 3.4s · ↑96K …`. The
+  turn's own rule says when its first answer landed, so the moments read down the page in the order
+  they happened, and the whole moment down to the second is in the hover. Nothing new is recorded
+  for it, since a response has always carried its own timestamp. On a phone the fraction of the
+  window goes to make room, because the gauge along the rule already says it.
+- **Moments are printed in your own timezone.** Everything stays recorded in UTC; the browser tells
+  the console which clock it keeps, in a cookie, and the console draws every moment against it - the
+  rules, the session list's dates, the cache note and the archived sentence alike. Without the
+  script a page is drawn against the console's own zone, which for a unit on your own machine is the
+  same answer. A reader in another timezone pays one reload on their first visit.
+- **A session told to come back later waits for exactly that long.** A provider that rate limits a
+  request and says when it will take one - a subscription's usage limit with its `resets_at`, or a
+  standard `Retry-After` - parks the session until that moment instead of being retried every lease
+  for however many days that is, and the page says which limit was reached and when the next attempt
+  goes out. A 429 that names no moment is retried as it was before, and so is every other failure
+  that carries a moment: what the provider knows about its own limit, it does not know about an
+  outage.
 - **An anchored `grep` tool** searches Git-known repository text with a line-oriented regular
   expression and returns bounded matching regions carrying the same anchors as `read`, so a match can
   go straight to `edit` without a second call solely to acquire its address. An optional glob narrows
@@ -84,7 +102,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
   written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
   reaches nothing it was not handed. It may contribute a tool, instructions, a card of settings, an
-  answer in the composer, and a message put into the conversation; it may be shipped with the
+  answer in the composer, and a message put into the conversation, and it may end the turn one of its
+  tools was called in, for a call whose effect leaves the rest of that turn with nothing to do; it
+  may be shipped with the
   console, installed by the operator in `config.yaml`, or carried by the repository a session works
   in. Handoff and the guidance below are both plugins, which is what makes the pair a test of the
   protocol rather than two examples of it - and what makes either replaceable.
@@ -232,8 +252,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   may be empty: what it does with the text is point the handoff at something, appended to the standing
   ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
   it writes are drawn as their own `note` kind, because every other message in a conversation was
-  typed by somebody. It ships as a **plugin** rather than as part of the console, which is what makes
-  every word of it replaceable: install your own beside it and turn ours off with one switch.
+  typed by somebody. Handing over is the last thing its turn does: the document carries the boundary,
+  so the next turn starts from it, and anything the delivering turn went on to say would be written
+  into a history about to be thrown away. It ships as a **plugin** rather than as part of the console,
+  which is what makes every word of it replaceable: install your own beside it and turn ours off with
+  one switch.
 - **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
   writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
   handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
@@ -334,6 +357,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   resumed pass replays the refusal the model was actually sent instead of running the tool again to
   hear what it would say now. The graph's retry budget went with it: a refusal is the call's result,
   and nothing counts how many a turn has had.
+- **Every date is printed `2031-03-14 10:20`**, where it was `Mar 14, 10:20`, and a full stamp in a
+  hover carries the offset rather than a zone abbreviation: `2031-03-14 10:09:26-05:00` where it was
+  `Mar 14, 10:09:26 CDT`. One canonical form at every reader, on the grounds that this is a console
+  for programmers: it sorts lexicographically, it reads the same in Berlin as in Chicago, and an
+  offset cannot be resolved two ways where `CST` is both US Central and China Standard. Which
+  *instant* is shown still follows the reader's own clock; only how it is written no longer does.
 - **A tool call's row says what it acted on**, beside the tool's name: the path a `read` or an
   `edit` took, with which lines or how many operations, and the first line of what `bash` ran, with
   how many lines follow. That is what makes the other half affordable: **every call is drawn shut,

@@ -229,6 +229,15 @@ class Agent:
         one thing to answer. `keeping` absent is a session none of whose plugins asked, and the turn
         ends the first time the model answers.
 
+        **A turn a plugin ended stops after the batch that ended it**, with the tool returns recorded
+        as the turn's last word and the model never asked again, and it is not offered to the gate:
+        `end` says this turn is over and `before_turn_end` exists to say it is not, so asking would be
+        inviting an injection into a turn whose next one is already queued. The end wins because it is
+        the more specific answer. Whether a plugin ended it is read off `scope.halted`, which
+        `Stepping.call` sets from each call's *record*, so a replayed pass stops where the first did
+        without the plugin being asked; and the returns have to go into the history first, because a
+        history whose last word is a call nothing answered is one no provider will take next turn.
+
         **A response the loop cannot act on is `CannotGoOn`, not a correction.** A tool call the model
         was cut off writing has arguments that fail validation like any bad call's, so left to the
         retry path the model would be told they were malformed and asked again, spending a request
@@ -258,6 +267,8 @@ class Agent:
                     raise CannotGoOn("the model asked for two tool calls under one id, and neither can be answered")
                 results = await together([tools.call(scope, call) for call in calls])
                 messages.append(ModelRequest(parts=[*results], instructions=self.instructions))
+                if scope.halted:
+                    return tuple(messages[start:])
                 continue
 
             if said_something(response):

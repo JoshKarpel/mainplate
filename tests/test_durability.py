@@ -41,6 +41,7 @@ from mainplate.durability import TOOK
 from mainplate.durability import Allowance
 from mainplate.durability import AllowanceSpent
 from mainplate.durability import Stepping
+from mainplate.durability import ending_turn
 from mainplate.durability import parse_model_response
 from mainplate.durability import parse_returned
 from mainplate.durability import stepping
@@ -434,8 +435,37 @@ class Noting:
 
     ran: list[str] = field(default_factory=list)
 
+    ends: bool = False
+    """
+    Whether this toolset also offers a `stop`, which asks for the turn to end the way a plugin does.
+
+    A second tool rather than `note` doing both, so a test can call one beside the other and ask what
+    each of their records says. It calls `ending_turn` directly, which is what `asking_through` does
+    with an `end`: what is under test here is the recording and the replay, and a plugin subprocess
+    in front of it would be the same assertions made slowly.
+    """
+
+    waits: bool = False
+    """
+    Whether `note` holds until `stop` has asked, which pins how the two interleave in one response.
+
+    **A test of what each of their records says proves nothing without it.** Neither tool awaits
+    anything real, so whichever task is scheduled first runs to completion, and a `note` that
+    finished before its neighbour asked records the right thing even under a design that shares one
+    flag between every concurrent call. Pinning the order is what makes the assertion an assertion:
+    `note` reads its own answer at the one moment a shared flag would hold somebody else's.
+
+    An event rather than a sleep, for the reason the suite gives everywhere else: any duration is
+    either racy or wasted, and this is the actual signal. Only the one test that calls both tools at
+    once sets it, since a `note` waiting for a `stop` nobody called waits for ever.
+    """
+
+    ended: asyncio.Event = field(default_factory=asyncio.Event)
+
     def toolset(self) -> FunctionToolset[None]:
         held = self.ran
+        ended = self.ended
+        waits = self.waits
 
         async def note(what: str) -> str:
             """
@@ -446,10 +476,27 @@ class Noting:
 
             """
             held.append(what)
+            if waits:
+                await ended.wait()
             return f"noted {what}"
+
+        async def stop(what: str) -> str:
+            """
+            Note something down, and end the turn.
+
+            Args:
+                what: The thing to note.
+
+            """
+            held.append(what)
+            ending_turn()
+            ended.set()
+            return f"noted {what}, and that is the turn"
 
         toolset = FunctionToolset[None]()
         toolset.add_function(note)
+        if self.ends:
+            toolset.add_function(stop)
         return toolset
 
 
@@ -536,6 +583,59 @@ class TestRecordingAToolCall:
             if hasattr(part, "content") and part.part_kind == "tool-return"
         ]
         assert returns == ["noted alpha"]
+
+    async def test_a_call_that_ended_its_turn_says_so_on_the_pass_that_asked_and_on_every_replay(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        **The whole reason `end` rides on the record rather than in a flag.** The plugin that asks is
+        consulted once: every later pass replays this call from its step without running the tool
+        again, so a turn ended in memory alone would stop here on the first pass and run on past this
+        point on every pass after it. That is the one disagreement between two passes this mechanism
+        exists not to have.
+
+        What the scope carries is read back from the record on both, which is what makes the two
+        agree; the tool running once is what says the second reading was a replay.
+        """
+        ending = Noting(ends=True)
+        halted: list[bool] = []
+        asked: list[int] = []
+        for _ in range(2):
+            scripted = Scripted(script=(calls(("stop", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+            async with a_pass(checkpointer) as run:
+                with stepping(run, "turn:0") as scope:
+                    messages = await calling(scripted, ending).run("go", (), scope)
+                halted.append(scope.halted)
+                asked.append(scripted.asked)
+
+        assert ending.ran == ["alpha"], "the tool ran on the first pass and was replayed on the second"
+        assert parse_returned((await checkpointer.load(WORKFLOW))["turn:0:tool:call-stop-0"]).ended is True
+        assert halted == [True, True]
+        assert asked == [1, 0], "the model was not asked again after the call that ended the turn, on either pass"
+        assert isinstance(messages[-1], ModelRequest), "and the turn's last word is the call's return"
+
+    async def test_a_call_beside_one_that_ended_the_turn_records_nothing_of_it(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        Why the asking is a context variable and not a field on the scope, which every call shares.
+
+        A model can ask for several tools in one response and the loop runs each in a task of its
+        own, so a shared flag would have whichever call finished after the ending one claim to be
+        where the turn stopped. What the turn does is the same either way, which is exactly why this
+        needs an assertion: the record is the only place the difference shows.
+        """
+        wanted = (("note", {"what": "alpha"}), ("stop", {"what": "beta"}))
+        scripted = Scripted(script=(calls(*wanted), ModelResponse(parts=[TextPart("done")])))
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope:
+                await calling(scripted, Noting(ends=True, waits=True)).run("go", (), scope)
+
+        recorded = await checkpointer.load(WORKFLOW)
+        assert scope.halted is True, "the turn stops, because one of them asked"
+        assert parse_returned(recorded["turn:0:tool:call-stop-1"]).ended is True
+        assert parse_returned(recorded["turn:0:tool:call-note-0"]).ended is False, "and its neighbour did not"
 
 
 @dataclass(slots=True)

@@ -31,12 +31,14 @@ from mainplate.conversation import REPOSITORY_DECLARED_KEY
 from mainplate.conversation import Guidance
 from mainplate.conversation import Prose
 from mainplate.conversation import Steering
+from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
 from mainplate.conversation import Unconfirmed
 from mainplate.conversation import conversing
 from mainplate.conversation import declared_in
 from mainplate.conversation import end_key
 from mainplate.conversation import environment_in
+from mainplate.conversation import model_key
 from mainplate.conversation import parse_end
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
@@ -47,6 +49,7 @@ from mainplate.conversation import transcript
 from mainplate.durability import parse_returned
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
+from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import asked_to_set
 from mainplate.plugins.asking import running
 from mainplate.plugins.installed import BUNDLED_ROOT
@@ -95,6 +98,7 @@ from mainplate.sessions import Session
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
 from mainplate.tending import TENDED
+from mainplate.tending import Tending
 
 # Where the fixture plugins live. A directory of real executables rather than strings written into
 # tests, because what is under test includes that a plugin is a *file this console runs*: a fake
@@ -130,6 +134,7 @@ ASKING: Final[Mapping[str, dict[str, object]]] = {
     "refuse": {"refuse": "not that one"},
     "inject": {"inject": ["a sentence"]},
     "deliver": {"deliver": [{"said": "a note"}]},
+    "end": {"end": True},
     "set": {"set": {"seen": 3}},
 }
 
@@ -139,7 +144,7 @@ ASKING: Final[Mapping[str, dict[str, object]]] = {
 # matrix said a second time, so a cell edited in one place has to be defended in the other.
 PERMITS: Final[Mapping[str, frozenset[str]]] = {
     "setup": frozenset(),
-    "tool": frozenset(("return", "retry", "deliver", "set")),
+    "tool": frozenset(("return", "retry", "deliver", "end", "set")),
     "before_tool": frozenset(("refuse", "deliver", "set")),
     "before_request": frozenset(("inject", "deliver", "set")),
     "before_turn_end": frozenset(("inject", "deliver", "set")),
@@ -325,6 +330,70 @@ class TestSettingsAndState:
         nothing = Described()
         assert settings_of(nothing, {"seen": 3}) == {}
         assert state_of(nothing, {"seen": 3}) == {"seen": 3}
+
+
+class TestReadingBackWhatAPluginJustWrote:
+    """
+    A `set` is visible to the plugin that made it, over a snapshot taken once at the top of the pass.
+
+    **What the snapshot holds back is somebody else's write, not the plugin's own.** It is there so a
+    switch flicked while a turn is in flight cannot have that turn answered under one value and judged
+    under another, which says nothing about a plugin reading back its own bookkeeping. Without the
+    overlay such a plugin reads what the pass began with, so a guard it keeps for itself never fires.
+    """
+
+    CARD = Described.model_validate(
+        {"card": {"heading": "probe", "rows": [{"switch": {"name": "on", "label": "on", "default": True}}]}}
+    )
+
+    def enrolled(self) -> Enrolled:
+        return Enrolled(
+            installed=Installed(tier=Tier.USER, name="probe", path=FIXTURES / "stickler"), described=self.CARD
+        )
+
+    async def test_state_written_at_one_event_is_there_at_the_next(self) -> None:
+        """The handoff's case: two calls in one response, and the second has to find the first."""
+        plugin = self.enrolled()
+        live = Live(session="a-session", enrolled=(plugin,))
+        assert live.state(plugin) == {}
+
+        await live.perform(plugin, parse_answer("user:probe", {"set": {"handed": True}}))
+        assert live.state(plugin) == {"handed": True}
+
+    async def test_a_control_written_at_one_event_is_there_at_the_next(self) -> None:
+        """Settings and state are one column, so one overlay answers for both."""
+        plugin = self.enrolled()
+        live = Live(session="a-session", enrolled=(plugin,))
+        assert live.settings(plugin) == {"on": True}
+
+        await live.perform(plugin, parse_answer("user:probe", {"set": {"on": False}}))
+        assert live.settings(plugin) == {"on": False}
+
+    async def test_a_name_written_as_null_is_gone_rather_than_held_as_one(self) -> None:
+        """
+        Which is what `json_patch` does to the column underneath, checked rather than assumed.
+
+        The overlay agreeing with the store is the whole of what it is for: a plugin that read back a
+        name it had just deleted would be told something no later pass will ever say.
+        """
+        plugin = self.enrolled()
+        live = Live(session="a-session", enrolled=(plugin,), tending=Tending(settings={"user:probe": {"seen": 3}}))
+
+        await live.perform(plugin, parse_answer("user:probe", {"set": {"seen": None}}))
+        assert live.state(plugin) == {}
+
+    async def test_one_plugins_write_is_not_another_plugins_to_read(self) -> None:
+        """Keyed by qualified name, so three plugins called `probe` hold three sets and not one."""
+        mine, theirs = (
+            self.enrolled(),
+            Enrolled(
+                installed=Installed(tier=Tier.USER, name="other", path=FIXTURES / "stickler"), described=Described()
+            ),
+        )
+        live = Live(session="a-session", enrolled=(mine, theirs))
+
+        await live.perform(mine, parse_answer("user:probe", {"set": {"handed": True}}))
+        assert live.state(theirs) == {}
 
 
 class TestReadingAPostedNumber:
@@ -971,6 +1040,37 @@ class TestTheBundledHandoff:
         assert answered.returned is not None
         assert "starts again" in str(answered.returned)
 
+    async def test_the_document_is_the_last_thing_its_turn_does(self, handoff: Path) -> None:
+        """
+        The document carries the boundary, so the next turn starts from it and every request this one
+        went on to make would be written into a history about to be thrown away.
+        """
+        answered = parse_answer(
+            "bundled:handoff",
+            await asked(handoff, spoken(event="tool", tool="hand_off", args={"document": "x" * 400})),
+        )
+        assert answered.end is True
+        assert answered.setting == {"handed": True}, "so a second call in the same response finds it"
+
+    async def test_a_second_call_in_one_response_hands_nothing_over_again(self, handoff: Path) -> None:
+        """
+        What the `end` cannot cover on its own: both calls of one response run before the turn stops.
+
+        The model is told rather than corrected, because nothing about the call was malformed and
+        there is nothing for it to do differently - the handoff it asked for has already happened.
+        """
+        answered = parse_answer(
+            "bundled:handoff",
+            await asked(
+                handoff,
+                spoken(event="tool", tool="hand_off", args={"document": "y" * 400}, state={"handed": True}),
+            ),
+        )
+        assert answered.deliver == (), "one turn hands over one document"
+        assert answered.end is True
+        assert answered.retry is None
+        assert "already been handed off" in str(answered.returned)
+
     async def test_an_acknowledgement_is_a_correctable_refusal_rather_than_a_document(self, handoff: Path) -> None:
         """A `retry` doing exactly what retries are for: the model is told and writes a real one."""
         answered = parse_answer(
@@ -1096,6 +1196,59 @@ class TestTheBundledHandoff:
             ),
         )
         assert answered.deliver == ()
+
+    @pytest.mark.parametrize(
+        ("settings", "context", "why"),
+        [
+            ({"hands_off": False, "reserve": 40}, 170_000, "the switch is off"),
+            ({"hands_off": True, "reserve": 40}, 10_000, "the reserve is nowhere near"),
+            ({"hands_off": True, "reserve": 40}, 170_000, "the reserve was crossed and one is asked for"),
+        ],
+    )
+    async def test_the_guard_against_a_second_call_is_let_go_at_the_turn_boundary(
+        self, handoff: Path, settings: dict[str, object], context: int, why: str
+    ) -> None:
+        """
+        On every path out of the boundary, because what `handed` guards is two calls in one response.
+
+        The turn ends on the first of those, so anything past this boundary is a turn of its own and
+        has to start clean. Parametrised over all three exits precisely because two of them are early
+        returns, which is how a clear like this gets left on one branch.
+        """
+        answered = parse_answer(
+            "bundled:handoff",
+            await asked(
+                handoff,
+                spoken(
+                    event="after_turn",
+                    turn=4,
+                    opened_on={"kind": "prompt"},
+                    context=context,
+                    window=200_000,
+                    settings=settings,
+                    state={"handed": True},
+                ),
+            ),
+        )
+        assert answered.setting == {"handed": False}, why
+
+    async def test_a_turn_boundary_with_nothing_to_clear_asks_for_no_write(self, handoff: Path) -> None:
+        """Which is every ordinary turn: a write per boundary per session would be for nothing."""
+        answered = parse_answer(
+            "bundled:handoff",
+            await asked(
+                handoff,
+                spoken(
+                    event="after_turn",
+                    turn=4,
+                    opened_on={"kind": "prompt"},
+                    context=10_000,
+                    window=200_000,
+                    settings={"hands_off": True, "reserve": 40},
+                ),
+            ),
+        )
+        assert answered.setting == {}
 
     async def test_a_note_typed_beside_the_leader_is_appended_rather_than_replacing_the_ask(
         self, handoff: Path
@@ -1483,6 +1636,87 @@ class TestASessionsPlugins:
             return await read_tending(service.database, session)
 
         return read
+
+
+class TestEndingATurnFromInsideACall:
+    """
+    A plugin answering a call with an `end`, and the turn stopping once that call is answered.
+
+    **What it is for is a call whose effect makes the rest of the turn worthless.** A handoff is the
+    worked example: the document carries a boundary, so the next turn starts from it and everything
+    this turn went on to say is written into a history about to be thrown away. Left to run on, such
+    a turn spends real money on work nothing reads and gives the model the chance to hand over twice.
+    """
+
+    @pytest.fixture
+    def declaring(self) -> Declaring:
+        return Declaring(console=bundled(), speaking=Spawned(environ={}))
+
+    def calling(self) -> Scripted:
+        """A response that hands over, and one that would follow it if the turn were allowed to."""
+        return Scripted(
+            script=(
+                ModelResponse(
+                    parts=[ToolCallPart(tool_name="hand_off", args={"document": "x" * 400}, tool_call_id="c1")]
+                ),
+                ModelResponse(parts=[TextPart("and now some more work nobody will ever read")]),
+            )
+        )
+
+    async def test_the_turn_stops_once_the_model_has_been_handed_the_return(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """
+        One request and not two. The second response is in the script precisely so that a turn which
+        ran on would consume it, which is what makes the count an assertion rather than a coincidence.
+        """
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        scripted = self.calling()
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring)
+        await passing(service, session.id, body)
+
+        assert scripted.asked == 1, "the turn ended on the call rather than asking again"
+        recorded = await service.checkpointer.load(session.id)
+        assert model_key(0, 0) in recorded, "it did make the request that produced the call"
+        assert model_key(0, 1) not in recorded
+
+    async def test_the_call_that_ended_it_is_recorded_as_having_done_so(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """
+        **On the call's own record, because where a turn stopped is positional.** A turn that ended
+        after its third call replays two calls and then stops, which a fact about the turn cannot say.
+        """
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        body = conversing(self.calling().endpoints(), INSTRUCTIONS, declaring=declaring)
+        await passing(service, session.id, body)
+
+        recorded = await service.checkpointer.load(session.id)
+        assert parse_returned(recorded[tool_key(0, "c1")]).ended is True
+
+    async def test_the_call_is_answered_even_though_nothing_is_asked_again(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """
+        **The returns ride on the request the turn never makes**, which is the half that is easy to
+        lose: `ModelRequestNode` appends its own request to the history a node *after* the call it
+        answers, so a loop that stopped without carrying it would record a call nothing answered.
+
+        That is a spinner the page never stops drawing, and a history the next request cannot carry,
+        since a provider handed a tool call with no result refuses it outright.
+        """
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        body = conversing(self.calling().endpoints(), INSTRUCTIONS, declaring=declaring)
+        await passing(service, session.id, body)
+
+        answered = transcript(await service.checkpointer.load(session.id))
+        calls = [block for panel in answered.panels for block in panel.blocks if isinstance(block, ToolUse)]
+        assert [each.tool for each in calls] == ["hand_off"]
+        assert calls[0].returned is not None, "the call is answered rather than left out"
+        assert "starts again" in calls[0].returned.content
 
 
 class TestRefusingACall:

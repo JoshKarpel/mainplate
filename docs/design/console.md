@@ -234,6 +234,123 @@ cost, stated: it covers the tail of a long name while it shows, which is the cor
 lives in, and the whole name is in the title. It is not drawn on a phone, where nothing hovers; a
 session is opened and closed from its rail there.
 
+## Which clock a moment is printed against
+
+Every moment this console shows is recorded in UTC and printed in somebody's local time, and the
+question is whose. The browser is the only party that knows, and it cannot say so in time to matter
+unless it says it on the request for the document itself, so it says it in a **cookie**: the script
+writes `zone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`, the `reading` extractor reads
+it, and the `Reader` it parses into is threaded to the page functions as one more
+[already-answered question](../philosophy.md#a-page-is-a-pure-function-of-already-answered-questions).
+The rules, the session list's dates, the cache note and the archived sentence are all drawn from it,
+so nothing on the page is in a different clock from anything else on it.
+
+**A value rather than a parameter, because of the threading rather than any second field.** The
+clock reached two dozen page signatures as a parameter of its own, so the next reader-scoped answer
+would touch every one of them again; a field on `Reader` costs one line. What does not go on it is
+anything that is not a rendering input: a credential shares the `Cookie` header and is a gate in
+*front* of drawing a page rather than something a page draws with, so it never becomes a field. That
+line is what keeps `Reader` a value and not a drawer. The zone may well stay its only field, and
+that is fine - what the value buys is that a second one would be an edit in one place.
+
+One cookie per answer rather than one cookie carrying all of them. A single packed value would buy a
+format, a parser and a version to keep in step, where a name apiece stays independently writable by
+the script and independently readable by `cookie_value`, which already takes a name.
+
+## The format is canonical, and the zone is the only thing that varies
+
+`resolvedOptions()` names a `locale` and an `hourCycle` beside the `timeZone`, and **both are
+declined**. Every moment this console prints is `%Y-%m-%d %H:%M`, at everybody: this is a console
+for programmers, and a stamp that sorts lexicographically and reads the same to a reader in Berlin
+as to one in Chicago is worth more here than one in their own conventions. So only *which instant*
+follows the reader; *how it is written* never does.
+
+Three things fall out of that, and they are the reason it is worth stating rather than just doing:
+
+- **The axis is closed, not unfilled.** A locale field is not a cell waiting to be filled in later;
+  it is a thing decided against, so nobody should arrive at `Reader` and read one field as an
+  unfinished job.
+- **`strftime` stays sufficient.** A genuinely locale-aware render needs CLDR data through `babel`,
+  because Python's own `locale` module is process-global and so no use per request. Declining the
+  locale is what keeps that dependency out.
+- **The full stamp carries an offset, not an abbreviation.** `CST` is US Central and also China
+  Standard, so the abbreviation answers "whose 09:32" with a value two readers resolve differently.
+  `2031-03-14 10:09:26-05:00` cannot be read two ways, and it is the same text as the `datetime`
+  attribute beside it give or take the separator.
+
+The cost, stated: `2031-03-14 10:20` is three characters wider than `Mar 14, 10:20` in a 17rem
+sidebar column, and a reader who would rather see their own conventions does not get them.
+
+**The formatting stays on the server**, which is the whole reason for the cookie rather than a
+script that rewrites `<time>` elements after the fact. A moment inside a sentence - `Archived
+2031-03-18 04:02:17-05:00: nothing more is said in it` - cannot be rewritten without composing that
+sentence in JavaScript too, so the alternative is two implementations of what a date looks like, in
+two languages, one of which cannot see the other. The `<time>` element is still there, carrying the
+instant in its `datetime` attribute while its text carries the reader's clock.
+
+**Without the cookie a page is drawn against the console's own zone**, which `here()` reads from `TZ`
+or `/etc/localtime`, and that is the right answer rather than a fallback: the install this console
+documents is a user unit on the machine somebody is reading it from. UTC where neither says, which
+is what a container with no zone configured is actually keeping.
+
+The page writes back the zone it *used*, on `<html>` as `data-zone`, and that is what closes the
+loop rather than leaving one. A browser whose zone is not the one the page was drawn against asks for
+the page again, once; the cookie it wrote is what stops it asking twice, since a name this machine's
+zone database does not have comes back as the console's own and would otherwise be requested for
+ever. The cookie is **read back before the reload** rather than assumed, which is the same loop shut
+one step earlier: a browser blocking this origin's cookies makes the write a silent no-op, so the
+request would carry no zone, the console would keep drawing in its own, and every load would ask for
+a page that could not say anything new. Where the answer cannot reach the server at all, the reader
+keeps the page they got. Two spellings of one clock are not a difference, and that is asked of the
+browser rather than decided by comparing strings: `Etc/UTC` on a server is `UTC` in Chromium, and
+`Asia/Calcutta` is `Asia/Kolkata`, so a string comparison would hand every console running in UTC
+one reload per visit for a page that was already printing exactly the right time.
+
+**On `<html>` rather than on `<body>`, which is what keeps that reload from being seen.** `paintClock`
+runs in the script's first block, beside the theme and before the document exists, for the reason the
+theme is there: a page opened dark must not flash light on the way, and a page opened in Tokyo must
+not paint a column of London times on the way. The open tag of `<html>` has been parsed by the time
+that block runs and `document.body` is still `null`, so the answer has to be on the element that
+exists. Moved to the body the check does not fire late, it stops firing at all, and
+`TestTheClockAPageIsDrawnAgainst`'s browser tests are what say so.
+
+**Asking from the head abandons the parse where it stands**, which is the price of asking early and
+is worth knowing about rather than discovering: `DOMContentLoaded` still fires on what was abandoned,
+with no `<body>` ever built, so `start` is handed a document that is already being replaced. It
+returns rather than wiring it, and without that every first visit from another zone raises where the
+wiring reads the body.
+
+The reload is a reload and not an htmx request, which is worth stating because the smaller-looking
+change does not work: `htmx.ajax` into `body` swaps the body and leaves `<head>` and the `data-zone`
+on `<html>` exactly as they were, so the page would keep saying it was drawn against a clock it no
+longer is. That is `hx-boost`'s known limitation arriving in a place nobody boosted. There is one
+document to replace, and `location.reload()` is what replaces it.
+
+**Every page and every fragment says `Vary: cookie`**, which is the one thing the cookie obliges
+beyond reading it. These responses carry no `cache-control` at all, so a cache with nothing said to
+it falls back to its own heuristic, and the browser's is what this closes: a page cached before the
+script wrote the cookie and served again from that cache is a reader stuck on the console's clock
+for ever, since the script has already asked once and will not ask again. The stream needs nothing,
+being `no-store` already.
+
+The cost, stated: **a reader in a zone the console is not in pays one reload on their first visit**,
+and a reader with no script gets the console's clock. `TestTheClockAPageIsDrawnAgainst` exists in
+both suites, the server's half in `test_console.py` and the script's in a real browser, because
+neither half can see the other.
+
+**Where the line between the two halves falls** is worth saying once, because the countdown beside
+this makes the other choice and the pair reads as an inconsistency otherwise. A fact that reads the
+same in an hour is the server's: a moment, a date, a rule's `09:32`. A figure that is wrong a second
+later is the script's: `Due in 4d 14h`, `warm as of 12m`. So `elapsed` in `pages.py` and `soon` in
+`mainplate.js` really do both implement how a duration is worded, and they have to agree unit for
+unit, down to the unit that is zero: the server draws the first figure and the script repaints it a
+second later, so a wait landing on a whole hour written `1h 0m` and repainted `1h` changes shape
+while a reader is looking at it, which reads as the countdown having moved. That is the one piece of
+this deliberately written twice, and the width holding still is the price of it. A date is not in
+that category,
+which is the whole argument for the cookie: nothing about `2031-03-18 04:02` stops being true while
+somebody reads it, so there is no reason for a second implementation of it to exist.
+
 ## The picker
 
 **Ordered widest-first: workspace, network, repository code, endpoint, model, thinking, output
@@ -647,6 +764,17 @@ field along: the server renders the figure and `data-due` lets the script keep i
 stream sends this region when the worker's standing *changes* and counting down is exactly the
 interval where it does not.
 
+**One arm of that line is not a failure at all**, and it outranks the rest: a session
+[waiting out a moment a provider named](durability.md#a-request-the-provider-will-not-take-yet).
+Nothing is wrong, nothing is refused, and the session is coming back, so it is drawn in the ordinary
+edge and ground rather than the red ones, which on this page mean a fault. It is the only arm
+carrying a **moment** as well as a countdown, and the pair is the point: a subscription's allowance
+resets days out, so `Due in 4d 14h` is a figure nobody can plan around and a moment with nothing
+beside it does not say how far off it is. The moment is a fact that reads the same in an hour, so it
+is the server's, and the countdown is wrong a second later, so it is the script's - which is the
+same split the rest of this line already makes. `elapsed` and the script's `soon` both grew an hours
+and a days width for it, since a wait of days read as `6623m 0s` before.
+
 **A panel whose default would otherwise move carries the working dots on its own row instead.** The
 panel saying a reply is being written, and a stretch of context whose instructions no pass has
 composed yet, are both drawn *shut* with the dots in the opening line's place. Two things fall out
@@ -730,11 +858,29 @@ reads it back with a real HTML parser.
 
 ## What the figures on a rule say
 
-Six of them, and none is picked out from the others: how long it took, how much context it carried
-and how much of that came out of the cache, how full the model's window is, how much came back, what
-it cost, and what the conversation has cost so far. The cost used to take a stronger ink, which read
-as the figure to look at; which one somebody is reading changes with what they are doing, so picking
-one is deciding that for them.
+Seven of them, and none is picked out from the others: when the answer landed, how long it took, how
+much context it carried and how much of that came out of the cache, how full the model's window is,
+how much came back, what it cost, and what the conversation has cost so far. The cost used to take a
+stronger ink, which read as the figure to look at; which one somebody is reading changes with what
+they are doing, so picking one is deciding that for them.
+
+**The moment leads and the duration follows it**, which is the pair read together: the answer landed
+at 09:32 and 3.4s of that was spent waiting on the provider. It is `ModelResponse.timestamp`, which
+is the only moment a request records and is already in the checkpoint, so nothing new is written
+down for it; what it is *not* is when the request went out, which is this figure less the one beside
+it and would be a moment on the page that nothing wrote down.
+
+A turn rule shows its **first** request's, which is the one figure there that comes from a request
+rather than from the turn. That is the way round it is so the moments read down the page in the
+order they happened: a turn's last answer, on the rule that opens it, would run backwards against
+the requests below. The title says which - `Turn 3 was first answered at …` against `Request 3.1 was
+answered at …` - exactly as the other figures' titles say whose they are.
+
+On a phone the rule now drops the **fraction of the window** as well as the cached count and the
+running total. That figure is the one here already drawn twice, since the gauge along the rule says
+it as a picture for no room at all, and the trade is stated: at that width the row holds six cells
+and the seventh pushed the cost onto a line of its own. Of the two, the moment is the one a reader
+on a phone came for and the one the gauge cannot say.
 
 **The input figure is the context and not the sum**, which is `Spent.context`'s argument said on the
 page. Every request of a turn carries the whole conversation again, so a summed input says what the
@@ -744,7 +890,7 @@ is still true and is not drawn: the money on the rule already says what the prov
 and a second count that disagrees with the first by design would be a page arguing with itself.
 
 **A symbol per figure, and the words in the titles.** A rule is one line that must not wrap and it
-now carries six figures where it carried three. `↑` and `↓` are a count of tokens going up to the
+now carries seven figures where it carried three. `↑` and `↓` are a count of tokens going up to the
 model and coming back, `▣` is how much of the first came out of the provider's cache instead, and
 `Δ` against `Σ` is what this exchange added against the running total, which is that pair's own
 notation and reads as a pair rather than as two prices to tell apart by size. Five cells against the

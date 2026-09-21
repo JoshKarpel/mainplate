@@ -23,6 +23,7 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,20 @@ and a delivery made through it can only reach that session.
 """
 
 
+type Halting = Callable[[], None]
+"""
+Saying that the call running right now is the last thing its turn does.
+
+A function for `Delivering`'s reason, and here the ignorance it buys is of the durability layer: what
+answers it marks the *step* recording this call, so that a resumed pass ends the turn where the first
+one did without the plugin being asked again. This module would otherwise have to know how a call is
+recorded in order to say something about the turn around it.
+
+It takes nothing and returns nothing because there is nothing to say: which call is ending the turn is
+already established by which call is running, and the answer is never no.
+"""
+
+
 type Storing = Callable[[str, Mapping[str, object]], Awaitable[None]]
 """
 What a plugin's `set` writes, by qualified name, bound to the session the same way.
@@ -103,6 +118,42 @@ async def unstored(plugin: str, values: Mapping[str, object]) -> None:
     """The same, one effect along: a console given no way to write settings writes none."""
 
 
+def never() -> None:
+    """
+    The same again for `end`, which is the effect a `Live` outside a turn cannot perform.
+
+    Every `Live` a request handler builds is one of those: `compose` and `action` are fired from
+    routes, where there is no turn to end and no step to mark. Inert rather than absent, so nothing
+    has to ask whether it is in a pass before answering a plugin.
+    """
+
+
+@dataclass(slots=True)
+class Written:
+    """
+    What this pass's plugins have written to their own store, laid over the snapshot it began with.
+
+    **A plugin reading back its own write is not the writer `tending` is snapshotted against.** That
+    snapshot exists so a switch somebody flicks mid-turn cannot change what the turn is judged under;
+    it says nothing about a plugin's own `set`, and without this such a plugin reads what the pass
+    began with, so a guard it wrote itself never fires.
+
+    **A name written as `None` is kept here and dropped by `Live.stored`**, because that is what
+    `json_patch` does to the column underneath: null removes the name rather than storing one. Kept
+    rather than dropped on the way in, since what a removal has to do is cover the snapshot's own
+    value, which an overlay with no entry for that name would let straight through.
+    """
+
+    held: dict[str, dict[str, object]] = field(default_factory=dict)
+
+    def of(self, qualified: str) -> Mapping[str, object]:
+        """Whatever this pass has written for one plugin, which for most plugins is nothing at all."""
+        return self.held.get(qualified, {})
+
+    def wrote(self, qualified: str, values: Mapping[str, object]) -> None:
+        self.held[qualified] = {**self.of(qualified), **values}
+
+
 @dataclass(frozen=True, slots=True)
 class Live:
     """
@@ -123,15 +174,15 @@ class Live:
     """
     What this session's plugins are set to and remember, **captured once at the top of the pass.**
 
-    So a `set` lands in the column and reaches the next pass, and no event of this one: not another
-    plugin's, and not the writer's own next event. A plugin that writes at `tool` and reads at
-    `after_turn` in the same turn reads what the pass began with. The bundled plugins never notice,
-    because every `set` they make rides beside a `deliver` and a delivery ends the pass; a plugin
-    that writes without delivering is the one this matters to.
-
     Once rather than re-read per event, because a setting is a place two writers share: a switch
     flicked while a turn was in flight would have that turn answered under one value and judged
     under another. The cost is stated in the design note beside the mechanism.
+
+    **What it holds back is somebody else's write, not the plugin's own.** A `set` is laid over this
+    in `written` and read back through `stored`, so a plugin that writes at `tool` and reads at
+    `after_turn` sees what it wrote. Without that a guard a plugin keeps for itself never fires, and
+    the handoff's is the case that showed it: two `hand_off` calls in one model response each read
+    `handed` as unset and each delivered a document carrying a boundary.
     """
     speaking: Speaking | None = None
     worktree: Worktree | None = None
@@ -145,6 +196,16 @@ class Live:
 
     delivering: Delivering = nowhere
     storing: Storing = unstored
+    halting: Halting = never
+
+    written: Written = field(default_factory=Written)
+    """
+    What this pass's plugins have written over `tending`; see `Written`.
+
+    Made here rather than handed in, because it belongs to exactly this `Live`: a request handler
+    builds one per request and a pass builds one per pass, which is in both cases the span over which
+    a plugin should read back its own `set`.
+    """
 
     def wanting(self, event: Event) -> tuple[Enrolled, ...]:
         """
@@ -159,6 +220,20 @@ class Live:
         """One running plugin by qualified name, or nothing where it is not one of this session's."""
         return next((each for each in self.enrolled if each.qualified == qualified), None)
 
+    def stored(self, plugin: Enrolled) -> Mapping[str, object]:
+        """
+        What one plugin's column holds as this pass sees it: the snapshot, under this pass's writes.
+
+        The one reading, so `settings` and `state` cannot come to disagree about which of the two a
+        value came from.
+
+        A name left holding `None` is a name nothing holds, which is the store's own answer rather
+        than a rule invented here: `json_patch` removes a name a write gave null to, so a read that
+        kept it would be telling a plugin something no later pass will ever say.
+        """
+        merged = {**self.tending.of(plugin.qualified), **self.written.of(plugin.qualified)}
+        return {name: value for name, value in merged.items() if value is not None}
+
     def settings(self, plugin: Enrolled) -> dict[str, Setting]:
         """
         What one plugin reads as its settings, which is its card's defaults under whatever was stored.
@@ -166,7 +241,7 @@ class Live:
         The parse the `STRICT` table stopped doing, against the schema the card already declares; see
         `protocol.settings_of`.
         """
-        return settings_of(plugin.described, self.tending.of(plugin.qualified))
+        return settings_of(plugin.described, self.stored(plugin))
 
     def instructions(self) -> tuple[str, ...]:
         """
@@ -223,7 +298,7 @@ class Live:
         The complement of `settings`, over the same stored mapping, so the two are exactly what is in
         the column and nothing is in both.
         """
-        return state_of(plugin.described, self.tending.of(plugin.qualified))
+        return state_of(plugin.described, self.stored(plugin))
 
     def payload(self, plugin: Enrolled) -> dict[str, object]:
         """The envelope every event carries: this session, its files, and this plugin's own store."""
@@ -244,9 +319,13 @@ class Live:
         leaves every other plugin's save alone. The notes are handed back rather than delivered,
         because where a delivery may be made is the caller's question and not this one's - inside a
         step it is safe, and at a turn boundary it is a value the pass returns.
+
+        The overlay is written **after** the column and not before, so a write that failed leaves no
+        plugin reading back a value the store does not hold.
         """
         if answered.setting:
             await self.storing(plugin.qualified, answered.setting)
+            self.written.wrote(plugin.qualified, answered.setting)
         return tuple(noted(plugin.qualified, each) for each in answered.deliver)
 
 
@@ -524,15 +603,21 @@ def asking_through(live: Live) -> Asking:
     """
     Calling a plugin's tool, with its answer applied and its refusal raised as a correction.
 
-    **Three effects out of one call**, which is what the protocol was read off: a `retry` is a
-    correctable refusal, a `deliver` puts a message in the inbox carrying its own boundary, and a
-    `return` is the value the model is handed. The order is the one the tool intends - a refusal
-    happens instead of the other two, and a delivery happens before the model is told it was
-    recorded.
+    **Four effects out of one call**, which is what the protocol was read off: a `retry` is a
+    correctable refusal, a `deliver` puts a message in the inbox carrying its own boundary, an `end`
+    stops the turn once the call has been answered, and a `return` is the answer. The order is the one
+    the tool intends - a refusal happens instead of the rest, and a delivery happens before the value
+    saying it was recorded.
 
     The delivery is made from **inside** the call rather than handed back, and that is sound rather
     than an exception to the rule at the top of this module: `Stepping.call` wraps this whole call in
     a step, so a resumed pass replays the recorded return and writes no second entry.
+
+    `end` is the one effect this does not perform, because it cannot: what ends a turn is the loop
+    carrying it, several frames above, and what a tool hands back is the value the model is told.
+    `halting` is the channel, and what it marks is the *record* of this call rather than a flag in
+    memory - so a resumed pass, which replays that record and never asks the plugin again, ends the
+    turn exactly where the first pass did.
     """
 
     async def call(qualified: str, declared: str, arguments: Mapping[str, object]) -> object:
@@ -544,6 +629,8 @@ def asking_through(live: Live) -> Asking:
             raise ModelRetry(answered.retry)
         for note in await live.perform(plugin, answered):
             await live.delivering(note)
+        if answered.end:
+            live.halting()
         return answered.returned
 
     return call

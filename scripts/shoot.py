@@ -29,6 +29,7 @@ from playwright.sync_api import Response
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import sync_playwright
 
+from scripts.gallery import ZONE
 from scripts.gallery import pages
 
 # Wide enough that the rail stands beside the conversation rather than sliding off, and tall
@@ -110,7 +111,10 @@ def shoot(gallery: Path, out: Path, targets: tuple[Target, ...]) -> tuple[Path, 
             browser = driving.chromium.launch()
             try:
                 for label, viewport in VIEWPORTS.items():
-                    page = browser.new_page(viewport=viewport)
+                    # In the gallery's own zone, which is what keeps a shot the same picture on every
+                    # machine: the pages are drawn against `ZONE`, and a browser on some other one
+                    # would have the script ask for them again rather than photograph what is there.
+                    page = browser.new_page(viewport=viewport, timezone_id=ZONE.key)
                     diagnosing(page, label)
                     for target in targets:
                         page.goto(f"{base}/{target.path}", wait_until="load")

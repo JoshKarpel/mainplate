@@ -107,6 +107,11 @@ rot, which is what a reader with `mainplate.js` absent gets, and `warm as of 12m
 reading of it. Cold is the one state the server *can* assert, since it was already true when the
 page was rendered and nothing makes a cold prefix warm again.
 
+That absolute time is drawn against
+[the reader's own clock](console.md#which-clock-a-moment-is-printed-against), like every other
+moment the page prints, which is also why the script does not compute it: the zone reaches the
+server and the moment is rendered there once.
+
 **That split is also what keeps one elapsed formatter rather than two.** The server never renders a
 duration here, so `ago` exists only in the script; a server that rendered `12m` too would be the
 same three-branch format written in two languages with nothing holding them together.

@@ -11,8 +11,10 @@ from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from re import sub
+from zoneinfo import ZoneInfo
 
 import pytest
+from calling import UTC_ZONE
 from calling import Caller
 from calling import calling
 from conftest import CONFIG
@@ -38,6 +40,7 @@ from mainplate.app import build_app
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
+from mainplate.console import HERE
 from mainplate.console import LONGEST_PROMPT
 from mainplate.console import NotAMessage
 from mainplate.console import Sending
@@ -45,6 +48,7 @@ from mainplate.console import parse_form_prompt
 from mainplate.console import parse_form_send
 from mainplate.console import posted_isolation
 from mainplate.console import posted_workspace
+from mainplate.console import reader_in
 from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import LEADERS
 from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
@@ -173,7 +177,7 @@ async def a_session(
         return session
 
 
-async def watched(app: ASGIApp, session: str) -> str:
+async def watched(app: ASGIApp, session: str, zone: str = UTC_ZONE) -> str:
     """
     The transcript alone, as the page's live connection sends it.
 
@@ -188,7 +192,7 @@ async def watched(app: ASGIApp, session: str) -> str:
     same message carries the list and the list carries the title - which is that same text again,
     escaped as an ordinary child, and the copy the first paragraph says these must not measure.
     """
-    async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
+    async with calling(app, zone) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
         return without_region((await anext(events)).data, LISTED_ID)
 
 
@@ -899,7 +903,9 @@ class TestWhatIsNewInTheList:
         async with calling(app) as caller:
             answered = await caller.get("/")
         assert f'datetime="{(WHEN + timedelta(days=2)).isoformat()}"' in answered.text
-        assert 'title="Last message Mar 16, 15:09. Created Mar 14, 15:09"' in answered.text
+        # Whole in the title, down to the second and naming the clock it was read against, because a
+        # hover is the one place with room to say which nine-oh-nine this is.
+        assert 'title="Last message 2031-03-16 15:09:26+00:00. Created 2031-03-14 15:09:26+00:00"' in answered.text
 
     async def test_a_session_nobody_started_is_a_page_with_a_way_back(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
@@ -1795,6 +1801,127 @@ class TestWhatASessionIsOn:
         assert '<dt>output override</dt><dd class="about__override">20000</dd>' in with_one.text
 
 
+class TestTheClockAPageIsDrawnAgainst:
+    """
+    Which zone a moment is printed in, which the browser says and the server decides.
+
+    The whole loop is a cookie: the script writes the reader's own zone into one and asks for the
+    page again where what it got was drawn against another. So what these pin is the server's half -
+    that the cookie reaches every render, that an unreadable one costs the reader's clock and nothing
+    else, and that the page says which clock it used. `TestTheClockAPageIsDrawnAgainst` in
+    `test_browser.py` is the script's half, in a real browser.
+    """
+
+    async def test_the_cookie_decides_which_clock_every_moment_is_printed_against(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        One checkpoint, two readers, two clocks - and the same instant under both of them.
+
+        The rule and the cache note are the two moments a conversation draws, and they move together
+        because they are one `Reader` threaded to both rather than two places that format a date.
+        """
+        session = await a_session(app, service)
+        await answered(service, session, *ANSWERED)
+
+        here = await watched(app, session)
+        there = await watched(app, session, "Asia/Tokyo")
+
+        assert ">15:09</time>" in here
+        assert "cached at 15:09" in here
+        assert ">00:09</time>" in there, "nine minutes past midnight the next day, in Tokyo"
+        assert "cached at 00:09" in there
+        assert f'datetime="{WHEN.isoformat()}"' in there, "and the same instant underneath it"
+
+    async def test_a_page_says_which_clock_it_was_drawn_against(self, app: ASGIApp, service: Service) -> None:
+        """
+        What the script compares against its own zone, which is what stops the loop being one.
+
+        Written back rather than echoed: a cookie naming a zone this machine's database does not have
+        falls back to the console's own, and saying so is what tells a browser its request was not
+        honoured rather than leaving it to ask for ever.
+        """
+        session = await a_session(app, service)
+
+        async with calling(app, "Asia/Tokyo") as caller:
+            asked = await caller.get(f"/sessions/{session}")
+        async with calling(app, "Mars/Olympus") as caller:
+            refused = await caller.get(f"/sessions/{session}")
+
+        assert 'data-zone="Asia/Tokyo"' in asked.text
+        assert f'data-zone="{HERE.key}"' in refused.text, "unreadable, so this console's own clock"
+
+    async def test_every_page_with_a_moment_on_it_says_which_clock_it_used(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        All three, because the sidebar's dates are on all three and the script reads one attribute.
+
+        A page that forgot it is a page a reader in another zone is never served again in their own:
+        the script compares what it finds, finds nothing, and leaves the page as it is.
+        """
+        session = await a_session(app, service)
+
+        async with calling(app, "Asia/Tokyo") as caller:
+            for where in ("/", f"/sessions/{session}", f"/sessions/{session}/forks/new?at=0"):
+                page = await caller.get(where)
+                assert page.status == 200, where
+                assert 'data-zone="Asia/Tokyo"' in page.text, where
+
+    async def test_a_cookie_nobody_can_read_costs_the_clock_and_nothing_else(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        `forge.offers`' arm rather than `catalogue.discover`'s: the page still renders, in UTC.
+
+        A value nobody typed must not answer a browser with a refusal, so every unreadable shape is
+        the same answer as no cookie at all.
+        """
+        session = await a_session(app, service)
+        await answered(service, session, *ANSWERED)
+
+        for said in ("Mars/Olympus", "../../../etc/passwd", "", "%2F%2Fnope"):
+            async with calling(app, said) as caller:
+                page = await caller.get(f"/sessions/{session}")
+            assert page.status == 200, said
+            assert f'data-zone="{HERE.key}"' in page.text, said
+
+    async def test_a_page_says_that_it_depends_on_the_cookie(self, app: ASGIApp, service: Service) -> None:
+        """
+        `Vary`, because the same address now renders different moments for two readers.
+
+        These responses say nothing about caching, so a cache falls back to its own heuristic, and
+        the one this closes is the browser's own: a page cached before the script wrote the cookie
+        and served again from that cache is a reader stuck on the console's clock, since the script
+        has already asked once and will not ask again.
+        """
+        session = await a_session(app, service)
+        await answered(service, session, *ANSWERED)
+        await service.checkpointer.supply(session, model_key(0, 0), answered_with(ANSWERED[0]))
+
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session}")
+            swap = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
+
+        assert page.status == 200
+        assert swap.status == 200, "the control: a refusal would carry the header too"
+        assert page.headers["vary"] == "cookie"
+        assert swap.headers["vary"] == "cookie", "the swaps too, since a rule is in one"
+
+    def test_one_cookie_is_found_among_whatever_else_a_browser_is_holding(self) -> None:
+        """
+        The header is `name=value` pairs and that is the whole grammar this parses.
+
+        The slash is why the script writes it with `encodeURIComponent` and why this decodes: a zone
+        name has one in it, and a cookie value is not the place to find out what a browser does with
+        an undecoded one.
+        """
+        assert reader_in((b"theme=dark; zone=Asia%2FTokyo; other=1",)).zone == ZoneInfo("Asia/Tokyo")
+        assert reader_in((b"theme=dark", b"zone=Asia/Tokyo")).zone == ZoneInfo("Asia/Tokyo")
+        assert reader_in((b"zoned=Asia%2FTokyo",)).zone == HERE, "a name that merely starts the same is not it"
+        assert reader_in(()).zone == HERE
+
+
 class TestWhatARuleSays:
     """
     The line that opens a turn, which is where everything true of the turn rather than of a panel is.
@@ -1812,6 +1939,46 @@ class TestWhatARuleSays:
         assert "\N{DOWNWARDS ARROW}640" in region
         assert "(\N{WHITE SQUARE CONTAINING BLACK SMALL SQUARE}4K)" in region
         assert "\N{GREEK CAPITAL LETTER DELTA}$0.0123" in region
+
+    async def test_a_rule_says_when_the_answer_it_stands_at_came_back(self, app: ASGIApp, service: Service) -> None:
+        """
+        The moment leads the figures, drawn against the reader's clock and carrying the instant.
+
+        The text is the clock and the attribute is the moment, which is what makes the pair worth
+        having: the same rule read from another zone prints different digits over the same
+        `datetime`, and that is the test below.
+        """
+        session = await a_session(app, service)
+        await answered(service, session, *ANSWERED)
+        region = await watched(app, session)
+        assert f'<time class="rule__when" datetime="{WHEN.isoformat()}"' in region
+        assert 'title="Turn 0 was first answered at 2031-03-14 15:09:26+00:00">15:09</time>' in region
+
+    async def test_the_moment_a_turn_rule_says_is_its_first_answer_and_not_its_last(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The one figure a turn rule takes from a request rather than from the turn.
+
+        It is that way round so the moments read down the page in the order they happened: a turn's
+        last answer, on the rule that *opens* it, would run backwards against the requests below.
+        """
+        session = await a_session(app, service)
+        later = WHEN + timedelta(minutes=7)
+        await answered(
+            service,
+            session,
+            ANSWERED[0],
+            {
+                "kind": "response",
+                "parts": [{"part_kind": "text", "content": "and the rest of it"}],
+                "timestamp": later.isoformat(),
+                "usage": {"input_tokens": 9},
+            },
+        )
+        region = await watched(app, session)
+        assert 'title="Turn 0 was first answered at 2031-03-14 15:09:26+00:00">15:09</time>' in region
+        assert 'title="Request 0.1 was answered at 2031-03-14 15:16:26+00:00">15:16</time>' in region
 
     async def test_a_rule_says_how_full_the_window_is_and_draws_the_same_fact_as_a_gauge(
         self, app: ASGIApp, service: Service

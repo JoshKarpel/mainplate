@@ -129,7 +129,7 @@ change:
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
   anything to the parent that runs a program against a session's worktree.**
 - [`docs/design/durability.md`](docs/design/durability.md): the model-and-tool loop, the steps it
-  records, and what one pass does.
+  records, what one pass does, and what a session does when a provider says to come back later.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
   sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
   executes a plugin before somebody presses the button on that step**, which is a trust boundary and
@@ -138,8 +138,8 @@ change:
   repository ready to work in is a plugin too**, which is where the two grants a repository's plugin
   has at `setup` and at no other event are written down. **This repository carries that plugin in
   `.mainplate/`**, described below.
-- [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
-  picker, and the message box.
+- [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, which
+  clock a moment is printed against, the picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
   page, and the vendored monospace face box drawing depends on.
 - [`docs/design/deployment.md`](docs/design/deployment.md): the systemd unit `mainplate install`
