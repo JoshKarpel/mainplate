@@ -1296,7 +1296,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         await expect(page.locator(".panel[data-kind=thinking] .copy")).to_have_count(1)
 
 
-# One response of a turn, as the capability records it partway through: the model reasoned and asked
+# One response of a turn, as `Stepping` records it partway through: the model reasoned and asked
 # for two files at once. Two calls because that is the state worth watching arrive - they run
 # together, so one comes back while the other is still out.
 PARTWAY = answered_with(

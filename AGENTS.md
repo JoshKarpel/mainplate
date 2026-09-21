@@ -128,8 +128,8 @@ change:
 - [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
   anything to the parent that runs a program against a session's worktree.**
-- [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, and what one
-  pass does.
+- [`docs/design/durability.md`](docs/design/durability.md): the model-and-tool loop, the steps it
+  records, and what one pass does.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
   sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
   executes a plugin before somebody presses the button on that step**, which is a trust boundary and

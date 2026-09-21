@@ -1845,6 +1845,28 @@ class TestAnAnswerCutOffAtTheOutputLimit:
         assert ended == Blocked(listening=frozenset({opened_key(1)}))
         assert refusal_in(await service.checkpointer.load(SESSION)) is None
 
+    async def test_a_tool_call_cut_off_stalls_the_session_and_is_said_to_be_one(self, service: Service) -> None:
+        """
+        The other shape of the same cut-off: the model ran out of room writing a call's arguments.
+        Left to the retry path the loop would tell the model its arguments were malformed and ask
+        again, which spends a request on an answer that was never wrong. It stalls like the
+        thinking-only case and the reason says which of the two it was.
+        """
+        await waiting(service, "hello")
+        cut_off = ModelResponse(
+            parts=[ToolCallPart("read", '{"path": "READ', "call-read-0")], finish_reason="length", timestamp=WHEN
+        )
+        scripted = Scripted(script=(cut_off,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert ended == Completed(Stalled())
+        assert scripted.asked == 1, "the model was not asked to try again"
+        refused = parse_refused(recorded[refused_key(0, 1)])
+        assert refused.status is None
+        assert "tool call" in refused.why
+
     def test_the_reason_names_the_number_that_was_sent(self) -> None:
         """The number is what somebody looks up, and its absence is what a session with none should say."""
         assert "output limit of 4096 tokens" in cut_off_why(UnexpectedModelBehavior("cut"), 4096)

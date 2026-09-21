@@ -13,6 +13,7 @@ from conftest import Provider
 from conftest import Scripted
 from conftest import calls
 from pydantic_ai import ModelRetry
+from pydantic_ai.exceptions import IncompleteToolCall
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import RetryPromptPart
@@ -583,6 +584,39 @@ class TestTheModelAndToolLoop:
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0") as scope, pytest.raises(UnexpectedModelBehavior):
                 await calling(scripted, Noting()).run("go", (), scope)
+
+    async def test_a_tool_call_cut_off_at_the_output_limit_is_raised_rather_than_retried(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        Truncated arguments fail validation like any other bad call, so left to the retry path the
+        loop would ask the model to try again with a prompt that says the arguments were wrong. They
+        were not: the model was cut off writing them, and `conversing` stalls the turn on this
+        exception rather than spending another request on it.
+        """
+        cut_off = ModelResponse(parts=[ToolCallPart("note", '{"what": "al', "call-note-0")], finish_reason="length")
+        scripted = Scripted(script=(cut_off, ModelResponse(parts=[TextPart("done")])))
+        tools = Noting()
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope, pytest.raises(IncompleteToolCall):
+                await calling(scripted, tools).run("go", (), scope)
+
+        assert scripted.asked == 1, "the model was not asked to try again"
+        assert tools.ran == [], "and nothing ran on half an argument"
+
+    async def test_a_whole_call_in_an_answer_cut_off_after_it_still_runs(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """The control: the limit was reached after the call was written out, and the call is usable."""
+        cut_off = ModelResponse(parts=[ToolCallPart("note", {"what": "alpha"}, "call-note-0")], finish_reason="length")
+        scripted = Scripted(script=(cut_off, ModelResponse(parts=[TextPart("done")])))
+        tools = Noting()
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope:
+                messages = await calling(scripted, tools).run("go", (), scope)
+
+        assert tools.ran == ["alpha"]
+        assert output_of(messages) == "done"
 
     async def test_duplicate_call_ids_fail_loudly(self, checkpointer: MemoryCheckpointer) -> None:
         response = ModelResponse(

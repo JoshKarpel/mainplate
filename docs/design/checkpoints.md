@@ -169,7 +169,7 @@ without being taught that either.
 readers (`opened_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`, read
 by `choice_of` and `reached` for the body, `transcript`, `so_far` and `responded` for the page,
 `before` for a fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them
-for the writers, from a turn prefix and a kind, which is what lets one capability name a step
+for the writers, from a turn prefix and a kind, which is what lets the durability layer name a step
 without importing the conversation. `tree_key(n, i)` and `Stepping.key("tree")` therefore produce
 the same string from opposite ends, and nothing enforces that: change one and change the other. That
 is [one fact in two places](../philosophy.md#one-fact-in-two-places), paid the usual way, and the

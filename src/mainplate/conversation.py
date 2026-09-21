@@ -2422,8 +2422,8 @@ def so_far(recorded: Mapping[str, object], turn: int) -> tuple[Block, ...]:
     The second of the two readings of a turn, and the reason a reader watches one happen instead of
     waiting for the whole of it: `turn:{n}:messages` is written when the turn *ends*, where the
     responses and the results behind it are written as they arrive. Nothing here is a second copy of
-    anything - these are the records the durability capability already keeps so that a resumed pass
-    does not pay for the same request twice.
+    anything - these are the records `Stepping` already keeps so that a resumed pass does not pay
+    for the same request twice.
 
     What comes out is a *prefix* of what `blocks_of` will produce once the turn is answered: the
     same responses, in the same order, cut by the same rule, with the results that have not arrived

@@ -322,6 +322,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The console drives its own model-and-tool loop**, and `StepwiseDurability` is gone with the
+  Pydantic AI agent graph it was a capability of. Pydantic AI still makes every provider request and
+  types every message; what the console owns now is the order of a turn, which is what durability
+  was always about: the allowance, the inbox cursor, a plugin's injection, the tree snapshot, the
+  request, the response, and each tool's return are recorded by the same `Stepping` in the same
+  places, handed to the loop as a value rather than found through a context variable under somebody
+  else's hooks. Nothing about a session's checkpoint changes shape. What went with the graph is what
+  the console never used: structured output, native and deferred tools, and the request cap a turn
+  had to switch off.
 - **A tool call's row says what it acted on**, beside the tool's name: the path a `read` or an
   `edit` took, with which lines or how many operations, and the first line of what `bash` ran, with
   how many lines follow. That is what makes the other half affordable: **every call is drawn shut,

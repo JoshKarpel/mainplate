@@ -161,12 +161,15 @@ other way costs a redelivery per lease until somebody looks.
 
 **An answer the model was cut off in is the one settled thing that is not a 4xx**, and `conversing`
 names it rather than `terminally`, because it is not raised by the provider request. A response
-stopped at its output limit with nothing the loop can act on, all thinking or a tool call broken off
-mid-arguments, is recorded like any other; the loop then raises `UnexpectedModelBehavior`. Every
-input to that answer is recorded, so `conversing` writes a `Refused` with no status under the request
-the turn could not go on to make and reports `Stalled`. Anything else the loop raises is left to
-propagate, since a raise this console cannot account for is the transient default. This should be
-rare: a request is sent with the model's whole output limit
+stopped at its output limit with nothing the loop can act on is recorded like any other, and the loop
+then raises over it: `UnexpectedModelBehavior` for all thinking and no words, and its subclass
+`IncompleteToolCall` for a tool call broken off mid-arguments, which the loop checks for *before*
+validating the call, because truncated arguments fail validation like any bad call's and the retry
+path would otherwise spend a request telling the model its arguments were wrong. Every input to that
+answer is recorded, so `conversing` writes a `Refused` with no status under the request the turn
+could not go on to make, saying which of the two it was, and reports `Stalled`. Anything else the
+loop raises is left to propagate, since a raise this console cannot account for is the transient
+default. This should be rare: a request is sent with the model's whole output limit
 ([endpoints](endpoints.md#what-a-request-may-generate)), so reaching it is a model that ran to its
 ceiling without finishing a thought, and the cut-off answer stays on the page for what it is.
 
@@ -259,16 +262,18 @@ change.
 
 ## What replay costs
 
-Each pass re-runs the current turn's model-and-tool loop over its recorded responses and returns.
-The provider and tools are not reached twice, but a turn of many requests still revisits its earlier
-steps on every pass. The generic Pydantic AI graph and capability contexts are no longer part of
-that replay; what remains is the checkpoint's own sequence.
+Each pass re-runs the current turn's loop from the top over its recorded responses and returns, so a
+turn of *n* requests replays O(n²) steps across its passes. No provider or tool is reached twice;
+what is repeated is the loop's own work between steps, which is now this console's and small:
+parsing a record back out of the store, validating a replayed call's arguments, and building the
+next request. It has not been measured since the graph went. The last measurement, with the graph
+in place, put record parsing and loading under a few percent of a forty-request turn and the graph's
+own per-hook context rebuilding as the dominant term, and that term is gone.
 
-Do not build a record cache or a fetch-only-what-is-missing store for this. Loads and parsing are
-linear, and the next useful cut would be teaching the loop to select its first incomplete transition
-directly from the request and tool records. Raising the allowance also cuts pass count and replay,
-but makes a steer wait behind the live requests left in the pass, so the console keeps the default
-at one.
+Do not build a record cache or a fetch-only-what-is-missing store for this until a measurement says
+the quadratic is somewhere a store can reach. Raising the allowance cuts pass count and replay
+together, but makes a steer wait behind the live requests left in the pass, so the console keeps the
+default at one unless measured replay cost is worth that loss of responsiveness.
 
 **The tests default to unbounded and the console ships one.** A test about a conversation drives a
 whole turn in one pass and says nothing about how a pass is cut; `TestWhatOnePassDoes` is where the

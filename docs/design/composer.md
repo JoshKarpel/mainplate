@@ -385,9 +385,12 @@ history. A steer travelling beside a batch of tool results therefore follows tho
 reaches the same provider request, while remaining its own message in `turn:{n}:messages` for the
 transcript to draw.
 
-A new message is appended rather than an existing one mutated. Pydantic AI's model preparation may
-merge consecutive requests for a provider that wants one user turn, but the recorded history keeps
-the steer apart from the tool returns and the model response it shaped.
+A new message is appended rather than an existing one mutated, and nothing merges it into the tool
+returns beside it for the wire either: both providers take a request that arrives as consecutive
+messages, the Anthropic mapper already emits that shape of its own accord, and one message per thing
+said is what the transcript reads back. The cost, stated: the wire sees two user entries where the
+graph this loop replaced sent one, and a provider that stopped accepting that would be found by a
+live turn rather than a test.
 
 **What it reads is the pass's own snapshot rather than the store**, which is `Run.pending`'s own
 shape: entries are ordinary records, so they are already in the snapshot the pass loaded on its way

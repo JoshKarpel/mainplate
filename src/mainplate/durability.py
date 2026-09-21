@@ -254,9 +254,8 @@ type Draining = Callable[[StepKey], Awaitable[Sequence[str]]]
 What the person has said into this turn that no request has carried, taken under the key it records.
 
 A function for the reason `Pricer` is one: what answers it reads the session's inbox, and
-`conversation.py` reads `agent.py`, which builds the agent this capability is attached to. Injecting
-the one question keeps the capability ignorant of what a message is, which is the same ignorance
-that lets one instance serve every session.
+`conversation.py` reads `agent.py`, which builds the loop this records. Injecting the one question
+keeps this module ignorant of what a message is.
 
 It takes the *key* rather than a count of what has already been said, because the record it writes is
 a cursor: how far down the inbox this turn has read. Where a count had to be carried on the scope and
@@ -276,8 +275,8 @@ What a session's plugins want appended to the request about to go out, taken und
 records it.
 
 A function for the reason `Pricer` and `Draining` are: what answers it runs somebody else's script,
-and injecting the one question keeps this capability ignorant of what a plugin is and of where a
-session's files are. One instance still serves every session.
+and injecting the one question keeps this module ignorant of what a plugin is and of where a
+session's files are.
 
 It is handed the messages because that is what a plugin decides on: which paths the model reached
 for, and whether it has already been handed what covers them. The history is the ledger, so a
@@ -305,9 +304,9 @@ type Pricer = Callable[[RequestUsage], Decimal | None]
 What one model request came to, in US dollars, asked of whatever knows the rates.
 
 A function rather than the thing that answers it, and that is a ring rather than a preference: what
-prices a model is `reference.py`, which reads `agent.py`, which builds the agent this capability is
-attached to. Injecting the one question this module actually has keeps it ignorant of endpoints,
-catalogues and databases, which is the same ignorance that lets one capability serve every session.
+prices a model is `reference.py`, which reads `agent.py`, which builds the loop this records.
+Injecting the one question this module actually has keeps it ignorant of endpoints, catalogues and
+databases.
 
 `None` is "nothing here knows", never a free request, so an unpriced model records no cost rather
 than a zero somebody would read as having been given something for nothing.
@@ -500,6 +499,39 @@ class Stepping:
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
+        """
+        The provider's answer, asked for once across every pass at this conversation.
+
+        The step records what the *codec* will take, so the response is lowered to JSON here rather
+        than handed over as a dataclass: `JsonCodec` is the standard library's `json`, and a
+        `ModelResponse` is not something it can encode. `parse_model_response` is the other half,
+        and it is required rather than a convenience, since what comes back out of the store is an
+        `object` on the pass that ran the request as much as on the one that resumed it.
+
+        It is priced and timed on the way past for the same reason it is recorded at all: see
+        `price` and `stamp`, both of which have to run here because everything further out happens
+        after the record is written.
+
+        The worktree is snapshotted first, because this is the moment it is worth snapshotting: no
+        tool is running, so the tree is a coherent thing to read, and what is recorded is the state
+        the model is about to be asked to reason about. A pass that replays this request replays the
+        snapshot too and runs no git, so the pair stay in step whatever happens between them.
+
+        The allowance is spent *before* any of that, so a request that was never made leaves no tree
+        recorded in front of it. It is ordinarily spent earlier still, in `Agent.before_request`,
+        because that runs before this and records a cursor of its own; see `allowed`.
+
+        A refusal the provider will never take back is recorded here and re-raised as
+        `RequestRefused`, which is the one failure this console answers for rather than letting the
+        worker retry: see that exception for the loop it closes. Everything else propagates exactly
+        as it did, because a redelivery is the right answer to an error that might come out
+        differently.
+
+        A request already known to be refused is not made again, which is the first thing checked
+        and therefore ahead of the allowance and the snapshot alike: a pass must spend nothing on a
+        question whose answer is recorded, and a tree captured in front of a request nobody makes is
+        a record of a moment that did not happen.
+        """
         at = self.at("model")
         if (already := self.refused(at)) is not None:
             raise RequestRefused(already.why)
@@ -530,6 +562,38 @@ class Stepping:
         context: RunContext[None],
         tool: ToolsetTool[None],
     ) -> object:
+        """
+        Run a tool once across every pass of this conversation, recording what it came back with.
+
+        Required rather than an optimisation, and for both halves of what a tool does. A tool that
+        *reads* returns a different answer every time it is asked, so a pass that re-ran one would
+        resume the conversation against a file that has moved since the model was told what it
+        said. A tool that *writes* has already written: running it again would either repeat the
+        effect or, here, fail against anchors its own first run invalidated, which is a refusal for
+        an edit that actually succeeded.
+
+        Keyed by the call's own id rather than by position, because a model may ask for several
+        tools in one response and `Agent.run` runs them concurrently: which reaches this first is a
+        race, so a counter would hand a pass another call's record. The id is part of the model
+        response this conversation recorded, so a replay is handed the same one.
+
+        This is `step` and not `transact`, so it is at-least-once: a crash between the tool
+        returning and the record landing re-runs it on the next pass. That window is one store
+        round trip, and the failure it produces is the mild one, because an anchored edit whose
+        anchors no longer resolve is refused rather than applied somewhere wrong.
+
+        **How long it took is a field of the same record**, written by the same step, so there is no
+        window where a return was recorded and its duration was not. Timed around the tool alone,
+        so what is recorded is the call rather than the store write after it. A tool that raises
+        records nothing at all - the `ModelRetry` propagates out of the step and the call stays out
+        until a retry lands - so a failed call has no duration for the same reason it has no return.
+
+        **A call a plugin refused is recorded as one that returned the refusal**, inside this same
+        step, so the record is the whole of what a replay needs and the plugin is never asked twice.
+        It has no duration, because nothing ran: what took time was the asking, which is the
+        plugin's and not the tool's.
+        """
+
         async def perform() -> object:
             refused = await self.gated(call)
             if refused is not None:
