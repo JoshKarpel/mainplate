@@ -14,6 +14,7 @@ from datetime import timedelta
 import pytest
 from conftest import DEFAULT_CHOICE
 from conftest import WHEN
+from conftest import WORDED
 from conftest import passing
 from conftest import started
 from without_durability.interfaces import claimed
@@ -461,22 +462,25 @@ class TestHowLongAWaitIsWordedIn:
     The server's half of the one figure on this page written twice.
 
     `soon` in `mainplate.js` is the other half and repaints this element a second after the page
-    lands, so the two have to agree unit for unit. The zero unit is where they part company most
-    easily, and `TestTheCountdownOnAWait` in `test_browser.py` pins the script's side of exactly
-    these widths.
+    lands, so the two have to agree unit for unit. Which widths they owe each other is `WORDED` in
+    `conftest.py`, parametrised into both sides so neither can grow a width alone; the script's side
+    is `TestTheLineWhereNothingIsHappening` in `test_browser.py`.
     """
+
+    @pytest.mark.parametrize(("remaining", "said"), WORDED)
+    def test_a_width_is_worded_the_way_the_script_words_it(self, remaining: int, said: str) -> None:
+        assert elapsed(timedelta(seconds=remaining)) == said
 
     @pytest.mark.parametrize(
         ("took", "said"),
         [
             pytest.param(timedelta(milliseconds=80), "80ms", id="under a second"),
             pytest.param(timedelta(seconds=12.34), "12.3s", id="seconds"),
-            pytest.param(timedelta(minutes=9, seconds=7), "9m 7s", id="minutes"),
-            pytest.param(timedelta(hours=3, minutes=25), "3h 25m", id="hours"),
-            pytest.param(timedelta(days=4, hours=14), "4d 14h", id="days"),
-            pytest.param(timedelta(hours=1), "1h 0m", id="a whole hour keeps its zero"),
-            pytest.param(timedelta(days=1), "1d 0h", id="a whole day keeps its zero"),
         ],
     )
-    def test_each_width_drops_the_finest_unit_the_one_below_it_had(self, took: timedelta, said: str) -> None:
+    def test_a_width_below_a_minute_is_this_sides_alone(self, took: timedelta, said: str) -> None:
+        """
+        Not in the shared table, because no countdown reaches them: what `elapsed` is asked for below
+        a minute is how long a turn or a tool call took, which the script never repaints.
+        """
         assert elapsed(took) == said

@@ -299,7 +299,6 @@ class TestWhatAStepHolds:
 
         An arm added without a case here is not a failing test but a *silent* one: the suite goes on
         passing and the record nobody round-tripped is the one a dump or a migration finds out about.
-        Three arms had already arrived that way before this asked.
 
         Asked of `Step` itself rather than against a written-down count, so adding an arm is one line
         here and adding a number somewhere is never the fix.
@@ -307,6 +306,24 @@ class TestWhatAStepHolds:
         arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
 
         assert {type(each).__name__ for each in EVERY_RECORD} == arms
+
+    def test_every_record_there_is_is_an_arm(self) -> None:
+        """
+        **The half the check above cannot do**, and the reason it has to be asked of the hierarchy.
+        That one holds two hand-written lists against each other, so a record missing from *both* is
+        invisible to it, and four had arrived that way: a `Deferred`, a `Failed`, an `Environment`
+        and an `Archived` were written to checkpoints that `Step` could not read, with the suite
+        green throughout.
+
+        Subclassing `Record` is what nobody can forget, because it is how a record is declared at
+        all. So the list nothing may leave out is derived from that, and what is stated here is only
+        the exception: `Named` and `Enrolled` are members of `Declared` and `Registered` and are
+        never a checkpoint value on their own, which is a thing no schema says and this has to.
+        """
+        arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
+        nested = {"Named", "Enrolled"}
+
+        assert {each.__name__ for each in records.Record.__subclasses__()} - arms == nested
 
     def test_a_choice_is_deliberately_not_an_arm(self) -> None:
         """
@@ -2004,6 +2021,27 @@ class TestARequestTheProviderWillNotTakeYet:
         """
         now = datetime.now(UTC)
         assert deferred_until(ModelHTTPError(status_code=429, model_name="fixture", body=body), now) is None
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            pytest.param(503, id="a provider that failed and guessed when it would be back"),
+            pytest.param(500, id="a provider that failed and said nothing about why"),
+            pytest.param(408, id="a request that timed out"),
+        ],
+    )
+    def test_only_a_rate_limit_parks_a_session_however_honest_the_header(self, status: int) -> None:
+        """
+        **The difference is whether the provider knows.** A `429` is a window it is keeping itself,
+        so the moment it names is a fact; every other code that reaches here is transient, and a
+        header on one is a guess about when something outside its control will be fixed. Believed,
+        a `503` with a day in it turns a blip into a day of silence at the moment the ordinary
+        redelivery would have got an answer on its next attempt.
+        """
+        now = datetime.now(UTC)
+        honest = ModelHTTPError(status_code=status, model_name="fixture", headers={"retry-after": "86400"})
+
+        assert deferred_until(honest, now) is None
 
     def test_a_moment_already_past_is_not_a_wait(self) -> None:
         """

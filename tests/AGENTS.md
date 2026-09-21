@@ -62,6 +62,24 @@ which is the boundary working rather than a fixture to loosen.
 than in one file because two suites want it: `test_console.py` presses the button through a route and
 then has to run the pass the press asked for, which is the only way to assert what the press caused.
 
+**Every browser context carries the `zone` cookie as well as the timezone**, which `reading` in
+`test_browser.py` seeds. The timezone alone covers the gallery, whose pages are on disk in
+`gallery.ZONE`; a test on the live `console` fixture is answered by a real console drawing in the
+*runner's* zone until a request carries one, so those pages came back against another clock and
+`paintClock` reloaded them mid-fixture. `TestTheClockAPageIsDrawnAgainst` asks for contexts of its
+own, since the reload is what it is about.
+
+**A width added to `elapsed` or to `soon` goes in `WORDED` in `conftest.py`, not in either test.**
+How long a wait has left is worded twice on purpose, by the server and then by the script, so the two
+suites that pin it are parametrised from one table: written out in each, a width added to one side
+and not the other is a drift neither test reports. `test_attending.py` holds `elapsed` against it and
+`test_browser.py` holds `soon` against it in a real Chromium, because only a browser runs the second.
+
+**That browser half stops the clock and reads the figure back inside the same stop.** The line
+repaints itself once a second against the real one, so an assertion on the live element is racing an
+interval that puts `any moment` there a tick later, and the seconds a minutes-wide wait prints would
+otherwise be however long the repaint took to run.
+
 **A pass that sets plugins up needs `tendings`.** Which plugins are on is a column the *pass* reads
 now, so `conversing` built without a way to read it sets up every declared plugin regardless of what
 the switches said. A test asserting that a plugin left off was never launched must pass one.

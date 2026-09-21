@@ -297,18 +297,28 @@ The page writes back the zone it *used*, on `<html>` as `data-zone`, and that is
 loop rather than leaving one. A browser whose zone is not the one the page was drawn against asks for
 the page again, once; the cookie it wrote is what stops it asking twice, since a name this machine's
 zone database does not have comes back as the console's own and would otherwise be requested for
-ever. Two spellings of one clock are not a difference, and that is asked of the browser rather than
-decided by comparing strings: `Etc/UTC` on a server is `UTC` in Chromium, and `Asia/Calcutta` is
-`Asia/Kolkata`, so a string comparison would hand every console running in UTC one reload per visit
-for a page that was already printing exactly the right time.
+ever. The cookie is **read back before the reload** rather than assumed, which is the same loop shut
+one step earlier: a browser blocking this origin's cookies makes the write a silent no-op, so the
+request would carry no zone, the console would keep drawing in its own, and every load would ask for
+a page that could not say anything new. Where the answer cannot reach the server at all, the reader
+keeps the page they got. Two spellings of one clock are not a difference, and that is asked of the
+browser rather than decided by comparing strings: `Etc/UTC` on a server is `UTC` in Chromium, and
+`Asia/Calcutta` is `Asia/Kolkata`, so a string comparison would hand every console running in UTC
+one reload per visit for a page that was already printing exactly the right time.
 
 **On `<html>` rather than on `<body>`, which is what keeps that reload from being seen.** `paintClock`
 runs in the script's first block, beside the theme and before the document exists, for the reason the
 theme is there: a page opened dark must not flash light on the way, and a page opened in Tokyo must
 not paint a column of London times on the way. The open tag of `<html>` has been parsed by the time
 that block runs and `document.body` is still `null`, so the answer has to be on the element that
-exists. Moved to the body the check does not fire late, it stops firing at all, and all four of
+exists. Moved to the body the check does not fire late, it stops firing at all, and
 `TestTheClockAPageIsDrawnAgainst`'s browser tests are what say so.
+
+**Asking from the head abandons the parse where it stands**, which is the price of asking early and
+is worth knowing about rather than discovering: `DOMContentLoaded` still fires on what was abandoned,
+with no `<body>` ever built, so `start` is handed a document that is already being replaced. It
+returns rather than wiring it, and without that every first visit from another zone raises where the
+wiring reads the body.
 
 The reload is a reload and not an htmx request, which is worth stating because the smaller-looking
 change does not work: `htmx.ajax` into `body` swaps the body and leaves `<head>` and the `data-zone`

@@ -724,6 +724,24 @@ def messages_key(turn: int) -> StepKey:
     return f"{turn_prefix(turn)}:messages"
 
 
+def turns_in(recorded: Mapping[str, object]) -> int:
+    """
+    How many turns this session has answered, which is also **the turn being answered**.
+
+    A turn records its messages by finishing, so the first turn with none is the one a pass would
+    open next, and the count and that turn are one number rather than two. Everything asked *of the
+    turn being answered* starts here: a refusal, a wait, the newest tree.
+
+    `reached`'s walk without the history, deliberately. That function parses every turn's messages
+    to hand back the conversation so far, which is the expensive half of it and is paid on a path a
+    page takes on every render; what these callers want is the number.
+    """
+    turn = 0
+    while messages_key(turn) in recorded:
+        turn += 1
+    return turn
+
+
 def tree_key(turn: int, at: int) -> StepKey:
     """
     What the worktree looked like before the `at`-th model request of this turn.
@@ -854,15 +872,13 @@ def deferred_in(recorded: Mapping[str, object]) -> records.Deferred | None:
     which it will, and already has: any message a person sends makes the delivery ready immediately,
     so a short wait is routinely outlived by the turn that took it.
 
-    The turn is the first with no messages, which is what a pass would open next, and the wait is the
-    newest one under it, which is what `deferrals_in` already counts. Neither index is searched for.
+    Neither index is searched for: `turns_in` is which turn, and `deferrals_in` already counts the
+    waits under it, so the newest is the last one it counted.
 
     Whether that wait is still *on* is a second question, about the clock, which a page may not ask:
     see `Conversation.deferred`, where the moment is compared against a `now()` the service takes.
     """
-    turn = 0
-    while messages_key(turn) in recorded:
-        turn += 1
+    turn = turns_in(recorded)
     at = deferrals_in(recorded, turn)
     return None if at == 0 else parse_deferred(recorded[deferred_key(turn, at - 1)])
 
@@ -2355,15 +2371,10 @@ def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
     answered is history and the transcript is where history goes; only one on the turn nothing has
     got past means the session has stopped.
 
-    Neither index is searched for. The turn is the first with no messages, which is what a pass would
-    open next, and the request is the one after the last that answered, which is what `responded`
-    already counts. The turn walk is `reached`'s without the history: this needs the number and not
-    the messages, and parsing every turn's messages is the expensive half of that function, on a path
-    a page takes on every render.
+    Neither index is searched for: `turns_in` is which turn, and the request is the one after the
+    last that answered, which is what `responded` already counts.
     """
-    turn = 0
-    while messages_key(turn) in recorded:
-        turn += 1
+    turn = turns_in(recorded)
     said = recorded.get(refused_key(turn, len(responded(recorded, turn))))
     return None if said is None else parse_refused(said)
 
@@ -2392,11 +2403,8 @@ def latest_tree(recorded: Mapping[str, object]) -> object | None:
     """
     if (held := recorded.get(ARCHIVED_TREE_KEY)) is not None:
         return held
-    turn = 0
-    while messages_key(turn) in recorded:
-        turn += 1
     newest: object | None = None
-    for behind in range(turn, -1, -1):
+    for behind in range(turns_in(recorded), -1, -1):
         at = 0
         while (tree := recorded.get(tree_key(behind, at))) is not None:
             newest = tree

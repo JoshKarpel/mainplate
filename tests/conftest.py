@@ -15,6 +15,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 import pytest
 from pydantic import SecretStr
@@ -373,6 +374,28 @@ def usage_limit_reached(resets_at: datetime) -> dict[str, object]:
         "eligible_promo": None,
         "resets_in_seconds": int((resets_at - datetime.now(UTC)).total_seconds()),
     }
+
+
+WORDED: Final = (
+    pytest.param(547, "9m 7s", id="minutes"),
+    pytest.param(12_300, "3h 25m", id="hours"),
+    pytest.param(3_600, "1h 0m", id="a whole hour keeps its zero"),
+    pytest.param(396_000, "4d 14h", id="days"),
+    pytest.param(86_400, "1d 0h", id="a whole day keeps its zero"),
+)
+"""
+How long a wait has left, and the one wording both sides of the page must reach for it.
+
+`elapsed` in `pages.py` draws the first figure and `soon` in `mainplate.js` repaints the same element
+a second later, so the two implementations are deliberately written twice and their *expectations*
+must not be: asserted against a copy apiece, a width added to one side and not the other is a drift
+neither test reports. Parametrised from here, adding a row is an edit in one place that both sides
+then have to satisfy.
+
+Every width above a minute, which is what the contract covers. Below one the figure is a turn's own
+duration rather than a countdown, so `elapsed` has widths there that no wait ever reaches and
+`test_attending.py` pins those alone.
+"""
 
 
 def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:

@@ -278,8 +278,21 @@ def deferred_until(error: Exception, now: datetime) -> datetime | None:
     The body is read as a mapping and nothing more is assumed about it. A provider that sends a
     number where this expects one is honoured; anything else is an error with no moment in it, which
     is the common case and the safe one.
+
+    **A `429` and nothing else**, which is a narrower door than `Retry-After` opens and is deliberate.
+    `terminally` calls every 5xx transient, so without this they arrive here too, and a gateway
+    answering `503` with a day in its header would park the session for a day. The difference is
+    whether the provider *knows*: a rate or usage limit is a window it is keeping itself, so the
+    moment it names is a fact, where a 5xx is a guess about when something it is not in control of
+    will be fixed. The cost of believing the first is a wait that was going to happen anyway; the
+    cost of believing the second is turning a blip into a day of silence, at a moment when the
+    ordinary redelivery would have got an answer on its next attempt.
+
+    The cost, stated: **a provider that shed load through a `503` with an honest `Retry-After` is
+    asked again on the lease instead**, which is a handful of requests it did not want, against the
+    console's own worst case being an hour rather than however long somebody else's header said.
     """
-    if not isinstance(error, ModelHTTPError):
+    if not isinstance(error, ModelHTTPError) or error.status_code != 429:
         return None
     for named in (resets_at(error.body), retry_after(error, now)):
         if named is not None and named > now:

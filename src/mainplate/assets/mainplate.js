@@ -121,10 +121,21 @@
   // and stays in this browser. See `ZONE_COOKIE` in `pages.py`, and `paintClock` below.
   const ZONE_COOKIE = "zone";
 
+  // A cookie is arbitrary text the way storage is, and this runs before `start` exists, so a value
+  // it cannot decode must be nothing rather than a throw: `decodeURIComponent` raises on a malformed
+  // escape, and raising here unwinds out of the whole file, leaving a page with no folds, no copy
+  // buttons, no live connection and no composer. Nothing at all is also the *right* answer, not only
+  // the safe one - a value this did not write is not a zone this asked for - and the caller writes a
+  // good one over the top of it.
   const cookieValue = (name) => {
     for (const pair of document.cookie.split(";")) {
       const [key, ...rest] = pair.split("=");
-      if (key.trim() === name) return decodeURIComponent(rest.join("="));
+      if (key.trim() !== name) continue;
+      try {
+        return decodeURIComponent(rest.join("="));
+      } catch {
+        return null;
+      }
     }
     return null;
   };
@@ -189,6 +200,13 @@
       // plain http on a machine somebody is sitting at would never see the cookie come back at all.
       const safely = location.protocol === "https:" ? "; secure" : "";
       document.cookie = `${ZONE_COOKIE}=${encodeURIComponent(named)}; path=/; max-age=31536000; samesite=lax${safely}`;
+      // **Read back rather than assume it took**, which is what stops the reload below being
+      // infinite. Where the origin's cookies are blocked the write above is a silent no-op: the
+      // request carries no zone, the server keeps drawing in its own, and every load would ask for
+      // the page again having changed nothing about what the next one can say. A console drawn
+      // against the wrong clock is worth one reload and is not worth a loop, so where the answer
+      // cannot reach the server this leaves the page it got.
+      if (cookieValue(ZONE_COOKIE) !== named) return;
     }
     // Only where this browser had not already asked for this zone, which is what keeps it from
     // being a loop: the server writes back the zone it *used*, so a name its own zone database
@@ -201,6 +219,11 @@
   paintClock();
 
   const start = () => {
+    // **There may be no document left to wire.** `paintClock` above can ask for the page again from
+    // the head, which abandons the parse where it stands - and `DOMContentLoaded` still fires on
+    // what was abandoned, with no `<body>` ever built. Everything below is about a page a reader is
+    // going to look at, and this one is already being replaced, so there is nothing here to do.
+    if (document.body === null) return;
     // The theme is the reader's and holds across every session; everything else below is a fact
     // about one conversation, so it is stored under that conversation's own id.
     const session = document.body.dataset.session || "?";

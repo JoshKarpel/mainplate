@@ -19,11 +19,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rules, the session list's dates, the cache note and the archived sentence alike. Without the
   script a page is drawn against the console's own zone, which for a unit on your own machine is the
   same answer. A reader in another timezone pays one reload on their first visit.
-- **A session told to come back later waits for exactly that long.** A provider that turns a request
-  down for *now* and says when - a subscription's usage limit with its `resets_at`, or a standard
-  `Retry-After` - parks the session until that moment instead of being retried every lease for
-  however many days that is, and the page says which limit was reached and when the next attempt
-  goes out. A 429 that names no moment is retried as it was before.
+- **A session told to come back later waits for exactly that long.** A provider that rate limits a
+  request and says when it will take one - a subscription's usage limit with its `resets_at`, or a
+  standard `Retry-After` - parks the session until that moment instead of being retried every lease
+  for however many days that is, and the page says which limit was reached and when the next attempt
+  goes out. A 429 that names no moment is retried as it was before, and so is every other failure
+  that carries a moment: what the provider knows about its own limit, it does not know about an
+  outage.
 - **An anchored `grep` tool** searches Git-known repository text with a line-oriented regular
   expression and returns bounded matching regions carrying the same anchors as `read`, so a match can
   go straight to `edit` without a second call solely to acquire its address. An optional glob narrows

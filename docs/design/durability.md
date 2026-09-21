@@ -219,6 +219,16 @@ a body echoing the window that has just closed would otherwise take the answer a
 header on the same response. An error naming no moment is raised exactly as it was, which is every
 429 this console saw before.
 
+**A `429` and nothing else is read this way**, which is narrower than `Retry-After` itself, and the
+reason is whether the provider *knows*. A rate or usage limit is a window it is keeping, so the
+moment it names is a fact about its own bookkeeping. `terminally` calls every 5xx transient, so
+without the gate they arrive here too, and a 5xx header is a guess about when something the provider
+does not control will be fixed: a gateway shedding load with `503` and `Retry-After: 86400` would
+park a session for a day, at the moment an ordinary redelivery would have got an answer on its next
+attempt. The cost, stated: **a provider that meant its `503` header is asked again on the lease
+anyway**, which is a handful of requests it did not want, bought by this console's worst case being
+one lease rather than however long somebody else's header said.
+
 **The suspension is `ScheduledWakeup` raised directly rather than `Run.sleep` taken**, and the
 difference is which record holds the deadline. `sleep` computes and stores one of its own, `now +
 duration`, so this console would be writing down a moment it was *told* as though it had chosen it,
