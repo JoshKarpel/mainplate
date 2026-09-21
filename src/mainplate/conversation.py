@@ -2111,11 +2111,14 @@ def drains_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
     One walk of the checkpoint in *record* order rather than two lookups by name, so nothing here
     depends on the drains being numbered consecutively - which they are, but the order is the
     property being used and the store already guarantees it.
+
+    **Both names it compares against are built once, above the walk**, and that is worth the two
+    extra lines. This runs once per model request, replayed requests included, over a checkpoint
+    that grows with the turn, so it is the innermost loop in a long turn's replay and a key composed
+    inside it is composed once per recorded key per request. `just replay` is what says so.
     """
-    heard = f"{turn_prefix(turn)}:heard:"
-    return tuple(
-        parse_cursor(value) for key, value in recorded.items() if key == opened_key(turn) or key.startswith(heard)
-    )
+    opened, heard = opened_key(turn), f"{turn_prefix(turn)}:heard:"
+    return tuple(parse_cursor(value) for key, value in recorded.items() if key == opened or key.startswith(heard))
 
 
 def steered(held: Sequence[Posted], since: str, upto: str) -> tuple[str, ...]:
