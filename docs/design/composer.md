@@ -379,22 +379,18 @@ one a running turn may take and `records.Prompt` is one it must not, which is ho
 `forget` say what they mean; a pass draining its queue stops at the first prompt. See [the key
 scheme](checkpoints.md#the-key-scheme).
 
-**It is appended to `request_context.messages` in `before_model_request`, and emphatically not
-`ctx.enqueue`, which was tried and delivered every steer one round trip late.** Pydantic AI's own
-drain capability is ordered `outermost`, so it empties the queue in *its* `before_model_request`
-before this one runs: a message enqueued there misses the request it was read for and lands in the
-next one. That cost a round trip nobody asked for, drew the steer's panel below the answer it was
-meant to shape, and made `heard:{i}` a claim about a request that never heard it.
+**It is appended by `Agent.before_request`, immediately before the model request it belongs to.**
+The durable cursor is taken first, then a new `ModelRequest` carrying the steer is appended to the
+history. A steer travelling beside a batch of tool results therefore follows those results and
+reaches the same provider request, while remaining its own message in `turn:{n}:messages` for the
+transcript to draw.
 
-Appending is sound for the two reasons the enqueue was reached for. `_agent_graph` builds the
-request context with `messages=ctx.state.message_history[:]`, a *copy*, and what
-`before_model_request` returns is adopted wholesale (`ctx.state.message_history[:] = messages`), so
-the steer lands in `turn:{n}:messages` and the transcript draws it with nothing else taught about
-it. And a *new* message is added rather than an existing one mutated, which is the thing the docs
-actually forbid. Pydantic AI merges consecutive trailing requests for the wire with the tool parts
-first, so a steer travelling beside a batch of results arrives after them in one request and is
-recorded as its own message. It is emphatically not `CheckpointedModel.request` either: anything
-added at the model reaches that one request and never the recorded history.
+A new message is appended rather than an existing one mutated, and nothing merges it into the tool
+returns beside it for the wire either: both providers take a request that arrives as consecutive
+messages, the Anthropic mapper already emits that shape of its own accord, and one message per thing
+said is what the transcript reads back. The cost, stated: the wire sees two user entries where the
+graph this loop replaced sent one, and a provider that stopped accepting that would be found by a
+live turn rather than a test.
 
 **What it reads is the pass's own snapshot rather than the store**, which is `Run.pending`'s own
 shape: entries are ordinary records, so they are already in the snapshot the pass loaded on its way
@@ -415,7 +411,7 @@ resumed pass reading live would ask a question the first pass never asked, and `
 is the *answer* to a question, so a replay that asked a different one would be pairing an answer
 with a prompt nobody gave. The record is a **cursor**, which is why nothing is carried on the scope
 any more: where the record was a list of texts and the next request needed a count of them, it is
-now a place in a queue that the next drain simply reads. Reading the inbox is the capability
+now a place in a queue that the next drain simply reads. Reading the inbox is the loop
 reaching into conversation state, so it arrives **injected** as `Draining`, symmetric with `Pricer`
 and for the same cycle.
 

@@ -7,7 +7,7 @@
 # thought of, including the ones a repository's own build script runs.
 #
 # **Per call, never a long-lived executor.** A pass re-runs the conversation body from the top and
-# `wrap_tool_execute` *replays* recorded results rather than re-running them, so a sandbox holding
+# `Stepping.call` *replays* recorded results rather than re-running them, so a sandbox holding
 # state between calls would offer that state on a first pass and withhold it on a resumed one, with
 # nothing to tell the agent which it is in. State that survives sometimes is worse than state that
 # never survives. A fresh namespace per call costs a couple of milliseconds against a call that

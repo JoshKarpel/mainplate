@@ -345,6 +345,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The console drives its own model-and-tool loop**, and `StepwiseDurability` is gone with the
+  Pydantic AI agent graph it was a capability of. Pydantic AI still makes every provider request and
+  types every message; what the console owns now is the order of a turn, which is what durability
+  was always about: the allowance, the inbox cursor, a plugin's injection, the tree snapshot, the
+  request, the response, and each tool's return are recorded by the same `Stepping` in the same
+  places, handed to the loop as a value rather than found through a context variable under somebody
+  else's hooks. What went with the graph is what the console never used: structured output, native
+  and deferred tools, and the request cap a turn had to switch off. **A tool turning a call down is
+  now recorded like a tool answering it**, under the call's key with the outcome saying which, so a
+  resumed pass replays the refusal the model was actually sent instead of running the tool again to
+  hear what it would say now. The graph's retry budget went with it: a refusal is the call's result,
+  and nothing counts how many a turn has had.
 - **Every date is printed `2031-03-14 10:20`**, where it was `Mar 14, 10:20`, and a full stamp in a
   hover carries the offset rather than a zone abbreviation: `2031-03-14 10:09:26-05:00` where it was
   `Mar 14, 10:09:26 CDT`. One canonical form at every reader, on the grounds that this is a console

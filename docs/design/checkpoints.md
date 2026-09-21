@@ -24,14 +24,14 @@ This console's is the rest:
 | `result:{entry}` | What the command delivered under `{entry}` exited with, said and took | `Commands`, when it finishes |
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |
-| `turn:{n}:tree:{i}` | The worktree before the i-th model request | `StepwiseDurability` |
-| `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `StepwiseDurability` |
-| `turn:{n}:model:{i}` | The i-th model response of that turn | `StepwiseDurability` |
-| `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `StepwiseDurability` |
+| `turn:{n}:tree:{i}` | The worktree before the i-th model request | `Stepping.request` |
+| `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `Stepping.steering` |
+| `turn:{n}:model:{i}` | The i-th model response of that turn | `Stepping.request` |
+| `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `Stepping.request` |
 | `turn:{n}:deferred:{i}` | The i-th time this turn was told to come back later, and the moment the provider named | The conversation body |
-| `turn:{n}:tool:{id}` | What one tool call returned and how long it ran | `StepwiseDurability` |
+| `turn:{n}:tool:{id}` | What one tool call returned, or why it failed, and how long it ran | `Stepping.call` |
 | `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
-| `turn:{n}:messages` | What the agent run produced | The conversation body |
+| `turn:{n}:messages` | What the model loop produced | The conversation body |
 | `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |
 | `archived` | That somebody archived the session, and when | `Service.archive`, on the press |
 | `archived:tree` | What the worktree held when it was taken off the disk | The reconciler in `archive.py`, just before uprooting it |
@@ -178,7 +178,7 @@ without being taught that either.
 readers (`opened_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`, read
 by `choice_of` and `reached` for the body, `transcript`, `so_far` and `responded` for the page,
 `before` for a fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them
-for the writers, from a turn prefix and a kind, which is what lets one capability name a step
+for the writers, from a turn prefix and a kind, which is what lets the durability layer name a step
 without importing the conversation. `tree_key(n, i)` and `Stepping.key("tree")` therefore produce
 the same string from opposite ends, and nothing enforces that: change one and change the other. That
 is [one fact in two places](../philosophy.md#one-fact-in-two-places), paid the usual way, and the

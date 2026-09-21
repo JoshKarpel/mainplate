@@ -19,7 +19,6 @@ from typing import Final
 
 import pytest
 from pydantic import SecretStr
-from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
@@ -32,7 +31,9 @@ from pydantic_ai.settings import ModelSettings
 from without_asgi import ASGIApp
 from without_durability.interfaces import claimed
 from without_durability.interfaces import inbox_key
+from without_durability.memory import MemoryCheckpointer
 from without_durability.stepwise import Run
+from without_durability.stepwise import extending
 from without_durability.stepwise import resume
 
 from mainplate import records
@@ -53,11 +54,13 @@ from mainplate.conversation import Ended
 from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
 from mainplate.conversation import opened_key
+from mainplate.durability import stepping
 from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
+from mainplate.loop import Agent
 from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.installed import Enrolled
 from mainplate.service import Service
@@ -135,6 +138,17 @@ CATALOGUE = Catalogue(offered={name: offering(name) for name in OFFERED}, defaul
 INSTRUCTIONS = "Answer as a fixture would."
 
 
+async def ask(agent: Agent, said: str = "hello") -> tuple[ModelMessage, ...]:
+    checkpointer = MemoryCheckpointer()
+    holder = await claimed(checkpointer, "asking")
+    try:
+        run = Run(holder=holder, checkpointer=checkpointer, recorded={}, extend=extending(checkpointer))
+        with stepping(run, "turn:0") as scope:
+            return await agent.run(said, (), scope)
+    finally:
+        await checkpointer.release(holder)
+
+
 @dataclass(slots=True)
 class Stand:
     """
@@ -176,9 +190,8 @@ class Watching(FunctionModel):
     """
     A stand-in model that records the settings each request was handed.
 
-    Asserting on `Agent.model_settings` would only say the agent was constructed with something. What
-    is worth pinning is that the value survives the capability stack and reaches the request, since
-    `StepwiseDurability` wraps every model this console builds.
+    The stand-in records what reaches the low-level model request, after the loop has composed the
+    wire and session settings.
 
     Here rather than in one suite because two want it now: what a session asked of a model and what
     its wire asked for are two questions with one way of answering them.
@@ -187,6 +200,7 @@ class Watching(FunctionModel):
     def __init__(self) -> None:
         super().__init__(lambda messages, info: ModelResponse(parts=[TextPart("ok")]))
         self.seen: list[ModelSettings | None] = []
+        self.instructions: list[tuple[str, ...]] = []
 
     async def request(
         self,
@@ -195,6 +209,7 @@ class Watching(FunctionModel):
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         self.seen.append(model_settings)
+        self.instructions.append(tuple(part.content for part in model_request_parameters.instruction_parts or ()))
         return await super().request(messages, model_settings, model_request_parameters)
 
 
@@ -232,12 +247,12 @@ class Provider:
         shared = self.model()
         return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
 
-    def agent(self) -> Agent[None, str]:
+    def agent(self) -> Agent:
         """
         The agent a pass would build for the default choice, for a test driving one directly.
 
-        Built through `agent_for` rather than assembled here, so a test standing in for half a pass
-        is running the capability stack a real pass runs and not a second one that resembles it.
+        Built through `agent_for` rather than assembled here, so the test drives the same model loop
+        as a real pass rather than a second one that resembles it.
         """
         return agent_for(self.endpoints(), DEFAULT_CHOICE, INSTRUCTIONS)
 

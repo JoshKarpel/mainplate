@@ -89,5 +89,6 @@ a `.github/`, and a fixture with a nested `.git` are ordinary files.
   that with a count, and caps at `MAX_ROWS`. That is the difference between orienting in a large
   repository for hundreds of tokens and for tens of thousands.
 - **Everything a tool turns down is a `ModelRetry`**, never a fault that ends the turn, because all
-  of it is correctable from the message. `RETRIES` is above Pydantic AI's default of one for the
-  same reason.
+  of it is correctable from the message. It reaches the model as the call's failed result, recorded
+  under the call's key like a return, and nothing counts how many times: a refusal is an answer, not
+  a strike.

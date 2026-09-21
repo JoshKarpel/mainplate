@@ -1,9 +1,9 @@
 # The philosophy of mainplate
 
-mainplate is a chat console over a Pydantic AI agent whose sessions are durable workflows. This is
-the standard new work here is measured against: one idea about where a conversation lives, a
-vocabulary for naming things, and the handful of rules that keep being the answer in a design
-argument.
+mainplate is a chat console over its own durable model-and-tool loop, using Pydantic AI for provider
+requests and normalized messages. This is the standard new work here is measured against: one idea
+about where a conversation lives, a vocabulary for naming things, and the handful of rules that keep
+being the answer in a design argument.
 
 It is not the authority on what the code currently does. The [design
 notes](https://joshkarpel.github.io/mainplate/design/) are, and where one of them says this console

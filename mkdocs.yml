@@ -1,8 +1,7 @@
 site_name: mainplate
 site_description: >-
-  A chat console over a Pydantic AI agent whose sessions are durable workflows,
-  where the checkpoint is the conversation and there is no second copy of what
-  was said.
+  A chat console over a durable model-and-tool loop, using Pydantic AI for provider
+  requests and normalized messages, where the checkpoint is the conversation.
 # No `site_url`, deliberately. GitHub Pages serves this under `/mainplate/`, and `mkdocs serve`
 # honours that path, so setting it makes `just docs` serve the whole site one directory down: `/`
 # redirects and every link a reader types by hand is a 404. What it buys is canonical links and

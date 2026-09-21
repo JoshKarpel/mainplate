@@ -69,15 +69,6 @@ from mainplate.tending import Tending
 
 logger = logging.getLogger(__name__)
 
-RETRIES = 3
-"""
-How many times a plugin's tool may be corrected before the turn gives up on it.
-
-Above Pydantic AI's default of one for the reason every other tool here is: what a plugin turns down
-is correctable from the message, so a model that gets the arguments wrong twice should still be
-allowed to get them right.
-"""
-
 
 type Delivering = Callable[[records.Note], Awaitable[None]]
 """
@@ -531,9 +522,9 @@ class PluginTools(AbstractToolset[Any]):
     Every tool this session's plugins contribute, as one toolset the agent knows nothing else about.
 
     **Tools are the safest thing a plugin can contribute, not a forbidden one.**
-    `StepwiseDurability.wrap_tool_execute` wraps every call in a step and writes a `records.Returned`,
-    so a plugin-provided tool's answer is recorded and a resumed pass replays it without running the
-    script again. That is what puts a tool call inside the line the durability layer draws.
+    `Stepping.call` records every call as a `records.Returned`, so a plugin-provided tool's answer is
+    replayed on a resumed pass without running the script again.
+    That is what puts a tool call inside the line the durability layer draws.
 
     The arguments are passed to the plugin as the model produced them, validated against nothing
     here: the schema is the plugin's and what would refuse a bad call is the plugin, whose refusal
@@ -554,7 +545,7 @@ class PluginTools(AbstractToolset[Any]):
             each.named: ToolsetTool(
                 toolset=self,
                 tool_def=each.definition,
-                max_retries=RETRIES,
+                max_retries=0,
                 args_validator=TOOL_SCHEMA_VALIDATOR,
             )
             for each in self.contributed
@@ -619,8 +610,8 @@ def asking_through(live: Live) -> Asking:
     saying it was recorded.
 
     The delivery is made from **inside** the call rather than handed back, and that is sound rather
-    than an exception to the rule at the top of this module: `wrap_tool_execute` wraps this whole
-    call in a step, so a resumed pass replays the recorded return and writes no second entry.
+    than an exception to the rule at the top of this module: `Stepping.call` wraps this whole call in
+    a step, so a resumed pass replays the recorded return and writes no second entry.
 
     `end` is the one effect this does not perform, because it cannot: what ends a turn is the loop
     carrying it, several frames above, and what a tool hands back is the value the model is told.

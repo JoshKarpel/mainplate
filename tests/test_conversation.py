@@ -30,9 +30,7 @@ from conftest import started
 from conftest import steered_at
 from conftest import usage_limit_reached
 from pydantic import ValidationError
-from pydantic_ai.exceptions import IncompleteToolCall
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
@@ -77,8 +75,6 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
 from mainplate.conversation import conversing
-from mainplate.conversation import cut_off_in
-from mainplate.conversation import cut_off_why
 from mainplate.conversation import deferred_in
 from mainplate.conversation import deferred_key
 from mainplate.conversation import failed_key
@@ -1236,8 +1232,8 @@ class TestAnsweringASession:
             recorded=await service.checkpointer.load(SESSION),
             extend=extending(service.checkpointer),
         )
-        with stepping(run, turn_prefix(0)):
-            await agent.run("hello")
+        with stepping(run, turn_prefix(0)) as scope:
+            await agent.run("hello", (), scope)
         await service.checkpointer.release(holder)
         recorded = await service.checkpointer.load(SESSION)
         assert messages_key(0) not in recorded
@@ -1819,10 +1815,11 @@ class TestAnAnswerCutOffAtTheOutputLimit:
     """
     The other request no pass can ever get past: one the provider answered, and cut off.
 
-    Pydantic AI raises over an answer stopped at its output limit with nothing in it the loop can act
-    on, and it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left
-    as an ordinary failure it would be replayed into the same exception once per lease for ever,
-    which is the loop the refusal record exists to close, so it is written where a refusal is.
+    The loop raises over an answer stopped at its output limit with nothing in it it can act on, and
+    it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left as an
+    ordinary failure it would be replayed into the same exception once per lease for ever, which is
+    the loop the refusal record exists to close, so it is written where a refusal is. What the reason
+    says is pinned in `test_durability.py`, where the loop is driven directly.
     """
 
     CUT_OFF = ModelResponse(parts=[ThinkingPart(content="let me think about")], finish_reason="length", timestamp=WHEN)
@@ -1874,28 +1871,31 @@ class TestAnAnswerCutOffAtTheOutputLimit:
         assert ended == Blocked(listening=frozenset({opened_key(1)}))
         assert refusal_in(await service.checkpointer.load(SESSION)) is None
 
-    def test_the_reason_names_the_number_that_was_sent(self) -> None:
-        """The number is what somebody looks up, and its absence is what a session with none should say."""
-        assert "output limit of 4096 tokens" in cut_off_why(UnexpectedModelBehavior("cut"), 4096)
-        assert "default output limit" in cut_off_why(UnexpectedModelBehavior("cut"), None)
-
-    def test_a_tool_call_cut_off_is_said_to_be_one(self) -> None:
-        assert "tool call" in cut_off_why(IncompleteToolCall("cut"), 128_000)
-        assert "tool call" not in cut_off_why(UnexpectedModelBehavior("cut"), 128_000)
-
-    def test_only_the_last_answer_decides_and_only_where_it_was_cut_off(self) -> None:
+    async def test_a_tool_call_cut_off_stalls_the_session_and_is_said_to_be_one(self, service: Service) -> None:
         """
-        An earlier answer stopped at the limit that still carried a usable call was acted on, and the
-        turn went on, so the reading is of the last answer and no other.
+        The other shape of the same cut-off: the model ran out of room writing a call's arguments.
+        Left to the retry path the loop would tell the model its arguments were malformed and ask
+        again, which spends a request on an answer that was never wrong. It stalls like the
+        thinking-only case and the reason says which of the two it was.
         """
-        whole = ModelResponse(parts=[TextPart("done")], timestamp=WHEN)
-        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF), model_key(0, 1): kept(whole)}, 0) is None
-        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF)}, 0) == self.CUT_OFF
-        assert cut_off_in({}, 0) is None
+        await waiting(service, "hello")
+        cut_off = ModelResponse(
+            parts=[ToolCallPart("read", '{"path": "READ', "call-read-0")], finish_reason="length", timestamp=WHEN
+        )
+        scripted = Scripted(script=(cut_off,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert ended == Completed(Stalled())
+        assert scripted.asked == 1, "the model was not asked to try again"
+        refused = parse_refused(recorded[refused_key(0, 1)])
+        assert refused.status is None
+        assert "tool call" in refused.why
 
 
 def kept(answered: ModelResponse) -> object:
-    """One answer as `CheckpointedModel.request` records it, so a reading is tested against the real shape."""
+    """One answer as `Stepping.request` records it, so a reading is tested against the real shape."""
     return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
 
 

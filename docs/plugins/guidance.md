@@ -236,8 +236,7 @@ there are decided:
     holds either way.
 
 - **It is injected as `Guiding`**, symmetric with `Pricer` and `Draining` and for the same cycle:
-  the capability stays ignorant of what a guidance file is and one instance still serves every
-  session.
+  `durability.py` stays ignorant of what a guidance file is.
 - **`bash` reaches nothing here, and that is stated rather than left to be found.** Its argv is the
   model's, so a path inside it is a string this console has no business parsing. That is the hole
   the index covers, and a diff between consecutive `turn:{n}:tree:{i}` would close it for writes:

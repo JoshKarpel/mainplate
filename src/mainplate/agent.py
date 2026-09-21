@@ -30,8 +30,8 @@
 # module happens to be handed: a worktree gets the file tools over it and its scratch, the whole
 # machine gets them over `/`, and reaching nothing gets no toolset at all - a console used to talk
 # rather than to edit is what this was before there were repositories, and tools that can only fail
-# are worse than none. `StepwiseDurability` is what records the calls, on the same capability that
-# already records the model requests.
+# are worse than none. The loop records every model request and tool call through the `Stepping`
+# it is handed by the conversation.
 
 from __future__ import annotations
 
@@ -48,7 +48,6 @@ from typing import assert_never
 
 from anthropic import AsyncAnthropic
 from anthropic.types import ModelInfo
-from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models import Model
@@ -67,7 +66,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.config import Format
-from mainplate.durability import StepwiseDurability
+from mainplate.loop import Agent
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import PluginTools
 from mainplate.plugins.asking import asking_through
@@ -444,9 +443,8 @@ class Streamed(WrapperModel):
     generation the same way.
 
     Collecting it here is the half that will go. The events are drained and thrown away, so nothing
-    above this can tell the difference and an answer is no closer to a reader than it was. What it
-    buys is that the day the page reads a turn as it arrives, the events already exist and the work
-    is `CheckpointedModel.request_stream` recording them; see `StreamingNotRecorded`.
+    above this can tell the difference and an answer is no closer to a reader than it was. Live
+    output means having the loop record those events beside the completed response instead.
     """
 
     async def request(
@@ -965,7 +963,7 @@ def agent_for(
     plugins: Live | None = None,
     environment: Mapping[str, str] | None = None,
     output_cap: int | None = None,
-) -> Agent[None, str]:
+) -> Agent:
     """
     The agent one session is answered by, built for the pass that is about to run it.
 
@@ -1032,10 +1030,8 @@ def agent_for(
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(
-        wire.model(chosen.model),
-        name="mainplate",
+        model=wire.model(chosen.model),
         instructions=instructions,
-        model_settings=asked,
-        capabilities=[StepwiseDurability()],
-        toolsets=tools,
+        settings=asked,
+        toolsets=tuple(tools),
     )

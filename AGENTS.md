@@ -1,7 +1,8 @@
 # AGENTS.md
 
-mainplate is a chat console over a Pydantic AI agent whose sessions are durable workflows.
-[`README.md`](README.md) is what it does and why; this is the map for changing it.
+mainplate is a chat console over its own durable model-and-tool loop, using Pydantic AI for provider
+requests and normalized messages. [`README.md`](README.md) is what it does and why; this is the map
+for changing it.
 
 `CLAUDE.md` beside it is one line importing this file, so Claude Code reads the same words every
 other harness does. `AGENTS.md` is the one that holds them, because it is the name the ecosystem
@@ -127,8 +128,8 @@ change:
 - [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
   anything to the parent that runs a program against a session's worktree.**
-- [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, what one pass
-  does, and what a session does when a provider says to come back later.
+- [`docs/design/durability.md`](docs/design/durability.md): the model-and-tool loop, the steps it
+  records, what one pass does, and what a session does when a provider says to come back later.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
   sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
   executes a plugin before somebody presses the button on that step**, which is a trust boundary and

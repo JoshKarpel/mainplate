@@ -483,12 +483,20 @@ class Returned(Record):
     retires the window where a return was recorded and its duration was not, because there is now one
     write rather than two.
 
+    **A call that failed is this same record with `outcome` saying so**, and `returned` holding what
+    the tool said about it. A tool turning a call down and a tool failing at it are one thing from
+    the model's side, a result that says what went wrong, and they are one thing here so that a
+    replay hands the loop the very words the model was sent rather than running the tool again to
+    find out what it would say this time. The default is what every record written before the field
+    existed meant.
+
     Named `Returned` and not `Tool`, which means a member of a toolset.
     """
 
     kind: Literal["tool"] = "tool"
     returned: object
     took: timedelta | None = None
+    outcome: Literal["success", "failed"] = "success"
 
     ended: bool = False
     """
