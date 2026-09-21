@@ -328,9 +328,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was always about: the allowance, the inbox cursor, a plugin's injection, the tree snapshot, the
   request, the response, and each tool's return are recorded by the same `Stepping` in the same
   places, handed to the loop as a value rather than found through a context variable under somebody
-  else's hooks. Nothing about a session's checkpoint changes shape. What went with the graph is what
-  the console never used: structured output, native and deferred tools, and the request cap a turn
-  had to switch off.
+  else's hooks. What went with the graph is what the console never used: structured output, native
+  and deferred tools, and the request cap a turn had to switch off. **A tool turning a call down is
+  now recorded like a tool answering it**, under the call's key with the outcome saying which, so a
+  resumed pass replays the refusal the model was actually sent instead of running the tool again to
+  hear what it would say now. The graph's retry budget went with it: a refusal is the call's result,
+  and nothing counts how many a turn has had.
 - **A tool call's row says what it acted on**, beside the tool's name: the path a `read` or an
   `edit` took, with which lines or how many operations, and the first line of what `bash` ran, with
   how many lines follow. That is what makes the other half affordable: **every call is drawn shut,

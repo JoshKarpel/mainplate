@@ -23,8 +23,8 @@
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `Stepping.request`
-#     turn:{n}:tool:{id}   what one tool call returned and how long it took, named by the call's
-#                          own id
+#     turn:{n}:tool:{id}   what one tool call returned, or why it failed, and how long it took,
+#                          named by the call's own id
 #     turn:{n}:messages    the messages the model loop produced, which is the turn's own answer
 #
 # **Every one of those holds a record from `records.py` rather than a bare value**, which is what
@@ -100,8 +100,6 @@ from typing import Literal
 from typing import assert_never
 from typing import cast
 
-from pydantic_ai.exceptions import IncompleteToolCall
-from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -143,6 +141,7 @@ from mainplate.durability import parse_tree
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
 from mainplate.loop import Agent
+from mainplate.loop import CannotGoOn
 from mainplate.loop import Keeping
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
@@ -1934,15 +1933,17 @@ def returned_step(held: records.Returned) -> Returned:
     silently rewrites itself under the reader the moment the turn lands. Hence `to_json` rather than
     the standard library's `dumps`, whose spacing differs.
 
-    Always a success, because a tool that raised recorded no step at all: a `ModelRetry` propagates
-    out of the step and the call stays out until the retry lands, then reads as failed once the
-    turn's messages say so. A `ToolReturn` carrying metadata would be unwrapped by the settled
-    reading and not by this one, which is a difference to fix in the tool rather than here if one
-    is ever written.
+    A failure is wrapped in the `{"error": ...}` object the settled reading wraps a failed
+    `ToolReturnPart` in, for the same reason: the two readings of one call have to agree to the
+    character. A `ToolReturn` carrying metadata would be unwrapped by the settled reading and not by
+    this one, which is a difference to fix in the tool rather than here if one is ever written.
     """
     if held.returned is None:
-        return Returned(outcome="success", content="")
-    said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
+        said = ""
+    else:
+        said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
+    if held.outcome == "failed":
+        return Returned(outcome="failed", content=to_json({"error": said}).decode())
     return Returned(outcome="success", content=said)
 
 
@@ -2136,39 +2137,6 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
     while (answered := recorded.get(model_key(turn, len(responses)))) is not None:
         responses.append(parse_model_response(answered))
     return tuple(responses)
-
-
-def cut_off_in(recorded: Mapping[str, object], turn: int) -> ModelResponse | None:
-    """
-    The last answer the turn being answered recorded, where the model was stopped at its output limit.
-
-    The *last* and no other, because that is the one Pydantic AI raises over: an earlier answer
-    stopped there and still carried a usable tool call was acted on and the turn went on. Nothing
-    here says whether that stop is a fault - a cut-off answer with text in it is returned as the
-    turn's answer, not raised - so this is read only once the loop has raised, to tell that raise
-    apart from every other.
-    """
-    answered = responded(recorded, turn)
-    if not answered or answered[-1].finish_reason != "length":
-        return None
-    return answered[-1]
-
-
-def cut_off_why(error: UnexpectedModelBehavior, cap: int | None) -> str:
-    """
-    What the page says of an answer the model was cut off in, in place of a provider's own words.
-
-    The number that was sent, because that is the one to look up, and the endpoint's default where
-    none was: a session on a model neither the endpoint nor the reference states a limit for is
-    exactly the one whose page should say so.
-    """
-    limit = f"its output limit of {cap} tokens" if cap is not None else "the endpoint's default output limit"
-    doing = (
-        "in the middle of a tool call"
-        if isinstance(error, IncompleteToolCall)
-        else "before it said anything this console could act on"
-    )
-    return f"the model was cut off at {limit} {doing}"
 
 
 def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None:
@@ -3314,7 +3282,8 @@ def conversing(
             # catalogue and the reference, both reloadable under a pass, and a model whose endpoint
             # raised the number should get the new one on the next turn rather than the next
             # restart. It is not recorded, because it is a fact about the model and not a thing
-            # anybody said, and the number that mattered is the one the response was cut off at.
+            # anybody said, and the number that mattered is the one the response was cut off at,
+            # which the loop names from the settings it was sent with.
             cap = None if prices is None else prices.output_cap(chosen)
             agent = agent_for(
                 endpoints,
@@ -3364,18 +3333,16 @@ def conversing(
                     # asking to be refused again; the reason is already recorded, so the page can
                     # say what happened without this carrying anything back.
                     return Stalled()
-                except UnexpectedModelBehavior as error:
-                    # Raised by Pydantic AI *after* an answer was recorded rather than by the
-                    # provider on the request: the model was cut off at its output limit before it
-                    # said anything the loop could act on. Every input to that answer is recorded,
+                except CannotGoOn as error:
+                    # Raised by the loop over an answer *after* it was recorded rather than by the
+                    # provider on the request: cut off at its output limit, emptied by a content
+                    # filter, or unanswerable as it stands. Every input to that answer is recorded,
                     # so a redelivery would replay the same answer into the same exception, once per
                     # lease, for ever. It is settled the way a refusal is and written where one is,
                     # under the request the turn could not go on to make; see `Refused`. Anything
-                    # else this raises is left to propagate, which is the default and the safe way
-                    # round.
-                    if cut_off_in(run.recorded, at.turn) is None:
-                        raise
-                    await scope.refuse(scope.at("model"), records.Refused(why=cut_off_why(error, cap)))
+                    # else the loop raises is left to propagate, which is the default and the safe
+                    # way round.
+                    await scope.refuse(scope.at("model"), records.Refused(why=error.why))
                     return Stalled()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             ended, at = at.turn, Reached(turn=at.turn + 1, history=(*at.history, *said))

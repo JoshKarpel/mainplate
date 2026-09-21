@@ -50,9 +50,9 @@ figure is the round trip to the provider and not the snapshot before it or the s
 `metadata`, so the request's duration needs no field of its own and reaches both readings of a turn
 for free; a tool return is somebody else's value with nowhere to put a fact about the call, so its
 duration is a field on the record wrapped around it. See [the key
-scheme](checkpoints.md#the-key-scheme). A tool that *raised* is timed no more than it is recorded,
-since the `ModelRetry` propagates out of the step and there is nothing to write, which is the honest
-record, and is why a still-out call and an untimed one read the same.
+scheme](checkpoints.md#the-key-scheme). A tool that turned the call down or failed at it is timed
+like one that answered, because it ran either way and its refusal is a result the model was sent; a
+still-out call is the only untimed one.
 
 **A tool's duration is threaded into both readings rather than found in either.** It is not in
 `turn:{n}:messages`, so `parted` and `blocks_from` are both handed the mapping `tooks_in` builds out

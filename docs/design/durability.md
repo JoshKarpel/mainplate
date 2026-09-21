@@ -17,9 +17,13 @@ plugin injections, `Stepping.request` snapshots the worktree and records the mod
 value explicitly from `conversing`; no ambient checkpoint or capability ordering is involved.
 
 Pydantic AI's toolsets still derive schemas and validators from the Python functions. The loop asks
-each toolset for its definitions, validates a call, runs calls in one response concurrently, and
-turns a `ModelRetry` into a `RetryPromptPart`. What it deliberately does not carry is the generic
-agent graph's structured outputs, native tools, deferred calls, dynamic capabilities, or model
+each toolset for its definitions, validates a call, and runs the calls in one response concurrently.
+**Whatever a tool says about a call is the call's result**, recorded under its key: a return, a
+`ToolFailed`, and a `ModelRetry` are one record with an outcome, because all three are something the
+model is sent over the network, and a replay has to hand the loop the same words rather than run the
+tool again to hear what it would say now. The graph told the last two apart and counted one of them
+against a retry budget; the loop counts nothing, and what it deliberately does not carry besides is
+the graph's structured outputs, native tools, deferred calls, dynamic capabilities, or model
 selection: none is part of this console's contract.
 
 Two rules the mechanism asks for, both easy to break silently:
@@ -162,14 +166,15 @@ other way costs a redelivery per lease until somebody looks.
 **An answer the model was cut off in is the one settled thing that is not a 4xx**, and `conversing`
 names it rather than `terminally`, because it is not raised by the provider request. A response
 stopped at its output limit with nothing the loop can act on is recorded like any other, and the loop
-then raises over it: `UnexpectedModelBehavior` for all thinking and no words, and its subclass
-`IncompleteToolCall` for a tool call broken off mid-arguments, which the loop checks for *before*
-validating the call, because truncated arguments fail validation like any bad call's and the retry
-path would otherwise spend a request telling the model its arguments were wrong. Every input to that
-answer is recorded, so `conversing` writes a `Refused` with no status under the request the turn
-could not go on to make, saying which of the two it was, and reports `Stalled`. Anything else the
-loop raises is left to propagate, since a raise this console cannot account for is the transient
-default. This should be rare: a request is sent with the model's whole output limit
+then raises `CannotGoOn` over it: for all thinking and no words, and for a tool call broken off
+mid-arguments, which it checks for *before* validating the call, because truncated arguments fail
+validation like any bad call's and the retry path would otherwise spend a request telling the model
+its arguments were wrong. The same exception covers the other answers that are recorded,
+deterministic, and unanswerable: one the content filter emptied, and one asking for two tool calls
+under a single id. `conversing` has one arm for it, which writes a `Refused` with no status under the
+request the turn could not go on to make, in the loop's own words, and reports `Stalled`. Anything
+else the loop raises stays the transient default, because a raise this console cannot account for
+is one a redelivery might get past. The cut-off should be rare: a request is sent with the model's whole output limit
 ([endpoints](endpoints.md#what-a-request-may-generate)), so reaching it is a model that ran to its
 ceiling without finishing a thought, and the cut-off answer stays on the page for what it is.
 

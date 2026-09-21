@@ -77,15 +77,6 @@ MAX_LINES: Final = 1500
 # slipped past the decode check rather than on anything anybody meant to read.
 MAX_BYTES: Final = 2 * 1024 * 1024
 
-# How many times a model may be told it got a call wrong before the turn fails.
-#
-# Above Pydantic AI's default of one, because a refusal here is *designed* to be corrected: a stale
-# anchor, a `find` that occurs twice, a batch whose operations overlap are all things the message
-# says how to fix, and one attempt is not enough to make that promise good. Observed rather than
-# guessed at: a smaller model got the operation shape wrong on its first call and the default limit
-# turned a correctable mistake into a failed turn.
-RETRIES: Final = 3
-
 # The most rows one listing will show. A bound on the pathological case rather than a page size, the
 # way `MAX_LINES` is: `depth` is the knob, and this is what stops a large `depth` on a large
 # repository from spending a context window before the model has asked its first real question.
@@ -732,9 +723,9 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         return await guarded(files.create(path, content, root))
 
     for tool in (read, edit, create):
-        toolset.add_function(tool, retries=RETRIES)
+        toolset.add_function(tool)
     # Asked for as `list`, which is the word a model reaches for, and defined as `listing`, because
     # `list` is a builtin and shadowing one inside this scope is a lint error rather than a style
     # question. The name the model sees is the only one that matters, so it is set here explicitly.
-    toolset.add_function(listing, name="list", retries=RETRIES)
+    toolset.add_function(listing, name="list")
     return toolset

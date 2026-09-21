@@ -28,7 +28,7 @@ This console's is the rest:
 | `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `Stepping.steering` |
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `Stepping.request` |
 | `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `Stepping.request` |
-| `turn:{n}:tool:{id}` | What one tool call returned and how long it ran | `Stepping.call` |
+| `turn:{n}:tool:{id}` | What one tool call returned, or why it failed, and how long it ran | `Stepping.call` |
 | `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
 | `turn:{n}:messages` | What the model loop produced | The conversation body |
 | `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |

@@ -28,8 +28,6 @@ HEAD_LINES: Final = 120
 TAIL_LINES: Final = 80
 MAX_LINE: Final = 2_000
 
-RETRIES: Final = 3
-
 
 class Refused(ValueError):
     """Something a model asked for that this tool will not do, phrased so it can ask again."""
@@ -181,5 +179,5 @@ def bash_tools(
         except Refused as refusal:
             raise ModelRetry(str(refusal)) from None
 
-    toolset.add_function(bash, retries=RETRIES)
+    toolset.add_function(bash)
     return toolset

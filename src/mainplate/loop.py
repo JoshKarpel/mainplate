@@ -29,18 +29,15 @@ from typing import Final
 
 from pydantic import ValidationError
 from pydantic_ai import ModelRetry
-from pydantic_ai.exceptions import ContentFilterError
-from pydantic_ai.exceptions import IncompleteToolCall
-from pydantic_ai.exceptions import ToolFailed
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import InstructionPart
 from pydantic_ai.messages import ModelMessage
-from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import RetryPromptPart
 from pydantic_ai.messages import SystemPromptPart
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
@@ -54,14 +51,37 @@ from pydantic_ai.usage import RunUsage
 
 from mainplate.durability import Stepping
 
-RETRIES: Final = 1
+CORRECTIONS: Final = 1
 """
-How many times one tool, or an answer with nothing in it, may be corrected before the turn fails.
+How many times running the model is asked again for an answer with nothing in it before the turn fails.
 
-Pydantic AI's own default, kept rather than chosen: a model that mis-calls the same tool twice
-running is not going to be talked out of it by a third prompt, and a turn that fails here is one
-`conversing` records and the page draws, where a turn that loops is one nobody sees the end of.
+Pydantic AI's own default, kept rather than chosen: a model that answers nothing twice running is not
+going to be talked out of it by a third prompt. It is the one count left in the loop. A tool call that
+went wrong is a result the model is sent, not a strike against it, and is not counted at all.
 """
+
+
+class CannotGoOn(Exception):
+    """
+    The recorded answer leaves the turn nowhere to go, and would leave it nowhere on every pass.
+
+    Raised by the loop for what it finds in a response *after* `Stepping.request` has recorded it: the
+    model stopped at its output limit before saying anything usable, or in the middle of a tool call;
+    the provider's content filter emptied the answer; two tool calls share one id. Every input to that
+    answer is recorded and so is the answer, so a redelivery would replay the same record into the
+    same dead end once per lease for ever. `conversing` writes `why` where a refusal goes and reports
+    `Stalled`, which is the same closing of the same loop `RequestRefused` does one step earlier.
+
+    A tool turning a call down is not this, because it is not a dead end: the refusal is the call's
+    result, the model is told and goes on. See `Tools.call`.
+
+    The wording is the page's, composed here because only the loop knows which dead end it was and
+    what limit was sent; `terminally` in `durability.py` composes a refusal's reason the same way.
+    """
+
+    def __init__(self, why: str) -> None:
+        super().__init__(why)
+        self.why = why
 
 
 type Keeping = Callable[[int, int], Awaitable[Sequence[str]]]
@@ -74,10 +94,10 @@ one question keeps this loop ignorant of what a plugin is.
 """
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Tools:
     """
-    Every tool the model may call this turn, by name, and how many times each has been corrected.
+    Every tool the model may call this turn, by name, and the context each call runs in.
 
     Resolved once per turn rather than per request, which is what Pydantic AI's toolsets allow for
     and what determinism asks for: a toolset whose tools changed between two requests of one turn
@@ -88,94 +108,69 @@ class Tools:
     """
 
     by_name: Mapping[str, ToolsetTool[None]]
-    retries: dict[str, int]
     context: RunContext[None]
 
     @classmethod
     async def from_toolsets(
         cls, model: Model, messages: list[ModelMessage], toolsets: Sequence[AbstractToolset[None]]
     ) -> Tools:
-        context = RunContext(deps=None, model=model, usage=RunUsage(), messages=messages, max_retries=RETRIES)
+        context = RunContext(deps=None, model=model, usage=RunUsage(), messages=messages)
         by_name: dict[str, ToolsetTool[None]] = {}
         for toolset in toolsets:
             for name, tool in (await toolset.get_tools(context)).items():
                 if name in by_name:
                     raise ValueError(f"two tools are named {name!r}")
                 by_name[name] = tool
-        return cls(by_name=by_name, retries={}, context=context)
+        return cls(by_name=by_name, context=context)
 
-    async def call(self, scope: Stepping, call: ToolCallPart) -> ToolReturnPart | ValidationError | ModelRetry:
+    async def call(self, scope: Stepping, call: ToolCallPart) -> ToolReturnPart:
         """
-        One call, validated here and run as a step of `scope`, or the correction it earned instead.
+        The call's result: what the tool returned, or what went wrong, in one shape either way.
 
-        The correction is *returned* rather than raised, because a batch runs under `gather` and the
-        other calls in it have to finish and be recorded whatever this one did: raising would cancel
-        siblings whose tools may already have written. `result` is where a correction becomes a
-        retry prompt or a failure, once the whole batch is in.
+        **A refusal, a failure and a return are one kind of part with an outcome**, because from the
+        model's side they are one thing, an answer to its call, and from the checkpoint's side they
+        had better be: whatever the model is sent about a call is in `turn:{n}:tool:{id}`, so a
+        replay hands back the same words. That is `Stepping.call`'s record, and the retry prompt
+        Pydantic AI drew a `ModelRetry` as is not used for a call at all. Nothing counts failures,
+        either: the graph's retry budget bounded one kind of mistake and a model that keeps calling
+        a tool that keeps failing was never bounded by it, and what bounds both is the priced turn.
 
-        Validation runs outside the step and the tool inside it, so a call the model got wrong is
-        never recorded as having returned anything, and a pass that replays the turn validates it
-        again, deterministically, to the same correction. A `ToolFailed` is a return, not a
-        correction: the tool ran and said what went wrong, and the model is told so in a result
-        marked failed rather than asked to call again.
+        Validation runs outside the step, so a call the model got wrong is never recorded as having
+        returned anything and a pass that replays the turn validates it again, deterministically, to
+        the same answer. **Only validation's `ValidationError` is read as the model's mistake.** One
+        raised from inside the tool is the tool's own bug, or a plugin's malformed answer, and it
+        propagates out of the step and the pass: caught here it would tell the model its arguments
+        were wrong when they were fine and bury the fault in a result.
         """
         tool = self.by_name.get(call.tool_name)
         if tool is None:
-            return ModelRetry(f"Unknown tool name: {call.tool_name!r}")
-
-        context = replace(
-            self.context,
-            retries=self.retries,
-            tool_name=call.tool_name,
-            tool_call_id=call.tool_call_id,
-            retry=self.retries.get(call.tool_name, 0),
-            max_retries=tool.max_retries,
-        )
+            return failed(call, f"there is no tool called {call.tool_name!r}")
+        context = replace(self.context, tool_name=call.tool_name, tool_call_id=call.tool_call_id)
         try:
             arguments = await validated(call, tool, context)
-            returned = await scope.call(call, arguments, context, tool)
-        except (ValidationError, ModelRetry) as error:
-            return error
-        except ToolFailed as error:
-            return ToolReturnPart(
-                tool_name=call.tool_name,
-                content=error.message,
-                tool_call_id=call.tool_call_id,
-                tool_kind=call.tool_kind,
-                outcome="failed",
-            )
+        except ValidationError as error:
+            return failed(call, RetryPromptPart.from_error(error, tool_name=call.tool_name).model_response())
+        except ModelRetry as error:
+            return failed(call, error.message)
+        recorded = await scope.call(call, arguments, context, tool)
         return ToolReturnPart(
             tool_name=call.tool_name,
-            content=returned,
+            content=recorded.returned,
             tool_call_id=call.tool_call_id,
             tool_kind=call.tool_kind,
+            outcome=recorded.outcome,
         )
 
-    def result(
-        self,
-        call: ToolCallPart,
-        attempted: ToolReturnPart | ValidationError | ModelRetry,
-    ) -> ToolReturnPart | RetryPromptPart:
-        """
-        The part the next request carries for this call: its return, or the prompt to try again.
 
-        Corrections are counted per tool name across the turn, which is Pydantic AI's accounting
-        and is kept for the reason it was chosen there: a model that gets `edit` wrong on three
-        different files is stuck on `edit`, not on any one call. Past the count the turn fails
-        rather than prompting again, and `UnexpectedModelBehavior` is what `conversing` reads a
-        turn that cannot go on as.
-        """
-        if isinstance(attempted, ToolReturnPart):
-            return attempted
-        tool = self.by_name.get(call.tool_name)
-        maximum = RETRIES if tool is None else tool.max_retries
-        used = self.retries.get(call.tool_name, 0)
-        if used >= maximum:
-            raise UnexpectedModelBehavior(
-                f"Tool {call.tool_name!r} exceeded max retries count of {maximum}."
-            ) from attempted
-        self.retries[call.tool_name] = used + 1
-        return RetryPromptPart.from_error(attempted, tool_name=call.tool_name, tool_call_id=call.tool_call_id)
+def failed(call: ToolCallPart, why: str) -> ToolReturnPart:
+    """The call's result where it never reached a tool, in the shape a tool's own failure takes."""
+    return ToolReturnPart(
+        tool_name=call.tool_name,
+        content=why,
+        tool_call_id=call.tool_call_id,
+        tool_kind=call.tool_kind,
+        outcome="failed",
+    )
 
 
 async def validated(call: ToolCallPart, tool: ToolsetTool[None], context: RunContext[None]) -> dict[str, object]:
@@ -234,11 +229,13 @@ class Agent:
         one thing to answer. `keeping` absent is a session none of whose plugins asked, and the turn
         ends the first time the model answers.
 
-        **A tool call the model was cut off writing is raised, not corrected.** Its arguments fail
-        validation like any bad call's, so left to the retry path the model would be told they were
-        malformed and asked again, spending a request on an answer that was never wrong. It is the
-        same cut-off as a thinking-only response stopped at the limit, and `conversing` settles both
-        the same way; see `cut_off_writing_a_call`.
+        **A response the loop cannot act on is `CannotGoOn`, not a correction.** A tool call the model
+        was cut off writing has arguments that fail validation like any bad call's, so left to the
+        retry path the model would be told they were malformed and asked again, spending a request
+        on an answer that was never wrong; it is checked for before any call is validated. A
+        thinking-only answer stopped at the limit, an answer the content filter emptied, and a batch
+        whose calls share an id are the same shape: recorded, deterministic, and nowhere to go. An
+        empty answer stopped for no stated reason is the one that is corrected, once.
 
         The turn is unbounded. What a session may spend is a question about money and not round
         trips, and it is answered where money is counted.
@@ -256,12 +253,11 @@ class Agent:
             calls = [part for part in response.parts if isinstance(part, ToolCallPart)]
             if calls:
                 if cut_off_writing_a_call(response):
-                    raise IncompleteToolCall("the model was cut off at its output limit while writing a tool call")
+                    raise CannotGoOn(f"the model was cut off at {self.limit()} in the middle of a tool call")
                 if len({call.tool_call_id for call in calls}) != len(calls):
-                    raise ValueError("a model response contains duplicate tool call ids")
-                attempted = await asyncio.gather(*(tools.call(scope, call) for call in calls))
-                results = [tools.result(call, result) for call, result in zip(calls, attempted, strict=True)]
-                messages.append(ModelRequest(parts=results, instructions=self.instructions))
+                    raise CannotGoOn("the model asked for two tool calls under one id, and neither can be answered")
+                results = await together([tools.call(scope, call) for call in calls])
+                messages.append(ModelRequest(parts=[*results], instructions=self.instructions))
                 continue
 
             if said_something(response):
@@ -282,12 +278,15 @@ class Agent:
                 continue
 
             if response.finish_reason == "length":
-                raise UnexpectedModelBehavior("Model token limit exceeded before any response was generated.")
-            if response.finish_reason == "content_filter":
-                body = ModelMessagesTypeAdapter.dump_json([response]).decode()
-                raise ContentFilterError("Content filter triggered.", body=body)
-            if corrected >= RETRIES:
-                raise UnexpectedModelBehavior(f"Model output exceeded max retries count of {RETRIES}.")
+                raise CannotGoOn(
+                    f"the model was cut off at {self.limit()} before it said anything this console could act on"
+                )
+            if response.finish_reason == "content_filter" and not any(
+                isinstance(part, ThinkingPart) for part in response.parts
+            ):
+                raise CannotGoOn("the provider's content filter stopped the answer before it said anything")
+            if corrected >= CORRECTIONS:
+                raise UnexpectedModelBehavior(f"Model output exceeded max retries count of {CORRECTIONS}.")
             corrected += 1
             messages.append(
                 ModelRequest(
@@ -330,18 +329,24 @@ class Agent:
         scope.allow(scope.coming("model"))
         injected = await scope.injected(messages)
         if injected:
-            messages.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
+            messages.append(
+                ModelRequest(
+                    parts=[SystemPromptPart(content=text) for text in injected], instructions=self.instructions
+                )
+            )
         steered = await scope.steering()
         if steered:
-            messages.append(ModelRequest(parts=[UserPromptPart(content=text) for text in steered]))
+            messages.append(
+                ModelRequest(parts=[UserPromptPart(content=text) for text in steered], instructions=self.instructions)
+            )
 
     async def request(self, scope: Stepping, messages: list[ModelMessage], tools: Tools) -> ModelResponse:
         """
         The provider's answer to the conversation as it stands, made or replayed by `scope`.
 
         Instructions travel as `instruction_parts` on the parameters, which is what a model reads,
-        and are also written on each `ModelRequest` this loop makes, which is what the transcript
-        reads back; the two are one string written twice for two readers, and `told` in
+        and are also written on every `ModelRequest` this loop makes, which is what the transcript
+        reads back; the two are one string written twice for two readers, and `system_prompt_in` in
         `conversation.py` is the reader that would notice them drifting.
 
         `prepare_messages` is the model's own chance to reshape a history for its wire, and is the
@@ -355,6 +360,38 @@ class Agent:
         )
         prepared = self.model.prepare_messages(messages, parameters)
         return await scope.request(self.model, prepared, self.settings or None, parameters)
+
+    def limit(self) -> str:
+        """
+        The output limit a cut-off answer was cut off at, in the words the page says it in.
+
+        The number that was sent, because that is the one to look up, and the endpoint's default where
+        none was: a session on a model neither the endpoint nor the reference states a limit for is
+        exactly the one whose page should say so.
+        """
+        cap = self.settings.get("max_tokens")
+        return f"its output limit of {cap} tokens" if cap is not None else "the endpoint's default output limit"
+
+
+async def together[T](calls: Sequence[Awaitable[T]]) -> list[T]:
+    """
+    Every result, in order, or the first exception with every other call cancelled and waited for.
+
+    `gather` alone propagates the first exception while its siblings run on detached, and here a
+    sibling is a tool call inside a `Stepping.call` step: left running it would finish after the scope,
+    the pass and possibly the lease had ended, and write its record through a released holder, maybe
+    under another worker's pass. Cancelling the siblings and *waiting* for them is what keeps every
+    step of a pass inside the pass; a cancelled call records nothing and runs again next time, which
+    is the at-least-once `Stepping.call` already promises.
+    """
+    tasks = [asyncio.ensure_future(call) for call in calls]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def said_something(response: ModelResponse) -> bool:

@@ -29,7 +29,9 @@ from time import monotonic
 from typing import Final
 
 from pydantic import TypeAdapter
+from pydantic_ai import ModelRetry
 from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import ToolFailed
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
@@ -561,7 +563,7 @@ class Stepping:
         arguments: dict[str, object],
         context: RunContext[None],
         tool: ToolsetTool[None],
-    ) -> object:
+    ) -> records.Returned:
         """
         Run a tool once across every pass of this conversation, recording what it came back with.
 
@@ -582,11 +584,20 @@ class Stepping:
         round trip, and the failure it produces is the mild one, because an anchored edit whose
         anchors no longer resolve is refused rather than applied somewhere wrong.
 
+        **A call the tool turned down or failed at is recorded exactly as one it answered**, with the
+        outcome saying which, and that is the half of this that is easy to get wrong. A `ModelRetry`
+        and a `ToolFailed` are both a result the model is sent, so both have to be in the checkpoint
+        for the same reason a return is: a replay that ran the tool again to find out what it would
+        say would be asking a live question, against a worktree the rest of the batch has since
+        written to, and pairing whatever it said with a recorded response the model made believing
+        the first answer. Under the graph the retry prompt was built outside anything this could wrap,
+        which is why they were once left unrecorded; the loop builds it now, from this record.
+
         **How long it took is a field of the same record**, written by the same step, so there is no
         window where a return was recorded and its duration was not. Timed around the tool alone,
-        so what is recorded is the call rather than the store write after it. A tool that raises
-        records nothing at all - the `ModelRetry` propagates out of the step and the call stays out
-        until a retry lands - so a failed call has no duration for the same reason it has no return.
+        so what is recorded is the call rather than the store write after it, and a failure is timed
+        like a return because the tool ran either way. Anything else a tool raises is its own bug
+        and propagates, recording nothing.
 
         **A call a plugin refused is recorded as one that returned the refusal**, inside this same
         step, so the record is the whole of what a replay needs and the plugin is never asked twice.
@@ -599,14 +610,20 @@ class Stepping:
             if refused is not None:
                 return records.Returned(returned=refused).recorded()
             started = monotonic()
-            came_back = to_jsonable_python(await tool.toolset.call_tool(call.tool_name, arguments, context, tool))
+            try:
+                came_back = to_jsonable_python(await tool.toolset.call_tool(call.tool_name, arguments, context, tool))
+            except (ModelRetry, ToolFailed) as failed:
+                return records.Returned(
+                    returned=failed.message,
+                    took=timedelta(seconds=monotonic() - started),
+                    outcome="failed",
+                ).recorded()
             return records.Returned(
                 returned=came_back,
                 took=timedelta(seconds=monotonic() - started),
             ).recorded()
 
-        recorded = await self.step(self.identified("tool", call.tool_call_id), perform, parse_returned)
-        return recorded.returned
+        return await self.step(self.identified("tool", call.tool_call_id), perform, parse_returned)
 
     def price(self, answered: ModelResponse) -> None:
         """

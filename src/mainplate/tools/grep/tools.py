@@ -19,7 +19,6 @@ from mainplate.tools.files.tools import Refused
 CONTEXT: Final = 2
 MAX_CONTEXT: Final = 3
 MAX_MATCHES: Final = 100
-RETRIES: Final = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,5 +175,5 @@ def grep_tools(files: Files) -> FunctionToolset[None]:
         except Refused as refusal:
             raise ModelRetry(str(refusal)) from None
 
-    toolset.add_function(grep, retries=RETRIES)
+    toolset.add_function(grep)
     return toolset

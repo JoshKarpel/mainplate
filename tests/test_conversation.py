@@ -26,9 +26,7 @@ from conftest import said_at
 from conftest import started
 from conftest import steered_at
 from pydantic import ValidationError
-from pydantic_ai.exceptions import IncompleteToolCall
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
@@ -73,8 +71,6 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
 from mainplate.conversation import conversing
-from mainplate.conversation import cut_off_in
-from mainplate.conversation import cut_off_why
 from mainplate.conversation import failed_key
 from mainplate.conversation import failure_in
 from mainplate.conversation import heard_key
@@ -1790,10 +1786,11 @@ class TestAnAnswerCutOffAtTheOutputLimit:
     """
     The other request no pass can ever get past: one the provider answered, and cut off.
 
-    Pydantic AI raises over an answer stopped at its output limit with nothing in it the loop can act
-    on, and it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left
-    as an ordinary failure it would be replayed into the same exception once per lease for ever,
-    which is the loop the refusal record exists to close, so it is written where a refusal is.
+    The loop raises over an answer stopped at its output limit with nothing in it it can act on, and
+    it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left as an
+    ordinary failure it would be replayed into the same exception once per lease for ever, which is
+    the loop the refusal record exists to close, so it is written where a refusal is. What the reason
+    says is pinned in `test_durability.py`, where the loop is driven directly.
     """
 
     CUT_OFF = ModelResponse(parts=[ThinkingPart(content="let me think about")], finish_reason="length", timestamp=WHEN)
@@ -1866,25 +1863,6 @@ class TestAnAnswerCutOffAtTheOutputLimit:
         refused = parse_refused(recorded[refused_key(0, 1)])
         assert refused.status is None
         assert "tool call" in refused.why
-
-    def test_the_reason_names_the_number_that_was_sent(self) -> None:
-        """The number is what somebody looks up, and its absence is what a session with none should say."""
-        assert "output limit of 4096 tokens" in cut_off_why(UnexpectedModelBehavior("cut"), 4096)
-        assert "default output limit" in cut_off_why(UnexpectedModelBehavior("cut"), None)
-
-    def test_a_tool_call_cut_off_is_said_to_be_one(self) -> None:
-        assert "tool call" in cut_off_why(IncompleteToolCall("cut"), 128_000)
-        assert "tool call" not in cut_off_why(UnexpectedModelBehavior("cut"), 128_000)
-
-    def test_only_the_last_answer_decides_and_only_where_it_was_cut_off(self) -> None:
-        """
-        An earlier answer stopped at the limit that still carried a usable call was acted on, and the
-        turn went on, so the reading is of the last answer and no other.
-        """
-        whole = ModelResponse(parts=[TextPart("done")], timestamp=WHEN)
-        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF), model_key(0, 1): kept(whole)}, 0) is None
-        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF)}, 0) == self.CUT_OFF
-        assert cut_off_in({}, 0) is None
 
 
 def kept(answered: ModelResponse) -> object:

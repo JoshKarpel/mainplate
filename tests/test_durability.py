@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,13 +13,17 @@ from conftest import INSTRUCTIONS
 from conftest import Provider
 from conftest import Scripted
 from conftest import calls
+from pydantic import TypeAdapter
+from pydantic import ValidationError
 from pydantic_ai import ModelRetry
-from pydantic_ai.exceptions import IncompleteToolCall
+from pydantic_ai.exceptions import ToolFailed
 from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
-from pydantic_ai.messages import RetryPromptPart
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RequestUsage
@@ -29,6 +34,8 @@ from without_durability.stepwise import extending
 
 from mainplate.conversation import draining_inbox
 from mainplate.conversation import recorded_steer
+from mainplate.conversation import returned_step
+from mainplate.conversation import returns_in
 from mainplate.conversation import turn_of
 from mainplate.durability import TOOK
 from mainplate.durability import Allowance
@@ -38,6 +45,7 @@ from mainplate.durability import parse_model_response
 from mainplate.durability import parse_returned
 from mainplate.durability import stepping
 from mainplate.loop import Agent
+from mainplate.loop import CannotGoOn
 
 WORKFLOW = "a-workflow"
 
@@ -285,35 +293,16 @@ class TestTimingWhatAPassDid:
 
         assert (await checkpointer.load(WORKFLOW))["turn:0:tool:call-note-0"] == first
 
-    async def test_a_tool_that_raised_is_timed_no_more_than_it_is_recorded(
-        self, checkpointer: MemoryCheckpointer
-    ) -> None:
-        """
-        A refusal propagates out of the step, so neither key is written and the call reads as still
-        out until the retry lands. A duration for a call with no result is a state nothing produces.
-        """
+    async def test_a_tool_that_refused_is_timed_like_one_that_answered(self, checkpointer: MemoryCheckpointer) -> None:
+        """The tool ran either way, and its refusal is a result the model is sent, so it is recorded like one."""
         scripted = Scripted(script=(calls(("refuse", {})), ModelResponse(parts=[TextPart("done")])))
-        toolset = FunctionToolset[None]()
-
-        async def refuse() -> str:
-            """Refuse whatever it is."""
-            raise ModelRetry("try something else")
-
-        toolset.add_function(refuse)
-        agent = Agent(
-            model=scripted.model(),
-            instructions=INSTRUCTIONS,
-            settings=ModelSettings(),
-            toolsets=(toolset,),
-        )
-
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0") as scope:
-                await agent.run("go", (), scope)
+                await declining(scripted, Declining()).run("go", (), scope)
 
-        recorded = await checkpointer.load(WORKFLOW)
-        assert scripted.asked == 2, "the refusal reached the model, so the call really was attempted"
-        assert [key for key in recorded if ":tool:" in key or ":took:" in key] == []
+        held = parse_returned((await checkpointer.load(WORKFLOW))["turn:0:tool:call-refuse-0"])
+        assert held.outcome == "failed"
+        assert held.took is not None
 
 
 class TestPuttingAMessageIntoARunningTurn:
@@ -549,25 +538,134 @@ class TestRecordingAToolCall:
         assert returns == ["noted alpha"]
 
 
+@dataclass(slots=True)
+class Declining:
+    """A toolset with one tool that turns the call down and one that fails at it, each counting its runs."""
+
+    ran: list[str] = field(default_factory=list)
+
+    def toolset(self) -> FunctionToolset[None]:
+        held = self.ran
+
+        async def refuse() -> str:
+            """Turn the call down, correctably."""
+            held.append("refuse")
+            raise ModelRetry("try something else")
+
+        async def fail() -> str:
+            """Fail at the call, for good."""
+            held.append("fail")
+            raise ToolFailed("there is no such thing")
+
+        toolset = FunctionToolset[None]()
+        toolset.add_function(refuse)
+        toolset.add_function(fail)
+        return toolset
+
+
+def declining(scripted: Scripted, tools: Declining) -> Agent:
+    return Agent(
+        model=scripted.model(), instructions=INSTRUCTIONS, settings=ModelSettings(), toolsets=(tools.toolset(),)
+    )
+
+
+def results_in(messages: tuple[object, ...]) -> list[ToolReturnPart]:
+    return [
+        part
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+
+
+class TestACallThatWentWrong:
+    """
+    A refusal, a failure and a return are one record with an outcome, and the model sees one shape.
+
+    What is being pinned is durability rather than wording: whatever the model was sent about a call
+    is in the checkpoint, so a resumed pass hands the loop the same words instead of running the tool
+    again to hear what it would say against a worktree the rest of the batch has since written to.
+    """
+
+    @pytest.mark.parametrize(("tool", "said"), [("refuse", "try something else"), ("fail", "there is no such thing")])
+    async def test_it_is_recorded_and_replayed_rather_than_run_again(
+        self, checkpointer: MemoryCheckpointer, tool: str, said: str
+    ) -> None:
+        scripted = Scripted(script=(calls((tool, {})), ModelResponse(parts=[TextPart("done")])))
+        tools = Declining()
+        for _ in range(3):
+            async with a_pass(checkpointer) as run:
+                with stepping(run, "turn:0") as scope:
+                    messages = await declining(scripted, tools).run("go", (), scope)
+
+        assert tools.ran == [tool], "it ran on the first pass and was replayed on the rest"
+        (result,) = results_in(messages)
+        assert (result.outcome, result.content) == ("failed", said)
+        assert scripted.asked == 2, "the model was told once and answered once"
+
+    @pytest.mark.parametrize("tool", ["refuse", "fail"])
+    async def test_both_readings_of_it_agree(self, checkpointer: MemoryCheckpointer, tool: str) -> None:
+        """The record a running turn is drawn from and the messages a settled one is drawn from say the same."""
+        scripted = Scripted(script=(calls((tool, {})), ModelResponse(parts=[TextPart("done")])))
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope:
+                messages = await declining(scripted, Declining()).run("go", (), scope)
+
+        held = parse_returned((await checkpointer.load(WORKFLOW))[f"turn:0:tool:call-{tool}-0"])
+        assert returned_step(held) == returns_in(messages)[f"call-{tool}-0"]
+
+    async def test_nothing_counts_how_many_times_a_tool_turned_the_model_down(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        The graph ended a turn on a second refusal of one tool. A refusal is an answer, and a model
+        that keeps getting a call wrong is bounded by what bounds a model that keeps calling a tool
+        that keeps failing, which is not a count.
+        """
+        scripted = Scripted(
+            script=(
+                ModelResponse(parts=[ToolCallPart("refuse", {}, "call-1"), ToolCallPart("refuse", {}, "call-2")]),
+                ModelResponse(parts=[ToolCallPart("refuse", {}, "call-3")]),
+                ModelResponse(parts=[ToolCallPart("refuse", {}, "call-4")]),
+                ModelResponse(parts=[TextPart("done")]),
+            )
+        )
+        tools = Declining()
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope:
+                messages = await declining(scripted, tools).run("go", (), scope)
+
+        assert output_of(messages) == "done"
+        assert tools.ran == ["refuse"] * 4
+        assert scripted.asked == 4
+
+
 class TestTheModelAndToolLoop:
-    async def test_an_unknown_tool_is_returned_as_a_correction(self, checkpointer: MemoryCheckpointer) -> None:
+    async def test_an_unknown_tool_is_a_failed_result(self, checkpointer: MemoryCheckpointer) -> None:
         scripted = Scripted(script=(calls(("absent", {})), ModelResponse(parts=[TextPart("done")])))
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0") as scope:
                 messages = await calling(scripted, Noting()).run("go", (), scope)
 
-        retries = [part for message in messages for part in message.parts if isinstance(part, RetryPromptPart)]
-        assert len(retries) == 1
-        assert retries[0].tool_name == "absent"
+        (result,) = results_in(messages)
+        assert (result.tool_name, result.outcome) == ("absent", "failed")
+        assert "absent" in str(result.content)
         assert scripted.asked == 2
 
-    async def test_invalid_arguments_are_returned_as_a_correction(self, checkpointer: MemoryCheckpointer) -> None:
+    async def test_invalid_arguments_are_a_failed_result_that_says_what_was_wrong(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """Deterministic on the recorded call, so it is not recorded, and a replay reaches the same words."""
         scripted = Scripted(script=(calls(("note", {})), ModelResponse(parts=[TextPart("done")])))
         async with a_pass(checkpointer) as run:
             with stepping(run, "turn:0") as scope:
                 messages = await calling(scripted, Noting()).run("go", (), scope)
 
-        assert any(isinstance(part, RetryPromptPart) for message in messages for part in message.parts)
+        (result,) = results_in(messages)
+        assert result.outcome == "failed"
+        assert "what" in str(result.content), "the missing argument is named"
+        assert "turn:0:tool:call-note-0" not in await checkpointer.load(WORKFLOW)
         assert scripted.asked == 2
 
     async def test_empty_output_is_retried_once(self, checkpointer: MemoryCheckpointer) -> None:
@@ -598,11 +696,50 @@ class TestTheModelAndToolLoop:
         scripted = Scripted(script=(cut_off, ModelResponse(parts=[TextPart("done")])))
         tools = Noting()
         async with a_pass(checkpointer) as run:
-            with stepping(run, "turn:0") as scope, pytest.raises(IncompleteToolCall):
+            with stepping(run, "turn:0") as scope, pytest.raises(CannotGoOn, match="in the middle of a tool call"):
                 await calling(scripted, tools).run("go", (), scope)
 
         assert scripted.asked == 1, "the model was not asked to try again"
         assert tools.ran == [], "and nothing ran on half an argument"
+
+    async def test_a_thinking_only_answer_cut_off_at_the_limit_names_the_number_that_was_sent(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """The number is what somebody looks up, and its absence is what a session with none should say."""
+        cut_off = ModelResponse(parts=[ThinkingPart(content="let me think about")], finish_reason="length")
+        scripted = Scripted(script=(cut_off,))
+        capped = Agent(
+            model=scripted.model(),
+            instructions=INSTRUCTIONS,
+            settings=ModelSettings(max_tokens=4096),
+            toolsets=(),
+        )
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope, pytest.raises(CannotGoOn, match="output limit of 4096 tokens"):
+                await capped.run("go", (), scope)
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:1") as scope, pytest.raises(CannotGoOn, match="default output limit"):
+                await calling(scripted, Noting()).run("go", (), scope)
+
+    async def test_an_answer_the_content_filter_emptied_cannot_go_on(self, checkpointer: MemoryCheckpointer) -> None:
+        """Recorded and deterministic, so a correction would spend a request to be filtered again."""
+        scripted = Scripted(script=(ModelResponse(parts=[], finish_reason="content_filter"),))
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope, pytest.raises(CannotGoOn, match="content filter"):
+                await calling(scripted, Noting()).run("go", (), scope)
+        assert scripted.asked == 1
+
+    async def test_a_filtered_answer_that_still_thought_is_corrected_instead(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """Pydantic AI's line, kept: thinking is content, so the filter did not empty the answer."""
+        thought = ModelResponse(parts=[ThinkingPart(content="hmm")], finish_reason="content_filter")
+        scripted = Scripted(script=(thought, ModelResponse(parts=[TextPart("done")])))
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope:
+                messages = await calling(scripted, Noting()).run("go", (), scope)
+        assert output_of(messages) == "done"
+        assert scripted.asked == 2
 
     async def test_a_whole_call_in_an_answer_cut_off_after_it_still_runs(
         self, checkpointer: MemoryCheckpointer
@@ -618,7 +755,11 @@ class TestTheModelAndToolLoop:
         assert tools.ran == ["alpha"]
         assert output_of(messages) == "done"
 
-    async def test_duplicate_call_ids_fail_loudly(self, checkpointer: MemoryCheckpointer) -> None:
+    async def test_duplicate_call_ids_cannot_go_on(self, checkpointer: MemoryCheckpointer) -> None:
+        """
+        Two calls under one id would be one record, so neither can be answered. The response is
+        already recorded, so this is settled rather than a failure a redelivery could get past.
+        """
         response = ModelResponse(
             parts=[
                 ToolCallPart("note", {"what": "one"}, "same"),
@@ -627,8 +768,69 @@ class TestTheModelAndToolLoop:
         )
         scripted = Scripted(script=(response,))
         async with a_pass(checkpointer) as run:
-            with stepping(run, "turn:0") as scope, pytest.raises(ValueError, match="duplicate"):
+            with stepping(run, "turn:0") as scope, pytest.raises(CannotGoOn, match="one id"):
                 await calling(scripted, Noting()).run("go", (), scope)
+
+
+class TestABatchOfCalls:
+    async def test_a_sibling_is_cancelled_and_waited_for_when_a_call_raises(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        A raise no arm of the loop reads ends the pass, and a sibling left running would write its
+        record after the pass had released the session. So the sibling is cancelled and the raise
+        waits for it, and what is pinned is that the cancellation reached the tool before the raise
+        reached the test.
+        """
+        cancelled: list[str] = []
+        never = asyncio.Event()
+
+        async def slow() -> str:
+            """Wait for something that does not come."""
+            try:
+                await never.wait()
+            except asyncio.CancelledError:
+                cancelled.append("slow")
+                raise
+            return "never"  # pragma: no cover - the wait does not end
+
+        async def broken() -> str:
+            """Fail in a way no arm of the loop reads."""
+            raise RuntimeError("a bug in the tool")
+
+        toolset = FunctionToolset[None]()
+        toolset.add_function(slow)
+        toolset.add_function(broken)
+        scripted = Scripted(script=(calls(("slow", {}), ("broken", {})),))
+        agent = Agent(model=scripted.model(), instructions=INSTRUCTIONS, settings=ModelSettings(), toolsets=(toolset,))
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope, pytest.raises(RuntimeError, match="a bug in the tool"):
+                await agent.run("go", (), scope)
+
+        assert cancelled == ["slow"]
+        assert "turn:0:tool:call-slow-0" not in await checkpointer.load(WORKFLOW)
+
+    async def test_a_validation_error_from_inside_a_tool_is_the_tools_fault(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """Caught as a correction it would tell the model its arguments were wrong when they were fine."""
+
+        async def parse() -> str:
+            """Parse something badly."""
+            TypeAdapter(int).validate_python("not a number")
+            return "unreachable"  # pragma: no cover - the parse raises
+
+        toolset = FunctionToolset[None]()
+        toolset.add_function(parse)
+        scripted = Scripted(script=(calls(("parse", {})), ModelResponse(parts=[TextPart("done")])))
+        agent = Agent(model=scripted.model(), instructions=INSTRUCTIONS, settings=ModelSettings(), toolsets=(toolset,))
+
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope, pytest.raises(ValidationError):
+                await agent.run("go", (), scope)
+
+        assert scripted.asked == 1, "the model was not told anything was wrong with its call"
 
 
 class TestBoundingWhatOnePassDoes:

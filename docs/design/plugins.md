@@ -622,7 +622,7 @@ pass still holding the claim on it. It is the split
 | Effect | Means | Where |
 |---|---|---|
 | `return` | hand this value back to the model | `tool` only |
-| `retry` | tell the model to try again, correctably | `tool` only, becomes a `ModelRetry` |
+| `retry` | tell the model to try again, correctably | `tool` only, the call's result marked failed |
 | `refuse` | do not run this call, and tell the model why | `before_tool` only, becomes the call's return |
 | `deliver` | put this message in the session's inbox | anywhere |
 | `set` | write these values into my own store | anywhere |

@@ -68,15 +68,6 @@ from mainplate.tending import Tending
 
 logger = logging.getLogger(__name__)
 
-RETRIES = 3
-"""
-How many times a plugin's tool may be corrected before the turn gives up on it.
-
-Above Pydantic AI's default of one for the reason every other tool here is: what a plugin turns down
-is correctable from the message, so a model that gets the arguments wrong twice should still be
-allowed to get them right.
-"""
-
 
 type Delivering = Callable[[records.Note], Awaitable[None]]
 """
@@ -475,7 +466,7 @@ class PluginTools(AbstractToolset[Any]):
             each.named: ToolsetTool(
                 toolset=self,
                 tool_def=each.definition,
-                max_retries=RETRIES,
+                max_retries=0,
                 args_validator=TOOL_SCHEMA_VALIDATOR,
             )
             for each in self.contributed

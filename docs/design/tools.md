@@ -250,10 +250,15 @@ sandbox, which bounds where a command reaches and says nothing about how many ti
 ## Refusals reach the model
 
 Everything a tool turns down arrives as a `ModelRetry`, because all of it is correctable from the
-message: a stale anchor, a `find` occurring twice, a batch that overlaps. `RETRIES` is above the
-loop's default of one for that reason, and the reason is observed rather than theoretical: a smaller
-model got an operation's shape wrong once and the default turned a correctable mistake into a failed
-turn.
+message: a stale anchor, a `find` occurring twice, a batch that overlaps. The loop treats it exactly
+as it treats a `ToolFailed`, which is the other verdict a tool can give: the call's result, marked
+failed, recorded under the call's key and replayed from there rather than run again. No count of
+refusals ends a turn. There was one, inherited from Pydantic AI's retry budget, and the reason it is
+gone is observed rather than theoretical: a smaller model got an operation's shape wrong once and a
+budget of one turned a correctable mistake into a failed turn, where a budget of three was a number
+picked to make that stop happening. What bounds a model that keeps getting a call wrong is what
+bounds a model that keeps calling a tool that keeps failing, which is the priced turn on the [cost
+page](cost.md), not a count of one kind of mistake.
 
 A call a *plugin* turns away is the other kind, and arrives as the call's return rather than as a
 retry: the call was well-formed and is not happening, which is an answer to act on rather than a
