@@ -52,6 +52,15 @@ gallery:
 shots *args: gallery
     uv run python -m scripts.shoot {{ GALLERY }} {{ SHOTS }} {{ args }}
 
+# Neither a test nor a gate: it prints numbers, fails nothing, and reaches no provider. Run it
+# before and after a change to `loop.py` or `durability.py`, and put the figures in
+# `docs/design/durability.md`, which is where the claim about what replay costs is written down.
+#
+# Extra arguments go straight to the script: `just replay --requests 40 --profile build/replay.prof`.
+[doc('Measure what replaying a turn costs, at several turn sizes')]
+replay *args:
+    uv run python -m scripts.replay {{ args }}
+
 # Behaviour rather than appearance is a different question and gets a different check, and those are
 # in the suite rather than here: what a still cannot show is that *two* panels are drawn as where the
 # reader is, or that a form posts the controls sitting outside it, and `tests/test_browser.py` drives

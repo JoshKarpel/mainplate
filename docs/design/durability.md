@@ -344,16 +344,45 @@ change.
 
 Each pass re-runs the current turn's loop from the top over its recorded responses and returns, so a
 turn of *n* requests replays O(n²) steps across its passes. No provider or tool is reached twice;
-what is repeated is the loop's own work between steps, which is now this console's and small:
-parsing a record back out of the store, validating a replayed call's arguments, and building the
-next request. It has not been measured since the graph went. The last measurement, with the graph
-in place, put record parsing and loading under a few percent of a forty-request turn and the graph's
-own per-hook context rebuilding as the dominant term, and that term is gone.
+what is repeated is the loop's own work between steps, which is this console's own.
 
-Do not build a record cache or a fetch-only-what-is-missing store for this until a measurement says
-the quadratic is somewhere a store can reach. Raising the allowance cuts pass count and replay
-together, but makes a steer wait behind the live requests left in the pass, so the console keeps the
-default at one unless measured replay cost is worth that loss of responsiveness.
+**`just replay` is what measures it**, and it is the answer to any argument about this section: it
+drives one turn twice over a stand-in provider and a real worktree, unbounded and then a pass per
+request, and prints the difference, the per-pass series and a profile. It reaches no provider, so
+running it before and after a change to `loop.py` or `durability.py` costs nothing.
+
+What it says is that **the per-already-recorded-request term is not flat**, so the turn is worse than
+quadratic: it grows by about half again between a forty-request turn and a hundred-and-sixty-request
+one. Almost none of that is parsing. Where a long turn's replay actually goes:
+
+- **Pydantic AI's `prepare_messages` is the largest single term**, around a quarter. `Agent.request`
+  composes the history for the wire before handing it to `Stepping.request`, so a replayed request
+  pays it too, over a history that is longer every time.
+- **Two walks of the whole checkpoint are next**, together around a fifth, and both are for the
+  inbox. `since_last` calls `drains_in` for this turn's cursors, and `Run.delivered` walks the same
+  keys again for the entries past the last one. Each is O(checkpoint) inside a loop already O(n²),
+  and the checkpoint grows with the turn, which is what makes the per-request term climb.
+- **Parsing a record back out of the store is around three percent**, which is where the last
+  measurement under the graph put it and is what removing the graph left behind: the graph's own
+  per-hook context rebuilding was the dominant term, and it is gone.
+
+**The two walks are the console's own and so are where its own fixes are.** Composing a key inside
+one of them costs a key per recorded key per request, which is why `drains_in` builds both names it
+compares against above its loop; that alone is worth a quarter of the per-request term. What is left
+is the walk itself, and shrinking *that* means indexing the checkpoint by turn on the way in, which
+is a change to what a pass holds rather than a tidy-up, and is not worth making until a real turn is
+long enough to feel it.
+
+Do not build a record cache or a fetch-only-what-is-missing store for any of this: the quadratic is
+not where a store can reach it, and a cache would sit in front of a `load` that is already one query.
+Raising the allowance cuts pass count and replay together, but makes a steer wait behind the live
+requests left in the pass, so the console keeps the default at one unless measured replay cost is
+worth that loss of responsiveness.
+
+The cost of knowing this, stated: `scripts/replay.py` is a second driver of a pass, beside the
+worker and beside the suite, and it repeats what `conftest` sets up because it is neither. A change
+to how a session is made ready reaches it, and nothing fails when it does not, because it is a script
+that prints numbers rather than a test that asserts on them.
 
 **The tests default to unbounded and the console ships one.** A test about a conversation drives a
 whole turn in one pass and says nothing about how a pass is cut; `TestWhatOnePassDoes` is where the

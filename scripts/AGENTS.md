@@ -1,11 +1,11 @@
 ---
-description: The gallery, the seeder and the screenshot driver, and the invariants the seeder has to repeat because it is not the service.
+description: The gallery, the seeder, the screenshot driver and the replay benchmark, and the invariants each has to repeat because none of them is the service.
 ---
 
 # The scripts
 
-Three of them, and all three exist so that a change downstream of a checkpoint can be looked at
-without a provider ever being asked anything.
+Four of them, and all four exist so that a change can be looked at or measured without a provider
+ever being asked anything.
 
 **A real turn costs real money, so do not spend one to see something a fixture already shows.** That
 is the right tool for a rendering, a stylesheet, a control, or anything downstream of a checkpoint,
@@ -60,6 +60,33 @@ whole reason `settled` is a method on `Choice` rather than a line in each of its
 `just seed`), or it keeps serving the old shape. That is the whole checkpoint and not only the
 choice: the fixtures in `gallery.py` write every kind directly, so a shape change lands here as a
 database full of values nothing can parse.
+
+## `replay.py`
+
+Drives one turn twice and prints what the second one paid (`just replay`): unbounded, where a single
+pass makes every live request, and then at the allowance the console ships, where pass *k* replays
+the *k-1* requests already recorded. What it exists to answer is
+[what replay costs](../docs/design/durability.md#what-replay-costs), which was an argument before it
+was a number.
+
+**It is the odd one out here, because it is not downstream of a checkpoint: it writes one.** So it
+drives a real `Service` over a real store and a real git worktree, with only the provider standing
+in - the per-request snapshot leaves the process, and a stand-in for git would leave the one thing a
+pass does outside Python out of the measurement.
+
+**The stand-in states its own usage, which is the control rather than a detail.** `FunctionModel`
+estimates usage for a response that carries none by splitting every message in the history with a
+regular expression, which is itself quadratic across a turn: left to it, the dominant term this
+prints is the fixture's own and not the console's. It was, the first time this was run.
+
+**It fits the per-pass series with Theil-Sen rather than least squares**, because a pass that lands
+on a git object pack or an sqlite checkpoint costs several times its neighbours and one of those
+near the start flattens a real trend to zero. That was also observed rather than anticipated.
+
+It repeats what `tests/conftest.py` sets up - a stand-in endpoint, a fixture repository, a session
+with its settings step answered - rather than importing it, so the benchmark does not depend on the
+suite's fixtures and the suite does not have to keep this running. The cost is that a change to how
+a session is made ready reaches both.
 
 ## `shoot.py`
 

@@ -39,6 +39,7 @@ $ just demo             # the same, on a database of its own, for poking without
 $ just seed             # the gallery's fixtures into that database, so there is something to click
 $ just gallery          # render every page to build/gallery, as files a browser can open
 $ just shots            # render every page and screenshot it, wide and phone, into build/shots
+$ just replay           # measure what replaying a turn costs, over a stand-in provider
 $ just docs             # serve the documentation site with live reload
 $ just docs-build       # build it into ./site, strictly
 $ just install          # this checkout as a user systemd unit, on the default port 8100
@@ -129,7 +130,8 @@ change:
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
   anything to the parent that runs a program against a session's worktree.**
 - [`docs/design/durability.md`](docs/design/durability.md): the model-and-tool loop, the steps it
-  records, what one pass does, and what a session does when a provider says to come back later.
+  records, what one pass does, what a session does when a provider says to come back later, and what
+  replaying a turn costs, which `just replay` measures rather than asserts.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
   sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
   executes a plugin before somebody presses the button on that step**, which is a trust boundary and
