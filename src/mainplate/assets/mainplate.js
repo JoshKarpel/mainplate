@@ -115,11 +115,57 @@
     } catch {}
   };
 
-  // --- Theme -------------------------------------------------------------
+  // The one thing here the *server* reads back, which is why it is a cookie and not storage: the
+  // zone a page's moments are printed in is decided while the page is being rendered, so the answer
+  // has to ride on the request for the document itself. Everything else in this file is the reader's
+  // and stays in this browser. See `ZONE_COOKIE` in `pages.py`, and `paintClock` below.
+  const ZONE_COOKIE = "zone";
+
+  // A cookie is arbitrary text the way storage is, and this runs before `start` exists, so a value
+  // it cannot decode must be nothing rather than a throw: `decodeURIComponent` raises on a malformed
+  // escape, and raising here unwinds out of the whole file, leaving a page with no folds, no copy
+  // buttons, no live connection and no composer. Nothing at all is also the *right* answer, not only
+  // the safe one - a value this did not write is not a zone this asked for - and the caller writes a
+  // good one over the top of it.
+  const cookieValue = (name) => {
+    for (const pair of document.cookie.split(";")) {
+      const [key, ...rest] = pair.split("=");
+      if (key.trim() !== name) continue;
+      try {
+        return decodeURIComponent(rest.join("="));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  // Whether two zone names are the same clock right now, asked of the browser rather than decided by
+  // comparing the strings. They are frequently not the same string for the same clock: a machine
+  // whose zone database says `Etc/UTC` is a browser that says `UTC`, and `Asia/Calcutta` is
+  // `Asia/Kolkata`, so a string comparison would ask for the page again on every load of a console
+  // that is already printing exactly the right time. A name this browser does not know throws, which
+  // is a difference and is answered as one.
   //
-  // The one thing that runs before the document exists. This script is a blocking tag in the head
-  // precisely so the reader's choice is pinned on <html> before the first paint: applied any later
-  // and a page opened dark flashes light on the way there.
+  // It compares what a reader would actually see, which is what the page is about: two zones that
+  // agree now and disagree in some past summer are not worth a reload over a transcript's rules.
+  const sameClock = (drawn, named) => {
+    try {
+      const now = Date.now();
+      const said = (zone) =>
+        new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "short", timeStyle: "long" }).format(now);
+      return said(drawn) === said(named);
+    } catch {
+      return false;
+    }
+  };
+
+  // --- Theme and clock ---------------------------------------------------
+  //
+  // The two things that run before the document exists. This script is a blocking tag in the head
+  // precisely so both can: the reader's chosen theme is pinned on <html> before the first paint,
+  // because applied any later a page opened dark flashes light on the way there, and the clock a
+  // page was drawn against is checked here for the same reason one field along.
 
   const THEME_KEY = "mainplate:theme";
 
@@ -130,7 +176,54 @@
 
   applyTheme(asTheme(held(THEME_KEY)));
 
+  const paintClock = () => {
+    // Which zone every moment on this page is printed in is the server's decision, and this is the
+    // whole of how it learns what to decide: the browser knows its reader's zone, the server does
+    // not, and a cookie is the one thing that reaches the request for the document itself. A header
+    // this file added would reach the swaps and not the page they land in, which is a transcript
+    // whose rules disagree with the rows beside them.
+    //
+    // **It formats nothing.** The page arrives with every moment already drawn - in a rule, in a
+    // hover, inside a sentence - so rewriting them here would mean a second implementation of what
+    // a date looks like, in a language that cannot see the first. Asking for the page again costs
+    // one load, once, and keeps the one implementation.
+    //
+    // **Here rather than in `start`**, which is what keeps that load from being seen: the server
+    // says which clock it drew against on <html>, whose open tag the parser has already read by the
+    // time this runs, so a page for the wrong zone is thrown away before it is painted rather than
+    // after. `document.body` does not exist yet, which is exactly why the answer is not on it.
+    const named = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!named) return;
+    const asked = cookieValue(ZONE_COOKIE);
+    if (asked !== named) {
+      // `secure` where the page was served over TLS and not otherwise, since a console reached over
+      // plain http on a machine somebody is sitting at would never see the cookie come back at all.
+      const safely = location.protocol === "https:" ? "; secure" : "";
+      document.cookie = `${ZONE_COOKIE}=${encodeURIComponent(named)}; path=/; max-age=31536000; samesite=lax${safely}`;
+      // **Read back rather than assume it took**, which is what stops the reload below being
+      // infinite. Where the origin's cookies are blocked the write above is a silent no-op: the
+      // request carries no zone, the server keeps drawing in its own, and every load would ask for
+      // the page again having changed nothing about what the next one can say. A console drawn
+      // against the wrong clock is worth one reload and is not worth a loop, so where the answer
+      // cannot reach the server this leaves the page it got.
+      if (cookieValue(ZONE_COOKIE) !== named) return;
+    }
+    // Only where this browser had not already asked for this zone, which is what keeps it from
+    // being a loop: the server writes back the zone it *used*, so a name its own zone database
+    // does not have comes back as the console's own and would otherwise be asked for for ever.
+    // A page with no moment on it says nothing at all and is left alone.
+    const drawn = document.documentElement.dataset.zone;
+    if (drawn !== undefined && !sameClock(drawn, named) && asked !== named) location.reload();
+  };
+
+  paintClock();
+
   const start = () => {
+    // **There may be no document left to wire.** `paintClock` above can ask for the page again from
+    // the head, which abandons the parse where it stands - and `DOMContentLoaded` still fires on
+    // what was abandoned, with no `<body>` ever built. Everything below is about a page a reader is
+    // going to look at, and this one is already being replaced, so there is nothing here to do.
+    if (document.body === null) return;
     // The theme is the reader's and holds across every session; everything else below is a fact
     // about one conversation, so it is stored under that conversation's own id.
     const session = document.body.dataset.session || "?";
@@ -865,8 +958,19 @@
       if (seconds <= 0) return "any moment";
       const minutes = Math.floor(seconds / 60);
       if (minutes < 1) return `${Math.ceil(seconds)}s`;
-      const spare = Math.floor(seconds % 60);
-      return spare ? `${minutes}m ${spare}s` : `${minutes}m`;
+      // Days and hours as well, because what this counts down is no longer only a lease: a provider
+      // deferring a session until its allowance resets is days out, and `6623m` is a figure a reader
+      // has to divide twice.
+      //
+      // **`elapsed` in `pages.py`, unit for unit, including the unit that is zero.** The server
+      // renders the first value of every one of these and this takes over a second later, so a wait
+      // landing on a whole hour drawn as `1h 0m` and repainted as `1h` is a figure that changes
+      // shape while a reader is looking at it, which reads as the countdown having moved. Two units
+      // always, and the width holds still.
+      if (minutes < 60) return `${minutes}m ${Math.floor(seconds % 60)}s`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours}h ${minutes % 60}m`;
+      return `${Math.floor(hours / 24)}d ${hours % 24}h`;
     };
 
     // How long until the worker looks at this session again, counted here rather than on the server.

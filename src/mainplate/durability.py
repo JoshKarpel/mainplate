@@ -36,6 +36,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import UTC
+from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 from time import monotonic
@@ -228,6 +230,105 @@ def terminally(error: Exception) -> records.Refused | None:
 
 RETRYABLE: Final = frozenset({408, 409, 425, 429})
 """The 4xx codes that describe the moment rather than the request, so asking again is the answer."""
+
+
+class RequestDeferred(Exception):
+    """
+    The provider will not take this request now, and said when it will.
+
+    Raised from `CheckpointedModel.request` the way `RequestRefused` and `AllowanceSpent` are, so it
+    unwinds `agent.run` and is caught by `conversing` outside it. What it reports is the third
+    answer those two leave room for: the session is owed another pass, and not until `until`.
+
+    **It exists because the provider knows something the worker does not.** A pass that raises is
+    redelivered when its lease elapses, which for a subscription that resets next Tuesday is one real
+    request to a provider already saying no, once a minute, for days. The moment is the whole value
+    here, so an error that names none is left exactly as it was: raised, and retried on the lease.
+
+    Deliberately not a `Refused`: nothing about the request is wrong, and recording one would stop
+    the session for good over a limit that lifts by itself.
+    """
+
+    def __init__(self, until: datetime, why: str) -> None:
+        self.until = until
+        self.why = why
+        super().__init__(f"the provider deferred this request until {until.isoformat()}: {why}")
+
+
+def deferred_until(error: Exception, now: datetime) -> datetime | None:
+    """
+    The moment a provider named for coming back, or nothing where it named none worth waiting for.
+
+    Two ways a provider says it, and both are read because they are one statement in two spellings.
+    `Retry-After` is the standard header and Pydantic AI already parses either of its forms; a
+    subscription's usage limit arrives in the body instead, as `resets_at` in seconds since the
+    epoch, which is what an OpenAI plan sends when its allowance is spent.
+
+    **Only ahead of now**, which is the parse rather than a nicety: a moment already past is not a
+    wait, and honouring one would schedule a wakeup for the past, get an immediate redelivery, and
+    ask the provider the same question as fast as the queue can turn it around. Behind, or absent,
+    the answer is nothing at all and the error is raised exactly as it was.
+
+    **Each spelling is held against that test on its own**, and the first one that passes is the
+    answer. Tried in turn, a body echoing the window that has just closed - or a clock a few seconds
+    apart from the provider's - takes the body's moment, fails the test, and throws away a perfectly
+    good header on the same response, which puts the session back on the worker's redelivery that
+    this exists to get it off.
+
+    The body is read as a mapping and nothing more is assumed about it. A provider that sends a
+    number where this expects one is honoured; anything else is an error with no moment in it, which
+    is the common case and the safe one.
+
+    **A `429` and nothing else**, which is a narrower door than `Retry-After` opens and is deliberate.
+    `terminally` calls every 5xx transient, so without this they arrive here too, and a gateway
+    answering `503` with a day in its header would park the session for a day. The difference is
+    whether the provider *knows*: a rate or usage limit is a window it is keeping itself, so the
+    moment it names is a fact, where a 5xx is a guess about when something it is not in control of
+    will be fixed. The cost of believing the first is a wait that was going to happen anyway; the
+    cost of believing the second is turning a blip into a day of silence, at a moment when the
+    ordinary redelivery would have got an answer on its next attempt.
+
+    The cost, stated: **a provider that shed load through a `503` with an honest `Retry-After` is
+    asked again on the lease instead**, which is a handful of requests it did not want, against the
+    console's own worst case being an hour rather than however long somebody else's header said.
+    """
+    if not isinstance(error, ModelHTTPError) or error.status_code != 429:
+        return None
+    for named in (resets_at(error.body), retry_after(error, now)):
+        if named is not None and named > now:
+            return named
+    return None
+
+
+def resets_at(body: object) -> datetime | None:
+    """
+    When the plan's allowance comes back, as a subscription's own `429` body says it.
+
+    `{"type": "usage_limit_reached", ..., "resets_at": 1790303879, "resets_in_seconds": 398418}` is
+    the shape, and the moment is read rather than the duration for `Run.sleep`'s reason: a deadline
+    survives the pass that heard it, where seconds from a moment nobody recorded do not.
+    """
+    if not isinstance(body, Mapping):
+        return None
+    said = body.get("resets_at")
+    if not isinstance(said, int | float) or isinstance(said, bool):
+        return None
+    try:
+        return datetime.fromtimestamp(float(said), UTC)
+    except OverflowError, OSError, ValueError:
+        return None
+
+
+def retry_after(error: ModelHTTPError, now: datetime) -> datetime | None:
+    """
+    When the provider's own `Retry-After` header says to come back, as a moment rather than a wait.
+
+    Pydantic AI parses both of the header's forms into seconds from now, so this is that answer put
+    back on the clock: what is recorded and scheduled here is a deadline, and a duration would be one
+    more place for "from when" to be got wrong.
+    """
+    seconds = error.retry_after
+    return None if seconds is None else now + timedelta(seconds=seconds)
 
 
 class AllowanceSpent(Exception):
@@ -713,9 +814,14 @@ class CheckpointedModel(WrapperModel):
 
         A refusal the provider will never take back is recorded here and re-raised as
         `RequestRefused`, which is the one failure this console answers for rather than letting the
-        worker retry: see that exception for the loop it closes. Everything else propagates exactly
-        as it did, because a redelivery is the right answer to an error that might come out
-        differently.
+        worker retry: see that exception for the loop it closes.
+
+        A refusal that is only about *now* and says when it lifts is re-raised as `RequestDeferred`,
+        which is the same move one answer along: the pass waits out the moment the provider named
+        instead of being redelivered onto it every lease until it passes. Nothing is recorded here,
+        because what is worth recording is the wait rather than the error, and the wait is
+        `conversing`'s to take. Everything else propagates exactly as it did, because a redelivery is
+        the right answer to an error that might come out differently and named no moment.
 
         A request already known to be refused is not made again, which is the first thing checked
         and therefore ahead of the allowance and the snapshot alike: a pass must spend nothing on a
@@ -740,10 +846,13 @@ class CheckpointedModel(WrapperModel):
             return await self.scope.step(key, ask, parse_model_response)
         except Exception as error:
             refused = terminally(error)
-            if refused is None:
+            if refused is not None:
+                await self.scope.refuse(at, refused)
+                raise RequestRefused(refused.why) from error
+            until = deferred_until(error, self.scope.run.now())
+            if until is None:
                 raise
-            await self.scope.refuse(at, refused)
-            raise RequestRefused(refused.why) from error
+            raise RequestDeferred(until, str(error)) from error
 
     @asynccontextmanager
     async def request_stream(

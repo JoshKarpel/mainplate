@@ -23,6 +23,7 @@ from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
@@ -63,6 +64,7 @@ from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
+from mainplate.pages import Reader
 from mainplate.pages import fork_page
 from mainplate.pages import session_page
 from mainplate.pages import start_page
@@ -96,6 +98,25 @@ When everything in this gallery happened, which every response fixture is stampe
 `ModelResponse.timestamp` defaults to the moment it was constructed, so a fixture without one is the
 moment the gallery ran: the composer's cache note draws that time, and two runs would produce two
 different pages. A screenshot that differs run to run is one nobody can compare against the last.
+"""
+
+ZONE = ZoneInfo("America/Chicago")
+"""
+The clock this gallery's pages are drawn against, which is a reader's rather than this machine's.
+
+Named here for `WHEN`'s reason and one more. Stated, because `here()` reads the machine the render
+ran on and a shot taken in one zone would not match a shot taken in another; and deliberately *not*
+UTC, because every moment in these fixtures is recorded in UTC, so a gallery drawn in UTC would
+render identically whether or not anything converted anything. 10:09 against `WHEN`'s 15:09 is the
+conversion visible in a screenshot.
+
+The zone itself rather than the `READER` below, because `shoot.py` and the browser tests point a
+real browser at it by name and neither has a page to draw.
+"""
+
+READER = Reader(zone=ZONE)
+"""
+Who every page below is drawn for, which is what the console answers off a cookie and this states.
 """
 
 # The session every page below is about, named here rather than on `PARENT` because the default
@@ -738,6 +759,7 @@ def showing(
     started: bool = True,
     refused: records.Refused | None = None,
     failed: records.Failed | None = None,
+    deferred: records.Deferred | None = None,
     attention: Attention | None = None,
     since: timedelta | None = SINCE,
     plugins: tuple[Enrolled, ...] | None = ENROLLED,
@@ -781,6 +803,9 @@ def showing(
         declared=declared,
         refused=refused,
         failed=failed,
+        # Already filtered to a moment still ahead, which `Service.read` does against a clock and a
+        # gallery has none: what is given here is a wait that is on.
+        deferred=deferred,
         attention=attention if attention is not None else Claimed(),
         repository=REPOSITORY if working else None,
         worktree=WORKSPACE / session.id if working else None,
@@ -904,6 +929,22 @@ def pages() -> dict[str, str]:
         ),
         attention=Delayed(until=timedelta(minutes=8, seconds=24)),
     )
+    # A session waiting out a limit the provider named a moment for, which is the one line here where
+    # nothing is wrong: the request is fine, the allowance is spent, and the wait is days rather than
+    # minutes. What a screenshot has to prove is that the moment is on the page, since a countdown
+    # reading `in 4d 14h` is a figure nobody can plan around.
+    held_off = showing(
+        PARENT,
+        answering,
+        deferred=records.Deferred(
+            until=WHEN + timedelta(days=4, hours=14, minutes=23),
+            why=(
+                "status_code: 429, model_name: openai/gpt-5.6-sol, body: {'type': 'usage_limit_reached', "
+                "'message': 'The usage limit has been reached', 'plan_type': 'plus', 'resets_at': 1930303879}"
+            ),
+        ),
+        attention=Delayed(until=timedelta(days=4, hours=14, minutes=23)),
+    )
     # And the other half of the same failure: nothing holds the session and nothing is scheduled to,
     # which is a session that has been dropped rather than one waiting. Drawn with no reason recorded,
     # because that is the shape it comes in - there is no pass to have written one - and it is the arm
@@ -947,32 +988,33 @@ def pages() -> dict[str, str]:
     )
 
     return {
-        "start.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, REFERENCE),
+        "start.html": start_page(LINKS, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE),
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
-        "start-unreferenced.html": start_page(LINKS, LISTED, CATALOGUE, REACHABLE, None),
-        "setting-up.html": session_page(LINKS, LISTED, planting, REACHABLE),
-        "settings.html": session_page(LINKS, LISTED, choosing_plugins, REACHABLE),
-        "settings-installing.html": session_page(LINKS, LISTED, installing, REACHABLE),
-        "settings-refused.html": session_page(LINKS, LISTED, failed_setup, REACHABLE),
-        "opening.html": session_page(LINKS, LISTED, queued, REACHABLE),
-        "session.html": session_page(LINKS, LISTED, showing(PARENT, settled), REACHABLE),
-        "waiting.html": session_page(LINKS, LISTED, showing(PARENT, waiting), REACHABLE),
-        "answering.html": session_page(LINKS, LISTED, showing(PARENT, answering), REACHABLE),
-        "handed-off.html": session_page(LINKS, LISTED, showing(PARENT, handed), REACHABLE),
-        "stalled.html": session_page(LINKS, LISTED, stalled, REACHABLE),
-        "refused.html": session_page(LINKS, LISTED, turned_down, REACHABLE),
-        "failed.html": session_page(LINKS, LISTED, fell_over, REACHABLE),
-        "dropped.html": session_page(LINKS, LISTED, dropped, REACHABLE),
-        "archived.html": session_page(LINKS, LISTED, archived, REACHABLE),
+        "start-unreferenced.html": start_page(LINKS, READER, LISTED, CATALOGUE, REACHABLE, None),
+        "setting-up.html": session_page(LINKS, READER, LISTED, planting, REACHABLE),
+        "settings.html": session_page(LINKS, READER, LISTED, choosing_plugins, REACHABLE),
+        "settings-installing.html": session_page(LINKS, READER, LISTED, installing, REACHABLE),
+        "settings-refused.html": session_page(LINKS, READER, LISTED, failed_setup, REACHABLE),
+        "opening.html": session_page(LINKS, READER, LISTED, queued, REACHABLE),
+        "session.html": session_page(LINKS, READER, LISTED, showing(PARENT, settled), REACHABLE),
+        "waiting.html": session_page(LINKS, READER, LISTED, showing(PARENT, waiting), REACHABLE),
+        "answering.html": session_page(LINKS, READER, LISTED, showing(PARENT, answering), REACHABLE),
+        "handed-off.html": session_page(LINKS, READER, LISTED, showing(PARENT, handed), REACHABLE),
+        "stalled.html": session_page(LINKS, READER, LISTED, stalled, REACHABLE),
+        "refused.html": session_page(LINKS, READER, LISTED, turned_down, REACHABLE),
+        "failed.html": session_page(LINKS, READER, LISTED, fell_over, REACHABLE),
+        "deferred.html": session_page(LINKS, READER, LISTED, held_off, REACHABLE),
+        "dropped.html": session_page(LINKS, READER, LISTED, dropped, REACHABLE),
+        "archived.html": session_page(LINKS, READER, LISTED, archived, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one.
-        "forking.html": fork_page(LINKS, LISTED, showing(PARENT, settled), 1, CATALOGUE, REACHABLE, REFERENCE),
+        "forking.html": fork_page(LINKS, READER, LISTED, showing(PARENT, settled), 1, CATALOGUE, REACHABLE, REFERENCE),
         # And a fork of a session in *no* repository, which is the one that may pick one up: the
         # ordinary shape of having thought something through and then going to work on it.
         "forking-attach.html": fork_page(
-            LINKS, LISTED, showing(PARENT, settled, working=False), 0, CATALOGUE, REACHABLE, REFERENCE
+            LINKS, READER, LISTED, showing(PARENT, settled, working=False), 0, CATALOGUE, REACHABLE, REFERENCE
         ),
     }
 

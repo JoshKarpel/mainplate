@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +14,8 @@ from conftest import DEFAULT_CHOICE
 from conftest import OFFERED
 from conftest import Stand
 from conftest import already
+from conftest import usage_limit_reached
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
@@ -26,6 +31,7 @@ from mainplate.conversation import messages_key
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.running import Spawned
+from mainplate.service import Delayed
 from mainplate.service import Service
 from mainplate.settings import Settings
 from mainplate.tending import SETTLE_FIELD
@@ -145,6 +151,55 @@ async def test_a_plugins_scratch_is_nowhere_the_model_can_write(database: Path) 
 
         assert theirs not in mine.parents
         assert mine not in theirs.parents
+
+
+@pytest.mark.timeout(30)
+async def test_a_session_the_provider_deferred_is_held_until_the_moment_it_named(database: Path) -> None:
+    """
+    The other end of a wait: the queue actually holding the delivery until then.
+
+    Everything up to the suspension is pinned a pass at a time in `test_conversation.py`, and this is
+    the one link neither half can see: a `Sleeping` pass is answered by the *worker*, with a
+    `wake_at` on the delivery it is holding, and a console assembled without that would record the
+    wait and then redeliver on the lease exactly as before - which is the whole thing this replaces,
+    with an extra record to show for it.
+
+    The moment is days out, so what is asserted is unambiguous: a delivery held for that long is not
+    one the lease put there, and no wait this suite is prepared to sit through would be.
+    """
+    until = datetime.fromtimestamp(int((datetime.now(UTC) + timedelta(days=3)).timestamp()), UTC)
+    reached = asyncio.Semaphore(0)
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        reached.release()
+        raise ModelHTTPError(status_code=429, model_name="fixture", body=usage_limit_reached(until))
+
+    shared = FunctionModel(respond)
+    endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    async with open_console(Settings(database=database), CONFIG, endpoints) as service:
+        async with calling(build_app(already(service))) as caller:
+            started = await caller.post(
+                "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
+            )
+            session = started.location.rsplit("/", 1)[-1]
+            await loaded(caller, service, session)
+            assert (await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})).status == 200
+            async with asyncio.timeout(PATIENCE):
+                await reached.acquire()
+
+            # Synchronised on the record rather than on a clock: the pass writes the wait and then
+            # suspends, and the worker answers for the delivery after that, so the queue is what is
+            # polled for.
+            async with asyncio.timeout(PATIENCE):
+                while not isinstance(held := await service.attention(session), Delayed):
+                    await asyncio.sleep(0.05)
+
+            assert held.until > timedelta(days=2), "the queue is holding it for the moment, not for a lease"
+            found = await service.read(session)
+            assert found is not None
+            assert found.deferred is not None
+            assert found.deferred.until == until, "and the page says which moment it is waiting for"
 
 
 async def unanswered(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:  # pragma: no cover - never called

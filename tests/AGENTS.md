@@ -62,6 +62,24 @@ which is the boundary working rather than a fixture to loosen.
 than in one file because two suites want it: `test_console.py` presses the button through a route and
 then has to run the pass the press asked for, which is the only way to assert what the press caused.
 
+**Every browser context carries the `zone` cookie as well as the timezone**, which `reading` in
+`test_browser.py` seeds. The timezone alone covers the gallery, whose pages are on disk in
+`gallery.ZONE`; a test on the live `console` fixture is answered by a real console drawing in the
+*runner's* zone until a request carries one, so those pages came back against another clock and
+`paintClock` reloaded them mid-fixture. `TestTheClockAPageIsDrawnAgainst` asks for contexts of its
+own, since the reload is what it is about.
+
+**A width added to `elapsed` or to `soon` goes in `WORDED` in `conftest.py`, not in either test.**
+How long a wait has left is worded twice on purpose, by the server and then by the script, so the two
+suites that pin it are parametrised from one table: written out in each, a width added to one side
+and not the other is a drift neither test reports. `test_attending.py` holds `elapsed` against it and
+`test_browser.py` holds `soon` against it in a real Chromium, because only a browser runs the second.
+
+**That browser half stops the clock and reads the figure back inside the same stop.** The line
+repaints itself once a second against the real one, so an assertion on the live element is racing an
+interval that puts `any moment` there a tick later, and the seconds a minutes-wide wait prints would
+otherwise be however long the repaint took to run.
+
 **A pass that sets plugins up needs `tendings`.** Which plugins are on is a column the *pass* reads
 now, so `conversing` built without a way to read it sets up every declared plugin regardless of what
 the switches said. A test asserting that a plugin left off was never launched must pass one.
@@ -69,6 +87,14 @@ the switches said. A test asserting that a plugin left off was never launched mu
 **Every response fixture carries a timestamp.** `ModelResponse.timestamp` defaults to the moment it
 was constructed, so a fixture without one is the moment the test ran, and an assertion over a whole
 `Transcript` becomes a comparison against the wall clock.
+
+**Every caller says which clock it reads moments against**, because the console draws them in the
+zone the request asks for and falls back to the machine's own. `calling(app)` sends `zone=UTC` on
+every request and `calling(app, "Asia/Tokyo")` is how a test about the conversion asks for another,
+so nothing here asserts `15:09` on a UTC runner and `10:09` on a laptop in Chicago. The browser
+fixtures are pinned to the *gallery's* zone for the same reason and one more: the script asks for a
+page again when it was drawn against another clock, so an unpinned context would put a reload in the
+middle of every test that opens a page.
 
 **The store stamps an inbox row off its own clock, and the suite's clock does not turn it.** The
 session list is ordered by that stamp, so two sessions written to in one test are stamped within a

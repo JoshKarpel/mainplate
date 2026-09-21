@@ -15,6 +15,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 import pytest
 from pydantic import SecretStr
@@ -323,6 +324,78 @@ class Refusing:
 
     def body(self) -> Callable[[Run], Awaitable[Ended]]:
         return conversing(self.endpoints(), INSTRUCTIONS)
+
+
+@dataclass(slots=True)
+class Deferring:
+    """
+    A stand-in model that will not answer *now* and says when it will.
+
+    `Refusing` one answer along: the request is fine and the provider is busy, over quota, or on a
+    plan whose allowance is spent. Which of those it is arrives in the body or the headers, so both
+    are settable and a test says the shape it is about rather than this deciding for it.
+
+    `asked` counts what reached it, which is what tells a pass that waited from one that asked again:
+    a session suspended on a deadline must reach no provider at all until that deadline passes.
+    """
+
+    body: object = None
+    headers: Mapping[str, str] | None = None
+    asked: int = 0
+
+    def model(self) -> FunctionModel:
+        def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            self.asked += 1
+            raise ModelHTTPError(status_code=429, model_name="fixture", body=self.body, headers=self.headers)
+
+        return FunctionModel(respond)
+
+    def endpoints(self) -> Wires:
+        shared = self.model()
+        return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    def body_of(self) -> Callable[[Run], Awaitable[Ended]]:
+        return conversing(self.endpoints(), INSTRUCTIONS)
+
+
+def usage_limit_reached(resets_at: datetime) -> dict[str, object]:
+    """
+    The body an OpenAI subscription answers a spent allowance with, as it actually arrives.
+
+    Written out whole rather than trimmed to the field that is read, because what these tests are
+    about is picking one moment out of somebody else's shape: a body cut down to `resets_at` would
+    pass whatever the parse did with the rest of it.
+    """
+    return {
+        "type": "usage_limit_reached",
+        "message": "The usage limit has been reached",
+        "plan_type": "plus",
+        "resets_at": int(resets_at.timestamp()),
+        "eligible_promo": None,
+        "resets_in_seconds": int((resets_at - datetime.now(UTC)).total_seconds()),
+    }
+
+
+WORDED: Final = (
+    pytest.param(547, "9m 7s", id="minutes"),
+    pytest.param(12_300, "3h 25m", id="hours"),
+    pytest.param(3_600, "1h 0m", id="a whole hour keeps its zero"),
+    pytest.param(396_000, "4d 14h", id="days"),
+    pytest.param(86_400, "1d 0h", id="a whole day keeps its zero"),
+)
+"""
+How long a wait has left, and the one wording both sides of the page must reach for it.
+
+`elapsed` in `pages.py` draws the first figure and `soon` in `mainplate.js` repaints the same element
+a second later, so the two implementations are deliberately written twice and their *expectations*
+must not be: asserted against a copy apiece, a width added to one side and not the other is a drift
+neither test reports. Parametrised from here, adding a row is an edit in one place that both sides
+then have to satisfy.
+
+Every width above a minute, which is what the contract covers. Below one the figure is a turn's own
+duration rather than a countdown, so `elapsed` has widths there that no wait ever reaches and
+`test_attending.py` pins those alone.
+"""
 
 
 def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:

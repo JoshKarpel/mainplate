@@ -14,6 +14,7 @@ from datetime import timedelta
 import pytest
 from conftest import DEFAULT_CHOICE
 from conftest import WHEN
+from conftest import WORDED
 from conftest import passing
 from conftest import started
 from without_durability.interfaces import claimed
@@ -23,9 +24,11 @@ from without_durability.stepwise import Run
 from mainplate import records
 from mainplate.app import reporting
 from mainplate.conversation import Transcript
+from mainplate.conversation import deferred_key
 from mainplate.conversation import failed_key
 from mainplate.conversation import failure_in
 from mainplate.conversation import parse_failed
+from mainplate.pages import elapsed
 from mainplate.pages import waiting_for
 from mainplate.service import Attended
 from mainplate.service import Claimed
@@ -36,6 +39,7 @@ from mainplate.service import Queued
 from mainplate.service import Service
 from mainplate.service import attention_of
 from mainplate.service import token_of
+from mainplate.service import waiting_out
 from mainplate.sessions import Session
 
 NOW = 1_000_000.0
@@ -293,6 +297,51 @@ class TestWhatAFallenPassLeavesBehind:
         assert fell.kind == "failed"
 
 
+class TestWhetherAWaitIsStillOn:
+    """
+    The one comparison that decides whether a recorded wait is a fact about now or about history.
+
+    Pure and apart from the read for `attention_of`'s reason: what the page draws turns on it, and a
+    comparison is a thing a test can hold with no store anywhere near it.
+    """
+
+    def test_a_moment_still_ahead_is_a_session_that_is_waiting(self) -> None:
+        held = records.Deferred(until=WHEN + timedelta(hours=2), why="429")
+
+        assert waiting_out(held, WHEN) is held
+
+    def test_a_moment_already_passed_is_history_and_not_a_state(self) -> None:
+        """
+        The pass that was waiting runs again when the deadline comes round, and whatever it does next
+        is the answer. A wait drawn past its own moment would be a page saying a session is stopped
+        while a turn is being answered under it.
+        """
+        assert waiting_out(records.Deferred(until=WHEN, why="429"), WHEN) is None
+        assert waiting_out(records.Deferred(until=WHEN - timedelta(seconds=1), why="429"), WHEN) is None
+
+    def test_a_session_that_has_never_been_deferred_is_waiting_for_nothing(self) -> None:
+        assert waiting_out(None, WHEN) is None
+
+    async def test_the_service_reads_the_newest_one_off_the_checkpoint(self, service: Service) -> None:
+        """
+        The join this console actually makes: the record is in the checkpoint and the comparison is
+        the service's, because a page is a pure function of already-answered questions and `now()` is
+        not one of them.
+        """
+        session = await started(service, "hello")
+        until = service.now() + timedelta(days=2)
+        await service.checkpointer.supply(
+            session.id, deferred_key(0, 0), records.Deferred(until=until, why="429: spent").recorded()
+        )
+
+        found = await service.read(session.id)
+
+        assert found is not None
+        assert found.deferred is not None
+        assert found.deferred.until == until
+        assert waiting_for(found) is not None, "and the page has something to say about it"
+
+
 class TestWhatThePageSaysAboutIt:
     """
     Which of the four states is worth a sentence, and which of them the dots already say.
@@ -351,6 +400,50 @@ class TestWhatThePageSaysAboutIt:
         assert waiting_for(settled) is None, "the control: a settled conversation says nothing"
         assert waiting_for(replace(settled, failed=records.Failed(why="boom", at=1))) is not None
 
+    def test_a_wait_the_provider_asked_for_says_when_rather_than_what_went_wrong(self) -> None:
+        """
+        The one arm here where nothing is wrong, and the only one carrying a moment.
+
+        A subscription's allowance resets days out, so what a reader needs is the moment: `in 4d 14h`
+        is a figure nobody can plan around, and three dots for four days is the state this whole line
+        exists to end.
+        """
+        until = WHEN + timedelta(days=4)
+        held = records.Deferred(until=until, why="status_code: 429, body: {'type': 'usage_limit_reached'}")
+
+        said = waiting_for(self.waiting(deferred=held, attention=Delayed(until=timedelta(days=4))))
+
+        assert said is not None
+        assert said.until == until
+        assert said.reason == held.why, "verbatim, because it is what says which limit was reached"
+        assert "will not take another request" in said.said
+
+    def test_a_wait_outranks_a_failure_that_has_not_been_got_past(self) -> None:
+        """
+        Both can be true at once - a pass that fell over, then one deferred - and only one of them is
+        what the session is doing right now. The wait is the newer fact and the one with a moment in
+        it, so it is what the reader is told.
+        """
+        stopped = self.waiting(
+            failed=records.Failed(why="boom", at=3),
+            deferred=records.Deferred(until=WHEN + timedelta(hours=2), why="429"),
+            attention=Delayed(until=timedelta(hours=2)),
+        )
+
+        said = waiting_for(stopped)
+
+        assert said is not None
+        assert said.until is not None
+        assert "boom" not in (said.reason or "")
+
+    def test_a_wait_already_over_is_not_drawn_at_all(self) -> None:
+        """
+        Which is `Service.read`'s to decide rather than this function's: whether a moment has passed
+        is a question about the clock, and a page may not ask one. What reaches here is already
+        filtered, so a session with nothing outstanding and no live wait says nothing.
+        """
+        assert waiting_for(self.waiting(said=Transcript(panels=(), awaiting=False, turns=1))) is None
+
     def test_the_reason_is_carried_apart_from_the_prose_around_it(self) -> None:
         """
         Which is what lets the page set it in its own block: an exception's `repr` is neither a
@@ -362,3 +455,32 @@ class TestWhatThePageSaysAboutIt:
         assert said.reason == "Boom('x')"
         assert "Boom" not in said.said, "and nowhere else"
         assert "Boom" not in (said.then or ""), "nor in the way out"
+
+
+class TestHowLongAWaitIsWordedIn:
+    """
+    The server's half of the one figure on this page written twice.
+
+    `soon` in `mainplate.js` is the other half and repaints this element a second after the page
+    lands, so the two have to agree unit for unit. Which widths they owe each other is `WORDED` in
+    `conftest.py`, parametrised into both sides so neither can grow a width alone; the script's side
+    is `TestTheLineWhereNothingIsHappening` in `test_browser.py`.
+    """
+
+    @pytest.mark.parametrize(("remaining", "said"), WORDED)
+    def test_a_width_is_worded_the_way_the_script_words_it(self, remaining: int, said: str) -> None:
+        assert elapsed(timedelta(seconds=remaining)) == said
+
+    @pytest.mark.parametrize(
+        ("took", "said"),
+        [
+            pytest.param(timedelta(milliseconds=80), "80ms", id="under a second"),
+            pytest.param(timedelta(seconds=12.34), "12.3s", id="seconds"),
+        ],
+    )
+    def test_a_width_below_a_minute_is_this_sides_alone(self, took: timedelta, said: str) -> None:
+        """
+        Not in the shared table, because no countdown reaches them: what `elapsed` is asked for below
+        a minute is how long a turn or a tool call took, which the script never repaints.
+        """
+        assert elapsed(took) == said

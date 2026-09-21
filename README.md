@@ -232,6 +232,11 @@ that stays alive but never finishes. Every model request and every tool call is 
 a pass that reaches the provider and then dies does not pay for that answer twice, and a tool that
 already read a file is not run again against a directory that has moved since.
 
+**A provider that says to come back later is taken at its word.** A request turned down for now
+with a moment attached - a subscription's usage limit and its reset time, or a `Retry-After` -
+parks the session until exactly that moment rather than being retried every lease for however many
+days that is, and the page says which limit was reached and when the next attempt goes out.
+
 ## How the agent edits files
 
 What a session's tools reach is one of the things it picks when it is created. A session working in
@@ -315,8 +320,11 @@ folds, from its own row**, so the dock's fold-everything button turns a finished
 its own outline; shut, a row carries the front of what is in it.
 
 A **rule** stands at every round trip, carrying what is true of that request rather than of any
-panel in it: the worktree it was made against, how long it took, what it spent in tokens and money,
-and a fold showing the JSON the checkpoint actually holds for it. Since the checkpoint *is* the
+panel in it: the worktree it was made against, when the answer came back, how long it took, what it
+spent in tokens and money, and a fold showing the JSON the checkpoint actually holds for it. Every
+moment the console prints is recorded in UTC and drawn against your own clock, which your browser
+tells it in a cookie, and written `2031-03-14 10:20` at everybody rather than in each reader's own
+conventions: one stamp that sorts and reads the same anywhere. Since the checkpoint *is* the
 conversation, that is the state itself rather than a debug view of it. The rule's own line is a
 **gauge** of how much of the model's context window the request carried, filled from the left and
 shading toward red, so scrolling down a long conversation shows the line lengthen and warm. What a

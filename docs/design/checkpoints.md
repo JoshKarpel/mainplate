@@ -28,6 +28,7 @@ This console's is the rest:
 | `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `StepwiseDurability` |
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `StepwiseDurability` |
 | `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `StepwiseDurability` |
+| `turn:{n}:deferred:{i}` | The i-th time this turn was told to come back later, and the moment the provider named | The conversation body |
 | `turn:{n}:tool:{id}` | What one tool call returned and how long it ran | `StepwiseDurability` |
 | `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
 | `turn:{n}:messages` | What the agent run produced | The conversation body |
@@ -79,6 +80,14 @@ exactly while `at` is still what the session holds, because anything recorded si
 got past it. That is `turn:{n}:refused:{i}`'s rule against a count rather than against a turn, and it
 has to be a count because a pass can fall over where no turn names it - planting a worktree, reading
 a declaration, running a setup.
+
+**`turn:{n}:deferred:{i}` counts waits and not requests**, which is `refused:{i}`'s rule turned
+round and the one place in this space where that is right. A refusal is settled, so the request's
+own position names it once and every later pass finds the answer under the key it was about to use.
+A wait is about the minute: the pass that comes back asks the same request again, and a provider
+that defers it a second time names a *new* moment, which keyed by the request would land on a key
+already holding the old one and be dropped by a write-once store. See [a request the provider will
+not take yet](durability.md#a-request-the-provider-will-not-take-yet) for what that would cost.
 
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model requests
 happen in a fixed order, so counting them names a step the same way on every pass, and the tree

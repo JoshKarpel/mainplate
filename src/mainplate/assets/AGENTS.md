@@ -77,3 +77,36 @@ The manifest's `192x192` and `512x512` PNGs and the `180x180` Apple touch icon a
 - **Everything `mainplate.js` does stays an enhancement.** With the file absent the page must still
   render, still post, and still fold. What it holds is what cannot live in the markup, reapplied
   after every swap through one idempotent `repaint()`.
+- **`soon` words a duration exactly as `elapsed` in `pages.py` does, including the unit that is
+  zero.** The server draws the first figure and this repaints it a second later, into the same
+  element, so dropping a `0m` here is a countdown that changes shape while a reader is looking at it.
+  Two units at every width above a minute, on both sides. The widths the two owe each other are
+  `WORDED` in `tests/conftest.py`, which both suites are parametrised from, so a width added here
+  goes in that table rather than in either test. See
+  [the format is canonical, and the zone is the only thing that varies](https://joshkarpel.github.io/mainplate/design/console/#the-format-is-canonical-and-the-zone-is-the-only-thing-that-varies).
+- **Do not format a moment here.** `paintClock` writes the reader's zone into a cookie and asks for
+  the page again where the one it got was drawn against another; every date and time on the page is
+  rendered by `pages.py`. Rewriting `<time>` elements instead looks like the smaller change and is
+  the larger one: half the moments on this page are inside sentences a tooltip holds, so it buys a
+  second implementation of what a date looks like, in a language that cannot see the first. See
+  [which clock a moment is printed against](https://joshkarpel.github.io/mainplate/design/console/#which-clock-a-moment-is-printed-against).
+  There is also nothing here to localise: the format is canonical `%Y-%m-%d %H:%M` at every reader,
+  so only *which instant* follows the browser and never how it is written.
+- **`paintClock` runs beside `applyTheme`, before the document exists, and needs to.** It reads the
+  zone the page was drawn against off `<html>`, whose open tag the parser has already passed; moved
+  into `start` with the rest of the wiring it would read `document.body`, which is `null` there, so
+  a reader in another zone would paint a whole page of wrong times before asking for the right ones.
+  Move the attribute to `<body>` and the check stops firing at all rather than firing late, which is
+  what `TestTheClockAPageIsDrawnAgainst`'s browser tests fail on.
+- **Nothing that runs before `start` may throw**, because it all sits in one block: an exception
+  there takes the rest of the file with it, leaving a page with no folds, no copy buttons, no live
+  connection and no composer, which is worse than the script being absent. That is why `held`, `hold`
+  and `sameClock` catch, and why `cookieValue` treats a value it cannot decode as nothing: a cookie
+  is arbitrary text and `decodeURIComponent` raises on a malformed escape.
+- **`start` returns where there is no `<body>`, and that case is reachable.** `paintClock` can ask
+  for the page again from the head, which abandons the parse where it stands, and
+  `DOMContentLoaded` still fires on what was abandoned. The document is already being replaced, so
+  there is nothing to wire; without the guard every first visit from another zone raises.
+- **The reload is worth doing once and never twice.** `paintClock` reads its own cookie back before
+  reloading, because a browser blocking this origin's cookies makes the write a silent no-op, and a
+  guard that trusted it would ask for the page again on every load for ever.

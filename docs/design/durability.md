@@ -191,6 +191,74 @@ keeping everything under them, and the sentence on the page says so. `refusal_in
 reads, of the turn being answered and no other: a refusal on a turn that later answered is history,
 and the transcript is where history goes.
 
+## A request the provider will not take yet
+
+**A refusal is about the request and this is about the minute**, which is the whole of the split.
+`429` is on the retryable list above, so a session that hits a rate limit or spends a plan's weekly
+allowance is a pass that raises and a delivery the worker redelivers when the lease elapses. That is
+the right answer when nothing is known about *when* the limit lifts, and a poor one when the
+provider has just said:
+
+```text
+ModelHTTPError("status_code: 429, model_name: openai/gpt-5.6-sol, body: {'type':
+'usage_limit_reached', 'message': 'The usage limit has been reached', 'plan_type': 'plus',
+'resets_at': 1790303879, 'resets_in_seconds': 398418}")
+```
+
+Four and a half days at one attempt a minute is six thousand real requests to a provider already
+saying no, with nothing on the page to say why. So `deferred_until` reads the moment out of the
+error - `resets_at` in the body, or the standard `Retry-After` header, which Pydantic AI already
+parses into seconds and which is the same statement in the other spelling - and
+`CheckpointedModel.request` raises `RequestDeferred` instead of letting the error through.
+`conversing` catches it, records what the provider said, and **suspends the pass on that moment**,
+which the worker answers by scheduling the delivery for exactly then. Only a moment *ahead of now*
+counts: one already past would schedule a wakeup for the past, be redelivered at once, and ask the
+same question as fast as the queue could turn it around, which is worse than the retry it replaces.
+Each spelling is held against that test on its own and the first that passes is the answer, because
+a body echoing the window that has just closed would otherwise take the answer and discard a usable
+header on the same response. An error naming no moment is raised exactly as it was, which is every
+429 this console saw before.
+
+**A `429` and nothing else is read this way**, which is narrower than `Retry-After` itself, and the
+reason is whether the provider *knows*. A rate or usage limit is a window it is keeping, so the
+moment it names is a fact about its own bookkeeping. `terminally` calls every 5xx transient, so
+without the gate they arrive here too, and a 5xx header is a guess about when something the provider
+does not control will be fixed: a gateway shedding load with `503` and `Retry-After: 86400` would
+park a session for a day, at the moment an ordinary redelivery would have got an answer on its next
+attempt. The cost, stated: **a provider that meant its `503` header is asked again on the lease
+anyway**, which is a handful of requests it did not want, bought by this console's worst case being
+one lease rather than however long somebody else's header said.
+
+**The suspension is `ScheduledWakeup` raised directly rather than `Run.sleep` taken**, and the
+difference is which record holds the deadline. `sleep` computes and stores one of its own, `now +
+duration`, so this console would be writing down a moment it was *told* as though it had chosen it,
+and the page would be reading the copy rather than the fact. Raising the suspension with the key of
+the record it already wrote is one deadline in one place, and `stopped_at` takes a suspension a
+workflow raised itself for precisely this.
+
+**`turn:{n}:deferred:{i}` is counted by how many waits there have been and not by the request that
+caused one**, which is the opposite of what a refusal does and the one thing to get right here. A
+refusal is settled, so the request's own position names it once. A wait is not: the pass that comes
+back asks the same request again, and a provider that defers it a second time has named a *new*
+moment. Keyed by the request, that moment would land on a key already holding the old one, the store
+would keep the first value, and the pass would wake onto a deadline already past - the hot loop this
+exists to close, reached through the back door. Counted, each wait is its own record and the record
+is what advances the count. A session against a limit that keeps being reached accumulates one of
+these per reset rather than one per lease.
+
+The page reads the newest one **under the turn being answered** and draws it [as a wait rather than a
+fault](console.md#every-panel-folds-from-its-own-row), with the moment and a countdown to it. Two
+tests stand between the record and the page and they answer different questions. Whose wait it is,
+because a turn reaches its `messages` by getting past every wait it took, so a moment named for a
+turn that has since answered is history: any message a person sends makes the delivery ready at once,
+and a short wait is routinely outlived by the turn that took it. And whether the wait is still on,
+which is a comparison against a clock, so `Service.read` makes it and the page is handed the answer.
+
+The cost, stated: **the console believes the provider.** A gateway that names a moment far out
+parks the session until then, and nothing shortens that but a person writing a message, which queues
+the session and gets the same answer one request earlier. That is the same bargain the recorded
+refusal takes, and the same way out.
+
 ## A pass that falls over
 
 **A refusal is settled and a failure is not, so the two are recorded differently and read
@@ -246,6 +314,13 @@ speaks on the *failure* and uses the delivery only to say when the next attempt 
 something outstanding is the exception and needs no failure beside it: a message and the row that
 queues it are written in one commit, and a pass asks for the next one from inside itself, so there is
 no race that produces one.
+
+**`Delayed` has a second cause now, and it is a deliberate one**: a pass that
+[suspended on a moment a provider named](#a-request-the-provider-will-not-take-yet) is a delivery
+held back until exactly then. It is told from the failure the same way, by what is recorded beside
+it - a `Deferred` still ahead of now rather than a live `Failed` - so nothing here had to learn a
+fifth arm, and the page draws the two differently because they mean opposite things about whether
+anything is wrong.
 
 **It is in `Service.token` as well, and that is what makes any of it visible.** A pass that falls over
 records nothing, so a token made of the record count alone holds still while the page sits under a

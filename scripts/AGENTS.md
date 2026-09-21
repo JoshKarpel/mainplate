@@ -33,6 +33,12 @@ was constructed, so a fixture without one is the moment the render ran, and two 
 then produce two different pages. A screenshot that differs run to run is one nobody can compare
 against the last.
 
+**The zone every page is drawn against is stated too**, for that reason and one more. `here()` reads
+the machine the render ran on, so a shot taken in one zone would not match a shot taken in another;
+and `ZONE` is deliberately not UTC, since every moment in these fixtures is recorded in UTC and a
+gallery drawn in UTC would look identical whether or not anything converted anything. `shoot.py` and
+the browser tests point their browsers at the same zone, or the script asks for every page again.
+
 ## `seed.py`
 
 Plants the gallery's checkpoints into the demo database (`just seed`), so the console can be
