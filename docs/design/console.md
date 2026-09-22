@@ -152,8 +152,8 @@ the panel's own hands over what the panel says. Five things there are decided:
   Markdown carries its source in `data-markdown` and that is what the button hands over. It is not a
   second copy of anything: it is the same value the element was built from, put into the same
   render, and nothing else reads it. Only the kinds that *are* Markdown, since a tool's arguments
-  and its return are already shown verbatim and a fence renders as the characters it was written
-  with. Measured on the gallery's own conversation, carrying the sources costs the page 16%, most of
+  and its return are shown as the text they were, and a fence renders as the characters it was
+  written with. Measured on the gallery's own conversation, carrying the sources costs the page 16%, most of
   that the system prompt, which is the longest Markdown on any page and the one a reader is least
   likely to be copying from. It is carried all the same: a fold nobody opened costs bytes, and a
   fold somebody did open with no way to lift the prompt out of it costs the control.
@@ -769,15 +769,24 @@ but the original beside the current.
 
 **`mainplate.js` records every toggle as the reader's decision, and what makes that true is that
 the server never changes its mind about a fold.** Where a fold starts is decided per kind and never
-per render: a call is shut whether or not it has come back, a command is open, a system prompt is
-away. So a morph delivering a result adds no `open` and removes none the reader did not set, and the
+per render: a read is shut and an edit is open whether or not either has come back, a command is
+open, a system prompt is away. So a morph delivering a result adds no `open` and removes none the
+reader did not set, and the
 only toggles left to record are presses. The script cannot tell a morph's toggle from a reader's,
 and does not try; a render whose answer moved between two states of the same fold would be recorded
 as a decision nobody made. That is exactly what drawing a call *open while it was out* did: the morph
 that delivered it recorded it open, and every call a reader watched arrive stayed open for good, so a
-turn of twenty reads was twenty open boxes. A call still out is drawn shut now, with the working mark
-in its summary saying it is out and [the subject beside its name](#what-a-folded-call-says) saying
-what it is about. `TestWatchingATurnArrive` pins it.
+turn of twenty reads was twenty open boxes. A call still out is drawn as its tool is drawn now, with
+the working mark in its summary saying it is out and [the subject beside its
+name](#what-a-folded-call-says) saying what it is about. `TestWatchingATurnArrive` pins it.
+
+**An `edit` and a `create` are drawn open, and every other call shut.** What a reader watching a
+turn is watching for is what the model is doing to the repository, which is the diff and the new
+file, where what a read brought back or a command said is context they reach for when they want to
+check the work. Decided by the tool alone, for the reason above: an edit drawn shut while it was out
+and open once its diff landed would be a default that moved, and the morph delivering the diff would
+be recorded as the reader opening it. The cost, stated: a turn of twenty edits is twenty open diffs,
+and the dock's fold-all is the way to put them away at once.
 
 **A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
 working, on its own panel, and it is the model's call, so a second panel of dots under it says the
@@ -830,8 +839,9 @@ no longer draw either way once a morph has recorded the state it delivered.
 **A call's summary names what it acted on, beside the tool's name**, so a turn of reads and edits
 reads as a list of paths with nothing opened: `read src/mainplate/pages.py lines 140–179`, `edit
 src/mainplate/pages.py 3 operations`, `bash grep -n overflow-x mainplate.css`. It is what makes
-drawing every call shut affordable, since what a reader scanning a turn wants from a call is what it
-touched, and what it was handed and what came back are the press away that the fold has always been.
+drawing a read or a command shut affordable, since what a reader scanning a turn wants from one is
+what it touched, and what it was handed and what came back are the press away that the fold has
+always been.
 
 Two slots, `said` and `extent`. The first is the subject, a path or a command's first line, and is
 the part that can be long, so the stylesheet lets it take the room the name and the outcome leave and
@@ -839,12 +849,73 @@ clip to an ellipsis rather than wrap; the whole of it is in the `title`. The sec
 subject - which lines, how many operations, how deep, how many more lines of command - and stays
 whole, because it is short and is the half a reader cannot recover from the path.
 
-**Named per tool, and only for this console's own.** `subject_of` in `pages.py` knows the four file
+**Named per tool, and only for this console's own.** `subject_of` in `calls.py` knows the four file
 tools and `bash`, and reads the one field that is the point of each call. A plugin's tool is named
 and nothing more: its arguments are its own vocabulary, and a guess at which of them is the subject
 is a second rendering of something the body already shows exactly. So is a malformed call, which is
 the one a reader most needs to open as it arrived, so nothing that is not a well-formed object with
 the field in it produces a subject at all.
+
+### What an open call shows
+
+**The body is drawn per tool where the console knows the tool, and as its arguments one to a row
+and its return verbatim where it does not.** `call_body` in `calls.py` is the whole of it. A call
+used to open on the JSON the model sent and the text the tool sent back, which put the one argument
+a reader came for behind a brace and a quoted key and drew a shell command as a string with its
+quotes escaped. What a reader opening a call wants is what it did, in the shape the thing has:
+
+- **`bash` is its command, coloured as shell, and its output as it came back.** The command stands
+  under `called with` with no name in front of it, since a coloured shell line says what it is by
+  its shape and the fold's own summary is already that line; `seconds` keeps its name, as a bare
+  number says nothing about which argument it was. The output still
+  opens with the command echoed, because that is what the model was sent and the return is shown as
+  the model saw it; the coloured line above it is the reader's, the echo below is the model's.
+- **`edit` is the diff.** The tool records a unified diff of the change beside its reply, as
+  [metadata the model is never sent](tools.md#every-tool-that-writes-hands-back-anchors), and the
+  body is that alone: the operations are the diff said in anchors and the reply is its right-hand
+  side said in anchors again, so either beside it would be the same change a third time. **The cost,
+  stated:** the anchors an edit was addressed by, and the ones its reply handed back, are not on the
+  panel, and a reader working out why the model's *next* edit was refused wants exactly those. They
+  are in the raw record on the request. An edit with no diff recorded - one that was refused, or one
+  recorded before the diff existed - shows its operations and its reply as every other call does.
+- **`read`, `create` and `grep` are lines of a file, with the anchors left out**, and a read or a
+  create is coloured by the grammar its path names, through the same Pygments tokens a fence gets
+  and the same palette. A search is not coloured, since its regions come from as many files as
+  matched and which grammar each is in would mean parsing the header line the tool wrote a second
+  time. A file Pygments knows no grammar for is left as it is, for the reason an unlabelled fence
+  is. **A `create` that wrote its file is its reply alone**, for the reason an edit is its diff
+  alone: the reply is the new file under the tool's line saying it was written, which is the
+  content the call was handed with a confirmation on top, so the arguments beside it would be the
+  file twice. A create that was refused keeps them, since the content is then nowhere else on the
+  page.
+
+**The anchors are not drawn.** Everything left of the bar is the tool talking, which `read` says to
+the model in the same words, and it is talking to the model: an anchor is the name a line answers
+to in an `edit`, and it says nothing to a person reading the file. Drawn faint they were still a
+column of four letters a reader learned to look past, so they are left out, and what is left to
+tell the file's lines from the tool's own - the header saying which file and which lines, the note
+that an anchor moved - is the tone a `data-said` line is set in. **The cost, stated:** a reader
+working out which line the model meant by `qwrt`, or why the model's next edit was refused, has to
+open the raw record on the request, and the page's own search finds no anchor because none is on
+the page.
+
+**A diff's line numbers are painted by the stylesheet from an attribute, and are not in the text.**
+`data-gutter` carries them and `::before` draws them, which is what makes the copy button on the
+block hand over the diff: the numbers are the console's and are not in the change. The `-` and `+`
+deliberately are text, since a diff copied without its marks is not one.
+
+**Each line is a block with its newline inside it.** A `<span>` per line, `display: block`, so a
+changed line in a diff paints its whole row rather than the words on it; the newline is the last
+character of the line rather than a text node between lines, so the block's `textContent` still
+reads as lines and a morph has nothing between the spans to reconcile.
+
+**A file's lines are coloured as one text, not one line at a time.** A string or a comment that
+runs over several lines is one token, and a lexer handed the lines separately would colour the
+inside of it as code. `highlighted` in `markup.py` hands the lexer the whole run and cuts the
+tokens where the lines are, which is what the HTML formatter's own line wrapping does too. What the
+lexer cannot be told not to do is turn a bare carriage return into a line break, so a run that
+comes back with a different number of lines is shown uncoloured rather than with every line's
+colour one line off from the line it belongs to.
 
 ## The line a shut panel stands for
 

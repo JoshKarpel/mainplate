@@ -23,7 +23,11 @@ from markdown import Markdown
 from markupsafe import Markup
 from markupsafe import escape
 from pygments.formatters import HtmlFormatter
+from pygments.lexers import get_lexer_by_name
+from pygments.lexers import get_lexer_for_filename
 from pygments.token import STANDARD_TYPES
+from pygments.token import _TokenType
+from pygments.util import ClassNotFound
 
 # The wrapper `codehilite` puts around a highlighted block, which is the one class here that is not
 # a token: Pygments names the spans inside, and the extension names the box.
@@ -166,3 +170,74 @@ def as_document(text: str) -> Markup:
     stretch of context, plus whatever a turn was handed on approach.
     """
     return converted(DOCUMENT, text)
+
+
+# The lexer a shell command is coloured by. `sh -c` is what runs it, and Pygments' one shell lexer
+# reads POSIX shell and bash alike.
+SHELL: Final = "bash"
+
+
+@lru_cache(maxsize=256)
+def language_of(path: str) -> str | None:
+    """
+    The Pygments lexer a file is coloured by, from its name alone, or nothing where it knows none.
+
+    Nothing rather than a guess, for the reason an unlabelled fence is left alone: a wrong grammar
+    reads worse than no colour. The first alias is what `get_lexer_by_name` takes back, and a name
+    rather than the lexer itself so that `highlighted` has something hashable to cache on.
+
+    Cached because the lookup walks every lexer's filename patterns, and a transcript re-renders
+    whole whenever the turn in flight records anything.
+    """
+    try:
+        return str(get_lexer_for_filename(path).aliases[0])
+    except ClassNotFound, IndexError:
+        return None
+
+
+def token_class(kind: _TokenType) -> str:
+    """
+    The class Pygments' HTML formatter would put on a token of this kind, which may be none.
+
+    A kind the table does not name takes its nearest named ancestor's, which is the formatter's
+    own rule for a lexer's private subtypes.
+    """
+    found = kind
+    while found not in STANDARD_TYPES and found.parent is not None:
+        found = found.parent
+    return STANDARD_TYPES.get(found, "")
+
+
+@lru_cache(maxsize=512)
+def highlighted(language: str, text: str) -> tuple[Markup, ...]:
+    """
+    `text` as one run of markup per line of it, each token wrapped in the class Pygments names it.
+
+    Per line rather than as the one block the HTML formatter produces, because what the page draws
+    in front of each line - an anchor, a diff's line numbers - is a fact about that line, so the
+    markup has to be cut where the lines are. A token that spans lines is cut with them, which is
+    what the formatter's own line wrapping does too.
+
+    Stripping and the trailing newline are both off, so the lexer is handed exactly the text and
+    hands back exactly as many lines. The one preprocessing step no option turns off is a bare
+    carriage return becoming a line break, so a text that comes back with a different number of
+    lines is shown uncoloured rather than misaligned: what the gutter says about a line has to be
+    about that line.
+
+    Cached for the reason a message is, and bounded smaller because what is cached is larger: a
+    read is up to fifteen hundred lines, where a message is a few paragraphs.
+    """
+    lines = text.split("\n")
+    lexer = get_lexer_by_name(language, stripnl=False, ensurenl=False)
+    marked: list[list[Markup]] = [[]]
+    for kind, value in lexer.get_tokens(text):
+        cls = token_class(kind)
+        for at, piece in enumerate(value.split("\n")):
+            if at:
+                marked.append([])
+            if not piece:
+                continue
+            marked[-1].append(Markup('<span class="{}">{}</span>').format(cls, piece) if cls else escape(piece))
+    if len(marked) != len(lines):
+        return tuple(escape(line) for line in lines)
+    return tuple(Markup().join(pieces) for pieces in marked)

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from collections.abc import Awaitable
+from collections.abc import Callable
 from inspect import cleandoc
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic_ai import ModelRetry
+from pydantic_ai.messages import ToolReturn
 
 from mainplate.snapshots import Worktree
 from mainplate.tools.files.anchors import GUTTER
@@ -429,9 +433,39 @@ class TestEditingAFile:
         assert (files.roots[0].path / "app.py").read_text() == SOURCE.replace("return 1", "return 42")
 
     async def test_the_reply_shows_the_changed_region_with_fresh_anchors(self, files: Files) -> None:
-        said = await files.edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
-        assert said.startswith("edited app.py, now 6 lines")
-        assert f"{naming(files, 1)}{GUTTER}    return 42" in said
+        edited = await files.edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
+        assert edited.said.startswith("edited app.py, now 6 lines")
+        assert f"{naming(files, 1)}{GUTTER}    return 42" in edited.said
+
+    async def test_the_diff_of_the_change_comes_back_beside_the_reply(self, files: Files) -> None:
+        """
+        A unified diff of the whole change, for the page rather than the model: what went away is
+        in it, which the reply cannot say without spending the model's tokens on it.
+        """
+        edited = await files.edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
+        # One literal, because a context line that is blank in the file is a single space in the
+        # diff, and a trailing space is what every editor strips off the end of a line.
+        assert edited.diff == (
+            "--- app.py\n+++ app.py\n@@ -1,5 +1,5 @@\n def first():\n-    return 1\n+    return 42\n \n \n def second():"
+        )
+
+    async def test_an_edit_that_changed_nothing_has_an_empty_diff(self, files: Files) -> None:
+        edited = await files.edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="1")])
+        assert edited.diff == ""
+
+    async def test_the_tool_hands_the_diff_to_the_page_and_the_reply_to_the_model(self, files: Files) -> None:
+        """
+        As Pydantic AI's `ToolReturn`: the reply is its `return_value`, and the diff rides as
+        `metadata`, which is the slot for what the application reads and the model is never sent.
+        """
+        edit = cast("Callable[..., Awaitable[object]]", file_tools(files).tools["edit"].function)
+        came_back = await edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
+        assert isinstance(came_back, ToolReturn)
+        assert isinstance(came_back.return_value, str)
+        assert came_back.return_value.startswith("edited app.py")
+        assert isinstance(came_back.metadata, dict)
+        assert set(came_back.metadata) == {"diff"}
+        assert "-    return 1" in came_back.metadata["diff"]
 
     async def test_a_refused_edit_writes_nothing(self, files: Files) -> None:
         with pytest.raises(ModelRetry):

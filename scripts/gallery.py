@@ -335,9 +335,8 @@ LONG_LINE = "    return Response.from_content(status, html_content(render(transc
 
 # What a read comes back as, in the shape `anchored` renders: a name, the gutter, and the line. Here
 # rather than assembled from the tool, so a fixture stays a value and needs no workspace to build,
-# and written out with the bar in it because that column is what the monospace row pitch is for. A
-# read is the most common thing a panel in this console ever shows and nothing else in this gallery
-# had one, so a pitch that broke the gutter into dashes broke it where nobody was looking.
+# and written out with the bar in it because that is what the model is sent: the page leaves the
+# anchors out, and a fixture without them would never show that it does.
 READ = 'qwrt│WAITING = "every 1s"\n----│\nmkpv│SWAP = "outerMorph"'
 
 
@@ -383,7 +382,126 @@ def timing(seconds: float) -> dict[str, object]:
 # does. Two scales rather than one, because `elapsed` formats them differently and a shot is where
 # you find out whether both read well. A call still out is absent from here on purpose: its duration
 # is written after its return, so a call with a time and no result is a state nothing can record.
-TIMINGS = {"call-1": 0.184, "call-7": 12.65}
+TIMINGS = {"call-1": 0.184, "call-3": 0.041, "call-4": 4.9, "call-5": 0.052, "call-6": 0.019, "call-7": 12.65}
+
+# What a `read` of the stylesheet in the second turn brought back, ahead of the edit that addresses
+# the anchors it shows: a partial read, so the header says where it stopped, of a file whose grammar
+# the page colours by its name. The anchors here are the ones the edit below names, and the lines are
+# the ones its diff shows going and staying, so the three calls read as one piece of work.
+EDITED_PATH = "src/mainplate/assets/mainplate.css"
+STYLESHEET_READ = (
+    f"{EDITED_PATH}, lines 823-842 of 4191; pass `offset` to read further\n"
+    "\n"
+    "xhqe│.text pre {\n"
+    "lwnb│    position: relative;\n"
+    "tfor│    margin: var(--space-4) 0;\n"
+    "ymcs│    line-height: var(--mono-line);\n"
+    "rkav│    padding: var(--space-4) var(--space-5);\n"
+    "ewqb│    border: 1px solid var(--edge-soft);\n"
+    "xmwe│    border-radius: var(--radius);\n"
+    "zpqm│    background: var(--sunk);\n"
+    "pzrk│    overflow-x: auto;\n"
+    "kdms│}\n"
+    "----│\n"
+    "vgtm│/* The code scrolls sideways, not the block around it, so a long line still moves the block and never\n"
+    "obzy│   the page. One level in rather than on the `pre` itself, because a copy button pinned to a scroll\n"
+    "wnqd│   container travels with the content. */\n"
+    "xkqe│.text pre code {\n"
+    "hvrn│    display: block;\n"
+    "qlgd│    padding: 0;\n"
+    "nwzo│    background: none;\n"
+    "ycfe│    font-size: var(--mono-size);\n"
+    "pfjw│}"
+)
+
+# What an `edit` in the second turn changed, as the tool recorded it beside the reply the model got.
+# The reply says the changed regions in anchors; the diff is what the page draws instead, and a shot
+# is where you find out whether a removed line and an added one read as such at a glance.
+EDITED = (
+    f"edited {EDITED_PATH}, now 4191 lines\n"
+    "\n"
+    "lines 828-832:\n"
+    "ewqb│    border: 1px solid var(--edge-soft);\n"
+    "xmwe│    border-radius: var(--radius);\n"
+    "zpqm│    background: var(--sunk);\n"
+    "kdms│}\n"
+    "----│\n"
+    "\n"
+    "lines 835-841:\n"
+    "xkqe│.text pre code {\n"
+    "hvrn│    display: block;\n"
+    "rmta│    overflow-x: auto;\n"
+    "qlgd│    padding: 0;\n"
+    "nwzo│    background: none;\n"
+    "ycfe│    font-size: var(--mono-size);\n"
+    "pfjw│}"
+)
+EDIT_DIFF = "\n".join(
+    [
+        f"--- {EDITED_PATH}",
+        f"+++ {EDITED_PATH}",
+        "@@ -823,11 +823,10 @@",
+        " .text pre {",
+        "     position: relative;",
+        "     margin: var(--space-4) 0;",
+        "     line-height: var(--mono-line);",
+        "     padding: var(--space-4) var(--space-5);",
+        "     border: 1px solid var(--edge-soft);",
+        "     border-radius: var(--radius);",
+        "     background: var(--sunk);",
+        "-    overflow-x: auto;",
+        " }",
+        " ",
+        "@@ -837,6 +836,7 @@",
+        " .text pre code {",
+        "     display: block;",
+        "+    overflow-x: auto;",
+        "     padding: 0;",
+        "     background: none;",
+        "     font-size: var(--mono-size);",
+        " }",
+    ]
+)
+
+# What a `create` in the same batch was handed and what it said back: the whole new file, which the
+# model was sent behind fresh anchors under a line saying it was written. A create that succeeded is
+# drawn as that reply alone, so the content is here as the argument because that is what a real
+# call carries, and a shot shows only the reply.
+CREATED_PATH = "tests/test_long_lines.py"
+CREATED_CONTENT = (
+    "from playwright.async_api import Page\n"
+    "\n"
+    "\n"
+    "async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:\n"
+    '    await page.goto(f"{gallery}/session.html", wait_until="load")\n'
+    '    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")\n'
+    "    assert not wider\n"
+)
+CREATED = (
+    f"created {CREATED_PATH}, 7 lines\n"
+    "\n"
+    "rbqu│from playwright.async_api import Page\n"
+    "----│\n"
+    "----│\n"
+    "gdxn│async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:\n"
+    'zhmv│    await page.goto(f"{gallery}/session.html", wait_until="load")\n'
+    'kpwe│    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")\n'
+    "ntyc│    assert not wider"
+)
+
+# What a `bash` in the same batch ran and said, in the shape the tool hands back: the command echoed,
+# the output, and the status, so the page's rendering of the command above it can be compared against
+# the model's own view of the same thing directly below.
+CHECKED = "just check 2>&1 | tail -3"
+CHECK_SAID = (
+    f"$ {CHECKED}\n"
+    "\n"
+    "ruff format.............................................................Passed\n"
+    "uv run mypy\n"
+    "Success: no issues found in 77 source files\n"
+    "\n"
+    "exit 0"
+)
 
 # What the requests in this fixture carried, so the panel that draws a session's system prompt has
 # something to draw. Three scopes in the order `instructing` composes them - the console's standing
@@ -584,6 +702,62 @@ CONVERSATION: list[ModelMessage] = [
 
 TOOL_IN_FLIGHT: list[ModelMessage] = [
     ModelRequest(parts=[UserPromptPart(content="Now check the stylesheet handles a long line.")]),
+    # Two settled batches ahead of the call still out, which between them are every rendering a
+    # call has: a partial read of the stylesheet, coloured by its name; then an edit addressed by
+    # the anchors that read showed, drawn as the diff the tool recorded beside its reply; a create,
+    # drawn as its reply alone since that is the new file under a line saying so; and a command
+    # with its output, which is the one call whose rendering of the arguments - the command,
+    # coloured - sits directly above the model's own view of the same command echoed at the top of
+    # what came back. The read is a batch of its own because an edit needs the anchors first, which
+    # is also what a real turn looks like.
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(content="Looking at how a fenced block is laid out first."),
+            ToolCallPart(
+                tool_name="read", args={"path": EDITED_PATH, "offset": 823, "limit": 20}, tool_call_id="call-5"
+            ),
+        ],
+        usage=spending(asked=95_600, answered=64, cached=44_600, cost="0.1699"),
+        metadata=timing(1.9),
+    ),
+    ModelRequest(parts=[ToolReturnPart(tool_name="read", content=STYLESHEET_READ, tool_call_id="call-5")]),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(
+                content=(
+                    "The block scrolls sideways rather than the page, so `overflow-x` belongs on the code "
+                    "and not on the `pre` around it. Moving it, pinning that with a browser test, then "
+                    "running the checks."
+                )
+            ),
+            ToolCallPart(
+                tool_name="edit",
+                args={
+                    "path": EDITED_PATH,
+                    "operations": [
+                        {"op": "splice", "from": "pzrk", "before": "kdms", "text": ""},
+                        {"op": "splice", "after": "hvrn", "text": "    overflow-x: auto;"},
+                    ],
+                },
+                tool_call_id="call-3",
+            ),
+            ToolCallPart(
+                tool_name="create", args={"path": CREATED_PATH, "content": CREATED_CONTENT}, tool_call_id="call-6"
+            ),
+            ToolCallPart(tool_name="bash", args={"command": CHECKED, "seconds": 300}, tool_call_id="call-4"),
+        ],
+        usage=spending(asked=96_900, answered=402, cached=95_600, cost="0.1721"),
+        metadata=timing(6.3),
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(tool_name="edit", content=EDITED, tool_call_id="call-3", metadata={"diff": EDIT_DIFF}),
+            ToolReturnPart(tool_name="create", content=CREATED, tool_call_id="call-6"),
+            ToolReturnPart(tool_name="bash", content=CHECK_SAID, tool_call_id="call-4"),
+        ]
+    ),
     ModelResponse(
         timestamp=WHEN,
         parts=[
@@ -596,7 +770,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
                 tool_call_id="call-2",
             ),
         ],
-        usage=spending(asked=96_300, answered=88, cached=44_600, cost="0.1698"),
+        usage=spending(asked=98_400, answered=88, cached=96_900, cost="0.1738"),
         metadata=timing(1.2),
     ),
 ]
@@ -614,7 +788,7 @@ PARTWAY = ModelResponse(
     # A turn in flight has a cost too, which is the point of pricing a response before the step
     # records it rather than after the run ends. Left off, this fixture would draw the state the
     # console used to have and no longer does.
-    usage=spending(asked=151_900, answered=142, cached=96_200, cost="0.1981"),
+    usage=spending(asked=151_900, answered=142, cached=98_300, cost="0.1981"),
     metadata=timing(2.8),
 )
 
@@ -671,17 +845,25 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
             ).recorded()
             for part in response.parts:
                 if isinstance(part, ToolCallPart) and part.tool_call_id in TIMINGS:
+                    answered = came_back.get(part.tool_call_id)
                     written[tool_key(turn, part.tool_call_id)] = records.Returned(
-                        returned=came_back.get(part.tool_call_id),
+                        returned=None if answered is None else answered.content,
                         took=timedelta(seconds=TIMINGS[part.tool_call_id]),
+                        metadata=None if answered is None else answered.metadata,
                     ).recorded()
     return written
 
 
-def returns(messages: Sequence[ModelMessage]) -> dict[str, object]:
-    """What each call in a turn came back with, by the id that names which call it answers."""
+def returns(messages: Sequence[ModelMessage]) -> dict[str, ToolReturnPart]:
+    """
+    What each call in a turn came back with, by the id that names which call it answers.
+
+    The whole part rather than its content, because a call's record carries what the tool recorded
+    beside its return as well, and a fixture that wrote one and not the other would draw a call the
+    two readings of a turn disagree about.
+    """
     return {
-        part.tool_call_id: part.content
+        part.tool_call_id: part
         for message in messages
         if isinstance(message, ModelRequest)
         for part in message.parts
@@ -997,7 +1179,8 @@ CAPTIONS: Final[dict[str, str]] = {
     "opening.html": "A session with its first message queued and nothing answered yet.",
     "session.html": (
         "A settled conversation: reasoning, a read, a highlighted reply with a table, a diagram and an SVG to "
-        "draw, commands the person ran, and a boundary where the context started again."
+        "draw, commands the person ran, a boundary where the context started again, and under it a read of "
+        "the stylesheet, an edit drawn as its diff, a file created, and a shell command with what it said."
     ),
     "waiting.html": "A message waiting for its turn.",
     "answering.html": "A turn part way through: two reads out at once, a steer taken and one still to be, a command running.",

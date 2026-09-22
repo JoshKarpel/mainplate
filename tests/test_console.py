@@ -37,6 +37,8 @@ from mainplate.agent import ANTHROPIC_RETENTION
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.app import build_app
+from mainplate.calls import Subject
+from mainplate.calls import subject_of
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
@@ -72,9 +74,7 @@ from mainplate.pages import CACHE_ID
 from mainplate.pages import LISTED_ID
 from mainplate.pages import SETUP_ID
 from mainplate.pages import TRANSCRIPT_ID
-from mainplate.pages import Subject
 from mainplate.pages import sending_answers
-from mainplate.pages import subject_of
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import recorded_declaration
 from mainplate.plugins.installed import Installed

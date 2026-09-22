@@ -79,6 +79,10 @@ from without_web import url_for
 
 from mainplate.agent import Choice
 from mainplate.agent import Listed
+from mainplate.calls import INDENT
+from mainplate.calls import call_body
+from mainplate.calls import starts_open
+from mainplate.calls import subject_of
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import grouped
@@ -2428,126 +2432,23 @@ def working(*, saying: str = "working", extra: str | None = None, identified: st
     )
 
 
-# How wide JSON is indented where a person reads it. Two, because the point of showing it is the
-# shape, and a value nested four deep at four spaces is mostly margin in a column this narrow.
-INDENT: Final = 2
-
-
-def laid_out(said: str) -> str:
-    """
-    JSON laid out to be read, and anything else left exactly as it arrived.
-
-    What a model hands a tool is JSON by construction, and a single line of it is where a reader
-    has to count brackets to find the argument they came for. It is not *reliably* well-formed,
-    though: `args_as_json_str` returns whatever the provider sent when the arguments arrived as a
-    string, so a malformed call reaches here as that text. Showing it unchanged is the honest
-    rendering, and it is the call a reader most needs to look at.
-
-    Deliberately not used on what a call *returned*. That is whatever the tool produced - usually
-    the contents of a file - so text that merely happens to parse as JSON would be reformatted, and
-    a reader would be shown something other than what the model was handed.
-    """
-    try:
-        return json.dumps(json.loads(said), indent=INDENT, ensure_ascii=False)
-    except ValueError:
-        return said
-
-
-@dataclass(frozen=True, slots=True)
-class Subject:
-    """
-    What one call was about, as the words a folded call shows beside the tool's name.
-
-    `said` is the thing the call acted on - a path, a command - and `extent` is how much of it, where
-    the tool has a way of saying less than all: which lines of a file, how many operations, how deep
-    a listing went. Two slots rather than one sentence so the stylesheet can let the first give way
-    to an ellipsis while the second stays whole.
-    """
-
-    said: str
-    extent: str | None = None
-
-
-def lines_of(offset: object, limit: object) -> str | None:
-    """
-    Which lines a `read` asked for, or nothing where it asked for all of them.
-
-    Both figures are taken as the model sent them, which is JSON and so could be anything: a figure
-    that is not an integer is treated as not given rather than refused, because what is being drawn
-    is a summary of a call and the call itself is a press away, exactly as it arrived.
-    """
-    from_line = offset if isinstance(offset, int) and not isinstance(offset, bool) else None
-    at_most = limit if isinstance(limit, int) and not isinstance(limit, bool) else None
-    if from_line is not None and at_most is not None:
-        return f"lines {from_line}\N{EN DASH}{from_line + at_most - 1}"
-    if from_line is not None:
-        return f"from line {from_line}"
-    if at_most is not None:
-        return f"first {at_most} lines"
-    return None
-
-
-def subject_of(tool: str, arguments: str) -> Subject | None:
-    """
-    What a call to one of this console's own tools was about, read off what the model handed it.
-
-    Named per tool rather than guessed from whichever field looks like a subject, because the four
-    file tools and `bash` are the whole of what this console defines and each has one field that is
-    the point of the call. A plugin's tool is not here: its arguments are its own vocabulary and
-    nothing here can say which of them is the subject, so a call to one is named and nothing more.
-
-    Nothing that is not a well-formed object with the expected field in it produces a subject. A
-    malformed call is the one a reader most needs to open, and `laid_out` shows it unchanged in the
-    body; a summary that guessed at it would be a second rendering of the thing that went wrong.
-    """
-    try:
-        handed = json.loads(arguments)
-    except ValueError:
-        return None
-    if not isinstance(handed, dict):
-        return None
-    if tool == "bash":
-        command = handed.get("command")
-        if not isinstance(command, str) or not command.strip():
-            return None
-        first, _, rest = command.strip().partition("\n")
-        more = rest.count("\n") + 1 if rest else 0
-        return Subject(first, extent=f"{more} more line{'s' if more != 1 else ''}" if more else None)
-    if tool not in ("read", "edit", "create", "list"):
-        return None
-    path = handed.get("path", "." if tool == "list" else None)
-    if not isinstance(path, str) or not path:
-        return None
-    root = handed.get("root")
-    said = f"{root}:{path}" if isinstance(root, str) and root else path
-    if tool == "read":
-        return Subject(said, extent=lines_of(handed.get("offset"), handed.get("limit")))
-    if tool == "edit":
-        operations = handed.get("operations")
-        if not isinstance(operations, list):
-            return Subject(said)
-        return Subject(said, extent=f"{len(operations)} operation{'s' if len(operations) != 1 else ''}")
-    if tool == "list":
-        depth = handed.get("depth")
-        deep = depth if isinstance(depth, int) and not isinstance(depth, bool) else None
-        return Subject(said, extent=f"depth {deep}" if deep is not None else None)
-    return Subject(said)
-
-
 def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     """
-    One call, folded, with what it was handed and what it gave back.
+    One call, folded or not by its tool, with what it was handed and what it gave back.
 
-    Folded because a call's arguments and its output are context a reader reaches for rather than
-    prose they read through, and a real `<details>` because that is what works with no script at
-    all and what the dock's fold controls act on.
+    A real `<details>` because that is what works with no script at all and what the dock's fold
+    controls act on. Most calls are folded, because what a read brought back or a command said is
+    context a reader reaches for rather than prose they read through; a call that *wrote* something
+    is open, because the diff or the new file is what a reader watching a turn is watching for.
+    `starts_open` in `calls.py` is where that is decided.
 
-    **Folded whether or not it has come back.** A call still out is drawn working, with the dots in
-    its summary, and drawn shut like every other, because the script keeps every toggle as the
-    reader's decision: a call drawn open while it was out would stay open once it returned, and a
-    turn of twenty reads would be twenty open boxes. What the summary says is what makes shut
-    affordable, since the subject of the call - the path, the command - is on the line a reader
-    scans without a press.
+    **Decided by the tool and never by whether the call has come back.** A call still out is drawn
+    working, with the dots in its summary, and folded or open exactly as it will be once it returns,
+    because the script keeps every toggle as the reader's decision: a fold whose default moved as
+    its result landed would be recorded as a decision nobody made, and a read drawn open while it
+    was out would stay open once it returned, so a turn of twenty reads would be twenty open boxes.
+    What the summary says is what makes shut affordable for the rest, since the subject of the call
+    - the path, the command - is on the line a reader scans without a press.
 
     The id is the panel's own plus this block's place in it, which is stable in both halves: a
     panel's blocks only ever grow at the end, so a call keeps its place once made whether or not it
@@ -2556,11 +2457,13 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     A command's fold cannot be named this way for exactly that reason; see `command_block`. The
     script needs it to put a reader's unfolded calls back after a swap, since morphing removes an
     attribute the new markup does not carry.
+
+    What is under the summary is `call_body`'s, drawn per tool; see `calls.py`.
     """
     subject = subject_of(used.tool, used.arguments)
     return details(
         cls="tool",
-        attrs={"id": f"{anchor}-tool-{at}", **opens(False)},
+        attrs={"id": f"{anchor}-tool-{at}", **opens(starts_open(used.tool))},
         children=[
             summary(
                 children=[
@@ -2601,18 +2504,7 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
                     ),
                 ]
             ),
-            dl(
-                cls="tool__body",
-                children=[
-                    dt(children="called with"),
-                    dd(children=pre(children=laid_out(used.arguments))),
-                    *(
-                        ()
-                        if used.returned is None
-                        else (dt(children="returned"), dd(children=pre(children=linked_text(used.returned.content))))
-                    ),
-                ],
-            ),
+            call_body(used),
         ],
     )
 

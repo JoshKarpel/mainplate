@@ -26,6 +26,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the note about what its tools reach, says that a `mermaid` or `svg` fence is drawn as a picture, so
   a model with a flow or a figure to show writes one. The operator's standing instructions are left
   alone, so rewriting those keeps it.
+- **A call opens on what it did rather than on JSON.** `bash` shows its command coloured as shell
+  above what came back; `edit` shows the diff of the change, with line numbers, in place of its
+  operations and its reply; `read` and `create` show the file coloured by its own grammar, with the
+  anchors the model was sent left out, so what is drawn and what the copy button hands over are
+  both the file, and a `create` that wrote its file shows the tool's reply alone rather than the
+  file twice. An `edit` and a `create` are drawn open, since what they did is what a reader
+  watching a turn is watching for; every other call is drawn shut as before, and the dock's
+  fold-all puts the open ones away at once. Every other tool, a plugin's included, shows its arguments one to
+  a row and its return as it was. The diff is recorded by the tool beside its reply, so an edit made
+  before this release opens as it always did.
 
 ### Fixed
 - **A reasoning summary a gateway hands back as text is read as reasoning.** Some OpenAI-compatible

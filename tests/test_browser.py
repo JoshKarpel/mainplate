@@ -1044,13 +1044,13 @@ class TestWhatScrollsOnTheStartPage:
 
 
 # Where a conversation draws monospace, which is the fenced blocks a model answers in and the body of
-# every tool call it makes. Both are on one grid, and both have to be, because a read's gutter is a
-# column of box drawing and it arrives in the second.
+# every tool call it makes. Both are on one grid, and both have to be, because a tree a command
+# prints is a column of box drawing and it arrives in the second.
 MONOSPACE = (".text pre code", ".tool__body pre")
 
 # Three rows of box drawing, which is a corner reaching down, a bar reaching both ways, and a corner
 # reaching up. The corners are here because they reach one way only and so have the least ink to
-# join with; the run is drawn as one column because that is what a read's gutter is.
+# join with; the run is drawn as one column because that is what the side of a tree or a table is.
 JOINING = ("┌", "│", "└")
 
 
@@ -1058,8 +1058,8 @@ class TestTheGridMonospaceIsDrawnOn:
     """
     Box drawing joins into lines rather than into dashes.
 
-    A model answers in tables and trees, and every `read` comes back as lines behind a `│` gutter, so
-    this is most of what a panel in this console ever shows. Two rows of it join on two conditions:
+    A model answers in tables and trees, and a command's output is full of both, so this is much of
+    what a panel in this console ever shows. Two rows of it join on two conditions:
     the row pitch is no more than the span of the glyph's own ink, and the pitch is a whole number of
     pixels, or each row lands on a different subpixel phase and the joins falling between two device
     rows draw as two half-lit ones.
@@ -1393,6 +1393,22 @@ class TestWhatComesOutOfACopyButton:
         assert await self.clipboard(page) == folded
         # And it is the call rather than the one line of its summary: what it was handed is in there.
         assert "called with" in folded
+
+    async def test_a_read_copies_the_file_and_none_of_the_anchors_the_model_was_sent(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        What the block draws and what its button hands over are the same string, and neither has
+        the anchors in it: they are the model's names for lines, and a reader lifting a function out
+        of a read wants the function.
+        """
+        panel = await self.copying(page, gallery, "tool")
+        fold = panel.locator("details.tool").first
+        await fold.locator("summary").click()
+        block = fold.locator(".tool__body pre").first
+        assert "qwrt" not in await block.inner_text()
+        await block.locator(".copy").click()
+        assert (await self.clipboard(page)).strip() == 'WAITING = "every 1s"\n\nSWAP = "outerMorph"'
 
     async def test_a_stretch_of_reasoning_copies_the_same_whether_it_is_open_or_folded(
         self, page: Page, gallery: str
@@ -2168,7 +2184,7 @@ class TestTheLineAShutPanelStandsFor:
             "lines => lines.map(line => line.textContent)"
         )
 
-        assert named == ["read", "bash", "read, read"]
+        assert named == ["read", "read", "edit, create, bash", "bash", "read, read"]
 
 
 class TestFoldingADocumentTheConsoleHandedOver:

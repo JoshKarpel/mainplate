@@ -230,6 +230,19 @@ new file; `edit` renders the changed regions and names any anchor that moved els
 property rather than two conveniences, and it is what lets a run of edits happen with no re-read
 between them.
 
+**`edit` also records the diff of what it changed, beside the reply and outside it.** The reply
+shows the lines that arrived with their fresh anchors, which is what the model needs to keep going;
+what it cannot say without spending the model's tokens on lines it will never address is what went
+away, and that is the half a person reading the conversation wants. So the tool hands back Pydantic
+AI's `ToolReturn`, with the reply as its `return_value` and a unified diff under `metadata`, which
+is the slot for what the application reads and the model is never sent. The loop splits the two
+before anything is written, so the diff is on the call's record and on the `ToolReturnPart` built
+from it, and [the page](console.md#what-an-open-call-shows) draws an edit as the diff. Computed at
+the one moment both versions of the file are in hand, and recorded rather than derived, because by
+the time anybody reads the page the file has moved on. A `ToolReturn` carrying a `content` or a
+`tools` is refused by the loop rather than dropped, since either is a promise to the model this loop
+does not keep.
+
 ## Two refusals rather than omissions
 
 **There is no `write`**: a tool that overwrites a whole file is the escape hatch that makes anchored

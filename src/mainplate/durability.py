@@ -38,6 +38,7 @@ from pydantic_ai.exceptions import ToolFailed
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ToolReturn
 from pydantic_ai.models import Model
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -96,6 +97,20 @@ def parse_took(recorded: object) -> timedelta | None:
     if isinstance(recorded, int | float) and not isinstance(recorded, bool):
         return timedelta(seconds=float(recorded))
     raise TypeError(f"how long something took must be seconds or nothing, not {recorded!r}")
+
+
+def unwrapped(came_back: object) -> tuple[object, object]:
+    """
+    What a tool returned as the two halves the record keeps: for the model, and beside it for the page.
+
+    A plain return is the whole of the first half and none of the second. A `ToolReturn` is split,
+    and one carrying what this loop cannot honour is refused; see `Stepping.call`.
+    """
+    if not isinstance(came_back, ToolReturn):
+        return came_back, None
+    if came_back.content is not None or came_back.tools is not None:
+        raise TypeError("a ToolReturn here may carry a return_value and metadata, and nothing else")
+    return came_back.return_value, came_back.metadata
 
 
 def parse_returned(recorded: object) -> records.Returned:
@@ -734,6 +749,13 @@ class Stepping:
         the only reader of it, so a call running beside one that ended the turn records nothing of
         its neighbour's decision. `halted` is set from the record rather than from the variable, which
         is what makes the pass that asked and every pass that replays agree.
+
+        **A tool that hands back a `ToolReturn` is unwrapped here**, into the return the model is
+        sent and the metadata it is not, because this loop and not Pydantic AI's graph is what builds
+        the part the model reads. Lowered whole instead, the model would be sent an object with a
+        `return_value` in it and the page would be handed the same. Only those two fields are taken:
+        a `content` or a `tools` on one would be a promise to the model this loop does not keep, so
+        either is refused rather than dropped on the floor.
         """
 
         async def perform() -> object:
@@ -743,7 +765,7 @@ class Stepping:
             started = monotonic()
             ending_here.set(False)
             try:
-                came_back = to_jsonable_python(await tool.toolset.call_tool(call.tool_name, arguments, context, tool))
+                came_back = await tool.toolset.call_tool(call.tool_name, arguments, context, tool)
             except (ModelRetry, ToolFailed) as failed:
                 return records.Returned(
                     returned=failed.message,
@@ -751,10 +773,12 @@ class Stepping:
                     outcome="failed",
                     ended=ending_here.get(),
                 ).recorded()
+            returned, metadata = unwrapped(came_back)
             return records.Returned(
-                returned=came_back,
+                returned=to_jsonable_python(returned),
                 took=timedelta(seconds=monotonic() - started),
                 ended=ending_here.get(),
+                metadata=to_jsonable_python(metadata),
             ).recorded()
 
         recorded = await self.step(self.identified("tool", call.tool_call_id), perform, parse_returned)

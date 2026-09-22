@@ -852,106 +852,111 @@ pre > .draw[aria-busy] {
    Grouped by what a reader is actually distinguishing rather than by Pygments' full tree: a
    comment from code, a string from a name, a keyword from both. Every short name in a group is
    listed because the selector has to match exactly, and an unlisted one simply inherits the
-   block's own colour, which is the right failure. */
+   block's own colour, which is the right failure.
+
+   On any `pre` rather than a fence's alone, because a tool call's body colours the same way: a
+   shell command, a file a read brought back, what a create was handed to write. The token classes
+   only ever reach the page from Pygments, through the sanitiser on a message and through `calls.py`
+   on a call, so there is no `pre` these could match by accident. */
 .codehilite {
     background: none;
 }
 
 /* Comments, in the same faint ink as everything else the eye is meant to skip. */
-.text pre .c,
-.text pre .ch,
-.text pre .cm,
-.text pre .cp,
-.text pre .cpf,
-.text pre .c1,
-.text pre .cs {
+pre .c,
+pre .ch,
+pre .cm,
+pre .cp,
+pre .cpf,
+pre .c1,
+pre .cs {
     color: var(--ink-faint);
     font-style: italic;
 }
 
 /* Keywords and operators that are really keywords: the structure of the language. */
-.text pre .k,
-.text pre .kc,
-.text pre .kd,
-.text pre .kn,
-.text pre .kp,
-.text pre .kr,
-.text pre .kt,
-.text pre .ow {
+pre .k,
+pre .kc,
+pre .kd,
+pre .kn,
+pre .kp,
+pre .kr,
+pre .kt,
+pre .ow {
     color: var(--lapis);
     font-weight: 600;
 }
 
 /* Strings and the pieces of them, in the one hue added for this: nothing else on the page is
    green, which is exactly why a string reads as a string at a glance. */
-.text pre .s,
-.text pre .sa,
-.text pre .sb,
-.text pre .sc,
-.text pre .dl,
-.text pre .sd,
-.text pre .s2,
-.text pre .se,
-.text pre .sh,
-.text pre .si,
-.text pre .sx,
-.text pre .sr,
-.text pre .s1,
-.text pre .ss {
+pre .s,
+pre .sa,
+pre .sb,
+pre .sc,
+pre .dl,
+pre .sd,
+pre .s2,
+pre .se,
+pre .sh,
+pre .si,
+pre .sx,
+pre .sr,
+pre .s1,
+pre .ss {
     color: var(--moss);
 }
 
 /* Numbers, beside strings as the other kind of literal but distinct from them. */
-.text pre .m,
-.text pre .mb,
-.text pre .mf,
-.text pre .mh,
-.text pre .mi,
-.text pre .mo,
-.text pre .il {
+pre .m,
+pre .mb,
+pre .mf,
+pre .mh,
+pre .mi,
+pre .mo,
+pre .il {
     color: var(--sienna);
 }
 
 /* What a thing is called, where the name is doing work: a definition, a decorator, a builtin. */
-.text pre .nf,
-.text pre .fm,
-.text pre .nc,
-.text pre .nd,
-.text pre .ne {
+pre .nf,
+pre .fm,
+pre .nc,
+pre .nd,
+pre .ne {
     color: var(--claude);
 }
 
-.text pre .nb,
-.text pre .bp,
-.text pre .nt {
+pre .nb,
+pre .bp,
+pre .nt {
     color: var(--sienna);
 }
 
 /* Errors, in the one hue this console reserves for something being wrong. */
-.text pre .err {
+pre .err {
     color: var(--vermilion);
 }
 
 /* A diff inside a fence, which is what a coding agent shows most often after code itself. */
-.text pre .gd {
+pre .gd {
     color: var(--vermilion);
 }
 
-.text pre .gi {
+pre .gi {
     color: var(--moss);
 }
 
-.text pre .gh,
-.text pre .gu {
+pre .gh,
+pre .gu {
     color: var(--ink-soft);
     font-weight: 600;
 }
 
-.text pre .ge {
+pre .ge {
     font-style: italic;
 }
 
-.text pre .gs {
+pre .gs {
     font-weight: 600;
 }
 
@@ -1011,8 +1016,10 @@ pre > .draw[aria-busy] {
 
 /* --- Tool calls ------------------------------------------------------- */
 
-/* Folded by default: what a tool was handed and what it gave back is context a reader reaches
-   for, not prose they read through. The fold is a real `<details>`, which is what the dock's
+/* Folded by default for most tools: what a read brought back or a command said is context a reader
+   reaches for, not prose they read through. A call that wrote something - an edit, a create - is
+   drawn open, since the diff or the new file is what a reader watching a turn is watching for;
+   `starts_open` in `calls.py` decides. The fold is a real `<details>`, which is what the dock's
    fold-all works on and what keeps the whole thing usable with no script at all. */
 .tool {
     margin: 0.5rem 0;
@@ -1138,9 +1145,9 @@ pre > .draw[aria-busy] {
     /* What the call returned is not part of the band that shuts the panel, because a press here is
        usually the start of lifting a line out. The cursor is where the frame stops saying so. */
     cursor: auto;
-    /* On the same grid as a fenced block, because a read's gutter is the longest column of box
-       drawing this console ever draws and it is here rather than in a fence. The family is said
-       again rather than inherited from `.tool`: a browser's own sheet sets `pre` to `monospace`
+    /* On the same grid as a fenced block, because a command's output is where box drawing and
+       aligned columns turn up outside a fence, and a listing is a tree. The family is said again
+       rather than inherited from `.tool`: a browser's own sheet sets `pre` to `monospace`
        directly, and a rule on the element beats a value inherited from an ancestor. */
     font-family: var(--mono);
     font-size: var(--mono-size);
@@ -1151,6 +1158,69 @@ pre > .draw[aria-busy] {
     overflow-x: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+/* One argument to a row: its name in the gutter's ink, and its value beside it, or under it where
+   the value runs to lines. The rows replace the JSON a call used to be shown as, which put the
+   argument a reader came for behind a brace and a quoted key; see `arguments_element` in
+   `calls.py`. */
+.argument {
+    margin: 0.15rem 0;
+}
+
+.argument__name {
+    color: var(--ink-faint);
+}
+
+.argument pre {
+    margin-top: 0.15rem;
+}
+
+/* A block of lines with something the console drew in front of each: the anchor a read put there,
+   which is a diff's line numbers. The gutter is an attribute the stylesheet paints rather than
+   text, which is what makes copying the block copy the diff: the numbers are the console's and
+   are not in the change. A line is a block with its newline inside it, so it paints its whole row
+   and the text of the block still reads as lines; see `line_element` in `calls.py`.
+
+   A read's anchors are not drawn at all. They are the model's names for lines and mean nothing to
+   a person, so what is left to tell a file's lines from the tool's own - the header saying which
+   file and which lines - is tone. */
+.line {
+    display: block;
+}
+
+.line[data-gutter]::before {
+    content: attr(data-gutter);
+    color: var(--ink-faint);
+}
+
+.line[data-said] {
+    color: var(--ink-soft);
+}
+
+/* A diff's lines, in the two hues a fence's own diff already uses, with a wash behind each so a
+   changed line reads as a row rather than as coloured words. The hunk header is the console's own
+   line and takes the gutter's ink. */
+.line[data-mark="+"] {
+    color: var(--moss);
+    background: color-mix(in srgb, var(--moss) 12%, transparent);
+}
+
+.line[data-mark="-"] {
+    color: var(--vermilion);
+    background: color-mix(in srgb, var(--vermilion) 12%, transparent);
+}
+
+.line[data-mark="@"] {
+    color: var(--ink-faint);
+}
+
+/* An edit whose diff is empty, said rather than drawn as a box with nothing in it, the way a
+   command with no output is. */
+.tool__silent {
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    font-style: italic;
 }
 
 /* --- Commands the person ran ------------------------------------------- */

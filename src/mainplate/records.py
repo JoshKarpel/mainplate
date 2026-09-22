@@ -515,6 +515,23 @@ class Returned(Record):
     what all of them were.
     """
 
+    metadata: object = None
+    """
+    What the tool recorded beside its return for the page, which the model is never sent.
+
+    Pydantic AI's own slot, under its own name: a tool hands one back as `ToolReturn.metadata`, and
+    the loop carries it onto the `ToolReturnPart` it builds from this record, so both readings of a
+    call see the same value. `edit` is the one writer, and what it writes is the diff of what it
+    changed, which the reply the model gets does not carry: the reply shows the changed regions with
+    fresh anchors so the model can keep editing, and what a reader wants is what went away as well
+    as what arrived.
+
+    A fact about the call, settled when it returns and never rewritten, which is what lets it be
+    recorded rather than looked up: the file it was computed from has moved on by the time anybody
+    reads the page. Defaulted, so every call recorded before this existed reads as one that recorded
+    nothing beside its return, which is what all of them did.
+    """
+
 
 class Messages(Record):
     """
