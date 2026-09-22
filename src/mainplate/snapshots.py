@@ -22,10 +22,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 from collections.abc import AsyncIterator
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from secrets import token_hex
 from typing import Final
@@ -184,139 +186,46 @@ class Ran:
 
 @dataclass(frozen=True, slots=True)
 class Worktree:
-    """
-    A git worktree this console can snapshot and put back.
-
-    Frozen, and holding only paths: every method is an effect against the repository rather than
-    against anything held here, so two callers sharing one of these share no state.
-    """
+    """A session-owned checkout whose Git processes run inside its mount namespace."""
 
     root: Path
-
-    gitdir: Path | None = None
-    """
-    Where git keeps this tree, told to git rather than found by looking down from `root`.
-
-    A session's worktree is a *linked* one, so the `.git` at its root is a one-line pointer file
-    standing in the single directory that session's own `bash` may write. Both halves of what git
-    would discover from there are therefore the session's to replace: the file can become a
-    repository, or keep pointing somewhere the session made. Repository configuration names programs
-    git runs - `core.fsmonitor` fires on the index refresh inside `add` - so a parent that discovers
-    its way to a git directory runs whatever the tree last said, as the service user, outside the
-    sandbox, and with `add` still exiting 0 because git treats a failing fsmonitor as a reason to
-    scan normally.
-
-    Naming it is what closes that, and it closes the whole family rather than the settings anybody
-    has named so far: the poisoned config is never read, so which keys can run a program stops being
-    a list to keep up with. That is `sandbox.py`'s argument about commands, one layer in.
-
-    The value is free to know. A linked worktree's git directory is `<clone>/worktrees/<session>`,
-    so `Worktrees` derives it and reads nothing out of the tree to do so. `None` is the repository
-    itself, where `root` *is* the git directory and there is nothing in between to poison.
-    """
-
-    @property
-    def pointer(self) -> Path:
-        """
-        The file at this tree's root naming its git directory, which nothing may be allowed to
-        replace: git reads the configuration of whatever it points at, and that configuration may
-        name programs git runs.
-        """
-        return self.root / POINTER
-
-    @property
-    def common(self) -> Path | None:
-        """
-        The clone every linked worktree of this one shares, by construction rather than by asking.
-
-        `<clone>/worktrees/<session>` is where `Worktrees` puts a session's git directory, so the
-        clone is two components up and there is nothing to run to find that out. `None` is a tree
-        whose directory was never named, where the answer has to come from git.
-
-        Derived for the reason `gitdir` is named at all: asking a tree for its common directory is
-        asking git to discover its way in from a pointer file the session can write.
-        """
-        if self.gitdir is None:
-            return None
-        return self.gitdir.parent.parent
-
-    @property
-    def addressed(self) -> tuple[str, ...]:
-        """
-        Where git is told to work, or nothing at all where it is left to find out.
-
-        `--work-tree` is this tree's root and never the directory git is being run *in*, which is
-        the one way to get this wrong: a command run in a subdirectory still names the root here,
-        and its output stays relative to where it ran, exactly as an unpinned call's would. Naming
-        the subdirectory instead changes what `ls-files` prints.
-        """
-        if self.gitdir is None:
-            return ()
-        return ("--git-dir", str(self.gitdir), "--work-tree", str(self.root))
+    store: Path | None = None
+    store_ref: str | None = None
+    trusted: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock, compare=False)
 
     @property
     def environment(self) -> Mapping[str, str]:
-        """
-        What a git run against this tree finds in its environment, built rather than inherited.
-
-        Built, so the console's own environment does not cross into a program git may run on the
-        strength of something in a repository, and so a machine where nobody set `user.email` still
-        snapshots. Nothing here sets `HOME`, so git reads no global configuration either.
-
-        Read by `git` and by nothing else. It is a property so the reasoning has somewhere to live,
-        not an invitation to assemble a git call out of parts.
-        """
         return {**IDENTITY, "PATH": WHERE_GIT_IS}
 
-    @asynccontextmanager
-    async def staging(self) -> AsyncIterator[Path]:
-        """
-        A shadow index for the length of one operation, and never `.git/index`.
-
-        Not the real index, because the reader's staged changes are theirs: building a snapshot
-        through it would stage their whole working tree out from under them, and `git add` there
-        takes `.git/index.lock`, so it would fight whatever they were running at the time.
-
-        A fresh one *per operation* rather than one per worktree, because two of these can be in
-        flight at once. A single shared path is a file two concurrent captures would write over
-        each other, and the loser's `write-tree` would then describe a tree that never existed.
-
-        The directory is never assumed to be `.git`, because in a *linked* worktree it is not: `.git`
-        there is a file holding a pointer, and every session having a worktree of its own means
-        almost every worktree here is a linked one. Where `gitdir` says which it is, that is the
-        answer, and asking git would be asking it to read the pointer this console is refusing to
-        trust - so the shadow index lands in the clone rather than wherever the tree last pointed.
-        """
-        known = self.gitdir or Path(await self.demand("rev-parse", "--absolute-git-dir"))
-        index = known / f"mainplate-index-{token_hex(8)}"
-        try:
-            yield index
-        finally:
-            index.unlink(missing_ok=True)
-
     async def git(self, *arguments: str, index: Path | None = None, at: Path | None = None) -> Ran:
-        """
-        One git command against this tree, with everything that makes that safe already applied.
+        """Run Git against trusted storage directly, or against a checkout inside bubblewrap."""
+        environment: Mapping[str, str] | None = {
+            **self.environment,
+            **({"GIT_INDEX_FILE": str(index)} if index else {}),
+        }
+        if self.trusted:
+            command = ("git", *arguments)
+        else:
+            from mainplate.sandbox import Bind
+            from mainplate.sandbox import Sandbox
+            from mainplate.sandbox import Venue
+            from mainplate.sandbox import sandbox_command
 
-        **This is the whole of how git is run here**, and it is one method rather than a set of
-        pieces on purpose. `addressed` and `environment` are the two halves a caller would otherwise
-        assemble, and a second assembly is a second thing to keep in step: the first time it drifts,
-        what it drops is the git directory, and the failure is a program running rather than an
-        error. So a caller that needs something this does not do gets an argument here.
-
-        `at` is where git *runs*, defaulting to the tree's root. It is never what `--work-tree`
-        names, so a listing of a subdirectory comes back relative to that subdirectory.
-
-        `index` is a shadow index, which `staging` makes and every capture goes through.
-        """
+            sandbox = Sandbox(places=(Bind(path=self.root, writable=True, name="worktree"),))
+            command = (
+                sandbox_command(),
+                *sandbox.argv(at=str(at or self.root), venue=Venue.CONFINED, environment=environment),
+                "git",
+                *arguments,
+            )
+            environment = None
         process = await asyncio.create_subprocess_exec(
-            "git",
-            *self.addressed,
-            *arguments,
+            *command,
             cwd=at or self.root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**self.environment, **({"GIT_INDEX_FILE": str(index)} if index else {})},
+            env=environment,
         )
         out, err = await process.communicate()
         return Ran(code=process.returncode or 0, stdout=out, stderr=err)
@@ -328,46 +237,45 @@ class Worktree:
         return ran.out
 
     async def confirm(self) -> None:
-        """That this is a git worktree at all, asked once at startup rather than at the first turn."""
         ran = await self.git("rev-parse", "--is-inside-work-tree")
         if not ran.ok or ran.out != "true":
             raise NotAWorktree(f"{self.root} is not a git worktree: {ran.err or ran.out}")
 
     async def tip(self) -> str | None:
-        """The commit the snapshot chain currently points at, or nothing before the first one."""
         ran = await self.git("rev-parse", "--verify", "--quiet", f"{SNAPSHOT_REF}^{{commit}}")
         return ran.out if ran.ok and ran.out else None
 
     async def capture(self, why: str) -> str:
         """
-        The worktree as a tree object, recorded so it stays reachable, and its hash.
+        Capture a Git-ignore-aware tree without changing the checkout's index or history.
 
-        The tree is what a checkpoint holds, and the commit exists only to keep it alive: git
-        prunes an object nothing refers to, so a bare `write-tree` would be a hash that stops
-        resolving at the next `gc`. Chaining each commit onto the last is what keeps every earlier
-        snapshot reachable through one ref rather than needing a ref apiece.
-
-        An unchanged worktree writes nothing at all. The tree hash is the content, so a turn that
-        touched no file produces the hash the last one did, and the commit is skipped: the cost of
-        snapshotting tracks what actually changed rather than how often this is called.
-
-        **Call this only where the agent is quiescent**, which means at a model-request boundary
-        rather than after each tool call. A model may issue several calls in one response and they
-        may run at once, and while they do there is no coherent state to capture: `git add -A`
-        walks a tree somebody is still writing to, so what it records is a mixture that never
-        existed. Between one model request and the next, every tool of the previous batch has
-        returned by construction, so the quiescence costs nothing to arrange.
+        Git and every program its writable configuration names run inside the checkout's sandbox.
+        A bundle is then imported into the trusted repository, so the parent parses an artifact but
+        never invokes Git against model-writable metadata. The trusted ref keeps every imported tree
+        alive after this checkout is archived.
         """
-        async with self.staging() as index:
-            await self.demand("add", "-A", index=index)
-            tree = await self.demand("write-tree", index=index)
-        was = await self.tip()
-        if was is not None and await self.demand("rev-parse", f"{was}^{{tree}}") == tree:
-            return tree
-        parent = ("-p", was) if was is not None else ()
-        commit = await self.demand("commit-tree", tree, *parent, "-m", why)
-        await self.demand("update-ref", SNAPSHOT_REF, commit)
-        return tree
+        async with self.lock:
+            gitdir = self.root / ".git"
+            index = gitdir / f"mainplate-index-{token_hex(8)}"
+            bundle = gitdir / f"mainplate-snapshot-{token_hex(8)}.bundle"
+            try:
+                await self.demand("add", "-A", index=index)
+                tree = await self.demand("write-tree", index=index)
+                if not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+                    raise SnapshotFailed(f"git write-tree returned an invalid object id: {tree!r}")
+                was = await self.tip()
+                if was is None or await self.demand("rev-parse", f"{was}^{{tree}}") != tree:
+                    parent = ("-p", was) if was is not None else ()
+                    commit = await self.demand("commit-tree", tree, *parent, "-m", why)
+                    await self.demand("update-ref", SNAPSHOT_REF, commit)
+                if self.store is not None and self.store_ref is not None:
+                    await self.demand("bundle", "create", str(bundle), SNAPSHOT_REF)
+                    store = Worktree(root=self.store, trusted=True)
+                    await store.demand("fetch", str(bundle), f"{SNAPSHOT_REF}:{self.store_ref}")
+                return tree
+            finally:
+                index.unlink(missing_ok=True)
+                bundle.unlink(missing_ok=True)
 
     async def paths(self, tree: str) -> tuple[str, ...]:
         listed = await self.demand("ls-tree", "-r", "--name-only", tree)
@@ -376,20 +284,7 @@ class Worktree:
 
 @dataclass(frozen=True, slots=True)
 class Worktrees:
-    """
-    One repository, and a worktree of it per session.
-
-    A worktree each rather than one shared tree, and the reason is the one that has run through
-    every part of this: two writers in one directory make a snapshot unattributable. The person is
-    always one of those writers, so even a console answering a single session at a time has two;
-    with a tree apiece, what a session's snapshot holds is what that session and its reader did,
-    and nothing else.
-
-    They share the repository's object store, so a worktree costs a checkout rather than a clone,
-    and a tree captured in one is immediately readable from every other. That is what makes a fork
-    cheap: the branch point's tree is already an object, so planting the fork's worktree at it is a
-    checkout of something that exists rather than a copy of anything.
-    """
+    """One trusted repository cache and one complete checkout per session."""
 
     repo: Path
     root: Path
@@ -397,75 +292,36 @@ class Worktrees:
     def at(self, session: str) -> Path:
         return self.root / session
 
-    def gitdir(self, session: str) -> Path:
-        """
-        Where git keeps this session's worktree, by construction rather than by reading anything.
-
-        `git worktree add` names the directory after the last component of the path it is given, and
-        that component is the session id, which is unique. So this is derivable from the two things
-        already held here, and derivable is the whole point: it is the *trusted* half of a session's
-        git state, sitting inside a clone that the sandbox binds read-only, and working it out from
-        the tree instead would mean asking the one directory the session can write. `Worktree.gitdir`
-        is what that buys.
-        """
-        return self.repo / "worktrees" / self.at(session).name
+    def snapshot_ref(self, session: str) -> str:
+        return f"refs/mainplate/sessions/{session}"
 
     def worktree(self, session: str) -> Worktree:
-        """
-        The session's own worktree, as something to snapshot, whether or not it has been planted.
-
-        A value rather than a lookup, so a caller that only wants to *name* the worktree - a page
-        saying where a session works - needs no repository call and cannot fail.
-        """
-        return Worktree(root=self.at(session), gitdir=self.gitdir(session))
-
-    async def confirm(self) -> None:
-        """That the repository is one, once at startup rather than at the first session."""
-        await Worktree(root=self.repo).confirm()
-
-    async def planted(self) -> frozenset[Path]:
-        """Every worktree this repository currently has, by where it sits."""
-        listed = await Worktree(root=self.repo).demand("worktree", "list", "--porcelain")
-        return frozenset(
-            Path(line.removeprefix("worktree ")) for line in listed.splitlines() if line.startswith("worktree ")
+        return Worktree(
+            root=self.at(session),
+            store=self.repo,
+            store_ref=self.snapshot_ref(session),
         )
 
+    async def confirm(self) -> None:
+        ran = await Worktree(root=self.repo, trusted=True).git("rev-parse", "--is-bare-repository")
+        if not ran.ok or ran.out != "true":
+            raise NotAWorktree(f"{self.repo} is not a bare git repository: {ran.err or ran.out}")
+
+    async def planted(self) -> frozenset[Path]:
+        if not self.root.exists():
+            return frozenset()
+        return frozenset(path for path in self.root.iterdir() if (path / ".git").is_dir())
+
     async def default_branch(self) -> str | None:
-        """
-        What this repository calls its default branch, or nothing where its `HEAD` names no branch.
-
-        Read from the clone's own `HEAD`, which `git clone --bare` sets as a symbolic ref to whatever
-        the remote's default was. It is the *name* that is wanted rather than the commit: the commit
-        under `refs/heads/` is as old as the clone, and the name is what `resolve` turns into the
-        current one by preferring the fetched `refs/remotes/origin/` side.
-
-        `None` is a clone whose `HEAD` is detached, which `--bare` does not produce from an ordinary
-        remote. It is read as "there is no branch name to resolve" and the caller falls back to the
-        raw `HEAD`, which is parsing the two shapes a `HEAD` can have rather than a second mechanism.
-        """
-        named = await Worktree(root=self.repo).git("symbolic-ref", "--short", "--quiet", "HEAD")
+        repository = Worktree(root=self.repo, trusted=True)
+        named = await repository.git("symbolic-ref", "--short", "--quiet", "HEAD")
         return named.out or None if named.ok else None
 
     async def resolve(self, base: str) -> str:
-        """
-        The commit something a person typed names, as the hash it is.
-
-        `origin/<base>` first and the bare name second, and that ordering is what makes "start at
-        `main`" mean today's `main`. A bare clone keeps the branches it was made with under
-        `refs/heads/`, and those are as old as the clone; a fetch writes the current ones under
-        `refs/remotes/origin/`. So the same word names two commits here, and the fresher of them is
-        the one somebody typing a branch name means. A tag, a hash and anything with revision syntax
-        in it are not under `origin/` at all and fall through to the second try.
-
-        `^{commit}` so a tag object resolves to what it points at rather than to itself, since a
-        worktree is planted at a commit and an annotated tag is not one.
-
-        `--verify` and `--quiet`, so a name that resolves to nothing is a failed call naming the
-        name rather than git printing the string back and this planting a worktree at a ref that
-        does not exist.
-        """
-        repository = Worktree(root=self.repo)
-        found = await repository.git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}^{{commit}}")
+        repository = Worktree(root=self.repo, trusted=True)
+        found = await repository.git(
+            "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}^{{commit}}"
+        )
         if found.ok and found.out:
             return found.out
         return await repository.demand("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
@@ -474,70 +330,35 @@ class Worktrees:
         self, session: str, *, tree: str | None = None, base: str | None = None, branch: str | None = None
     ) -> Worktree:
         """
-        The session's worktree, checked out where it was asked for, made if it is not there already.
+        Clone an isolated checkout and place it at the requested commit before the session can write it.
 
-        Three ways to say where, and they are ranked rather than combined:
-
-        - `tree` is a **fork**, and it wins over everything. It is a *tree* and `git worktree add`
-          wants a commit, so one is made for it. That is not a wasted object: a commit for a tree is
-          three lines of text, the tree and its blobs already exist, and being a worktree's `HEAD` is
-          what keeps the whole thing reachable when `gc` runs.
-        - `base` is what a session was started at, resolved through `resolve` above.
-        - Neither is the repository's default branch, resolved through the *same* call, which is what
-          makes a session that said nothing start where the repository is *now*. Reading the clone's
-          own `HEAD` commit instead would be reading a value as old as the clone, so a fetch before
-          this would refresh `refs/remotes/origin/` and then plant at the stale commit beside it -
-          a round trip that changes nothing, which is worse than not making it.
-
-        Ranked and not merged because a fork's tree is the answer to a question a base cannot also
-        answer: a branch re-asks its turn against the files that turn saw, so a base beside it would
-        be two claims about one checkout. `Service.fork` never sends both, and this is what makes
-        that impossible to get wrong from here.
-
-        `branch` starts one at whatever that came to. Without it the worktree is on **no** branch,
-        and `--detach` is stated rather than left to git so that is a decision rather than a default -
-        though nothing reaches here without one for a session in a repository, since `Choice.branching`
-        fills it. This stays answerable either way because it is the layer below that decision: what
-        it is handed is what it does.
-
-        Naming a base cannot check that branch out instead, which is the question `branch` answers
-        and the reason the two are separate fields: git refuses a branch another worktree already
-        holds, so two sessions started at `main` would mean the second failing to plant at all.
-
-        What a branch buys is somewhere for a commit to go, since a detached `HEAD` has nowhere. It
-        has to be a name nothing is using, and `git worktree add -b` refusing one that exists is the
-        honest failure - two sessions on one branch would be two writers in one history, and the
-        whole reason each session gets a worktree of its own is that two writers make a record
-        unattributable.
-
-        Idempotent, because the alternative is worse than the check. A worktree already planted is
-        one a session has been working in, and re-planting would either fail the request or throw
-        that work away.
+        All Git commands here operate on the trusted cache or on a checkout that did not exist before
+        this call. Once planted, no parent process invokes Git against the checkout again.
         """
         here = self.at(session)
-        if here in await self.planted():
+        if (here / ".git").is_dir():
             return self.worktree(session)
         self.root.mkdir(parents=True, exist_ok=True)
-        repository = Worktree(root=self.repo)
+        repository = Worktree(root=self.repo, trusted=True)
         if tree is not None:
             commit = await repository.demand("commit-tree", tree, "-m", f"session {session}")
         elif (named := base if base is not None else await self.default_branch()) is not None:
             commit = await self.resolve(named)
         else:
             commit = await repository.demand("rev-parse", "HEAD")
-        placing = ("-b", branch) if branch is not None else ("--detach",)
-        await repository.demand("worktree", "add", *placing, str(here), commit)
+        planting_ref = f"refs/mainplate/plants/{session}"
+        await repository.demand("update-ref", planting_ref, commit)
+        try:
+            await repository.demand("clone", "--no-checkout", str(self.repo), str(here))
+            checkout = Worktree(root=here, trusted=True)
+            await checkout.demand("fetch", str(self.repo), planting_ref)
+            placing = ("-b", branch) if branch is not None else ("--detach",)
+            await checkout.demand("checkout", "--quiet", *placing, commit)
+        finally:
+            await repository.demand("update-ref", "-d", planting_ref)
         return self.worktree(session)
 
     async def uproot(self, session: str) -> None:
-        """
-        Take a session's worktree away, leaving everything it recorded behind.
-
-        Nothing calls this yet, and it is here because the pair is the thing worth getting right:
-        a worktree left behind after its session is gone is a directory nothing will ever look at
-        and `git worktree list` will keep naming. What it does *not* touch is the snapshots, which
-        live in the object store under a ref of their own and outlive any worktree.
-        """
         here = self.at(session)
-        if here in await self.planted():
-            await Worktree(root=self.repo).demand("worktree", "remove", "--force", str(here))
+        if here.exists():
+            await asyncio.to_thread(shutil.rmtree, here)

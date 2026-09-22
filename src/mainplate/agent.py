@@ -85,7 +85,6 @@ from mainplate.tools import Scratch
 from mainplate.tools import System
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
-from mainplate.tools import git_tools
 from mainplate.tools.files.tools import Root
 
 
@@ -782,31 +781,20 @@ def working_note(scratch: bool) -> str:
     reads its parent's prefix from cache instead of paying for the whole conversation again.
     """
     said = (
-        "You are working in a git worktree, which is called `worktree`. The file tools take paths "
-        "relative to it and reach nothing outside it. Changes you make there are snapshotted "
-        "automatically; you never need to commit, and you should not run git commands to record "
-        "your work."
+        "You are working in a Git checkout called `worktree`. The file tools take paths relative "
+        "to it and reach nothing outside it. Changes are snapshotted automatically, while the "
+        "checkout's branch, index, refs and reflogs are yours: ordinary Git commands work through "
+        "`bash`."
     )
     if not scratch:
         return said
-    # The names and the policy both, because both are this session's rather than the tool's. A
-    # `bash` description cannot carry either: one toolset is built per session and its tools'
-    # descriptions are not, so what varies between sessions has to be said here.
-    #
-    # Where a command *starts* is said for a different reason: the tool's own description says a
-    # `cd` does not survive to the next call, which on its own reads as an instruction to put one at
-    # the front of every command. `--chdir` has already done it.
     return (
         f"{said} You also have a scratch directory called `scratch`, outside the worktree and "
         f"outside every snapshot, which is where anything that is not the repository's belongs. "
         f'Reach it by passing `root: "scratch"` to `read`, `edit` or `create`; in a command it is '
         f"`${environment_named('scratch')}`, and the worktree is `${environment_named('worktree')}`. "
-        f"Commands you run start in the worktree, so a relative path means the same thing there as "
-        f"it does to the file tools and you never need to `cd` into it. They reach those two "
-        f"directories and a read-only system, and nothing else: no home directory, no other "
-        f"session's files, and no configuration of the console itself. Git can be read but not "
-        f"written there, so `status`, `diff`, `log` and `blame` answer while `add`, `commit` and "
-        f"`stash` fail."
+        f"Commands start in the worktree. They reach those two directories and a read-only system, "
+        f"and nothing else: no other session's files and no console configuration."
     )
 
 
@@ -986,8 +974,6 @@ def agent_for(
         tools.append(PluginTools(contributed, asking_through(plugins)))
     if reach.roots:
         tools.append(file_tools(Files(roots=reach.roots)))
-        if worktree is not None and any(isinstance(root, GitTracked) for root in reach.roots):
-            tools.append(git_tools(worktree))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(

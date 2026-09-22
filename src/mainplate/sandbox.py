@@ -259,12 +259,11 @@ class Sandbox:
     That is what keeps the network answer, the cleared environment and the pid namespace from being
     things the filesystem answer can change by accident.
 
-    Every path is absolute and every one is bound at *its own* path inside the namespace rather than
-    at a tidy `/worktree`. That is forced rather than chosen: a linked worktree's `.git` is a file
-    holding an *absolute* pointer into the clone, so a remapped worktree is one whose git is broken
-    unless every consumer also carries a `GIT_COMMON_DIR` that any subprocess is free to unset.
-    """
+    Every bound path keeps its absolute name inside the namespace. A session checkout is one
+    self-contained directory, including its writable `.git`, so binding the checkout binds all of
+    its Git state without exposing a shared repository.
 
+    """
     places: tuple[Bind, ...]
 
     @classmethod
@@ -276,41 +275,16 @@ class Sandbox:
         session_scratch: Path | None = None,
     ) -> Sandbox:
         """
-        A worktree, its clone read-only, and a scratch directory: what a `WORKTREE` session reaches.
+        A writable checkout and a scratch directory: what a `WORKTREE` session reaches.
 
-        `session_scratch` adds a second writable directory under the name a command finds the
-        session's own under, which is what a plugin getting the repository ready is given at `setup`.
-        Absent everywhere else, including for the session's own commands, whose `scratch` is already
-        that directory: naming one path twice would put two binds of it in one namespace.
-
-        The clone and not the per-worktree directory: the latter sits *inside* the former and its
-        `commondir` points back out at it for objects and refs, so binding the common one covers both
-        and binding the other covers neither. Taken from `Worktree.common` where the tree's directory
-        was named, which is every session's, and asked of git only for a tree that named none - so
-        the ordinary path runs no subprocess and reads nothing out of the tree to decide what to bind.
-
-        **The pointer goes back over the worktree read-only, and the order is what makes that work.**
-        `.git` in a linked worktree is a one-line file naming the git directory, and it sits in the
-        one place a session may write, so without this a command replaces it with a repository of its
-        own and every later git in that directory reads *that* repository's configuration - which
-        names programs git runs. Bound over itself after the tree, the file cannot be written,
-        removed, moved, or unmounted from in here, and reading it and everything around it still
-        works. See [what runs, and as whom](../../docs/design/security.md).
-
-        All three are **absolute as a precondition**, which is the same one `Clones` and `Worktrees`
-        take: `Settings.workspace_root` resolves once where a configured path enters the process, so
-        everything derived from it is already absolute and nothing here re-establishes it. A relative
-        path would be resolved against whatever directory bwrap happened to start in, which is not a
-        thing to guess at per call.
+        The checkout owns its `.git` directory, refs and index. Binding the whole directory
+        read-write is what lets ordinary Git work while the namespace keeps every program Git may
+        launch away from the parent. `session_scratch` is the setup-only grant for repository
+        plugins.
         """
-        common = worktree.common or Path(
-            await worktree.demand("rev-parse", "--path-format=absolute", "--git-common-dir")
-        )
         return cls(
             places=(
                 Bind(path=worktree.root, writable=True, name="worktree"),
-                Bind(path=worktree.pointer, writable=False),
-                Bind(path=common, writable=False),
                 Bind(path=scratch, writable=True, name=scratch_named),
                 *(() if session_scratch is None else (Bind(path=session_scratch, writable=True, name="scratch"),)),
             )
@@ -352,14 +326,10 @@ class Sandbox:
         repository's script setting `PATH` for every plugin would redirect what the repository's
         other plugins execute at every turn boundary.
 
-        A `WORKTREE` sandbox binds the worktree read-write, its clone **read-only**, and the scratch
-        read-write. The read-only clone is the load-bearing part: it leaves every read working -
-        `ls-files`, `status`, `diff`, `log`, `blame` - while `add`, `commit`, and `stash` fail loudly
-        on a read-only `index.lock`. What that buys is not tidiness: a git write from in here would
-        be a second history that no panel shows, no fork inherits and no rewind restores, which is
-        the second copy of state this whole console is built to refuse. Snapshots keep working
-        because they run in the parent, where the clone is writable, so the agent physically cannot
-        rewrite the history `refs/mainplate/snapshots` is chained onto.
+        A `WORKTREE` sandbox binds the complete checkout read-write, including its private Git
+        metadata. Git may therefore add, commit, merge, rebase and continue conflicts normally.
+        Any repository configuration or hook Git executes still runs inside this same namespace,
+        with the parent's environment cleared and only this session's directories writable.
 
         A `EVERYTHING` sandbox binds `/` read-write instead, which subsumes all of that and is the point
         of choosing it. Everything below the binds is identical either way, which is why there is one

@@ -46,23 +46,17 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
     """
     Every directory that is this session's, off the disk, with the worktree's last tree recorded first.
 
-    The worktree goes through git rather than `rmtree`, because git keeps its own directory for a
-    linked worktree inside the clone and its own list of them: a tree deleted behind its back is one
-    `git worktree list` names for ever and `Worktrees.plant` refuses to reuse. `uproot` is that call,
-    and it copes with a directory already gone. The tree is captured just before, under
-    `archived:tree`, so a fork from the end of this session plants at the files it actually ended
-    with; the snapshots themselves live in the clone's object store and outlive the worktree.
-
-    Then everything `Places.of` names that is still there, which is the scratch, the plugins' scratches
-    and, on a console whose clone has gone, the worktree itself.
+    The checkout's last tree is captured before the directory is removed, so a fork from the end
+    starts from the files the session actually ended with. Snapshot objects are imported into the
+    trusted repository cache before removal and remain available afterwards.
     """
     workspaces = places.workspaces
     if session.repository is not None and workspaces.clones.cloned(session.repository):
-        worktrees = workspaces.clones.worktrees(session.repository, workspaces.root)
-        if worktrees.at(session.id) in await worktrees.planted():
-            ending = await worktrees.worktree(session.id).capture(f"archived {session.id}")
+        checkout = workspaces.worktree(session.id, session.repository)
+        if checkout.root.exists():
+            ending = await checkout.capture(f"archived {session.id}")
             await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, records.Tree(tree=ending).recorded())
-            await worktrees.uproot(session.id)
+            await workspaces.clones.worktrees(session.repository, workspaces.root).uproot(session.id)
     for place in places.of(session.id, session.repository):
         if place.is_symlink():
             await asyncio.to_thread(place.unlink)
