@@ -672,6 +672,51 @@ pre > .copy {
     opacity: 1;
 }
 
+/* --- Drawings: seated by the script -------------------------------------- */
+
+/* A fence labelled `mermaid` or `svg` takes a second button to the left of its copy button, in the
+   copy button's own face. The copy button stays in its corner, so it sits where it does on every
+   other block on the page; what makes room is this one standing further in. Both widths are pinned
+   rather than measured, so neither button moves when its word changes: `copy` grows to `copied` and
+   `draw` swaps for `code`, and a button that shifted under the pointer on being pressed is one that
+   is missed on the second press. The copy button's width is `copied`'s, and only inside a block,
+   where the panel's own stands in a row that sizes it. */
+pre > .copy {
+    min-width: 3.3rem;
+    text-align: center;
+}
+
+pre > .draw {
+    right: calc(var(--space-3) + 3.3rem + 0.3rem);
+    min-width: 2.7rem;
+}
+
+pre > .draw[aria-busy] {
+    cursor: progress;
+}
+
+/* The picture stands where the code stood, scaled to the block and never wider than it. The code
+   is hidden with the attribute the script sets, and told so here because `.text pre code`'s own
+   `display: block` outranks the browser's `[hidden]` rule. */
+.text pre code[hidden] {
+    display: none;
+}
+
+.drawing {
+    display: block;
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+/* Why there is no picture, in the block's own face and wrapped, since what mermaid says about a
+   parse error is a sentence and not a line of code. */
+.drawing--failed {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    white-space: pre-wrap;
+}
+
 /* --- The line a shut panel stands for ----------------------------------- */
 
 /* Every panel folds, so every panel needs a line saying what is in it while it is shut: the front
@@ -1206,8 +1251,9 @@ pre > .copy {
     font-size: 0.68rem;
 }
 
-/* The status as a word, out at the edge where a reader scans down a turn. `ok` and `exit 2` rather
-   than a colour alone, because a status nobody can name is one a screen reader cannot read out. */
+/* The status as words, out at the edge where a reader scans down a turn. `exit 0` and `exit 2`
+   rather than a colour alone, because a status nobody can name is one a screen reader cannot read
+   out; one shape for every status, so the colour is the whole of what sets the non-zero ones apart. */
 .ran__status {
     margin-left: auto;
     font-size: 0.68rem;
@@ -3745,6 +3791,18 @@ main:has(> .forking) {
     font-size: 0.68rem;
     font-family: var(--mono);
     font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* Something still coming: a pass answering the session now, or one that will. The same face and
+   the same ink as `new`, since both are the console's bookkeeping about the row, and the regular
+   weight beside `new`'s bold because what has already arrived is the one to go and read. */
+.session .working {
+    flex: none;
+    color: var(--mark);
+    font-size: 0.68rem;
+    font-family: var(--mono);
     letter-spacing: 0.04em;
     text-transform: uppercase;
 }

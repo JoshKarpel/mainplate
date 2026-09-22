@@ -503,7 +503,10 @@ command doing its job as one that broke.
 model reaching for context, so what it returned is something a reader opens to check the work; a
 command is a line the person typed, and what it said is the whole of why they typed it. It is still
 a `<details>`, so it folds, the dock's fold controls reach it, and a reader who has read one can put
-it away; it simply does not have to be opened to be read.
+it away; it simply does not have to be opened to be read. The one command drawn folded is the one
+with no output: its line, its time and its status are all there is to read and all three are on the
+summary, so open it would spend a row on the sentence saying there is nothing under it. It is drawn
+open while it runs, like every command, so one that finishes with output is already open to be read.
 
 **A fold's frame shuts it, and not only its summary.** A summary is one row at the top of a box that
 may be several screens of output, so putting a long one away meant scrolling back up to the single
@@ -534,11 +537,15 @@ so the decision is recorded exactly as a press on the summary is.
 the frame stops and the output starts is a fact about the rendered layout that no markup assertion
 can see.
 
-**And a command that said nothing says so**, rather than drawing the empty pane that being open
-exposed. Plenty of them do, `git diff --quiet` being the gallery's own example, as is every command
-whose whole answer is its exit status, and a blank rectangle under one reads as output that failed
-to arrive. It is a stated absence for the same reason `no reference record` is. A command still
-*running* gets no body at all, since "said nothing" is a claim about a finished one.
+**And a command with no output says so**, rather than drawing the empty pane that being open
+exposed. Plenty of them have none, `git diff --quiet` being the gallery's own example, as is every
+command whose whole answer is its exit status, and a blank rectangle under one reads as output that
+failed to arrive. It is a stated absence for the same reason `no reference record` is. A command
+still *running* gets no body at all, since "no output" is a claim about a finished one. The status
+beside it is the number in every case, `exit 0` included: one shape down the column, with the colour
+alone picking out the statuses that are not zero, since what a status means is the program's to say
+and a word of the console's own for zero was a second vocabulary for the one value every program
+agrees on.
 
 **That is what makes the fold a decision in two directions, and the script keeps both.** A call the
 server renders shut can be opened and a command it renders open can be shut, so `mainplate.js` holds

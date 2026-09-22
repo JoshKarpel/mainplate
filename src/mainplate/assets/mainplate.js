@@ -254,6 +254,11 @@
     let copied = null; // the panel whose copy button is saying so
     let saying = null; // and the timer that stops it saying it
 
+    // The drawable blocks a reader asked to see as text rather than as the picture they are drawn
+    // as by default, by the name their copy button has. Not stored, for `following`'s reason: which
+    // way round a diagram is shown is a mode within a visit.
+    let asCode = new Set();
+
     let shelf = []; // text kept and not sent, as {name, text}
 
     // Which of the sending menu's answers the box is in the mode of, by its own word, or nothing for
@@ -478,8 +483,12 @@
     // Encoded rather than joined, so two blocks cannot be split differently and read the same: the
     // separator that would need is a character rendered text is not allowed to contain, and there
     // is no such character.
-    const signature = (panel) =>
-      JSON.stringify(Array.from(panel.querySelectorAll(":scope > .block"), (block) => block.textContent));
+    //
+    // Through `wordsOf`, so what this file seated in a block is not in the block's signature: the
+    // buttons are taken off before a swap and put back after the signature is read, so a repaint
+    // between swaps would otherwise find every panel changed by the word on its own button, and a
+    // draw button that says `code` once pressed would mark its panel as news for being pressed.
+    const signature = (panel) => JSON.stringify(Array.from(panel.querySelectorAll(":scope > .block"), wordsOf));
 
     // Worked out here rather than taken from the swap, because morphing reports nothing a listener
     // can hear: `htmx:before:morph:node` is an extension hook rather than a DOM event, and it fires
@@ -812,6 +821,214 @@
       });
     };
 
+    // --- Drawings ----------------------------------------------------------
+    //
+    // A fence labelled `mermaid` or `svg` is a picture written as text, drawn as the picture, with
+    // a button in its corner that puts the text back and takes it away again. What is drawn is an
+    // *image*: the text becomes a `data:` URL on an `<img>`, after mermaid has turned a diagram into
+    // SVG, or as written where it already is SVG. An image is the one way to put markup a model
+    // wrote on the page with nothing in it running: SVG loaded as an image executes no script,
+    // follows no link and fetches nothing, which is the browser's own rule rather than any
+    // sanitising done here. The cost, stated: text in a drawing cannot be selected or searched, and
+    // it is set in the browser's faces rather than the page's.
+    //
+    // The library is three and a half megabytes and is fetched the first time a diagram is on the
+    // page, so a page with none pays nothing for it. Where it is served is on `<html>`, put there
+    // by `pages.py`, because an asset's address is the server's to say.
+    //
+    // Which blocks are shown as text is a value here and reapplied after every swap, like the
+    // folds: the morph would otherwise put a diagram back in front of the code somebody had just
+    // asked for. A block is named the way its copy button is, by the panel and the position in it.
+
+    // The class the sanitiser lets through on a fence's `<code>`, and what each is drawn as; see
+    // `DRAWABLE` in `markup.py`, which is the one place a label is allowed onto the page.
+    const DRAWABLE = { "language-mermaid": "mermaid", "language-svg": "svg" };
+
+    // What each text drew, by kind, theme and text: `{ src }`, `{ failed }`, or `{ pending: true }`
+    // while the answer is on its way. Keyed by text rather than by block, so a transcript morphed
+    // twenty times while a turn streams draws each diagram once.
+    const pictures = new Map();
+    let library = null; // the diagram library, once asked for
+    let numbered = 0; // mermaid wants an id per render that nothing on the page already has
+
+    const inTheDark = () => {
+      const chosen = document.documentElement.dataset.theme;
+      if (chosen === "dark" || chosen === "light") return chosen === "dark";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    };
+
+    const mermaidLoaded = () => {
+      if (library) return library;
+      library = new Promise((resolve, reject) => {
+        const tag = document.createElement("script");
+        tag.src = document.documentElement.dataset.mermaid;
+        tag.onload = () => resolve(window.mermaid);
+        tag.onerror = () => {
+          // Let go, so a press after the network comes back asks again rather than failing for ever.
+          library = null;
+          reject(new Error("the diagram library could not be fetched"));
+        };
+        document.head.appendChild(tag);
+      });
+      return library;
+    };
+
+    // A diagram at its own size. The library declares its width as a percentage of whatever holds
+    // it, which inside an image is the whole block, so a three-node flowchart would be drawn as
+    // wide as the code was. Its `viewBox` is the size it drew at, and that is what the image is
+    // told it is; `max-width: 100%` on the image still shrinks a wide one to the block.
+    const sized = (svg) => {
+      const document_ = new DOMParser().parseFromString(svg, "image/svg+xml");
+      const root = document_.documentElement;
+      const box = (root.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
+      if (box.length === 4 && box[2] > 0 && box[3] > 0) {
+        root.setAttribute("width", String(box[2]));
+        root.setAttribute("height", String(box[3]));
+        root.removeAttribute("style");
+      }
+      return new XMLSerializer().serializeToString(root);
+    };
+
+    // The SVG one block's text is: rendered where it is a diagram, and taken as written where it
+    // is SVG already. `strict` has the library escape any markup a label carries, and rendering
+    // errors come back as a rejection rather than as a picture of a bomb put on the page.
+    const rendered = async (kind, text, dark) => {
+      if (kind === "svg") return text;
+      const mermaid = await mermaidLoaded();
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        suppressErrorRendering: true,
+        theme: dark ? "dark" : "default",
+      });
+      const { svg } = await mermaid.render(`drawing-${(numbered += 1)}`, text);
+      return sized(svg);
+    };
+
+    const asImage = (svg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+    // Asked for once per text and repainted when it arrives. Nothing here holds an element across
+    // the await: the whole transcript may be morphed between the ask and the answer, and what the
+    // answer is for is a text, which is still on the page or is not.
+    const picture = (kind, text) => {
+      const dark = inTheDark();
+      const key = `${kind}:${dark}:${text}`;
+      const known = pictures.get(key);
+      if (known) return known;
+      const pending = { pending: true };
+      pictures.set(key, pending);
+      rendered(kind, text, dark)
+        .then((svg) => pictures.set(key, { src: asImage(svg) }))
+        .catch((error) => pictures.set(key, { failed: String(error && error.message ? error.message : error) }))
+        .then(() => paintDrawings());
+      return pending;
+    };
+
+    const drawableKind = (code) => {
+      const found = Object.keys(DRAWABLE).find((named) => code.classList.contains(named));
+      return found ? DRAWABLE[found] : null;
+    };
+
+    // One element in the block's place, replaced only when it has to be another kind: an `<img>` for
+    // a picture and a `<span>` for why there is none, both before the code so the button's position
+    // in its corner is the same whichever is showing.
+    const seatedDrawing = (pre, code, tag) => {
+      let element = pre.querySelector(":scope > .drawing");
+      if (element && element.tagName !== tag) {
+        element.remove();
+        element = null;
+      }
+      if (!element) {
+        element = document.createElement(tag);
+        element.className = "drawing";
+        pre.insertBefore(element, code);
+      }
+      return element;
+    };
+
+    const paintDrawings = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll(".panel").forEach((panel) => {
+        panel.querySelectorAll("pre").forEach((pre, at) => {
+          const code = pre.querySelector(":scope > code");
+          const kind = code && drawableKind(code);
+          if (!kind) return;
+          const name = `${panel.id}:${at}`;
+          let button = pre.querySelector(":scope > [data-draw]");
+          if (!button) {
+            button = document.createElement("button");
+            button.type = "button";
+            button.className = "copy draw";
+            button.dataset.draw = name;
+            pre.insertBefore(button, code);
+          }
+          const drawing = pre.querySelector(":scope > .drawing");
+          if (asCode.has(name)) {
+            code.hidden = false;
+            if (drawing) drawing.remove();
+            button.textContent = "draw";
+            button.title = kind === "svg" ? "Draw this SVG" : "Draw this diagram";
+            button.removeAttribute("aria-busy");
+            return;
+          }
+          const text = code.textContent;
+          const state = picture(kind, text);
+          if (state.pending) {
+            // The code stays while the picture is on its way, and the button says it is.
+            button.setAttribute("aria-busy", "true");
+            button.title = "Drawing";
+            return;
+          }
+          button.removeAttribute("aria-busy");
+          button.textContent = "code";
+          button.title = "Show the text this was drawn from";
+          code.hidden = true;
+          if (state.failed) {
+            const said = seatedDrawing(pre, code, "SPAN");
+            said.classList.add("drawing--failed");
+            said.textContent = `Not drawn: ${state.failed}`;
+            return;
+          }
+          const image = seatedDrawing(pre, code, "IMG");
+          image.alt = kind === "svg" ? "An SVG drawing" : "A diagram";
+          if (image.getAttribute("src") !== state.src) {
+            // An SVG the browser cannot parse loads as nothing, which is the one failure the render
+            // above cannot see: it is reported here, by the image itself, and painted like the rest.
+            image.onerror = () => {
+              pictures.set(`${kind}:${inTheDark()}:${text}`, { failed: "the browser could not draw this as an image" });
+              paintDrawings();
+            };
+            image.src = state.src;
+          }
+        });
+      });
+    };
+
+    // Taken off before a swap, for the copy buttons' reason, and the code shown again so the morph
+    // meets the markup the server sent rather than one this file hid.
+    const stripDrawings = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-draw], .drawing").forEach((element) => element.remove());
+      box.querySelectorAll("pre > code[hidden]").forEach((code) => {
+        code.hidden = false;
+      });
+    };
+
+    const wireDraw = () => {
+      document.addEventListener("click", (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const button = pressed.closest("[data-draw]");
+        if (!button) return;
+        const name = button.dataset.draw;
+        if (asCode.has(name)) asCode.delete(name);
+        else asCode.add(name);
+        paintDrawings();
+      });
+    };
+
     // --- Search ----------------------------------------------------------
 
     const clearHits = () => {
@@ -1006,6 +1223,7 @@
       paintOverride();
       paintCopies();
       paintCopied();
+      paintDrawings();
       paintCache();
       paintDue();
       paintNumbers();
@@ -1373,7 +1591,7 @@
     // system prompt - and the exemption is about the content rather than about either shape. A press
     // that *ended* a drag is out for the same reason: a browser reports one as a click on whatever
     // the pointer came to rest over, so a selection still standing is a press that was not aimed at
-    // the frame. `said nothing` is this console's own sentence rather than the command's, so it stays
+    // the frame. `no output` is this console's own sentence rather than the command's, so it stays
     // part of the frame.
     //
     // Shutting only. Opening is the summary's, because a shut panel is a summary and little else, and
@@ -1405,6 +1623,8 @@
           applyTheme(theme);
           hold(THEME_KEY, theme);
           paint(theme);
+          // A diagram is drawn in the theme's own palette, so the ones showing are drawn again.
+          paintDrawings();
         });
       });
     };
@@ -1643,7 +1863,7 @@
     // summary alone and one button would give two different answers a click apart.
     const wordsOf = (node) => {
       const taken = node.cloneNode(true);
-      taken.querySelectorAll("[data-copy]").forEach((button) => button.remove());
+      taken.querySelectorAll("[data-copy], [data-draw], .drawing").forEach((seated) => seated.remove());
       return taken.textContent;
     };
 
@@ -1847,6 +2067,7 @@
         if (event.target !== transcript()) return;
         clearHits();
         stripCopies();
+        stripDrawings();
       });
       document.addEventListener("htmx:after:swap", () => repaint());
     };
@@ -1946,6 +2167,7 @@
     wireDue();
     wireSend();
     wireCopy();
+    wireDraw();
     wireFresh();
     wireSwaps();
     wireShapes();

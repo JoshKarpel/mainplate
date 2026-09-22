@@ -5,7 +5,9 @@ from collections.abc import Callable
 import pytest
 from markupsafe import Markup
 
+from mainplate.markup import DRAWABLE
 from mainplate.markup import HIGHLIGHT
+from mainplate.markup import LANGUAGE_PREFIX
 from mainplate.markup import TOKENS
 from mainplate.markup import as_document
 from mainplate.markup import as_message
@@ -50,6 +52,35 @@ class TestWhatReachesThePage:
     def test_a_language_nobody_has_heard_of_renders_rather_than_raising(self) -> None:
         """The fence's label is written by a model, so an unknown one must not be an exception."""
         assert "gibberish here" in as_message("```notalanguage\ngibberish here\n```")
+
+
+class TestWhichFencesCanBeDrawn:
+    """
+    The fence's label reaches the page on exactly two labels, as the class the script draws from.
+
+    The label is written by a model, so which labels reach the page is a closed set for the reason
+    the token allowlist is: a class per label would be a class of the model's choosing.
+    """
+
+    @pytest.mark.parametrize("label", ["mermaid", "svg"])
+    def test_a_drawable_label_is_kept_on_the_code_it_wraps(self, label: str) -> None:
+        rendered = as_message(f"```{label}\nsomething to draw\n```")
+        assert f'<code class="{LANGUAGE_PREFIX}{label}">' in rendered
+        assert f"{LANGUAGE_PREFIX}{label}" in DRAWABLE
+
+    @pytest.mark.parametrize("label", ["python", "text", "notalanguage", "language-svg"])
+    def test_every_other_label_is_stripped_on_the_way(self, label: str) -> None:
+        """
+        The formatter puts every label on the page and the sanitiser takes all but two off, so the
+        set is closed by the same allowlist that closes the tokens rather than by a second check.
+        """
+        rendered = as_message(f"```{label}\nx = 1\n```")
+        assert LANGUAGE_PREFIX not in rendered
+        assert "x" in rendered
+
+    def test_a_label_that_is_markup_cannot_break_out_of_the_attribute(self) -> None:
+        rendered = as_message('```svg"><script>alert(1)</script>\nx\n```')
+        assert "<script>" not in rendered
 
 
 class TestWhereANewlineIsALineBreak:

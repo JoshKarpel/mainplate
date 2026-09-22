@@ -80,6 +80,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -124,6 +125,7 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.agent import drawing_note
 from mainplate.agent import reaching
 from mainplate.durability import TOOK
 from mainplate.durability import Allowance
@@ -1920,15 +1922,47 @@ def blocks_in(
     for part in response.parts:
         match part:
             case TextPart(content=said) if said.strip():
-                yield Prose(text=said)
+                thought, rest = unthought(said)
+                if thought:
+                    yield Reasoning(text=thought)
+                if rest.strip():
+                    yield Prose(text=rest)
             case ThinkingPart(content=thought) if thought.strip():
-                yield Reasoning(text=thought)
+                inner, rest = unthought(thought)
+                yield Reasoning(text=thought if inner is None else f"{inner}\n\n{rest}".strip())
             case ToolCallPart(tool_name=tool, tool_call_id=call):
                 yield ToolUse(
                     tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call), took=took.get(call)
                 )
             case _:
                 continue
+
+
+# A reasoning summary as some OpenAI-compatible gateways hand one back in a text part: the tag pair
+# a model is trained to think inside, with the summary on lines of its own between them. Anchored at
+# the front, because a `<think>` a model *mentions* mid-sentence is prose about the tag and not one.
+THOUGHT: Final = re.compile(r"\A\s*<think>(?P<thought>.*?)</think>(?P<rest>.*)\Z", re.DOTALL)
+
+
+def unthought(content: str) -> tuple[str | None, str]:
+    """
+    The reasoning a part opens with inside `<think>` tags, and whatever follows the closing tag.
+
+    Nothing and the content untouched where it opens with no tag, which is every part from a
+    provider that puts reasoning in a part of its own. Where it does open with one, the reasoning is
+    trimmed of the newlines the tags stood on: a message's newlines are line breaks on the page, so
+    left in they draw a blank line above and below one bold title, which is what a page full of
+    summaries looked like before this. The tags themselves are gone rather than escaped, since they
+    are the wire's punctuation and not a word the model said.
+
+    Read here, at the one rule about what a part is worth reading as, and never written back: the
+    checkpoint holds the part as it arrived, and a reading that changed its mind about the tags is
+    a reading, not a migration.
+    """
+    found = THOUGHT.match(content)
+    if found is None:
+        return None, content
+    return found.group("thought").strip(), found.group("rest").strip()
 
 
 def interjected(message: ModelRequest) -> Iterator[Block]:
@@ -3215,9 +3249,10 @@ def conversing(
         # every snapshot inside a turn is taken of it. A session with no repository has none, and
         # gets an agent with no file tools rather than tools that refuse every call.
         worktree = working_in(workspaces, run.workflow, chosen)
-        # Only where there is a worktree to sit beside: a session with no repository has nothing
-        # the scratch would be scratch *for*, and gets no tool that could reach it either.
-        scratch = None if workspaces is None or worktree is None else workspaces.scratch_at(run.workflow)
+        # Every session's, worktree or none: a session with no repository still runs things, and
+        # the scratch is where what they made is kept. Whether the isolation reaches it is
+        # `reaching`'s to say, and it says nothing of it on the whole-machine arm.
+        scratch = None if workspaces is None else workspaces.scratch_at(run.workflow)
         # The endpoint is asked for here and the agent is built per turn below, which is the same
         # check split in two. Without one there is no endpoint to answer on at all, and finding that
         # out before the first `awaiting` is what makes it a failure the console can explain rather
@@ -3362,6 +3397,9 @@ def conversing(
                 instructions,
                 *live.instructions(),
                 reaching(chosen.isolation, worktree, scratch, bwrap).note,
+                # What the page draws from a reply, which is the console's to say and the same for
+                # every session, so it is last and constant: nothing under it moves between sessions.
+                drawing_note(),
             )
 
             async def composing(blocks: Sequence[str] = said_under) -> object:

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from functools import lru_cache
 from typing import Final
 
@@ -21,6 +22,7 @@ import nh3
 from markdown import Markdown
 from markupsafe import Markup
 from markupsafe import escape
+from pygments.formatters import HtmlFormatter
 from pygments.token import STANDARD_TYPES
 
 # The wrapper `codehilite` puts around a highlighted block, which is the one class here that is not
@@ -33,6 +35,14 @@ HIGHLIGHT: Final = "codehilite"
 # stripped and that run of code would render unhighlighted with nothing saying why.
 TOKENS: Final[frozenset[str]] = frozenset({name for name in STANDARD_TYPES.values() if name} | {HIGHLIGHT})
 
+# The fence labels the script can draw a picture from, as the class each puts on its `<code>`. Two
+# and closed, for the reason the token set is closed: the label is written by a model, and a class
+# per label would be a class of the model's choosing on the page. `language-` is `codehilite`'s own
+# prefix, kept so the class reads as what it is. Everything else a fence is labelled with reaches
+# the formatter the same way and is stripped by the sanitiser, which is the test that pins this.
+LANGUAGE_PREFIX: Final = "language-"
+DRAWABLE: Final[frozenset[str]] = frozenset(f"{LANGUAGE_PREFIX}{label}" for label in ("mermaid", "svg"))
+
 # Only web URLs are links. Command and tool output is untrusted text, so every non-URL run is escaped
 # before it becomes markup and the URL is the only part given an `href`.
 URL: Final = re.compile(r"""https?://[^\s<>()\[\]{}"']+""")
@@ -41,8 +51,30 @@ TRAILING_URL_PUNCTUATION: Final = ".,;:!?"
 # Which classes survive sanitising, per tag. `allowed_classes` rather than allowing the `class`
 # attribute itself, and the difference is the whole point: this text is shaped by a model, so
 # `class` left open would let a reply paint itself as any part of this console's own chrome. A
-# closed set of Pygments token names cannot.
-ALLOWED_CLASSES: Final[dict[str, set[str]]] = {tag: set(TOKENS) for tag in ("div", "pre", "code", "span")}
+# closed set of Pygments token names cannot, and neither can the two labels the script draws from,
+# which are allowed on the one element the formatter puts them on.
+ALLOWED_CLASSES: Final[dict[str, set[str]]] = {
+    tag: set(TOKENS) | (set(DRAWABLE) if tag == "code" else set()) for tag in ("div", "pre", "code", "span")
+}
+
+
+class Labelled(HtmlFormatter[str]):
+    """
+    Pygments' HTML formatter, keeping the fence's label on the `<code>` it wraps.
+
+    `codehilite` hands a formatter *class* the label as `lang_str` and hands the stock `html`
+    formatter nothing, so which formatter is named decides whether the page can tell a fence
+    labelled `mermaid` from one labelled `text`. The stock formatter keeps the option with every
+    other it was not asked for and reads it nowhere, which is why this is a subclass rather than a
+    configuration: the only thing it changes is the open tag `_wrap_code` yields.
+    """
+
+    def _wrap_code(self, inner: Iterator[tuple[int, str]]) -> Iterator[tuple[int, str]]:
+        label = str(self.options.get("lang_str", ""))
+        yield 0, f'<code class="{escape(label)}">' if label else "<code>"
+        yield from inner
+        yield 0, "</code>"
+
 
 # What every conversion here does, whatever the text came from.
 EXTENSIONS: Final = [
@@ -66,6 +98,9 @@ EXTENSION_CONFIGS: Final = {
         # A language Pygments does not know renders as a plain fence rather than raising, which
         # matters because the fence's label is written by a model.
         "noclasses": False,
+        # The class rather than the name, which is the difference between the label reaching the
+        # page and being dropped on the way; see `Labelled`.
+        "pygments_formatter": Labelled,
     }
 }
 

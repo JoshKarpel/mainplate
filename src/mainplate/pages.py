@@ -123,14 +123,15 @@ from mainplate.reference import Reference
 from mainplate.reference import describe
 from mainplate.reference import output_cap_of
 from mainplate.sandbox import Filesystem
-from mainplate.service import Claimed
 from mainplate.service import Conversation
-from mainplate.service import Delayed
-from mainplate.service import Idle
-from mainplate.service import Queued
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
+from mainplate.sessions import Attention
+from mainplate.sessions import Claimed
+from mainplate.sessions import Delayed
 from mainplate.sessions import Footprint
+from mainplate.sessions import Idle
+from mainplate.sessions import Queued
 from mainplate.sessions import Session
 from mainplate.snapshots import LONGEST_REF
 from mainplate.tending import AGAIN
@@ -679,7 +680,14 @@ def document(
         [
             DOCTYPE,
             html(
-                attrs={"lang": "en", ZONE_FIELD: None if reader is None else reader.zone.key},
+                attrs={
+                    "lang": "en",
+                    ZONE_FIELD: None if reader is None else reader.zone.key,
+                    # Where the diagram library is, for the script to fetch the first time a
+                    # drawing is asked for and never on load: the address is the server's to say,
+                    # and the three and a half megabytes are a page that draws nothing's to skip.
+                    "data-mermaid": links.to_asset("mermaid.min.js"),
+                },
                 children=[
                     head(
                         children=[
@@ -894,6 +902,11 @@ def session_row(
                         if session.unseen and session.archived is None
                         else ()
                     ),
+                    # Whether something is still coming, which is the other reason to open a
+                    # row: `new` says the session has answered since anybody looked, and this says
+                    # a pass is answering it or is going to. Never on an archived row, for the
+                    # reason `new` is not.
+                    *(working_mark(session.attention) if session.archived is None else ()),
                     when_element(
                         session.latest,
                         cls="when",
@@ -974,6 +987,29 @@ def session_row(
             ),
         ],
     )
+
+
+def working_mark(attention: Attention | None) -> tuple[Element, ...]:
+    """
+    The word a row says while the worker has something to do about its session, or nothing.
+
+    One word for three arms, since what a reader scanning the list wants to know is whether to
+    expect more, and the title says which: a pass answering now, a delivery the next pass will
+    take, or one held back after a pass fell over. `Idle` and unread alike draw nothing, because a
+    settled session is the ordinary row and the word is for the ones that are not.
+    """
+    match attention:
+        case Claimed():
+            title = "A pass is answering this session now"
+        case Queued():
+            title = "Queued, and the next pass will take it"
+        case Delayed():
+            title = "Held back after a failed pass, and will be tried again"
+        case Idle() | None:
+            return ()
+        case _ as unreachable:
+            assert_never(unreachable)
+    return (span(cls="working", attrs={"title": title}, children="working"),)
 
 
 def tokens(count: int) -> str:
@@ -1719,7 +1755,7 @@ NO_FILES: Final = "no files"
 WHOLE_MACHINE: Final = "this whole machine"
 
 WITHOUT_A_REPOSITORY: Final[tuple[tuple[str, Filesystem, str], ...]] = (
-    (NO_FILES, Filesystem.NOTHING, "a conversation with nothing to edit"),
+    (NO_FILES, Filesystem.NOTHING, "a scratch directory of its own, and nothing else on this machine"),
     (WHOLE_MACHINE, Filesystem.EVERYTHING, "every file this console can reach, including its own"),
 )
 
@@ -2587,8 +2623,10 @@ def status_element(status: int) -> Element:
 
     The **number**, not "failed", because an exit status is a program's own vocabulary and flattening
     it loses what it said: `git diff --quiet` exits 1 to mean *there are changes*, and `grep` exits 1
-    to mean *no match*, neither of which is a failure. `ok` is written out for zero because that is
-    the one value every program agrees on, and the rest are shown as they came.
+    to mean *no match*, neither of which is a failure. Zero is shown as the number too, in the same
+    words as the rest, so a reader scanning a turn reads one column of statuses and the colour alone
+    is what picks out the ones that are not zero; a word of its own for zero was a second vocabulary
+    for the value the colour already sets apart.
 
     `UNFINISHED` is the console admitting it never learned, which is a third thing rather than a bad
     exit: the process that would have read the status was stopped first.
@@ -2599,11 +2637,10 @@ def status_element(status: int) -> Element:
             attrs={"data-status": "unfinished", "title": "This never reported a status"},
             children="unfinished",
         )
-    ended = "ok" if status == 0 else f"exit {status}"
     return span(
         cls="ran__status",
         attrs={"data-status": "ok" if status == 0 else "other", "title": f"This exited with status {status}"},
-        children=ended,
+        children=f"exit {status}",
     )
 
 
@@ -2635,16 +2672,22 @@ def command_block(ran: Command) -> Element:
     No `data-markdown`, for the same reason `tool_block` carries none: what is on the page is already
     the source, so an attribute repeating it would be the second copy that one is not.
 
-    **A command that said nothing says so, rather than drawing an empty box.** Plenty of them do -
-    `git diff --quiet` is the fixture's own example, and every command whose whole answer is its exit
-    status - and a blank pane under one reads as output that failed to arrive. It is a stated absence
-    for the same reason `no reference record` is: a reader's next question is what happened, and an
-    empty rectangle makes them ask it.
+    **A command with no output says so, rather than drawing an empty box.** Plenty of them have none
+    - `git diff --quiet` is the fixture's own example, and every command whose whole answer is its
+    exit status - and a blank pane under one reads as output that failed to arrive. It is a stated
+    absence for the same reason `no reference record` is: a reader's next question is what happened,
+    and an empty rectangle makes them ask it.
+
+    **And it is drawn folded**, where a command with output is drawn open: its line, its time and
+    its status are the whole of what there is to read, and all three are on the summary, so an open
+    fold would spend a row on the sentence saying there is nothing under it. A command still running
+    is drawn open, as every command is until it finishes, so one that finishes with output does not
+    have to be opened to be read.
     """
     said = None if ran.result is None else ran.result.output
     return details(
         cls="ran",
-        attrs={"id": f"ran-{ran.entry}", **opens(True)},
+        attrs={"id": f"ran-{ran.entry}", **opens(said is None or bool(said))},
         children=[
             summary(
                 children=[
@@ -2671,7 +2714,7 @@ def command_block(ran: Command) -> Element:
                         cls="ran__body",
                         children=pre(children=code(children=linked_text(said)))
                         if said
-                        else span(cls="ran__silent", children="said nothing"),
+                        else span(cls="ran__silent", children="no output"),
                     ),
                 )
             ),

@@ -204,7 +204,18 @@ devices - the phone that read the answer has read it for the laptop too - and be
 by reader the day there are readers to key it by. The word and not a dot, for the archived word's
 reason: a dot alone reads as a styling accident. In the console's own mark hue, because it is about
 the console's bookkeeping and not about who spoke. Never on an archived row, since nothing more is
-said in one, and never on the row being read, because serving that page is what marks it. A console
+said in one, and never on the row being read, because serving that page is what marks it.
+
+**A row says `working` while the worker has something to do about its session**, which is the other
+reason to open one: `new` says something arrived, and this says something is still coming. It is
+[what the worker is doing](durability.md) read for every session in one statement rather than one
+per row, since the list is redrawn whenever any session moves, and it is the reason the list's token
+carries the claim and the queue beside the index's three numbers: the row says which, so the list
+has to be drawn again when the answer changes. One word for three arms, with the title saying which
+of a pass answering now, a delivery the next pass will take, or one held back after a pass fell
+over; `Idle` draws nothing, because a settled session is the ordinary row. In the same face and hue
+as `new` and the regular weight beside its bold, since what has already arrived is the one to go
+and read. Never on an archived row, for `new`'s reason. A console
 upgraded onto the column has it filled to where every session stood, since `NULL` reads as never
 looked at and lighting every session at once would tell the reader nothing.
 
@@ -597,6 +608,29 @@ nothing saying why. `guess_lang` is off: a wrong guess colours text by a grammar
 in, which reads worse than no colour. The palette is the console's own hues in `mainplate.css`, not
 an imported Pygments theme with its own opinion about light and dark.
 
+**Two fences are also pictures.** A fence labelled `mermaid` or `svg` keeps its label on the page, as
+a class on the `<code>` alone that the sanitiser lets through (`DRAWABLE` in `markup.py`, the only
+two labels that reach the page: `language-python` is put on by the same formatter and stripped like
+any other class), and the script draws it as the picture: an image where the code would be, SVG as
+it was written or what the mermaid library rendered from the diagram in the reader's theme, with a
+button to the left of `copy` that puts the text back and takes it away again. The copy button stays
+in its corner, where it is on every other block, and the other one is what makes room. **An image,
+and never inline
+markup**, because the text is a model's: SVG loaded through `<img>` runs no script, follows no link
+and fetches nothing, which is the browser's own rule rather than a sanitiser's, and it holds for the
+library's output as much as for the hand-written kind, so the library's `strict` level is a second
+guard rather than the one this rests on. The cost, stated: nothing in a drawing can be selected or
+found by the search, and it is set in the browser's faces rather than the page's. Which blocks are
+shown as text is a value the script holds and reapplies after every swap, like the folds, since a
+morph would otherwise put a diagram back in front of the code somebody had just asked for. The
+library is three and a half megabytes and is fetched the first time a diagram is on the page, so a
+page with none pays nothing for it; where it comes from is [what is
+vendored](assets.md#what-is-vendored). The model is told so: `drawing_note` in
+`agent.py` is composed into every session's instructions beside the note about what its tools reach,
+the console's own sentence rather than a line in the operator's standing instructions, so an
+operator who rewrites those keeps it, and a model that has a flow or a figure to show knows the page
+will draw one.
+
 The two converters, and why a message's newlines are treated differently from a document's, are in
 [what a session is told](../plugins/guidance.md#the-system-prompt-is-drawn-as-a-panel).
 
@@ -610,6 +644,15 @@ palette runs on one axis and every kind takes its side from it: cool is what the
 reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue decided by
 that rather than chosen for it. A part kind `parted` has no rendering for is passed over rather than
 refused, because the provider and Pydantic AI are both free to add one.
+
+**A text part that opens inside `<think>` tags is read as reasoning**, which is how some
+OpenAI-compatible gateways hand a reasoning summary back: not as a thinking part but as text, the
+tags a model is trained to think inside, with one bold title on a line of its own between them.
+Drawn as it arrived that was an assistant panel saying `<think>`, with a blank line above and below
+the title where the tags' own newlines became breaks. `unthought` takes the tags and their newlines
+off and gives the title to a reasoning panel, and anything after the closing tag stays prose. It is
+a reading and never a rewrite: the checkpoint holds the part as the wire sent it, and the page is
+what changed its mind.
 
 **The axis is who wrote it and not who was told**, which a command is the case that settles: it is
 the one kind on the person's side that no model ever saw, and what says so is the `title` on its

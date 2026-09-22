@@ -31,8 +31,8 @@ from mainplate.conversation import messages_key
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.running import Spawned
-from mainplate.service import Delayed
 from mainplate.service import Service
+from mainplate.sessions import Delayed
 from mainplate.settings import Settings
 from mainplate.tending import SETTLE_FIELD
 from mainplate.tending import SETTLED

@@ -4,8 +4,8 @@ description: The gallery, the seeder, the screenshot driver and the replay bench
 
 # The scripts
 
-Four of them, and all four exist so that a change can be looked at or measured without a provider
-ever being asked anything.
+Five of them. Four exist so that a change can be looked at or measured without a provider ever
+being asked anything, and the fifth is how anything somebody else wrote gets into `assets/`.
 
 **A real turn costs real money, so do not spend one to see something a fixture already shows.** That
 is the right tool for a rendering, a stylesheet, a control, or anything downstream of a checkpoint,
@@ -18,6 +18,15 @@ no server, no database, no provider and no `config.yaml`, because a page is a pu
 already-answered questions: this answers them with fixtures and the assets are copied beside the
 output, so a static server renders what the console renders.
 
+**`FIXTURES` is the one table of sessions, and `seed.py` plants every row of it.** A `Fixture` is a
+session's row, what it is on, and the checkpoint under it, and everything in the table is settled:
+nothing in a fixture's checkpoint is waiting for a pass, because the demo has no worker behind it
+and a session drawn as being answered by nothing reads as broken. The states a worker produces on the
+way to settled - a message waiting, a turn part way through, a pass that fell over, a handoff whose
+document is unread, a command still running - are built by `pages()` as variations on a fixture's
+checkpoint and are not fixtures. Something new for the demo to show goes into a fixture's checkpoint;
+something new for a still to show that a worker would be in the middle of goes into `pages()`.
+
 `just shots` drives a real Chromium over that output and screenshots every page wide and phone.
 Every shot also prints whether the document scrolls sideways, which is how the `:target` rule that
 widened a panel past its container was found. It fails nothing, deliberately: it is a diagnostic for
@@ -27,6 +36,12 @@ added here is shot without being listed anywhere else.
 
 `tests/test_browser.py` renders this same gallery, through `pythonpath = ["."]`, rather than through
 a second set of fixtures that resembles it.
+
+**The documentation site renders it too, at build time, and checks nothing in.** `docs/hooks.py`
+calls `pages()` with a relative asset prefix, adds every page and every asset under `gallery/`, and
+writes the index page from `CAPTIONS`, one sentence per page. A page added to `pages()` needs a
+caption there, and a test holds the two sets equal. Rendering takes about a second, which is why
+the pages are derived on every build rather than committed and guarded.
 
 **Every response fixture carries a timestamp.** `ModelResponse.timestamp` defaults to the moment it
 was constructed, so a fixture without one is the moment the render ran, and two `just gallery` runs
@@ -41,9 +56,11 @@ the browser tests point their browsers at the same zone, or the script asks for 
 
 ## `seed.py`
 
-Plants the gallery's checkpoints into the demo database (`just seed`), so the console can be
+Plants the gallery's `FIXTURES` into the demo database (`just seed`), so the console can be
 *driven* rather than looked at: the sidebar reordering between branches, a fork actually being made,
-the rail projecting onto a transcript that came out of SQLite. Idempotent and never destructive.
+the rail projecting onto a transcript that came out of SQLite. Idempotent and never destructive. It
+keeps no list of its own: which sessions exist and what each holds is the gallery's table, so the
+demo and the stills cannot drift apart.
 
 **It is the one writer that is not `Service`, so an invariant the service enforces does not hold
 here unless it is repeated.** It supplies checkpoint keys directly, which is what lets it plant a
@@ -51,15 +68,18 @@ finished conversation nobody paid for, and is also what makes it the one place a
 record can be written: it once seeded every fixture naming a repository while recording that it
 reached no files, because settling lives in `Service.start` and nothing here goes through it.
 
-So a rule about what a recorded `choice` may hold is a rule this file has to apply too. It calls
-`Choice.settled()` rather than restating what a repository decides, which is what keeps that list in
-one place: a field added to what a repository settles is settled here without an edit, and is the
-whole reason `settled` is a method on `Choice` rather than a line in each of its three callers.
+So a rule about what a recorded `choice` may hold is a rule the fixtures have to apply too.
+`Fixture.of` in `gallery.py` calls `Choice.settled()` and `branching()` rather than restating what a
+repository decides, which is what keeps that list in one place: a field added to what a repository
+settles is settled there without an edit, and is the whole reason `settled` is a method on `Choice`
+rather than a line in each of its callers. Both scripts read the settled choice, so the rail in a
+still and the rail in the demo say the same thing.
 
-**Rebuild the demo database after any change to what a record holds** (`rm mainplate-demo.db*` then
-`just seed`), or it keeps serving the old shape. That is the whole checkpoint and not only the
-choice: the fixtures in `gallery.py` write every kind directly, so a shape change lands here as a
-database full of values nothing can parse.
+**Rebuild the demo database after any change to a fixture or to what a record holds** (`just
+reseed`, which removes the demo database and seeds it again), or it keeps serving the old shape and
+`just seed` says `skipped` for every row. That is the whole checkpoint and not only the choice: the
+fixtures in `gallery.py` write every kind directly, so a shape change lands here as a database full
+of values nothing can parse.
 
 ## `replay.py`
 
@@ -87,6 +107,24 @@ It repeats what `tests/conftest.py` sets up - a stand-in endpoint, a fixture rep
 with its settings step answered - rather than importing it, so the benchmark does not depend on the
 suite's fixtures and the suite does not have to keep this running. The cost is that a change to how
 a session is made ready reaches both.
+
+## `vendor.py`
+
+Fetches every row of `vendored.toml` beside it and writes the copy into `src/mainplate/assets/`
+(`just vendor`): a pinned URL, the digest of the bytes, and for a file published inside a release
+archive the `member` path in the zip. **Every row is checked before any is written**, so a bump with
+one wrong digest writes nothing rather than half, and a row with no digest has nowhere to land. That
+is the one rule here, applied to every script and face alike; `tests/test_vendored.py` holds the
+copies on disk against the same table with no network, and refuses a `.js` or `.woff2` no row names.
+
+Bumping one is editing the version in its URL, running the recipe, and recording the digest it
+refuses on once the file has been looked at, with the cooldown the resolver applies to a package: a
+week for a minor and a month for a major. Only zip archives are read, because that is what has been
+needed; a tarball is a second reader, added deliberately.
+
+The pre-commit hooks and `.gitattributes` both step around the vendored files, and that is this
+script's doing rather than theirs: a newline a hook appends, or a line ending git normalises on the
+way into the index, is a digest the test then refuses on every other machine.
 
 ## `shoot.py`
 

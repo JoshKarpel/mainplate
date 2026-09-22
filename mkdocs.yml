@@ -73,6 +73,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Gallery: gallery.md
   - Philosophy: philosophy.md
   - Design:
       - design/index.md

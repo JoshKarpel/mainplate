@@ -31,16 +31,17 @@ from mainplate.conversation import parse_failed
 from mainplate.pages import elapsed
 from mainplate.pages import waiting_for
 from mainplate.service import Attended
-from mainplate.service import Claimed
 from mainplate.service import Conversation
-from mainplate.service import Delayed
-from mainplate.service import Idle
-from mainplate.service import Queued
 from mainplate.service import Service
 from mainplate.service import attention_of
 from mainplate.service import token_of
 from mainplate.service import waiting_out
+from mainplate.sessions import Claimed
+from mainplate.sessions import Delayed
+from mainplate.sessions import Idle
+from mainplate.sessions import Queued
 from mainplate.sessions import Session
+from mainplate.sessions import enrol
 
 NOW = 1_000_000.0
 """An arbitrary moment for the pure reading, in the store's own unit. Not zero, so a field left
@@ -60,33 +61,27 @@ class TestReadingWhatTheWorkerIsDoing:
         And it settles the answer whatever the queue says, because the row beside a live claim is the
         delivery that pass is answering for.
         """
-        attended = Attended(recorded=9, claimed_until=NOW + 120, due_at=NOW + 600, asked_at=NOW)
-
-        assert attention_of(attended) == Claimed()
+        assert attention_of(claimed_until=NOW + 120, due_at=NOW + 600, asked_at=NOW) == Claimed()
 
     def test_a_claim_whose_lease_has_run_out_is_not_one(self) -> None:
         """
         The claim is released by setting it to now, so `claimed_until` in the past is the ordinary state
         of a session nothing holds rather than an exceptional one.
         """
-        attended = Attended(recorded=9, claimed_until=NOW - 1, due_at=NOW - 1, asked_at=NOW)
-
-        assert attention_of(attended) == Queued()
+        assert attention_of(claimed_until=NOW - 1, due_at=NOW - 1, asked_at=NOW) == Queued()
 
     def test_a_delivery_already_due_is_queued(self) -> None:
-        assert attention_of(Attended(recorded=2, claimed_until=None, due_at=NOW, asked_at=NOW)) == Queued()
+        assert attention_of(claimed_until=None, due_at=NOW, asked_at=NOW) == Queued()
 
     def test_a_delivery_held_back_says_how_long_for(self) -> None:
         """
         Which is what the worker leaving a failed pass's delivery unanswered produces, and the one arm
         with a figure on it.
         """
-        attended = Attended(recorded=2, claimed_until=None, due_at=NOW + 504, asked_at=NOW)
-
-        assert attention_of(attended) == Delayed(until=timedelta(seconds=504))
+        assert attention_of(claimed_until=None, due_at=NOW + 504, asked_at=NOW) == Delayed(until=timedelta(seconds=504))
 
     def test_no_row_at_all_is_a_session_nothing_is_coming_for(self) -> None:
-        assert attention_of(Attended(recorded=2, claimed_until=None, due_at=None, asked_at=NOW)) == Idle()
+        assert attention_of(claimed_until=None, due_at=None, asked_at=NOW) == Idle()
 
 
 class TestReadingItOutOfTheStore:
@@ -141,6 +136,37 @@ class TestReadingItOutOfTheStore:
         finally:
             await service.checkpointer.release(holder)
 
+    async def test_the_list_says_what_the_worker_is_doing_about_every_session(self, service: Service) -> None:
+        """
+        One reading for the whole list rather than one per row, and every row gets an answer: the
+        one under a pass, the one waiting for its first, and the one nothing is coming for.
+        """
+        answering = await started(service, "being answered")
+        waiting = await started(service, "waiting its turn")
+        settled = Session(id="ab" * 16, created_at=WHEN, title="nothing queued, ever")
+        await enrol(service.database, settled)
+        holder = await claimed(service.checkpointer, answering.id)
+        try:
+            listed = {session.id: session.attention for session in await service.listed()}
+        finally:
+            await service.checkpointer.release(holder)
+        assert listed == {answering.id: Claimed(), waiting.id: Queued(), settled.id: Idle()}
+
+    async def test_the_list_s_token_moves_when_a_pass_takes_a_session_and_when_it_lets_go(
+        self, service: Service
+    ) -> None:
+        """The row says which, so the list has to be drawn again when the answer changes."""
+        session = await started(service, "hello")
+        before = await service.listing_token()
+        holder = await claimed(service.checkpointer, session.id)
+        try:
+            held = await service.listing_token()
+        finally:
+            await service.checkpointer.release(holder)
+        after = await service.listing_token()
+        assert before != held, "taking the session moves it"
+        assert held != after, "and so does letting go"
+
     async def test_a_session_nothing_has_ever_queued_is_idle(self, service: Service) -> None:
         """
         A workflow id with no rows anywhere, which is what a session looks like before anything is
@@ -186,7 +212,7 @@ class TestTheTokenAPageWatchesOn:
         later = Attended(recorded=4, claimed_until=NOW - 30, due_at=NOW + 600, asked_at=NOW + 90)
 
         assert token_of(earlier) == token_of(later)
-        assert attention_of(earlier) != attention_of(later), (
+        assert earlier.attention != later.attention, (
             "the control: the two readings really are different moments, and what the worker is doing "
             "does move between them"
         )

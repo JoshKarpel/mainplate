@@ -273,12 +273,12 @@ class TestHowACommandIsDrawn:
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
 
-        assert "said nothing" in drawn.text
+        assert "no output" in drawn.text
         assert "<pre>" not in drawn.text
 
     async def test_a_command_still_running_has_no_body_at_all(self, app: ASGIApp, service: Service) -> None:
         """
-        Nothing to say either way yet: `said nothing` is a claim about a finished command, and a
+        Nothing to say either way yet: `no output` is a claim about a finished command, and a
         console that made it about a running one would be reporting an absence it cannot know about.
         """
         session = await started(service, "have a look", DEFAULT_CHOICE)
@@ -288,7 +288,7 @@ class TestHowACommandIsDrawn:
             drawn = await caller.get(f"/sessions/{session.id}")
 
         assert "just test" in drawn.text
-        assert "said nothing" not in drawn.text
+        assert "no output" not in drawn.text
         assert 'class="ran__body"' not in drawn.text
 
 
