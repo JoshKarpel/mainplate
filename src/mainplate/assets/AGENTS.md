@@ -44,6 +44,18 @@ drawing draws as a dashed line. At size 14 a run joins at 23 and breaks at 24, s
   restates the font family deliberately: a browser's own sheet sets `pre` to `monospace`, and a rule
   on the element beats a value inherited from an ancestor.
 
+## The gutter in front of a line is `data-gutter`, painted by `::before`
+
+A diff's line numbers are an attribute the stylesheet draws, not text, so that copying the block
+copies the diff; `mainplate.js` reads `textContent` and never sees them. A read's anchors are not
+drawn at all, and a line the tool wrote itself is `data-said`, which is the only thing that sets it
+apart from the file's lines. **Do not move the gutter into the text, and do not draw the anchors**;
+do not put a newline *between* `.line` spans either: each carries its own as its last character,
+which is what lets a line be `display: block` and paint its whole row while the block's text still
+reads as lines. `TestWhatAnOpenCallShows` and the read-copies-the-file browser test are what fail
+when any of that goes. The Pygments token colours are on any `pre` rather than `.text pre`, because
+a call's body is coloured by the same tokens.
+
 `TestTheGridMonospaceIsDrawnOn` draws a run into a canvas and reads the pixels back, because the
 failure is a hairline no screenshot shows.
 

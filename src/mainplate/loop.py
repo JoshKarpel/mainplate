@@ -159,6 +159,7 @@ class Tools:
             tool_call_id=call.tool_call_id,
             tool_kind=call.tool_kind,
             outcome=recorded.outcome,
+            metadata=recorded.metadata,
         )
 
 

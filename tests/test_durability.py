@@ -23,6 +23,7 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ToolReturn
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.toolsets import FunctionToolset
@@ -636,6 +637,82 @@ class TestRecordingAToolCall:
         assert scope.halted is True, "the turn stops, because one of them asked"
         assert parse_returned(recorded["turn:0:tool:call-stop-1"]).ended is True
         assert parse_returned(recorded["turn:0:tool:call-note-0"]).ended is False, "and its neighbour did not"
+
+
+def annotating() -> FunctionToolset[None]:
+    """A toolset whose tools hand back a `ToolReturn`, one the loop takes and one it refuses."""
+    toolset = FunctionToolset[None]()
+
+    async def change(what: str) -> ToolReturn:
+        """Change something, and say what changed beside the reply."""
+        return ToolReturn(return_value=f"changed {what}", metadata={"diff": f"-{what}\n+{what.upper()}"})
+
+    async def promise(what: str) -> ToolReturn:
+        """Hand back a `content` the loop would have to send the model separately."""
+        return ToolReturn(return_value=f"promised {what}", content="and also this")
+
+    toolset.add_function(change)
+    toolset.add_function(promise)
+    return toolset
+
+
+class TestWhatAToolRecordsBesideItsReturn:
+    """
+    A tool that hands back Pydantic AI's `ToolReturn` is split by the loop: the return the model is
+    sent, and the metadata it is not, which the page reads. Both are on the call's record and on the
+    part built from it, so the two readings of a call carry it alike.
+    """
+
+    async def test_the_model_is_sent_the_return_and_the_page_is_handed_the_metadata(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        scripted = Scripted(script=(calls(("change", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        agent = Agent(
+            model=scripted.model(), instructions=INSTRUCTIONS, settings=ModelSettings(), toolsets=(annotating(),)
+        )
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope:
+                messages = await agent.run("go", (), scope)
+
+        held = parse_returned((await checkpointer.load(WORKFLOW))["turn:0:tool:call-change-0"])
+        assert (held.returned, held.metadata) == ("changed alpha", {"diff": "-alpha\n+ALPHA"})
+        (result,) = results_in(messages)
+        assert (result.content, result.metadata) == ("changed alpha", {"diff": "-alpha\n+ALPHA"})
+        assert result.model_response_str() == "changed alpha", "the metadata is not in what the model reads"
+
+    async def test_both_readings_of_it_carry_the_metadata(self, checkpointer: MemoryCheckpointer) -> None:
+        scripted = Scripted(script=(calls(("change", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        agent = Agent(
+            model=scripted.model(), instructions=INSTRUCTIONS, settings=ModelSettings(), toolsets=(annotating(),)
+        )
+        async with a_pass(checkpointer) as run:
+            with stepping(run, "turn:0") as scope:
+                messages = await agent.run("go", (), scope)
+
+        held = parse_returned((await checkpointer.load(WORKFLOW))["turn:0:tool:call-change-0"])
+        assert returned_step(held) == returns_in(messages)["call-change-0"]
+        assert returned_step(held).metadata == {"diff": "-alpha\n+ALPHA"}
+
+    async def test_a_return_promising_the_model_more_is_refused_rather_than_dropped(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        `content` on a `ToolReturn` is a second part the model would be sent, which this loop does
+        not build. Lowering it whole would send the model an object with a `return_value` in it, and
+        taking the two fields the loop knows would silently keep a promise nobody made.
+        """
+        scripted = Scripted(script=(calls(("promise", {"what": "alpha"})), ModelResponse(parts=[TextPart("done")])))
+        agent = Agent(
+            model=scripted.model(), instructions=INSTRUCTIONS, settings=ModelSettings(), toolsets=(annotating(),)
+        )
+
+        async def running() -> None:
+            async with a_pass(checkpointer) as run:
+                with stepping(run, "turn:0") as scope:
+                    await agent.run("go", (), scope)
+
+        with pytest.raises(TypeError, match="return_value and metadata"):
+            await running()
 
 
 @dataclass(slots=True)

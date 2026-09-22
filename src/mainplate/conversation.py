@@ -1382,6 +1382,14 @@ class Returned:
     outcome: Outcome
     content: str
 
+    metadata: object = None
+    """
+    What the tool recorded beside its return for the page and the model was never sent.
+
+    Read out of the same two places `content` is, the call's record and the turn's messages, so the
+    two readings of a call carry it alike; see `records.Returned.metadata` for what writes it.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class ToolUse:
@@ -1882,7 +1890,9 @@ def returns_in(messages: Sequence[ModelMessage]) -> dict[str, Returned]:
             continue
         for part in message.parts:
             if isinstance(part, ToolReturnPart):
-                found[part.tool_call_id] = Returned(outcome=part.outcome, content=part.model_response_str())
+                found[part.tool_call_id] = Returned(
+                    outcome=part.outcome, content=part.model_response_str(), metadata=part.metadata
+                )
             elif isinstance(part, RetryPromptPart) and part.tool_call_id is not None:
                 found[part.tool_call_id] = Returned(outcome="failed", content=part.model_response())
     return found
@@ -2067,16 +2077,16 @@ def returned_step(held: records.Returned) -> Returned:
 
     A failure is wrapped in the `{"error": ...}` object the settled reading wraps a failed
     `ToolReturnPart` in, for the same reason: the two readings of one call have to agree to the
-    character. A `ToolReturn` carrying metadata would be unwrapped by the settled reading and not by
-    this one, which is a difference to fix in the tool rather than here if one is ever written.
+    character. What a tool recorded beside its return is on the record already unwrapped, because
+    the loop splits a `ToolReturn` before anything is written, so it is carried across as it is.
     """
     if held.returned is None:
         said = ""
     else:
         said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
     if held.outcome == "failed":
-        return Returned(outcome="failed", content=to_json({"error": said}).decode())
-    return Returned(outcome="success", content=said)
+        return Returned(outcome="failed", content=to_json({"error": said}).decode(), metadata=held.metadata)
+    return Returned(outcome="success", content=said, metadata=held.metadata)
 
 
 def recorded_command(said: str) -> dict[str, object]:

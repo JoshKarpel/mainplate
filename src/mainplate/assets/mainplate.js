@@ -461,9 +461,9 @@
       const box = transcript();
       if (!box) return;
       // Only a fold the reader has actually acted on is forced, and it is forced *either* way. The
-      // server renders a call shut and a command open, so one set of ids to reopen would put back
-      // every command a reader had put away; what has to survive a swap is the decision, whichever
-      // way it went. A fold nobody has touched is left where the server put it.
+      // server renders a read shut and an edit or a command open, so one set of ids to reopen would
+      // put back every command a reader had put away; what has to survive a swap is the decision,
+      // whichever way it went. A fold nobody has touched is left where the server put it.
       box.querySelectorAll(FOLDS).forEach((fold) => {
         const decided = folds.get(fold.id);
         if (decided !== undefined) fold.open = decided;
@@ -1554,11 +1554,12 @@
     // reading a set of ids back off the page could not tell a decision from a default.
     //
     // **Every toggle is taken as the reader's, and that is only true because the server never
-    // changes its mind.** Where a fold starts is decided per kind and never per render - a call is
-    // shut whether or not it has come back, a command is open - so a morph delivering a result adds
-    // no `open` and removes none the reader did not set, and the only toggles left are presses. A
-    // server that drew a call open while it was out broke exactly this: the morph's own toggle was
-    // recorded as a decision, and every call a reader watched arrive stayed open for good.
+    // changes its mind.** Where a fold starts is decided per kind and never per render - a read is
+    // shut and an edit is open whether or not either has come back, a command is open - so a morph
+    // delivering a result adds no `open` and removes none the reader did not set, and the only
+    // toggles left are presses. A server that drew a call open while it was out and shut once it
+    // returned broke exactly this: the morph's own toggle was recorded as a decision, and every
+    // call a reader watched arrive stayed open for good.
     //
     // The dock's third button is the way back from any decision, and it is why the *server* still
     // says where each fold started: see `data-opens` and `opens` in `pages.py`.
@@ -1878,7 +1879,10 @@
     // A tool call is the block that is not simply its own text either: its parts are a name, what it
     // was handed and what it gave back, and run together they are one unreadable line. So the pairs
     // are read off the list the server already draws them as, which keeps the labels in one place -
-    // "called with" and "returned" are written in `pages.py` and nowhere here.
+    // "called with", "returned" and "diff" are written in `calls.py` and nowhere here. A diff's
+    // line numbers are an attribute the stylesheet paints rather than text, so they are not in
+    // what comes out here, which is the point: copying a diff copies the diff. A read's anchors are
+    // not on the page at all.
     //
     // A command is the same problem in a smaller shape: the line, the status and the output run
     // together read as one word followed by a wall. Its line is what somebody copying almost always

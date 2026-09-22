@@ -48,17 +48,20 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from difflib import unified_diff
 from functools import cache
 from pathlib import Path
 from typing import Final
 from typing import assert_never
 
 from pydantic_ai import ModelRetry
+from pydantic_ai.messages import ToolReturn
 from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.roots import RootName
 from mainplate.snapshots import POINTER
 from mainplate.snapshots import Worktree
+from mainplate.tools.files.anchors import CONTEXT
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import EditRefused
 from mainplate.tools.files.anchors import Moved
@@ -81,6 +84,10 @@ MAX_BYTES: Final = 2 * 1024 * 1024
 # way `MAX_LINES` is: `depth` is the knob, and this is what stops a large `depth` on a large
 # repository from spending a context window before the model has asked its first real question.
 MAX_ROWS: Final = 400
+
+# Under what name an edit's diff rides beside its reply, in the metadata the loop records and the
+# page reads. Named here because the page reads it by this name and nothing else does.
+DIFF: Final = "diff"
 
 
 class ListingFailed(RuntimeError):
@@ -433,7 +440,7 @@ class Files:
             case _ as unreachable:
                 assert_never(unreachable)
 
-    async def edit(self, path: str, operations: Sequence[Operation], root: str = "") -> str:
+    async def edit(self, path: str, operations: Sequence[Operation], root: str = "") -> Edited:
         located = self.resolved(path, root)
         # The read and the write are one critical section, not two. Holding this around the write
         # alone would leave each caller writing out a whole file it read *before* the other one's
@@ -445,7 +452,8 @@ class Files:
             # `newline=""` again, so the endings `Text` just put back are written as they are rather
             # than translated a second time on the way out.
             await asyncio.to_thread(found.write_text, text.rejoined(done.lines), encoding="utf-8", newline="")
-        return reported(self.naming(path, located), done)
+        named = self.naming(path, located)
+        return Edited(said=reported(named, done), diff=diffed(named, text.lines, done.lines))
 
     async def create(self, path: str, content: str, root: str = "") -> str:
         located = self.resolved(path, root)
@@ -519,6 +527,34 @@ def reading(path: str, total: int, start: int, stop: int) -> str:
 
 def remapping(moved: Moved) -> str:
     return f"  {moved.was} is now {moved.now}   {moved.line.strip()[:60]}"
+
+
+@dataclass(frozen=True, slots=True)
+class Edited:
+    """
+    What one edit hands back: the reply the model reads, and the diff of the change for the page.
+
+    Two values rather than one string, because they are for two readers who want different things.
+    The model wants the changed regions with their fresh anchors, so it can keep editing without a
+    re-read; a person wants to see what went away as well as what arrived, and the reply cannot
+    carry that without spending the model's tokens on lines it is never going to address. So the
+    diff rides beside the reply as `ToolReturn.metadata`, which the loop records and the model is
+    never sent.
+    """
+
+    said: str
+    diff: str
+
+
+def diffed(path: str, before: Sequence[str], after: Sequence[str]) -> str:
+    """
+    The change as a unified diff, in the ordinary shape with `CONTEXT` lines either side of a hunk.
+
+    Computed here rather than at render time because this is the only moment both versions of the
+    file are in hand: by the time a page is drawn the file has moved on, and the reply the model got
+    holds the lines that arrived and not the ones that went.
+    """
+    return "\n".join(unified_diff(before, after, fromfile=path, tofile=path, n=CONTEXT, lineterm=""))
 
 
 def reported(path: str, done: Written) -> str:
@@ -651,7 +687,7 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         """
         return await guarded(files.read(path, offset, limit, root))
 
-    async def edit(path: str, operations: list[Operation], root: str = "") -> str:
+    async def edit(path: str, operations: list[Operation], root: str = "") -> ToolReturn:
         r"""
         Change a file by naming lines with their anchors, never by retyping them.
 
@@ -703,7 +739,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
                 Left out, it is the first one, which is what a bare name has always meant.
 
         """
-        return await guarded(files.edit(path, operations, root))
+        edited = await guarded(files.edit(path, operations, root))
+        return ToolReturn(return_value=edited.said, metadata={DIFF: edited.diff})
 
     async def create(path: str, content: str, root: str = "") -> str:
         """

@@ -29,7 +29,7 @@ This console's is the rest:
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `Stepping.request` |
 | `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `Stepping.request` |
 | `turn:{n}:deferred:{i}` | The i-th time this turn was told to come back later, and the moment the provider named | The conversation body |
-| `turn:{n}:tool:{id}` | What one tool call returned, or why it failed, and how long it ran | `Stepping.call` |
+| `turn:{n}:tool:{id}` | What one tool call returned, or why it failed, how long it ran, and what the tool recorded beside its return for the page | `Stepping.call` |
 | `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
 | `turn:{n}:messages` | What the model loop produced | The conversation body |
 | `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |
@@ -222,7 +222,11 @@ shape change.
 for the whole policy: a duration could not sit beside a bare tool return without being
 indistinguishable from a tool that returned a field of that name, so it needed a key, and the key
 brought a window where a return was recorded and its duration was not. One record, one write, no
-window, and `tooks_in` and `blocks_from` now read one mapping rather than being handed two.
+window, and `tooks_in` and `blocks_from` now read one mapping rather than being handed two. The
+envelope is also where what a tool records *beside* its return goes, under Pydantic AI's own name
+for the slot, `metadata`: [an edit's diff](tools.md#every-tool-that-writes-hands-back-anchors) is
+the one thing written there, it is a fact about the call settled the moment the call returns, and
+a bare return would have had nowhere to put it either.
 
 **Every record carries its own `kind`**, which is a second copy of what its key already says, and
 the copy is the point: parsed by key alone, a record written under the wrong one is silently

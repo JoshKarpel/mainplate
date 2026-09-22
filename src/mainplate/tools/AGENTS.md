@@ -18,6 +18,21 @@ a worktree root has to be resolved against, or how a command is confined.
 A further tool is a new package beside `files/` and `bash/` and one more name in that list. It is not
 an edit to anything that already imports them.
 
+The one reader outside the harness that reaches past the constructors is `calls.py`, the page's
+rendering of a call, which imports the anchor scheme's constants to tell a file's lines from the
+tool's own and `DIFF` to find an edit's diff. That is the page knowing the shape of what a tool
+prints, which it has to; it is not `agent.py` knowing it, and nothing else should come to.
+
+## `edit` hands back a `ToolReturn`, and the loop splits it
+
+`Files.edit` returns an `Edited`, the reply and a unified diff of the change, and the tool function
+wraps them as Pydantic AI's `ToolReturn`: the reply as `return_value`, the diff under `metadata`
+as `{DIFF: ...}`. `Stepping.call` in `durability.py` is what unwraps that into the record's
+`returned` and `metadata`, and it refuses a `ToolReturn` carrying `content` or `tools`, so a tool
+here may use those two fields and no other. The model is never sent the metadata; the page reads
+it. See [every tool that writes hands back
+anchors](../../../docs/design/tools.md#every-tool-that-writes-hands-back-anchors).
+
 **A tool that acts on the conversation rather than on the machine does not belong here at all**: it
 belongs in a [plugin](../plugins/AGENTS.md), which is where `hand_off` lives. What is left in this
 package is the tools whose subject is a file or a command, which is what makes the table below the
