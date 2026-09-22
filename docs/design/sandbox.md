@@ -66,6 +66,13 @@ decision as snapshots honouring a `.gitignore`, arrived at one level out: going 
 call should not uninstall what was installed since. The cost is the one an ignored path already
 carries, that what is in there goes stale while the source around it moves back.
 
+**A session with no repository gets one too, and it is the whole of what its commands reach.**
+`NOTHING` is nothing *of the machine*: the scratch is bound alone, a command starts in it, and a
+relative path to the file tools means it, since there is no worktree for one to mean instead. That
+is `InAScratch` beside `InAWorktree`, and the same one bind is what `Sandbox.within` makes. It is
+what lets a conversation that is not about a repository run a script or keep a plan across turns
+without being handed the whole machine to do it, which was the only other answer.
+
 **It is `$HOME` for a session's commands**, rather than the tmpfs, because that is where every tool
 that fetches keeps what it fetched: a toolchain [a repository's plugin
 installs](plugins.md#getting-the-repository-ready-is-a-plugin-too) lands under `$HOME`, and a shell

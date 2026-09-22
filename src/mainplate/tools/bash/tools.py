@@ -8,10 +8,10 @@ from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.sandbox import Confinement
-from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
 from mainplate.sandbox import home_in
+from mainplate.sandbox import scratch_of
 from mainplate.sandbox import starting_at
 
 SHELL: Final = "/bin/sh"
@@ -93,8 +93,8 @@ async def ran(
     # Made here rather than when the session was planted, because bwrap will not bind a source that
     # does not exist and this is the one place that knows a command is about to run. Idempotent, so
     # every later call reaches it and does nothing.
-    if isinstance(confinement, InAWorktree):
-        scratch = confinement.scratch
+    scratch = scratch_of(confinement)
+    if scratch is not None:
         await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
     sandbox = await confined_by(confinement)
     home = home_in(confinement)

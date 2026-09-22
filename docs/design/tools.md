@@ -23,9 +23,13 @@ lets the interesting half be tested with a list of strings.
 **Over its *files*, that is decided by its `isolation`, not by whether it picked a repository.** A
 session on `WORKTREE` gets `read`, `edit` and `create` over its worktree and scratch, and `list` and
 `grep` over the worktree. One on `EVERYTHING` gets the first three over `/`, while `list` and `grep`
-refuse because nothing there is in git. One on `NOTHING` gets **none of them**, because tools that can
-only fail are worse than none and cost a description on every request. `bash` is added to the first
-two wherever there is a sandbox to run it in.
+refuse because nothing there is in git. One on `NOTHING` gets the first three over [its
+scratch](sandbox.md#the-scratch-directory) alone, which is nothing *of the machine*: a conversation
+that is not about a repository still wants to run a script or keep a note across turns, and a
+relative path there means the scratch. `bash` is added to all three wherever there is a sandbox to
+run it in, and on `NOTHING` the file tools come only with it, because the scratch is made by the
+first command and a `read` over a directory nothing creates is a tool that can only fail, which is
+worse than none and costs a description on every request.
 
 **`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
 with no files still has exactly one toolset rather than none. It is not an exception to the rule

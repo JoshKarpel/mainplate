@@ -21,6 +21,17 @@ OpenAI wires reach almost every gateway, and each further extra is a whole SDK. 
 not free, since it brings `openai`, `tiktoken`, `requests`, `urllib3`, `regex`, and `certifi`, which
 is the price of the OpenAI-compatible half of a gateway being reachable at all.
 
+## Vendored assets
+
+The scripts and faces under `src/mainplate/assets/` that somebody else wrote are rows in
+`scripts/vendored.toml`, and `just vendor` is the one way they get there: every row is fetched from
+the release its URL pins and checked against the digest beside it, and nothing is written unless
+everything matches. Bumping one is editing the version in its URL, running the recipe, and recording
+the digest it refuses on once the file has been looked at, with the same cooldown the resolver
+applies to a package: a week for a minor release and a month for a major. Why each of them is there
+is [what is vendored](design/assets.md#what-is-vendored); `tests/test_vendored.py` is what fails when
+a copy on disk stops matching its row.
+
 ## What mypy does not walk
 
 Two directories, and neither is skipped by `.gitignore`, which mypy does not read: `workspaces/`,
@@ -51,6 +62,12 @@ read first, and a release process edits the changelog at the root.
 
 **The price is that a link in any of the three has to work from both places.** A relative path
 resolves in only one of them, so those pages name the published site by URL.
+
+The same hook renders [the gallery](https://joshkarpel.github.io/mainplate/gallery/) into the site
+on every build: every page `scripts/gallery.py` draws, with the assets beside them under `gallery/`
+and an index written from the script's captions. Nothing is checked in, because the pages are a
+pure function of fixtures pinned to one clock and take about a second to render, so a copy in the
+tree would be one to keep in step by hand.
 
 `docs/stylesheets/extra.css` is the one override, and it exists for the tables: a table's first
 column here is an identifier, and left to wrap it breaks mid-token so that `turn:{n}:opened` reads

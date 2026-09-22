@@ -257,12 +257,47 @@ quotation differ from the thing quoted. It costs alignment as well: no italic fa
 an oblique is synthesised by shearing every glyph, which leans a gutter and the sides of a box while
 leaving the horizontals flat.
 
-## The vendored htmx
+## The mark
+
+`icon.svg` is a watch movement's mainplate, which is what the console is named for: the plate every
+other part is mounted on and the one that stays put while the rest is taken off and put back. The
+disc is the plate in the console's blue, with a bevel at the rim; the large cutout is the barrel,
+the cream dot is the centre hole the hands turn on, the orange stone in its countersink is a jewel,
+and the two small holes are for the screws. Circles and nothing else, because the mark has to read
+at sixteen pixels in a tab: a letterform does not, and at that size a plate with four holes in it
+is still a plate with four holes in it. The manifest's two PNGs and the Apple touch icon are
+rasterised from it by a browser, and the plate is exactly the safe circle a platform's mask keeps,
+so a masked icon is the plate with its corners gone and nothing cut.
+
+## What is vendored
+
+Everything served from `assets/` that somebody else wrote is a row in `scripts/vendored.toml`: the
+URL it was published at, pinned to a release, and the digest of the bytes. `just vendor` fetches
+every row and writes none of them unless every one hashes to what is recorded, and
+`tests/test_vendored.py` holds the copies on disk against the same table with no network, so a
+vendored file edited by hand is a failing test rather than a quiet drift. One table and one rule
+rather than a download apiece, because the check is the whole of the safety and a script nobody
+checked would otherwise have somewhere to land. The pre-commit hooks step around the same files,
+since a newline one of them appends is a digest the test then refuses, and `.gitattributes` has git
+store them verbatim, since a line ending normalised on the way into the index is the same refusal
+on every other machine. A release is taken on once it
+has aged, a week for a minor and a month for a major, which is `uv`'s cooldown applied by hand to a
+fetch `uv` does not make.
 
 `htmax.min.js` is htmx 4 core plus every bundled extension in one file, with an allowlist in a meta
 tag deciding which actually register. Why one file rather than core plus separately vendored
 extensions is on [the console's page](console.md#htmx-4), because what reads the allowlist is
 `EXTENSIONS` in `pages.py` rather than anything here.
+
+`mermaid.min.js` is the diagram library, and it is the one asset no page loads by itself: `<html>`
+carries its address and the script fetches it the first time a `mermaid` fence is on the page, so a
+page with no diagram pays nothing for the three and a half megabytes. Vendored rather than
+taken from a CDN for the reason everything here is, that a console on a machine with no route out
+still draws. What the button does with it is [two fences are also
+pictures](console.md#markdown-and-the-sanitiser).
+
+The two faces are members of one release archive rather than files published as themselves, which
+is what the `member` field on a row is for; their digest is the face's own and never the archive's.
 
 `mainplate.js` itself depends on nothing, and nothing in the repository needs Node: `just shots`
 drives the same Python Playwright the suite does, so a checkout pins one Chromium.

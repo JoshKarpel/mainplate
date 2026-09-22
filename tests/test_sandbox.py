@@ -6,13 +6,16 @@ from pathlib import Path
 import pytest
 
 from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InAScratch
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
 from mainplate.sandbox import Sandbox
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
+from mainplate.sandbox import home_in
 from mainplate.sandbox import sandbox_command
+from mainplate.sandbox import starting_at
 from mainplate.snapshots import Worktree
 from mainplate.tools.bash.tools import HEAD_LINES
 from mainplate.tools.bash.tools import MAX_LINE
@@ -86,6 +89,45 @@ def scratch(tmp_path: Path) -> Path:
 async def inside(worktree: Worktree, scratch: Path, bwrap: str, command: str) -> str:
     """One command through the real tool, so these test what a session would actually get."""
     return await ran(InAWorktree(worktree=worktree, scratch=scratch), bwrap, Venue.CONFINED, command, seconds=20)
+
+
+class TestWhatAScratchOnlySessionReaches:
+    """
+    A session with no repository gets its scratch and nothing else of the machine.
+
+    Through the real tool and the real namespace, for the reason everything here is: what is
+    asserted is what a mount namespace with one bind in it actually does.
+    """
+
+    async def alone(self, scratch: Path, bwrap: str, command: str) -> str:
+        return await ran(InAScratch(scratch=scratch), bwrap, Venue.CONFINED, command, seconds=20)
+
+    async def test_a_command_starts_in_the_scratch_which_is_also_home_and_named(
+        self, scratch: Path, bwrap: str
+    ) -> None:
+        said = await self.alone(scratch, bwrap, 'echo "$PWD"; echo "$HOME"; echo "$MAINPLATE_SCRATCH"')
+        assert said.count(str(scratch)) == 3, said
+
+    async def test_the_scratch_is_made_by_the_first_command_and_kept_for_the_next(
+        self, scratch: Path, bwrap: str
+    ) -> None:
+        assert not scratch.exists(), "the fixture leaves making it to the tool"
+        await self.alone(scratch, bwrap, "echo kept > note.txt")
+        assert (scratch / "note.txt").read_text() == "kept\n"
+        assert "kept" in await self.alone(scratch, bwrap, "cat note.txt")
+
+    async def test_nothing_of_the_machine_is_in_there(self, scratch: Path, bwrap: str, worktree: Worktree) -> None:
+        """A worktree that exists on this machine is exactly the kind of thing a scratch-only session must not see."""
+        said = await self.alone(scratch, bwrap, f"ls {worktree.root} >/dev/null 2>&1 && echo VISIBLE || echo DENIED")
+        assert "DENIED" in said
+        said = await self.alone(scratch, bwrap, 'echo "worktree=${MAINPLATE_WORKTREE:-unset}"')
+        assert "worktree=unset" in said
+
+    async def test_a_scratch_only_sandbox_binds_the_scratch_and_nothing_else(self, scratch: Path) -> None:
+        sandbox = await confined_by(InAScratch(scratch=scratch))
+        assert [(bind.path, bind.writable, bind.name) for bind in sandbox.places] == [(scratch, True, "scratch")]
+        assert starting_at(InAScratch(scratch=scratch)) == scratch
+        assert home_in(InAScratch(scratch=scratch)) == scratch
 
 
 class TestWhereTheCloneIs:

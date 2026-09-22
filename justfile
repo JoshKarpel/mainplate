@@ -34,6 +34,15 @@ dependencies:
 setup: dependencies
     uv run pre-commit install
 
+# Every script this console serves that somebody else wrote, fetched from where it was published
+# and checked against the digest `scripts/vendored.toml` records before any of it is written. One
+# recipe and one table rather than a download apiece, so the check is applied to every one of them
+# and a script nobody checked has nowhere to land. Bumping one is editing the version in its `url`,
+# running this, and recording the digest it refuses on once the file has been looked at.
+[doc('Fetch the vendored scripts named in scripts/vendored.toml, each checked against its recorded digest')]
+vendor:
+    uv run python -m scripts.vendor
+
 # The stylesheet is a deliverable, and no string assertion checks one. These render every page from
 # fixture checkpoints and drive a real Chromium over them, so a styling change can be *looked at*.
 #
@@ -121,6 +130,15 @@ demo *args:
 [doc('Put the gallery fixtures into the demo database')]
 seed *args:
     uv run python -m scripts.seed {{ if args == "" { DEMO_DATABASE } else { args } }}
+
+# `seed` skips a session the index already has, so a demo database seeded before a fixture changed
+# keeps serving the old checkpoints and says `skipped` for every row. This is the rebuild: the demo
+# database and the two files WAL leaves beside it, gone, and the fixtures planted again. Only ever
+# the demo database, which by its name never holds a real conversation.
+[doc('Remove the demo database and seed it again, for after a fixture changes')]
+reseed:
+    rm -f {{ DEMO_DATABASE }} {{ DEMO_DATABASE }}-wal {{ DEMO_DATABASE }}-shm
+    just seed
 
 # `uv sync` first, and it is not a convenience: the unit names this checkout's interpreter, so an
 # install from a stale environment points systemd at a venv missing whatever was just added. Run

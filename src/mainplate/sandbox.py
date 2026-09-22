@@ -71,6 +71,12 @@ class Filesystem(Enum):
     because the worktree is the point of having picked it. The other two are what a session with no
     repository chooses between, and `Service.start` is where that is made true rather than trusted.
 
+    `NOTHING` is nothing *of this machine*. A session on it still gets a scratch directory of its own
+    and commands inside it, where there is a sandbox to run them in: somewhere to run a script or
+    keep a note across turns, reaching no file that was there before the session and none of the
+    console's. It is the arm a conversation that is not about a repository lands on, and a
+    conversation still wants to run things.
+
     `EVERYTHING` still runs inside a sandbox, with `/` bound instead of a worktree. That buys nothing
     about the filesystem and everything about the rest: the network switch is `--unshare-net`, the
     credential is kept out by `--clearenv`, and teardown is `--unshare-pid`, so dropping the sandbox
@@ -177,18 +183,32 @@ class InAWorktree:
 
 
 @dataclass(frozen=True, slots=True)
+class InAScratch:
+    """
+    A session's commands inside its scratch directory and nothing else of the machine.
+
+    What a session with no repository gets: somewhere to run things and keep what they made from
+    one turn to the next, with no worktree for a relative path to mean and no clone to bind. It is
+    `Filesystem.NOTHING`'s arm, and "nothing" still means nothing *of this machine*: the scratch is
+    the session's own, made for it and taken off the disk with it.
+    """
+
+    scratch: Path
+
+
+@dataclass(frozen=True, slots=True)
 class OverEverything:
     """A session's commands over the whole machine, still inside a namespace."""
 
 
-type Confinement = InAWorktree | OverEverything
+type Confinement = InAWorktree | InAScratch | OverEverything
 """
 Which shape of sandbox a session's commands get, decided when its agent is built.
 
 A value rather than a built `Sandbox`, because the worktree does not exist yet at that moment: a
 session's first pass plants it, and the agent that will use it is constructed before that happens.
-`Filesystem.NOTHING` has no arm here on purpose - a session reaching nothing is built with no tools
-at all, so there is no confinement to describe rather than an empty one to carry.
+The scratch does not exist yet either, for every arm that has one: `bash` makes it on the first
+command, which is the one place that knows a command is about to run.
 """
 
 
@@ -197,6 +217,8 @@ async def confined_by(confinement: Confinement) -> Sandbox:
     match confinement:
         case InAWorktree(worktree=worktree, scratch=scratch, scratch_named=named, session_scratch=session):
             return await Sandbox.around(worktree, scratch, named, session)
+        case InAScratch(scratch=scratch):
+            return Sandbox.within(scratch)
         case OverEverything():
             return Sandbox.everywhere()
         case _ as unreachable:
@@ -204,10 +226,12 @@ async def confined_by(confinement: Confinement) -> Sandbox:
 
 
 def starting_at(confinement: Confinement) -> Path:
-    """Where a command starts, which is the worktree for one and the root of everything for the other."""
+    """Where a command starts: the worktree, the scratch where that is all there is, or the root of everything."""
     match confinement:
         case InAWorktree(worktree=worktree):
             return worktree.root
+        case InAScratch(scratch=scratch):
+            return scratch
         case OverEverything():
             return Path("/")
         case _ as unreachable:
@@ -225,7 +249,25 @@ def home_in(confinement: Confinement) -> Path | None:
     the whole machine, which has no scratch and gets the tmpfs.
     """
     match confinement:
-        case InAWorktree(scratch=scratch):
+        case InAWorktree(scratch=scratch) | InAScratch(scratch=scratch):
+            return scratch
+        case OverEverything():
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def scratch_of(confinement: Confinement) -> Path | None:
+    """
+    The session's own scratch, which `bash` makes exist before the first command, or nothing at all.
+
+    Its own and never a plugin's: a plugin's namespace is `InAWorktree` around a directory of the
+    plugin's, and `running.py` makes that one itself. Separate from `home_in` even though the two
+    agree today, because they answer different questions and could stop agreeing without either
+    being wrong.
+    """
+    match confinement:
+        case InAWorktree(scratch=scratch) | InAScratch(scratch=scratch):
             return scratch
         case OverEverything():
             return None
@@ -317,6 +359,18 @@ class Sandbox:
         )
 
     @classmethod
+    def within(cls, scratch: Path) -> Sandbox:
+        """
+        A scratch directory and nothing else, for a session that chose `NOTHING`.
+
+        One bind, writable, under the name a command finds the session's scratch by on every other
+        arm, so what a model is told about `scratch` is true whichever shape it is in. Everything
+        under the binds is the same as the other two shapes: a read-only system, the network switch,
+        the cleared environment, and the pid namespace that reaps what a command leaves behind.
+        """
+        return cls(places=(Bind(path=scratch, writable=True, name="scratch"),))
+
+    @classmethod
     def everywhere(cls) -> Sandbox:
         """
         The whole machine, for a session that chose `EVERYTHING`.
@@ -353,7 +407,8 @@ class Sandbox:
         other plugins execute at every turn boundary.
 
         A `WORKTREE` sandbox binds the worktree read-write, its clone **read-only**, and the scratch
-        read-write. The read-only clone is the load-bearing part: it leaves every read working -
+        read-write; a `NOTHING` sandbox binds the scratch alone. The read-only clone is the
+        load-bearing part of the first: it leaves every read working -
         `ls-files`, `status`, `diff`, `log`, `blame` - while `add`, `commit`, and `stash` fail loudly
         on a read-only `index.lock`. What that buys is not tidiness: a git write from in here would
         be a second history that no panel shows, no fork inherits and no rewind restores, which is

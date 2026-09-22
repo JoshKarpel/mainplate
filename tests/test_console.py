@@ -89,6 +89,8 @@ from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import TITLE_LENGTH
+from mainplate.sessions import Session
+from mainplate.sessions import enrol
 from mainplate.sessions import prepare
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
@@ -723,6 +725,26 @@ class TestWhatIsNewInTheList:
         assert set(rows) == {other, reading}
         assert '<span class="unseen" title="Something new since you last looked">new</span>' in rows[other]
         assert "unseen" not in rows[reading]
+
+    async def test_the_row_says_working_while_a_pass_is_coming_for_it_and_not_otherwise(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        The app here runs no worker, so a session spoken to stays queued for a pass that never
+        comes, which is exactly the row that has something coming; one enrolled and never spoken to
+        has nothing coming and says nothing.
+        """
+        queued = await a_session(app, service, "still to be answered")
+        settled = Session(id="ab" * 16, created_at=WHEN, title="nothing queued, ever")
+        await enrol(service.database, settled)
+        async with calling(app) as caller:
+            page = await caller.get("/")
+        rows = {
+            row.group(1): row.group(2)
+            for row in re.finditer(r'<li id="listed-([0-9a-f]+)"(.*?)</li>', page.text, re.DOTALL)
+        }
+        assert '<span class="working" title="Queued, and the next pass will take it">working</span>' in rows[queued]
+        assert "working" not in rows[settled.id]
 
     async def test_an_archived_session_is_never_new(self, app: ASGIApp, service: Service) -> None:
         """Nothing more is said in one, and the press that archived it is not something to catch up on."""

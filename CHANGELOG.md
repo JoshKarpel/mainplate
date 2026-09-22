@@ -8,6 +8,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **A fence labelled `mermaid` or `svg` is drawn.** The picture it describes stands where the code
+  would, SVG as it was written or the diagram as the mermaid library renders it in your theme, and a
+  button to the left of `copy` puts the text back and takes it away again. The picture is an image,
+  so nothing a model wrote runs on the page, and the library is fetched only for a page with a
+  diagram on it.
+- **The session list says `working`** on a row while a pass is answering its session or one is
+  scheduled to, beside `new` where both are true, so a row that says something arrived and a row
+  that says something is still coming can be told apart without opening either.
+- **A session with no repository gets a scratch directory and `bash` inside it.** Somewhere to run a
+  script or keep a note across turns, reaching nothing else on the machine; `read`, `edit` and
+  `create` reach it too. Where there is no sandbox to run a command in, such a session reaches
+  nothing, as before.
+- **A new mark.** A watch movement's mainplate, in the console's blue, on the tab and the installed
+  app's icon.
+- **Every session is told what the page draws.** One sentence of the console's own, composed beside
+  the note about what its tools reach, says that a `mermaid` or `svg` fence is drawn as a picture, so
+  a model with a flow or a figure to show writes one. The operator's standing instructions are left
+  alone, so rewriting those keeps it.
+
+### Fixed
+- **A reasoning summary a gateway hands back as text is read as reasoning.** Some OpenAI-compatible
+  gateways return one wrapped in `<think>` tags as an ordinary text part, which the console drew as
+  an assistant panel saying `<think>` with a blank line above and below the title. The tags and
+  their newlines come off and the title goes to a reasoning panel; anything after the closing tag is
+  still the answer.
+
+### Changed
+- **A command's status reads `exit 0` rather than `ok`**, one shape down the column with the colour
+  alone picking out the statuses that are not zero, and a command with no output says `no output`
+  where it said `said nothing`, folded, since its line, its time and its status are all there is.
+- **`just seed` plants what the stills show.** The gallery and the seeder read one table of fixture
+  sessions, so the demo database now carries the commands a person ran, the boundary a `forget`
+  draws, the diagram and SVG fences, and a different model per branch, exactly as the screenshots
+  do. A command still running moved to the in-flight page, since a command that never finishes is
+  honest under a pass and not in a settled session.
+- **The vendored htmx is the published 4.0.0 build**, where it was a build of the same version
+  with one byte's difference, and every vendored script and face is now recorded with its release
+  and digest in `scripts/vendored.toml`.
 - **Every rule says when its answer came back**, leading the figures it already carried, so a
   conversation reads as a timeline rather than as a pile of counts: `09:32 · 3.4s · ↑96K …`. The
   turn's own rule says when its first answer landed, so the moments read down the page in the order

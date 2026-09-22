@@ -31,10 +31,12 @@ Read off `Choice.isolation`, not off whether the session picked a repository:
 |---|---|---|
 | `WORKTREE` | `read`, `edit`, `create` over the worktree and scratch; `list`, `grep` over the worktree | where there is a sandbox |
 | `EVERYTHING` | `read`, `edit`, `create` over `/`; `list` and `grep` refuse | where there is a sandbox |
-| `NOTHING` | none of them | no |
+| `NOTHING` | `read`, `edit`, `create` over the scratch, where there is a sandbox; `list` and `grep` refuse | where there is a sandbox |
 
-`NOTHING` gets none rather than five that can only fail, because a tool that cannot work still costs
-its description on every request.
+`NOTHING` gets its file tools only beside `bash`, and nothing at all without one, because the scratch
+is made by the first command and a tool that cannot work still costs its description on every
+request. `reaching` in `agent.py` is the one place that table is decided, and `tests/test_agent.py`
+holds every arm of it.
 
 **A plugin's tools are outside that table**, and a session with `NOTHING` still gets them: what a
 plugin reaches is decided by its own tier rather than by what the *model* may touch. They are settled

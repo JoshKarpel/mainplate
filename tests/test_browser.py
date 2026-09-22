@@ -31,6 +31,7 @@ from conftest import run
 from conftest import started
 from playwright.async_api import Browser
 from playwright.async_api import BrowserContext
+from playwright.async_api import FloatRect
 from playwright.async_api import Locator
 from playwright.async_api import Page
 from playwright.async_api import Route
@@ -68,6 +69,7 @@ from mainplate.plugins.running import Spawned
 from mainplate.service import Service
 from mainplate.sessions import read_tending
 from mainplate.snapshots import Worktree
+from scripts.gallery import CAPTIONS
 from scripts.gallery import ZONE
 from scripts.gallery import pages
 from scripts.gallery import write
@@ -900,6 +902,13 @@ class TestTheSessionListOnAPhone:
         # showing through the gap. A wheel rather than a touch, since it lands on whatever is under
         # the pointer the same way, and the browser's own scrolling is what either ends up driving.
         await phone.goto(f"{gallery}/session.html", wait_until="load")
+        # With every drawing drawn and every image decoded first: a picture arriving above the
+        # viewport while this measures is a height change the browser's scroll anchoring answers
+        # with a pixel of its own.
+        await expect(phone.locator("[data-draw][aria-busy]")).to_have_count(0, timeout=15_000)
+        await phone.wait_for_function(
+            "() => Array.from(document.querySelectorAll('img.drawing')).every((image) => image.complete)"
+        )
         await phone.locator(clasp).click()
         await expect(phone.locator(below)).to_be_in_viewport()
         first = await phone.locator(above).bounding_box()
@@ -1167,6 +1176,140 @@ class TestHowReasoningIsSet:
             }"""
         )
         assert drawn == ["italic", "normal", "normal"]
+
+
+class TestDrawingAFence:
+    """
+    A fence labelled `mermaid` or `svg` is shown as the picture it describes, and a press shows the
+    text it was written as, and back.
+
+    A browser because the picture is an image the page makes: whether the browser could draw it is a
+    property of its own parse and nothing the markup says, and whether the diagram library is fetched
+    only for a page that holds a diagram is a property of the requests the page makes.
+    """
+
+    async def drawable(self, page: Page, gallery: str, kind: str) -> Locator:
+        """The first fence of one drawable kind, drawn, with its button offering the text."""
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        pre = page.locator(f"pre:has(> code.language-{kind})").first
+        await expect(pre.locator(".draw")).to_have_text("code", timeout=15_000)
+        return pre
+
+    async def loaded(self, image: Locator) -> bool:
+        return bool(await image.evaluate("(image) => image.complete && image.naturalWidth > 0"))
+
+    async def test_an_svg_is_drawn_as_it_was_written_and_the_code_is_a_press_away_and_back(
+        self, page: Page, gallery: str
+    ) -> None:
+        pre = await self.drawable(page, gallery, "svg")
+        image = pre.locator("img.drawing")
+        await expect(image).to_be_visible()
+        await expect(pre.locator("code")).to_be_hidden()
+        assert await self.loaded(image), "the browser parsed what was written as an image"
+        assert (await image.get_attribute("src") or "").startswith("data:image/svg+xml"), (
+            "an image and never inline markup"
+        )
+        await pre.locator(".draw").click()
+        await expect(pre.locator("code")).to_be_visible()
+        await expect(image).to_have_count(0)
+        await expect(pre.locator(".draw")).to_have_text("draw")
+        await pre.locator(".draw").click()
+        await expect(pre.locator("img.drawing")).to_be_visible()
+        await expect(pre.locator(".draw")).to_have_text("code")
+
+    @pytest.mark.timeout(30)
+    async def test_the_diagram_library_is_fetched_for_a_page_with_a_diagram_and_not_otherwise(
+        self, page: Page, gallery: str
+    ) -> None:
+        """Three and a half megabytes a page with no diagram on it must not pay for."""
+        fetched: list[str] = []
+        page.on("request", lambda request: fetched.append(request.url))
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await expect(page.locator(".panel pre")).to_have_count(0)
+        assert not any("mermaid" in url for url in fetched), "nothing on a page with no diagram"
+        pre = await self.drawable(page, gallery, "mermaid")
+        image = pre.locator("img.drawing")
+        await expect(image).to_be_visible(timeout=15_000)
+        assert any(url.endswith("/assets/mermaid.min.js") for url in fetched), "and the library where there is one"
+        assert await self.loaded(image), "the library's SVG draws as an image"
+        # At the diagram's own size rather than the block's: the library declares a percentage
+        # width, which inside an image would be the whole block.
+        box = await image.bounding_box()
+        assert box is not None
+        assert box["width"] < 600, f"a three-node flowchart drawn {box['width']}px wide is one stretched to the block"
+
+    @pytest.mark.timeout(30)
+    async def test_a_diagram_that_cannot_be_drawn_says_so_in_the_block(self, page: Page, gallery: str) -> None:
+        """A parse error is a sentence in the block's place rather than nothing at all, or a bomb."""
+        pre = await self.drawable(page, gallery, "mermaid")
+        # Shown as text, rewritten to something that is not a diagram, and drawn again: what is
+        # drawn is keyed by the text, so the new text is a new drawing.
+        await pre.locator(".draw").click()
+        await pre.locator("code").evaluate("(code) => { code.textContent = 'this is not any kind of diagram'; }")
+        await pre.locator(".draw").click()
+        said = pre.locator(".drawing--failed")
+        await expect(said).to_contain_text("Not drawn:", timeout=15_000)
+        await expect(pre.locator("img.drawing")).to_have_count(0)
+        await expect(pre.locator(".draw")).to_have_text("code")
+
+    async def test_a_fence_that_is_not_a_picture_takes_no_button(self, page: Page, gallery: str) -> None:
+        await self.drawable(page, gallery, "svg")
+        plain = page.locator(".panel pre:has(> code:not(.language-mermaid):not(.language-svg))").first
+        await expect(plain.locator(".copy")).to_have_count(1)
+        await expect(plain.locator(".draw")).to_have_count(0)
+
+    async def test_the_copy_button_stays_in_its_corner_and_the_draw_button_stands_to_its_left(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        The copy button sits where it does on every other block, so a reader's hand finds it in the
+        same place whether a block can be drawn or not; what makes room is the other button.
+        """
+        pre = await self.drawable(page, gallery, "svg")
+        plain = page.locator(".panel pre:has(> code:not(.language-mermaid):not(.language-svg))").first
+        drawable_copy = await pre.locator("[data-copy]").bounding_box()
+        plain_copy = await plain.locator("[data-copy]").bounding_box()
+        draw = await pre.locator(".draw").bounding_box()
+        pre_box = await pre.bounding_box()
+        plain_box = await plain.bounding_box()
+        assert drawable_copy is not None
+        assert plain_copy is not None
+        assert draw is not None
+        assert pre_box is not None
+        assert plain_box is not None
+
+        def right_inset(button: FloatRect, block: FloatRect) -> float:
+            return (block["x"] + block["width"]) - (button["x"] + button["width"])
+
+        assert abs(right_inset(drawable_copy, pre_box) - right_inset(plain_copy, plain_box)) < 1
+        assert draw["x"] + draw["width"] < drawable_copy["x"], "the draw button is wholly to the left of copy"
+
+    async def test_the_copy_button_hands_over_the_text_whichever_is_showing(self, page: Page, gallery: str) -> None:
+        """A picture is a rendering of the text, so what is copied is the text: the copy button reads it, hidden or not."""
+        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        pre = await self.drawable(page, gallery, "svg")
+        written = str(await pre.locator("code").text_content()).strip()
+        await expect(pre.locator("code")).to_be_hidden()
+        await pre.locator("[data-copy]").click()
+        taken = str(await page.evaluate("() => navigator.clipboard.readText()"))
+        assert taken.strip() == written
+        assert "Not drawn" not in taken, "and none of what the script seated in the block"
+
+    async def test_pressing_the_button_does_not_mark_the_panel_as_news(self, page: Page, gallery: str) -> None:
+        """The button's own word changes on the press, and a panel's signature must not read it."""
+        pre = await self.drawable(page, gallery, "svg")
+        panel = pre.locator("xpath=ancestor::*[contains(concat(' ', @class, ' '), ' panel ')]").first
+        await pre.locator(".draw").click()
+        await expect(pre.locator("code")).to_be_visible()
+        assert await panel.get_attribute("data-fresh") is None
+
+
+async def test_every_gallery_page_has_a_caption_and_nothing_else_does() -> None:
+    """
+    The documentation site lists the gallery from `CAPTIONS`, so a page without one would be listed
+    with nothing beside it and a caption without a page would name a link to nowhere.
+    """
+    assert set(CAPTIONS) == set(pages())
 
 
 class TestWhatComesOutOfACopyButton:

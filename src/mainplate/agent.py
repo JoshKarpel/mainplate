@@ -74,6 +74,7 @@ from mainplate.plugins.asking import contributions
 from mainplate.roots import environment_named
 from mainplate.sandbox import Confinement
 from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InAScratch
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
@@ -850,6 +851,46 @@ def working_note(scratch: bool) -> str:
     )
 
 
+def scratch_note() -> str:
+    """
+    What a session with no repository is told about the one place it reaches.
+
+    The same shape as `working_note` with the worktree taken out, and said separately rather than
+    by a flag on that one: what a relative path means is the whole of what differs, and a sentence
+    saying it means the worktree "except where there is none" is a sentence a model has to resolve
+    on every call. Pure of paths for `working_note`'s reason, so every session of this shape shares
+    one cached prefix.
+    """
+    return (
+        "You are working with no repository and no worktree. You have a scratch directory called "
+        "`scratch`, which is where anything you make or fetch belongs, and it is kept from one turn "
+        'to the next. Reach it by passing `root: "scratch"` to `read`, `edit` or `create`, or by a '
+        f"relative path; in a command it is `${environment_named('scratch')}`, and commands start "
+        f"there, so a relative path means the same thing to a command as to the file tools. Commands "
+        f"reach that directory and a read-only system, and nothing else: no home directory, no other "
+        f"session's files, and no configuration of the console itself. Nothing in it is snapshotted."
+    )
+
+
+def drawing_note() -> str:
+    """
+    What the console draws from a reply, said so a model reaches for it.
+
+    A fact about this console rather than about the session, which is why it is composed here beside
+    the reach note and not left to the operator's standing instructions: an operator who rewrites
+    those should not lose the one sentence that says what the page can show. The same words for every
+    session, so it costs nothing in any cached prefix, and it names the two labels `markup.py`
+    allows onto the page and no others, since a model told `dot` draws too would write one that is
+    shown as code.
+    """
+    return (
+        "A fenced code block labelled `mermaid` or `svg` is drawn as a picture on the page, so when a "
+        "diagram or a figure would say it better than prose, write one: `mermaid` for a flow, a "
+        "sequence, a state machine or a timeline, and `svg` when you need to draw exactly what you "
+        "mean. Every other fence is shown as code."
+    )
+
+
 def network_note(reachable: bool) -> str:
     """
     Whether commands can dial out, which is this session's setting rather than the tool's.
@@ -908,21 +949,31 @@ def reaching(
     bwrap: str | None = None,
 ) -> Reach:
     """
-    What one session's isolation affords, given the worktree and the sandbox this machine has.
+    What one session's isolation affords, given the worktree, the scratch and the sandbox this
+    machine has.
 
     **Decided by the session's own isolation**, not by what a caller happens to be handed.
-    `Filesystem.NOTHING` reaches nothing rather than reaching a place its tools would refuse: a
-    console being used to talk rather than to edit is what this was before there were repositories,
-    and offering a model tools that cannot work is worse than offering none, since it spends the
-    description on every request and invites a call that can only fail.
+    `Filesystem.NOTHING` reaches nothing of the machine, and that is a scratch directory of the
+    session's own and commands inside it: a conversation that is not about a repository still wants
+    to run a script or keep a note, and what it must not reach is anything that was there before it.
+    Offered only where a command can make the directory exist, for the reason the worktree's scratch
+    is: a `read` naming a directory nothing ever creates is a tool that can only fail, and a tool
+    that can only fail is worse than none, since it spends its description on every request.
 
     `bwrap` is passed in rather than looked up, because where the sandbox binary is is a fact about
     the machine. Without it a `WORKTREE` session keeps its file tools and is offered no `bash`, which
-    is what this console was before there was one, and an `EVERYTHING` session reaches nothing at
-    all: what that arm *is* is a sandbox with `/` in it, so without one there is nothing left that
-    anybody chose.
+    is what this console was before there was one; a `NOTHING` session reaches nothing, since its
+    scratch is only ever made by a command; and an `EVERYTHING` session reaches nothing at all: what
+    that arm *is* is a sandbox with `/` in it, so without one there is nothing left that anybody
+    chose.
     """
     match isolation.filesystem:
+        case Filesystem.NOTHING if scratch is not None and bwrap is not None:
+            return Reach(
+                roots=(Scratch(path=scratch),),
+                confinement=InAScratch(scratch=scratch),
+                note=f"{scratch_note()}\n\n{network_note(isolation.network)}",
+            )
         case Filesystem.NOTHING:
             return Reach()
         case Filesystem.WORKTREE if worktree is not None:

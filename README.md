@@ -11,6 +11,9 @@ own and the agent can read, edit and create files in it; the work so far is most
 substrate underneath, because a coding agent that forgets what it was doing when its process dies
 is the failure worth designing out first.
 
+What it looks like is [the gallery](https://joshkarpel.github.io/mainplate/gallery/): every page of
+the console, rendered from fixtures, that can be opened and folded and searched without running one.
+
 ## Running it
 
 Write `$XDG_CONFIG_HOME/mainplate/config.yaml` (usually `~/.config/mainplate/config.yaml`), then

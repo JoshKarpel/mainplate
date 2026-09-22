@@ -555,6 +555,30 @@ class TestForgettingWhatCameBefore:
         ]
         assert blocks_of(turn, {}) == (Prose(text="and"),)
 
+    def test_reasoning_a_gateway_handed_back_as_tagged_text_is_read_as_reasoning(self) -> None:
+        """
+        Some OpenAI-compatible gateways return a reasoning summary as a text part wrapped in the
+        tags a model thinks inside, one bold title on a line of its own between them. Read as it
+        arrived that is an assistant panel saying `<think>`, with the tags' newlines drawn as breaks
+        above and below the title.
+        """
+        turn: list[ModelMessage] = [ModelResponse(parts=[TextPart("<think>\n**Updating archive logic**\n</think>")])]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Updating archive logic**"),)
+
+    def test_prose_after_the_closing_tag_is_still_the_answer(self) -> None:
+        turn: list[ModelMessage] = [
+            ModelResponse(parts=[TextPart("<think>\n**Planning the fix**\n</think>\n\nAn interval, not a load.")])
+        ]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Planning the fix**"), Prose(text="An interval, not a load."))
+
+    def test_a_tag_mentioned_mid_sentence_is_a_word_and_not_a_wrapper(self) -> None:
+        turn: list[ModelMessage] = [ModelResponse(parts=[TextPart("The wire wraps a summary in <think> tags.")])]
+        assert blocks_of(turn, {}) == (Prose(text="The wire wraps a summary in <think> tags."),)
+
+    def test_a_thinking_part_that_arrived_with_its_tags_on_is_unwrapped_too(self) -> None:
+        turn: list[ModelMessage] = [ModelResponse(parts=[ThinkingPart("<think>\n**Locating imports**\n</think>")])]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Locating imports**"),)
+
     def test_a_message_that_is_not_text_is_refused_rather_than_rendered(self) -> None:
         with pytest.raises(ValidationError):
             parse_delivered({"kind": "prompt", "content": "nice try"})
@@ -1465,6 +1489,24 @@ class TestWhatOnePassDoes:
             "one shape compose the same string and share a cached prefix"
         )
         assert parse_instructions(recorded[instructions_key(0)]) == told
+
+    async def test_what_the_page_draws_from_a_reply_is_said_in_every_session(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        The console's to say rather than the operator's, so it is composed beside the note about the
+        session's places and reaches the record the same way: an operator who rewrites the standing
+        instructions keeps the one sentence saying what the page can show.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = parse_instructions(recorded[instructions_key(0)])
+        assert "labelled `mermaid` or `svg` is drawn as a picture" in told
+        assert told.index(INSTRUCTIONS) < told.index("`mermaid`"), "after the operator's own, whose word it never takes"
 
     async def test_the_system_prompt_is_settled_before_the_first_answer_and_never_recomposed(
         self, service: Service, workspaces: Workspaces

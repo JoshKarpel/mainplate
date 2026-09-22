@@ -31,12 +31,14 @@ written in two places.
 ```console
 $ just setup            # uv sync, the browser, and pre-commit as a git hook
 $ just dependencies     # the same without the hook, which is the half a session's `.mainplate/setup` runs
+$ just vendor           # every script and face somebody else wrote, fetched and checked against scripts/vendored.toml
 $ just test             # mypy, then pytest
 $ just test tests/test_console.py::TestTheConsole  # extra args go straight to pytest
 $ just check            # pre-commit over all files, then mypy
 $ just serve            # foreground, on port 8101 so it never fights the installed service
 $ just demo             # the same, on a database of its own, for poking without touching real sessions
 $ just seed             # the gallery's fixtures into that database, so there is something to click
+$ just reseed           # the same from nothing, which is what a changed fixture needs: seed skips a session it already has
 $ just gallery          # render every page to build/gallery, as files a browser can open
 $ just shots            # render every page and screenshot it, wide and phone, into build/shots
 $ just replay           # measure what replaying a turn costs, over a stand-in provider

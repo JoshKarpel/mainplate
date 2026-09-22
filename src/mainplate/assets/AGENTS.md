@@ -47,6 +47,24 @@ drawing draws as a dashed line. At size 14 a run joins at 23 and breaks at 24, s
 `TestTheGridMonospaceIsDrawnOn` draws a run into a canvas and reads the pixels back, because the
 failure is a hairline no screenshot shows.
 
+## Anything somebody else wrote comes through `just vendor`
+
+`htmax.min.js`, `mermaid.min.js`, the two faces and the licence beside each are rows in
+`scripts/vendored.toml`, and the copy here is the bytes that row's digest names. **Do not edit one,
+and do not drop a script in here by hand**: `tests/test_vendored.py` hashes every row's copy and
+refuses a `.js` or `.woff2` no row names. Bumping one is editing the version in its `url`, running
+`just vendor`, and recording the digest it refuses on once the file has been looked at. The
+pre-commit hooks are told to leave these files alone, which is why a vendored file may end without
+a newline while nothing else here does, and `.gitattributes` tells git to store them verbatim, so a
+licence published with CRLF is CRLF in every checkout and not only on the machine that vendored it.
+
+`mermaid.min.js` is fetched by the script the first time a `mermaid` fence is on the page and by
+nothing else. **Do not put it in a `<script>` tag**, which is three and a half megabytes on every
+page for the pages with no diagram. What a drawing is put on the page as is an `<img>` with a `data:` URL,
+for SVG written by hand and the library's output alike: an image runs no script and fetches nothing,
+and inlining the markup instead would rest the page on the library's own sanitising of text a model
+wrote. `TestDrawingAFence` is what fails when either goes.
+
 ## The faces are upstream, unmodified, and there are two of them
 
 `JuliaMono-Regular.woff2` and its bold, under the OFL beside them. Two static weights rather than
