@@ -4816,13 +4816,16 @@ def composer(
                     # `rows` is the floor only where `field-sizing` is not supported: the box sizes
                     # itself from what is typed, and a browser that can do that ignores `rows`
                     # entirely. See the growth rule in `mainplate.css`.
+                    # Deliberately no `autofocus`: whether the box takes the cursor on arrival is a
+                    # touch-screen question the server cannot answer, so the script gives it focus on a
+                    # pointer and leaves a phone alone. The fork page keeps the attribute, since there
+                    # somebody is already there to edit.
                     textarea(
                         attrs={
                             "id": MESSAGE_ID,
                             "name": "prompt",
                             "rows": 3,
                             "required": True,
-                            "autofocus": not refusing,
                             "disabled": refusing,
                             "placeholder": "Say something",
                             "aria-label": "Message",

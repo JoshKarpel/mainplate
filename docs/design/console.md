@@ -570,16 +570,26 @@ and the rule under the last turn is the way on. A session stalled on a missing e
 refusing box, because a configuration put back *does* enable it, and that is the whole difference
 between the two stops.
 
+**On a phone the box does not take the focus on arrival, and on a pointer it does.** At a keyboard
+reaching a session opens it at its end with the box on screen, and the next thing somebody working
+does is type, so the cursor is already there. On a phone the same focus is the keyboard coming up
+over the conversation before a word of it has been read, so the box is left alone until it is
+touched. The fork page is the one box that takes the focus on any screen, since reaching it is being
+there to edit a message. Returning the cursor after a send, below, is the same split: a pointer gets
+it back, a phone does not.
+
 **And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
 button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
-flight, so without this the cursor is on nothing at all by the time the answer swaps in. *When*
-matters as much as whether: htmx re-enables what it disabled just after dispatching
-`htmx:finally:request`, so the focus is asked for a turn of the event loop later, and asked any
-sooner it is asked of a box that is still disabled and takes nothing. Only where nothing else has
-claimed the focus meanwhile, so a reader who went to the search box while the message was in flight
-is left where they went. `TestWhereTheCursorIsAfterSending` drives both ways of sending, and it too
-has to be a browser: the focus is a live property the server never renders, and the ordering it
-turns on is htmx's rather than ours.
+flight, so without this the cursor is on nothing at all by the time the answer swaps in. Not on a
+touch screen, where taking it back brings the keyboard up over the answer the reader is now watching
+for: there the box waits to be touched. *When* matters as much as whether: htmx re-enables what it
+disabled just after dispatching `htmx:finally:request`, so the focus is asked for a turn of the
+event loop later, and asked any sooner it is asked of a box that is still disabled and takes
+nothing. Only where nothing else has claimed the focus meanwhile, so a reader who went to the search
+box while the message was in flight is left where they went. `TestWhereTheCursorIsAfterSending`
+drives both ways of sending and a touch screen being left alone, and it too has to be a browser: the
+focus is a live property the server never renders, and the ordering it turns on is htmx's rather
+than ours.
 
 ## Markdown, and the sanitiser
 
