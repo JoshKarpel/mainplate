@@ -569,12 +569,13 @@ note over it would price a request nobody can make. The transcript ends in the s
 and the rule under the last turn is the way on. A session stalled on a missing endpoint keeps its
 refusing box, because a configuration put back *does* enable it, and that is the whole difference
 between the two stops.
-**The box does not take the focus on arrival**, because reaching a session is reading what was
-said first, and the fork page is the one box that opens with somebody already there to type, so it
-is the one that takes it. On a phone the keyboard comes up under whatever is focused, and a box
-that grabbed the focus would cover the conversation it belongs to before a word of it had been
-read. Returning the cursor after a send, below, is the different case: that is a box somebody has
-just written into and will write into again.
+**On a phone the box does not take the focus on arrival, and on a pointer it does.** At a keyboard
+reaching a session opens it at its end with the box on screen, and the next thing somebody working
+is to type, so the cursor is already there. On a phone the same focus is the keyboard coming up over
+the conversation before a word of it has been read, so the box is left alone until it is touched.
+The fork page is the one box that takes the focus on any screen, since reaching it is being there to
+edit a message. Returning the cursor after a send, below, is the same split: a pointer gets it back,
+a phone does not.
 **And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
 button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
 flight, so without this the cursor is on nothing at all by the time the answer swaps in. Not on a

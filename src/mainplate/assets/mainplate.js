@@ -326,6 +326,10 @@
     };
 
     const composerBox = () => document.querySelector('.composer textarea[name="prompt"]');
+    // A phone or tablet, where putting the cursor back in the box brings the keyboard up over the
+    // page. `hover: none` is the browser's own flag for this and no width constant has to be kept in
+    // step with the stylesheet's.
+    const touchScreen = () => window.matchMedia("(hover: none)").matches;
 
     // --- Reading the conversation ---------------------------------------
 
@@ -1851,7 +1855,7 @@
         if (!box) return;
         setTimeout(() => {
           const holding = document.activeElement;
-          if (window.matchMedia("(hover: none)").matches) return;
+          if (touchScreen()) return;
           if (holding === null || holding === document.body) box.focus();
         }, 0);
       });
@@ -2192,6 +2196,12 @@
       landed = named;
     }
     repaint(false);
+
+    // The box is where a pointer belongs on arrival, since a session opens at the end where the box
+    // is and the next thing somebody with a keyboard does is type. `preventScroll` so taking it does
+    // not move the page the reader has just arrived at; a touch screen is left alone, for the reason
+    // below the sends.
+    if (!touchScreen()) composerBox()?.focus({ preventScroll: true });
   };
 
   if (document.readyState === "loading") {

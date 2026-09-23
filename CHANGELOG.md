@@ -46,7 +46,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The composer no longer grabs the keyboard on a phone.** It took the focus when its page arrived
   and again once a message had gone, which on a phone puts the keyboard up over the conversation
   somebody had come to read; it now waits to be touched. Forking still puts the cursor in the box
-  holding the message to edit, and a pointer still gets the cursor back after a send.
+  holding the message to edit, and a pointer still finds the cursor in the box on arrival and back
+  after a send.
 
 ### Changed
 - **A command's status reads `exit 0` rather than `ok`**, one shape down the column with the colour

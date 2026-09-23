@@ -4814,10 +4814,10 @@ def composer(
                     # `rows` is the floor only where `field-sizing` is not supported: the box sizes
                     # itself from what is typed, and a browser that can do that ignores `rows`
                     # entirely. See the growth rule in `mainplate.css`.
-                    # Deliberately no `autofocus`: reaching a session is reading what was said
-                    # first, and the fork page is the one box that opens with somebody already
-                    # there to type. On a phone the keyboard comes up under whatever is focused,
-                    # over half the conversation.
+                    # Deliberately no `autofocus`: whether the box takes the cursor on arrival is a
+                    # touch-screen question the server cannot answer, so the script gives it focus on a
+                    # pointer and leaves a phone alone. The fork page keeps the attribute, since there
+                    # somebody is already there to edit.
                     textarea(
                         attrs={
                             "id": MESSAGE_ID,

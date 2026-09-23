@@ -3379,6 +3379,30 @@ class TestNarrowingTheBranches:
         await expect(page.locator("#basis-loading")).to_be_hidden()
 
 
+class TestWhereTheCursorIsOnArrival:
+    """
+    In the box where there is a keyboard, and off it where there is a touch screen, the moment a
+    session's page lands.
+
+    A browser, because it is the script's own doing: the server renders no `autofocus`, and whether a
+    box takes the cursor on arrival depends on whether taking it would bring a keyboard up, which only
+    the browser knows.
+    """
+
+    async def test_a_pointer_opens_with_the_cursor_in_the_box(self, page: Page, console: tuple[str, Service]) -> None:
+        await a_conversation(console, page)
+        await expect(page.locator(".composer textarea")).to_be_focused()
+
+    async def test_a_phone_opens_without_it(self, browser: Browser, console: tuple[str, Service]) -> None:
+        context = await reading(browser, viewport=VIEWPORT, has_touch=True)
+        try:
+            page = await context.new_page()
+            await a_conversation(console, page)
+            await expect(page.locator(".composer textarea")).not_to_be_focused()
+        finally:
+            await context.close()
+
+
 class TestWhereTheCursorIsAfterSending:
     """
     Back in the box, whichever way the message left it.
