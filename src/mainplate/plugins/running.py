@@ -196,12 +196,9 @@ and knows about sandboxes, and injecting the one question keeps everything above
 service, the routes - ignorant of how a plugin is run. It is also what lets a test drive the whole
 mechanism with a mapping of answers and no subprocess at all.
 
-**The worktree is passed beside the payload rather than read out of it**, and the two are not the
-same thing: the payload's is a string a plugin parses, and this is the tree as this console knows
-it - including the git directory it was told, which is what keeps a confined run from leaving git to
-discover one from a pointer file the session can write. Reconstructing a `Worktree` from the wire
-string is exactly the mistake `Worktree.gitdir` exists to stop. See
-[what runs, and as whom](../../docs/design/security.md).
+The worktree is passed beside the payload rather than reconstructed from the wire value. The payload
+is untrusted data a plugin parses; this value carries the checkout together with the trusted snapshot
+store it belongs to and the confinement used for any Git it runs.
 """
 
 
@@ -492,9 +489,8 @@ class Spawned:
             # run wrote: a setup that failed part-way through leaves its lines behind, and the
             # attempt after it must not inherit them.
             await asyncio.to_thread(lambda: (scratch / ENV_FILE).write_text("", encoding="utf-8"))
-        # The worktree as this console knows it, git directory and all, rather than one rebuilt from
-        # the path on the payload: an unnamed directory is one git discovers by reading the pointer
-        # file at the tree's root, which is the single thing in there the session can replace.
+        # The checkout value rather than a path reconstructed from the payload, so confinement and
+        # snapshot storage remain attached to the session value.
         #
         # `plugin_scratch` and not `scratch`, which is the name a model's own `bash` finds the
         # *session's* directory under. One word for two places would have a repository's plugin and

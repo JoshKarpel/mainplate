@@ -60,6 +60,7 @@ from mainplate.conversation import transcript
 from mainplate.footprint import Footprints
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
+from mainplate.sandbox import InAWorktree
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import acted
@@ -965,7 +966,16 @@ class Service:
         # Appended rather than delivered, because there is nothing for a worker to do about it: a
         # command reaches no model, so waking a pass to look at one would be a pass with no work.
         entry = await self.checkpointer.append(session, recorded_command(said))
-        self.commands.start(Slot(session=session, entry=entry.key), said, where)
+        self.commands.start(
+            Slot(session=session, entry=entry.key),
+            said,
+            where,
+            InAWorktree(
+                worktree=self.workspaces.worktree(session, found.chosen.repository),
+                scratch=self.workspaces.scratch_at(session),
+            ),
+            found.chosen.isolation.venue,
+        )
         return entry.key
 
     async def live(self, session: str, found: Conversation) -> Live | None:

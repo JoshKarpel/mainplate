@@ -12,11 +12,9 @@
 # the same answer. `Path.resolve` is what makes the symlink case work, since it is the only check
 # that follows one.
 #
-# **A path can also be in reach and still refused**, which is `Root.sealed`: the `.git` at a
-# worktree's root is git's pointer at its own directory, and rewriting it makes every later git in
-# there read a repository the session chose. The sandbox binds that file read-only, and these tools
-# write from the parent and never pass through a sandbox, so this is the same guard on the other
-# path rather than the same check twice.
+# **Git metadata is out of reach through the anchored file tools.** Ordinary Git is available through
+# `bash`, where it runs inside the sandbox. Keeping `.git` sealed here stops a line-editing call from
+# treating internal Git files as repository content and bypassing Git's own locking and formats.
 #
 # There are *two* places a session may reach, and they are not symmetric. A relative path is inside
 # the worktree unless a call names another root, because what a conversation is about is the
@@ -97,7 +95,7 @@ class ListingFailed(RuntimeError):
     git could not say what is in a directory.
 
     Not a `Refused`, because it is not something a model can retry its way out of: every worktree
-    these tools are built against is a linked worktree, so this is a broken environment rather than
+    these tools are built against is a checkout, so this is a broken environment rather than
     a badly-aimed call.
     """
 
@@ -160,11 +158,8 @@ class GitTracked:
     is the one thing that is true of this root and false of every other. A second worktree is one
     more of these in `Files.roots` and nothing else.
 
-    It holds the `Worktree` rather than its path, because enumerating it means running a program
-    against a directory a session may write, and *how* to do that safely is one answer this console
-    has already worked out: which git directory to name, and what environment to build. Holding the
-    path would be holding half of it, and the other half would be reassembled here and drift.
-    """
+    It holds the `Worktree` rather than only its path because enumeration runs Git, and Git against
+    model-writable configuration must run through the worktree's confinement.
 
     worktree: Worktree
 
@@ -181,14 +176,8 @@ class GitTracked:
     @property
     def sealed(self) -> tuple[str, ...]:
         """
-        `.git`, because a linked worktree keeps a one-line pointer there rather than a directory,
-        and it is the one file in reach whose *contents decide what git runs*: a session that
-        repoints it at a repository of its own has git reading that repository's configuration, and
-        several settings there name a program.
-
-        The sandbox binds the same file read-only, and this is not that check written twice. These
-        tools write from the parent and never pass through a sandbox at all, so without this the
-        bind guards `bash` and `edit` walks around it.
+        `.git`, because it is Git's private metadata rather than a repository file. The agent changes
+        it through ordinary Git in `bash`, where hooks and configured programs stay confined.
         """
         return (POINTER,)
 
@@ -211,11 +200,9 @@ class GitTracked:
         so git failing here is not something a model can retry its way out of, and returning nothing
         would be a silent wrong answer.
 
-        **Through `Worktree.git` rather than a subprocess of its own**, which is what gets this the
-        named git directory and the built environment: running a program in the parent against the
-        one directory a session may write is exactly what that method exists to make safe, and
-        rebuilding it here would be a second copy to keep in step. `at` is where git runs and is
-        never what `--work-tree` names, so a listing of a subdirectory comes back relative to it.
+        Through `Worktree.git`, which runs the fixed `ls-files` argv inside the checkout's sandbox.
+        Git may read model-writable configuration there, but every program it launches has only the
+        session checkout and no network or parent credentials.
 
         `stdout` rather than `out` because `-z` separates paths with NUL, which is not text to strip.
         """
@@ -371,7 +358,7 @@ class Files:
             if here == where or where in here.parents:
                 if any(here == where / name for name in found.sealed):
                     raise Refused(
-                        f"{path!r} is git's own pointer into this session's repository rather than "
+                        f"{path!r} is Git's own metadata for this session's repository rather than "
                         "a file of its own. Nothing here may read or change it."
                     )
                 return Located(path=here, root=found)

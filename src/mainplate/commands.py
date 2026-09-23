@@ -1,17 +1,10 @@
 # What a person runs themselves, beside the conversation rather than inside it.
 #
-# Every other effect in this console is the model's, and every one of them runs behind
-# `sandbox.py`: a mount namespace with the clone bound read-only, no network, and the parent's
-# environment cleared. A command here runs behind none of that, and that is the whole point rather
-# than a gap. A session's `isolation` bounds what a *model* asked for, and the read-only clone is
-# what stops a tool writing a history no panel shows and no fork inherits. `git commit` and
-# `git push` are the person's to run, and confining them is what would make this pointless.
-#
-# The authority that adds is nothing new. A session on `Filesystem.EVERYTHING` already hands a model
-# the store, every other conversation, and `config.yaml` with the credentials in it. What it does
-# mean is that whoever can reach this console can run anything the service can, so reachability is
-# the whole of what guards it - which was already true and is now worth saying out loud.
-#
+# Commands run through the same workspace confinement as model `bash`: the checkout and scratch are
+# writable, the parent environment is absent, and network follows the session's recorded choice. This
+# is required now that `.git/config` is model-writable; an unconfined shell in the checkout would let
+# a model stage a hook or Git helper for the next person-run command to execute with parent authority.
+# The distinction from model commands is authorship and presentation, not filesystem privilege.
 # Nothing here is ever told to a model. The record exists so the page can draw a run and a reload
 # can find it again; putting it in the history is a message somebody writes. See the key scheme in
 # `conversation.py`.
@@ -33,6 +26,10 @@ from mainplate.conversation import Result
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
 from mainplate.settings import DEFAULT_PATIENCE
+from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Venue
+from mainplate.sandbox import confined_by
+from mainplate.sandbox import sandbox_command
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +101,14 @@ def kill(process: asyncio.subprocess.Process) -> None:
         return
 
 
-async def ran(said: str, where: Path, patience: timedelta, into: bytearray) -> Result:
+async def ran(
+    said: str,
+    where: Path,
+    patience: timedelta,
+    into: bytearray,
+    confinement: InAWorktree | None = None,
+    venue: Venue = Venue.CONFINED,
+) -> Result:
     """
     One command, run in `where` as this process's own user, and what came of it.
 
@@ -121,14 +125,27 @@ async def ran(said: str, where: Path, patience: timedelta, into: bytearray) -> R
     run that hit the bound is a result to read, not an error to explain.
     """
     began = asyncio.get_running_loop().time()
-    process = await asyncio.create_subprocess_shell(
-        said,
-        cwd=where,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        # Its own process group, so `kill` can reach whatever the shell started. See `kill`.
-        start_new_session=True,
-    )
+    if confinement is None:
+        process = await asyncio.create_subprocess_shell(
+            said,
+            cwd=where,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+    else:
+        sandbox = await confined_by(confinement)
+        process = await asyncio.create_subprocess_exec(
+            sandbox_command(),
+            *sandbox.argv(at=str(where), venue=venue, home=str(confinement.scratch)),
+            "/bin/sh",
+            "-c",
+            said,
+            cwd=where,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
     reading = process.stdout
     if reading is None:  # pragma: no cover - a pipe was asked for, so there is one
         raise RuntimeError("a command was started with no way to read what it says")
@@ -198,7 +215,14 @@ class Commands:
     patience: timedelta = DEFAULT_PATIENCE
     running: dict[asyncio.Task[None], Slot] = field(default_factory=dict)
 
-    def start(self, slot: Slot, said: str, where: Path) -> None:
+    def start(
+        self,
+        slot: Slot,
+        said: str,
+        where: Path,
+        confinement: InAWorktree | None = None,
+        venue: Venue = Venue.CONFINED,
+    ) -> None:
         """
         Run `said` in `where`, and record what came of it under the slot already claimed for it.
 
@@ -210,11 +234,18 @@ class Commands:
         This is the control-plane argument the worker already answers for cloning, one step along: a
         POST records an intention and something else does the slow part.
         """
-        task = asyncio.create_task(self.record(slot, said, where), name=f"command {slot.session} {slot.entry}")
+        task = asyncio.create_task(self.record(slot, said, where, confinement, venue), name=f"command {slot.session} {slot.entry}")
         self.running[task] = slot
         task.add_done_callback(lambda done: self.running.pop(done, None))
 
-    async def record(self, slot: Slot, said: str, where: Path) -> None:
+    async def record(
+        self,
+        slot: Slot,
+        said: str,
+        where: Path,
+        confinement: InAWorktree | None = None,
+        venue: Venue = Venue.CONFINED,
+    ) -> None:
         """
         The whole of one run: do it, then say what happened, whichever way it ended.
 
@@ -232,7 +263,9 @@ class Commands:
         """
         holding = bytearray()
         try:
-            came = await ran(said, where, self.patience, holding)
+            if confinement is not None:
+                await asyncio.to_thread(confinement.scratch.mkdir, parents=True, exist_ok=True)
+            came = await ran(said, where, self.patience, holding, confinement, venue)
         except asyncio.CancelledError:
             await asyncio.shield(self.result(slot, self.stopped(holding)))
             raise

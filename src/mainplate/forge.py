@@ -236,7 +236,7 @@ class Clones:
         detached this morning, still gets the worktree it would have got before this existed.
         """
         here = self.at(repository.id)
-        fetched = await Worktree(root=here).git(
+        fetched = await Worktree(root=here, trusted=True).git(
             "fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*"
         )
         if not fetched.ok:
@@ -263,7 +263,7 @@ class Clones:
         self.root.mkdir(parents=True, exist_ok=True)
         try:
             async with asyncio.timeout(LISTING.total_seconds()):
-                listed = await Worktree(root=self.root).git("ls-remote", "--heads", "--refs", "--", repository.url)
+                listed = await Worktree(root=self.root, trusted=True).git("ls-remote", "--heads", "--refs", "--", repository.url)
         except TimeoutError:
             logger.warning(f"{repository.name} did not say what branches it has within {LISTING}")
             return ()
@@ -285,20 +285,17 @@ class Clones:
             return here
         self.root.mkdir(parents=True, exist_ok=True)
         logger.info(f"cloning {repository.name} from {repository.forge}")
-        await Worktree(root=self.root).demand("clone", "--bare", repository.url, str(here))
+        await Worktree(root=self.root, trusted=True).demand("clone", "--bare", repository.url, str(here))
         return here
 
 
 @dataclass(frozen=True, slots=True)
 class Workspaces:
     """
-    Where a session's files come from and where they live: clones of repositories, worktrees of
-    clones.
+    Where repositories are cached and where each session's complete checkout lives.
 
-    One value rather than three passed around together, because the three only mean anything as a
-    set: a worktree is of a clone, and a clone is of something a forge reaches. It is what the
-    worker is handed to make a session's files exist, and what the service is handed to say where
-    they are.
+    The bare cache is trusted parent state. A session gets a normal clone of it, with private Git
+    metadata, so local Git writes cannot change another session or the cache.
     """
 
     clones: Clones
@@ -328,13 +325,8 @@ class Workspaces:
 
     def worktree(self, session: str, repository: str) -> Worktree:
         """
-        A session's worktree, knowing which clone it is of, which is what lets git be *told* where
-        its directory is rather than left to find one in a tree the session can write. See
-        `Worktree.gitdir`.
-
-        The repository is asked for rather than derived from the session because nothing here holds
-        a session's choice, and the callers all have it: a worktree is only ever named for a session
-        that picked a repository.
+        A session's complete checkout, paired with the trusted store that keeps its snapshots after
+        the checkout is archived.
         """
         return self.clones.worktrees(repository, self.root).worktree(session)
 
@@ -365,7 +357,7 @@ class Workspaces:
         A session's worktree, cloning the repository first if this console has not seen it before.
 
         Idempotent at both levels, so this is what every pass calls and only the first one does any
-        work: a clone that exists is reused, and a worktree that exists is left exactly as the
+        work: a cache that exists is reused, and a checkout that exists is left exactly as the
         session left it.
 
         A repository **no forge currently reaches is still usable once cloned**, which is the same

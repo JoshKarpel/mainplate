@@ -17,7 +17,6 @@ from mainplate.tools.files import GitTracked
 from mainplate.tools.files import Scratch
 from mainplate.tools.files import System
 from mainplate.tools.files import file_tools
-from mainplate.tools.git import git_tools
 
 __all__ = [
     "Files",
@@ -26,5 +25,4 @@ __all__ = [
     "System",
     "bash_tools",
     "file_tools",
-    "git_tools",
 ]
