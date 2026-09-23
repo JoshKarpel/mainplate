@@ -242,8 +242,13 @@ async def page(browser: Browser) -> AsyncIterator[Page]:
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def phone(browser: Browser) -> AsyncIterator[Page]:
-    """The same thing on a phone, in a context of its own for the reason `page` is."""
-    context = await reading(browser, viewport=PHONE)
+    """
+    The same thing on a phone: the narrow window and, with it, a touch screen, in a context of its own
+    for the reason `page` is. The touch is what a phone is once the question is whether focus brings a
+    keyboard up - `has_touch` sets the `(hover: none)` the script reads - and the width is all a phone's
+    layout needs, so both are here rather than either.
+    """
+    context = await reading(browser, viewport=PHONE, has_touch=True)
     try:
         yield await context.new_page()
     finally:
@@ -3393,14 +3398,9 @@ class TestWhereTheCursorIsOnArrival:
         await a_conversation(console, page)
         await expect(page.locator(".composer textarea")).to_be_focused()
 
-    async def test_a_phone_opens_without_it(self, browser: Browser, console: tuple[str, Service]) -> None:
-        context = await reading(browser, viewport=VIEWPORT, has_touch=True)
-        try:
-            page = await context.new_page()
-            await a_conversation(console, page)
-            await expect(page.locator(".composer textarea")).not_to_be_focused()
-        finally:
-            await context.close()
+    async def test_a_phone_opens_without_it(self, phone: Page, console: tuple[str, Service]) -> None:
+        await a_conversation(console, phone)
+        await expect(phone.locator(".composer textarea")).not_to_be_focused()
 
 
 class TestWhereTheCursorIsAfterSending:
@@ -3442,19 +3442,14 @@ class TestWhereTheCursorIsAfterSending:
         await expect(page.locator("#transcript")).to_contain_text("one more thing")
         await expect(page.locator(".composer textarea")).to_be_focused()
 
-    async def test_the_cursor_stays_off_the_box_when_a_touch_screen_sends(
-        self, browser: Browser, console: tuple[str, Service]
+    async def test_a_phone_sends_and_the_box_stays_off_the_cursor(
+        self, phone: Page, console: tuple[str, Service]
     ) -> None:
-        context = await reading(browser, viewport=VIEWPORT, has_touch=True)
-        try:
-            page = await context.new_page()
-            await a_conversation(console, page)
-            await page.fill(".composer textarea", "and another thing")
-            await page.click(".sender > button")
-            await expect(page.locator("#transcript")).to_contain_text("and another thing")
-            await expect(page.locator(".composer textarea")).not_to_be_focused()
-        finally:
-            await context.close()
+        await a_conversation(console, phone)
+        await phone.fill(".composer textarea", "and another thing")
+        await phone.click(".sender > button")
+        await expect(phone.locator("#transcript")).to_contain_text("and another thing")
+        await expect(phone.locator(".composer textarea")).not_to_be_focused()
 
 
 class TestTheShelf:
