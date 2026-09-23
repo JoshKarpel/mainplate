@@ -76,6 +76,7 @@ type StepKind = Literal[
     "end",
     "environment",
     "archived",
+    "wrote",
 ]
 """
 What a record says it is, and what a turn's keys are named by.
@@ -334,6 +335,28 @@ class Tree(Record):
 
     kind: Literal["tree"] = "tree"
     tree: str | None = None
+
+
+class Wrote(Record):
+    """
+    The net change one request's tool batch made to the worktree, as a unified diff.
+
+    Computed where the two trees are both in hand, which is the moment the *next* request's snapshot is
+    taken, and recorded rather than derived: every later pass replays the diff instead of running git
+    again, and by the time a page is drawn the worktree has moved on. The diff is over the whole
+    worktree and across every tool the batch ran, an `edit`, a `create` and a `bash` alike, because
+    that is the one thing only a snapshot can see: what `bash` touched is invisible to any of the
+    tools themselves.
+
+    An empty `diff` is "no file changed", not "nothing recorded" - a batch that merely read, or one
+    whose writes came to nothing, still ran, and the page draws nothing for the difference between
+    the two rather than spending a row on it. Absence of the record is the third state: the turn
+    ended before its next request could be snapshotted, as a handoff ends it, so no batch's diff was
+    ever taken.
+    """
+
+    kind: Literal["wrote"] = "wrote"
+    diff: str
 
 
 class Response(Record):
@@ -752,6 +775,7 @@ type Step = Annotated[
     | Injected
     | End
     | Environment
+    | Wrote
     | Archived,
     Field(discriminator="kind"),
 ]

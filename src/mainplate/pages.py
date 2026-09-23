@@ -80,6 +80,7 @@ from without_web import url_for
 from mainplate.agent import Choice
 from mainplate.agent import Listed
 from mainplate.calls import INDENT
+from mainplate.calls import block_diff_element
 from mainplate.calls import call_body
 from mainplate.calls import starts_open
 from mainplate.calls import subject_of
@@ -3009,6 +3010,7 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 title=panel.title,
             ),
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
+            *((div(cls=("block", "block--diff"), children=block_diff_element(panel.diff)),) if panel.diff else ()),
         ],
     )
 

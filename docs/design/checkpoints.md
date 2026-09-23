@@ -25,6 +25,7 @@ This console's is the rest:
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |
 | `turn:{n}:tree:{i}` | The worktree before the i-th model request | `Stepping.request` |
+| `turn:{n}:wrote:{i}` | The net change the i-th request's tool batch made, as a unified diff over the whole worktree; empty where nothing changed | `Stepping.request`, once the next snapshot is taken |
 | `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `Stepping.steering` |
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `Stepping.request` |
 | `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `Stepping.request` |

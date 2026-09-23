@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **A batch of tool calls is drawn with its diff below the panel.** The net change the whole batch
+  made, as a `git diff` between the snapshots around it, so an `edit`, a `create` and a `bash` that
+  ran at once read as one change rather than three or none; an `edit`'s own diff is still a press
+  away inside its now-collapsed call. Nothing is drawn where the batch changed no file, and a
+  scratch-only session, with no worktree to snapshot, shows none, as before.
 - **A fence labelled `mermaid` or `svg` is drawn.** The picture it describes stands where the code
   would, SVG as it was written or the diagram as the mermaid library renders it in your theme, and a
   button to the left of `copy` puts the text back and takes it away again. The picture is an image,

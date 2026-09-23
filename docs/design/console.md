@@ -789,13 +789,15 @@ turn of twenty reads was twenty open boxes. A call still out is drawn as its too
 the working mark in its summary saying it is out and [the subject beside its
 name](#what-a-folded-call-says) saying what it is about. `TestWatchingATurnArrive` pins it.
 
-**An `edit` and a `create` are drawn open, and every other call shut.** What a reader watching a
-turn is watching for is what the model is doing to the repository, which is the diff and the new
-file, where what a read brought back or a command said is context they reach for when they want to
-check the work. Decided by the tool alone, for the reason above: an edit drawn shut while it was out
-and open once its diff landed would be a default that moved, and the morph delivering the diff would
-be recorded as the reader opening it. The cost, stated: a turn of twenty edits is twenty open diffs,
-and the dock's fold-all is the way to put them away at once.
+**A `create` is drawn open and every other call shut.** What a reader watching a turn is watching for
+is what the model is doing to the repository, which is the new file a `create` made; what a read
+brought back or a command said, and an edit's operations and its reply, are context they reach for
+when they want to check the work. An `edit` used to be open too, for its diff, and is shut now
+because that diff moved: the whole batch's diff stands below the panel, covering every tool it ran
+at once, so an edit's own diff is the fine print a reader opens a call to see. Decided by the tool
+alone, for the reason above: a call drawn shut while it was out and open once its diff landed would
+be a default that moved, and the morph delivering the diff would be recorded as the reader opening
+it.
 
 **A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
 working, on its own panel, and it is the model's call, so a second panel of dots under it says the
@@ -925,6 +927,25 @@ tokens where the lines are, which is what the HTML formatter's own line wrapping
 lexer cannot be told not to do is turn a bare carriage return into a line break, so a run that
 comes back with a different number of lines is shown uncoloured rather than with every line's
 colour one line off from the line it belongs to.
+
+### The batch's diff
+
+**Below a tool panel's calls stands the net change the whole batch made, as one diff.**  A model
+issues several calls in one response and they run at once, so no single call's diff says what the
+batch did: an `edit`, a `create` and a `bash` together would each report its own slice, and a `bash`
+reports none at all. The batch's diff is `diff(tree:{i}, tree:{i+1})`, the two snapshots around the
+request whose response produced the batch, computed where they are both in hand and [recorded rather
+than derived](tools.md#the-batchs-diff). It is drawn only where the diff has something in it, so a
+batch that merely read spends no row, and it is where an edit's own diff moved *to*: the per-edit
+diff is still a press away inside the collapsed call, where the anchors and the fine-grained hunks
+live, but what a reader watching a turn sees by default is the whole change, every tool and every
+file at once.
+
+**Each file in the diff is a header line naming its path, then its hunks**, the same numbered lines
+an edit's diff draws, one gutter width across the whole block so the columns line up. The path is a
+line the console writes, marked `said`, and a binary change, which has no lines to show, is left out.
+The whole block draws nothing where the two trees are the same, which is the common case for a turn
+that read more than it wrote.
 
 ## The line a shut panel stands for
 
