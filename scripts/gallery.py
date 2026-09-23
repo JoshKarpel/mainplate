@@ -63,6 +63,7 @@ from mainplate.conversation import result_key
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
+from mainplate.conversation import wrote_key
 from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Reachable
@@ -503,6 +504,53 @@ CHECK_SAID = (
     "exit 0"
 )
 
+
+# The net change the batch of four calls above made, in the shape the snapshot records it: the same
+# edit `EDIT_DIFF` shows, wrapped as one file of a `git diff`, and the file `create` made beside it as
+# a second. Drawn below the panel rather than inside any one call, which is what the block diff is
+# for: one reading of a batch that ran an edit, a create and a bash at once.
+BLOCK_DIFF = "\n".join(
+    [
+        f"diff --git a/{EDITED_PATH} b/{EDITED_PATH}",
+        "index 2c0f5a1..9d1e3b7 100644",
+        f"--- a/{EDITED_PATH}",
+        f"+++ b/{EDITED_PATH}",
+        "@@ -823,11 +823,10 @@",
+        " .text pre {",
+        "     position: relative;",
+        "     margin: var(--space-4) 0;",
+        "     line-height: var(--mono-line);",
+        "     padding: var(--space-4) var(--space-5);",
+        "     border: 1px solid var(--edge-soft);",
+        "     border-radius: var(--radius);",
+        "     background: var(--sunk);",
+        "-    overflow-x: auto;",
+        " }",
+        " ",
+        "@@ -837,6 +836,7 @@",
+        " .text pre code {",
+        "     display: block;",
+        "+    overflow-x: auto;",
+        "     padding: 0;",
+        "     background: none;",
+        "     font-size: var(--mono-size);",
+        " }",
+        f"diff --git a/{CREATED_PATH} b/{CREATED_PATH}",
+        "new file mode 100644",
+        "index 0000000..0000000",
+        "--- /dev/null",
+        f"+++ b/{CREATED_PATH}",
+        "@@ -0,0 +1,7 @@",
+        "+from playwright.async_api import Page",
+        "+",
+        "+",
+        "+async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:",
+        '+    await page.goto(f"{gallery}/session.html", wait_until="load")',
+        '+    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")',
+        "+    assert not wider",
+    ]
+)
+
 # What the requests in this fixture carried, so the panel that draws a session's system prompt has
 # something to draw. Three scopes in the order `instructing` composes them - the console's standing
 # directions, the working note the session's own isolation adds, and the repository's own
@@ -909,7 +957,10 @@ TREES = (
 
 
 def snapshotted(written: dict[str, object]) -> dict[str, object]:
-    """The same checkpoint with a tree recorded before each of a turn's model requests."""
+    """
+    The same checkpoint with a tree before each of a turn's model requests, and a batch's diff
+    where its tools changed the tree.
+    """
     return {
         **written,
         **{
@@ -917,6 +968,7 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
             for turn, taken in enumerate(TREES)
             for at, tree in enumerate(taken)
         },
+        wrote_key(1, 1): records.Wrote(diff=BLOCK_DIFF).recorded(),
     }
 
 
@@ -1180,7 +1232,8 @@ CAPTIONS: Final[dict[str, str]] = {
     "session.html": (
         "A settled conversation: reasoning, a read, a highlighted reply with a table, a diagram and an SVG to "
         "draw, commands the person ran, a boundary where the context started again, and under it a read of "
-        "the stylesheet, an edit drawn as its diff, a file created, and a shell command with what it said."
+        "the stylesheet, a batch drawn with its diff of an edit and a file created, and a shell command with what "
+        "it said."
     ),
     "waiting.html": "A message waiting for its turn.",
     "answering.html": "A turn part way through: two reads out at once, a steer taken and one still to be, a command running.",

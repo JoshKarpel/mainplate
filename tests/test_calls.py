@@ -7,7 +7,9 @@ from without_html import render
 
 from mainplate.calls import Change
 from mainplate.calls import Row
+from mainplate.calls import block_diff_element
 from mainplate.calls import call_body
+from mainplate.calls import changes_by_file
 from mainplate.calls import changes_of
 from mainplate.calls import rows_of
 from mainplate.calls import starts_open
@@ -86,16 +88,16 @@ class TestWhichCallsStartOpen:
     as a decision nobody made.
     """
 
-    @pytest.mark.parametrize("tool", ["edit", "create"])
+    @pytest.mark.parametrize("tool", ["create"])
     def test_a_call_that_writes_something_is_drawn_open(self, tool: str) -> None:
         assert starts_open(tool)
 
-    @pytest.mark.parametrize("tool", ["read", "list", "grep", "bash", "hand_off"])
+    @pytest.mark.parametrize("tool", ["read", "list", "grep", "bash", "hand_off", "edit"])
     def test_every_other_call_is_drawn_shut(self, tool: str) -> None:
         assert not starts_open(tool)
 
     def test_the_fold_says_so_in_both_attributes(self) -> None:
-        opened = render(tool_block(ToolUse(tool="edit", arguments='{"path": "a.py"}', returned=None), "panel-0-1", 0))
+        opened = render(tool_block(ToolUse(tool="create", arguments='{"path": "a.py"}', returned=None), "panel-0-1", 0))
         shut = render(tool_block(ToolUse(tool="read", arguments='{"path": "a.py"}', returned=None), "panel-0-1", 0))
         assert 'id="panel-0-1-tool-0" open data-opens="open"' in opened
         assert 'id="panel-0-1-tool-0" data-opens="shut"' in shut
@@ -226,3 +228,44 @@ class TestWhatAnOpenCallShows:
     def test_what_any_other_tool_returned_is_verbatim_with_its_urls_linked(self) -> None:
         body = drawn("hand_off", {}, Returned("success", "see https://example.com/x"))
         assert '<a href="https://example.com/x" referrerpolicy="no-referrer">https://example.com/x</a>' in body
+
+
+GIT_DIFF = """\
+diff --git a/a.py b/a.py
+index 1111111..2222222 100644
+--- a/a.py
++++ b/a.py
+@@ -1,2 +1,2 @@
+ def f():
+-    return 1
++    return 42
+diff --git a/new.txt b/new.txt
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,1 @@
++hello
+"""
+
+
+class TestABlocksBatch:
+    """The net change a whole batch made, read out of the git diff the snapshot recorded."""
+
+    def test_each_file_is_named_with_its_hunks(self) -> None:
+        assert [(path, len(changes)) for path, changes in changes_by_file(GIT_DIFF)] == [
+            ("a.py", 4),
+            ("new.txt", 2),
+        ]
+
+    def test_a_header_is_drawn_per_file_and_the_marks_are_kept(self) -> None:
+        body = render(block_diff_element(GIT_DIFF))
+
+        assert '<span class="line" data-said>a.py\n</span>' in body
+        assert '<span class="line" data-said>new.txt\n</span>' in body
+        assert 'data-mark="-">-    return 1\n</span>' in body
+        assert 'data-mark="+">+hello\n</span>' in body
+
+    def test_a_binary_change_has_no_lines_and_is_left_out(self) -> None:
+        binary = "diff --git a/img.png b/img.png\nindex 111..222 100644\nBinary files a/img.png and b/img.png differ\n"
+        assert changes_by_file(binary) == ()

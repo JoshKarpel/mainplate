@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Final
@@ -58,13 +60,14 @@ INDENT: Final = 2
 CALLED_WITH: Final = "called with"
 RETURNED: Final = "returned"
 
-# The tools whose calls are drawn open, because what they did is what a reader watching a turn is
-# watching for: a diff, or a new file. Every other call is drawn shut, since what a read brought
-# back or a command said is context a reader reaches for, and a turn of twenty reads drawn open is
-# twenty screens of file. Per tool and never per state, which is the one rule the fold script
-# rests on: a fold whose default moved as its result landed would be recorded as a decision nobody
-# made; see `wireFolds` in `mainplate.js`.
-WRITING: Final = frozenset({"edit", "create"})
+# The tools whose calls are drawn open. A `create` is, because the new file is what a reader watching
+# a turn is watching for; every other call is drawn shut, since what a read brought back or a command
+# said is context a reader reaches for, and a turn of twenty reads drawn open is twenty screens of
+# file. An `edit` used to be open too, for the diff; that diff now stands at the block level below the
+# panel, covering the whole batch, so the per-edit diff is a press away. Per tool and never per state,
+# which is the one rule the fold script rests on: a fold whose default moved as its result landed
+# would be recorded as a decision nobody made; see `wireFolds` in `mainplate.js`.
+WRITING: Final = frozenset({"create"})
 
 # The tools whose returns carry lines of a file behind an anchor, which is what `rows_of` reads. The
 # console's own and nobody else's: a plugin's tool could print the same shape and would be shown it
@@ -327,6 +330,27 @@ def changes_of(diff: str) -> Iterator[Change]:
                 raise ValueError(f"not a line of a unified diff: {line!r}")
 
 
+def gutter_width(changes: Iterable[Change]) -> int:
+    """How wide each side of a diff's gutter has to be, from the widest line number it holds."""
+    return max(
+        (len(str(at)) for change in changes for at in (change.old, change.new) if at is not None),
+        default=0,
+    )
+
+
+def diff_lines(changes: Sequence[Change], width: int) -> list[Element]:
+    """One run of a diff as lines, numbered on each side, which `diff_element` and a block's files share."""
+    lines = []
+    for change in changes:
+        if change.mark == "@":
+            lines.append(line_element(" " * (2 * width + 2), change.text, "@"))
+            continue
+        old = "" if change.old is None else str(change.old)
+        new = "" if change.new is None else str(change.new)
+        lines.append(line_element(f"{old:>{width}} {new:>{width}} ", f"{change.mark}{change.text}", change.mark))
+    return lines
+
+
 def diff_element(diff: str) -> Element:
     """
     The change an `edit` made, as the diff the tool recorded beside its reply.
@@ -338,16 +362,76 @@ def diff_element(diff: str) -> Element:
     if not diff:
         return span(cls="tool__silent", children="no change")
     changes = tuple(changes_of(diff))
-    width = max(len(str(at)) for change in changes for at in (change.old, change.new) if at is not None)
-    lines = []
-    for change in changes:
-        if change.mark == "@":
-            lines.append(line_element(" " * (2 * width + 2), change.text, "@"))
+    return pre(cls=("lines", "diff"), children=code(children=diff_lines(changes, gutter_width(changes))))
+
+
+def changes_by_file(diff: str) -> tuple[tuple[str, tuple[Change, ...]], ...]:
+    """
+    Each file a git diff changed, as its path and the numbered lines of its hunks.
+
+    What git prints around the lines a reader wants - the `diff --git` header then the `index`,
+    mode, rename and `---`/`+++` lines before the first hunk - is dropped, so what reaches
+    `changes_of` is the same clean shape `diffed` produces. The path comes off the `diff --git`
+    header, where it is the same on both sides whether the file was added, removed or edited. A
+    binary change has no lines to show and is left out, which is the one reading `--no-renames`
+    cannot turn into a line diff.
+    """
+    files: list[tuple[str, tuple[Change, ...]]] = []
+    path: str | None = None
+    hunks: list[str] = []
+    for line in diff.split("\n"):
+        if line.startswith("diff --git "):
+            if path is not None and hunks:
+                files.append((path, tuple(changes_of("\n".join(hunks)))))
+            _, _, rest = line.partition(" a/")
+            path = rest.partition(" b/")[0]
+            hunks = []
+        elif not line or line.startswith(
+            (
+                "index ",
+                "new file mode",
+                "deleted file mode",
+                "old mode",
+                "new mode",
+                "similarity index",
+                "dissimilarity index",
+                "rename from",
+                "rename to",
+                "copy from",
+                "copy to",
+                "Binary files",
+                "GIT binary patch",
+                "--- ",
+                "+++ ",
+                "\\",
+            )
+        ):
             continue
-        old = "" if change.old is None else str(change.old)
-        new = "" if change.new is None else str(change.new)
-        lines.append(line_element(f"{old:>{width}} {new:>{width}} ", f"{change.mark}{change.text}", change.mark))
-    return pre(cls=("lines", "diff"), children=code(children=lines))
+        else:
+            hunks.append(line)
+    if path is not None and hunks:
+        files.append((path, tuple(changes_of("\n".join(hunks)))))
+    return tuple(files)
+
+
+def block_diff_element(diff: str) -> Element:
+    """
+    The net change one batch of tool calls made, per file, with each file's path over its hunks.
+
+    Drawn below the panel's calls rather than inside any one of them, because a batch may run an
+    `edit`, a `create` and a `bash` at once and a diff for one call would say part of the change. The
+    path is a line the console writes, marked `said`, and the hunks under it are the same numbered
+    lines `diff_element` draws, one gutter width across the whole block so the columns line up.
+    """
+    files = changes_by_file(diff)
+    if not files:
+        return span(cls="tool__silent", children="no change")
+    width = gutter_width(change for _, changes in files for change in changes)
+    lines: list[Element] = []
+    for path, changes in files:
+        lines.append(line_element(None, path, said=True))
+        lines.extend(diff_lines(changes, width))
+    return pre(cls=("lines", "diff", "tool__batch"), children=code(children=lines))
 
 
 def recorded_diff(used: ToolUse) -> str | None:

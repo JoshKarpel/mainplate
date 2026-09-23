@@ -84,6 +84,17 @@ def parse_tree(recorded: object) -> str | None:
     return None if recorded is None else records.Tree.model_validate(recorded).tree
 
 
+def parse_wrote(recorded: object) -> str:
+    """
+    The net change one batch of tool calls made to the worktree, as the diff the pass computed it.
+
+    Empty is a batch that changed nothing, which is an ordinary answer and not a missing record: the
+    record's presence is what says a batch ran and its diff was taken, where absence says the turn
+    ended before one could be.
+    """
+    return records.Wrote.model_validate(recorded).diff
+
+
 def parse_took(recorded: object) -> timedelta | None:
     """
     How long one recorded thing took, or nothing where the pass that wrote it could not say.
@@ -556,6 +567,31 @@ class Stepping:
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
 
+    async def wrote(self, before: str | None, after: str | None) -> None:
+        """
+        Record the net change the tool batch that just ran made, from the tree it started from to the
+        one it ended at.
+
+        Called from `request` after the snapshot of the *current* request, because that is the moment
+        both halves are in hand: the current request's tree was just captured and the previous one has
+        been in the store since its own request. It rides under `wrote:{at-1}`, the request whose
+        response produced the batch, so a reader of that request finds the diff its tools wrote.
+
+        An unchanged pair records an empty diff rather than running git, and a session with no
+        worktree records one too: either is "the batch's net change is nothing to show", which the
+        page reads as no figure rather than as a missing record. The `git diff` itself is an effect,
+        so it happens inside the step and a replay is handed the recorded text instead of running it
+        again.
+        """
+        key = self.key("wrote")
+
+        async def diffing() -> object:
+            if self.worktree is None or before is None or after is None or before == after:
+                return records.Wrote(diff="").recorded()
+            return records.Wrote(diff=await self.worktree.diff(before, after)).recorded()
+
+        await self.step(key, diffing, parse_wrote)
+
     def refused(self, at: int) -> records.Refused | None:
         """
         Why request `at` of this turn was refused before, where a pass has already been refused it.
@@ -675,7 +711,10 @@ class Stepping:
             raise RequestRefused(already.why)
         key = self.key("model")
         self.allow(key)
-        await self.snapshot()
+        after = await self.snapshot()
+        if at > 0:
+            before = parse_tree(self.run.recorded.get(f"{self.prefix}:tree:{at - 1}"))
+            await self.wrote(before, after)
 
         async def ask() -> object:
             started = monotonic()
