@@ -933,7 +933,23 @@ class TestTheSessionListOnAPhone:
         await expect(phone.locator(below)).to_be_hidden()
         await phone.mouse.move(x, y)
         await phone.mouse.wheel(0, 200)
-        await phone.wait_for_function("() => document.querySelector('.transcript').scrollTop > 0")
+        # Until the wheel's scroll has *stopped*, not merely begun: it is animated over several
+        # frames, and put back to the top partway through, the rest of it lands a pixel below the
+        # top. Stopped is the same position for a few frames running, since this Chromium sends no
+        # `scrollend` for it.
+        await phone.evaluate(
+            """() => new Promise((done) => {
+                const transcript = document.querySelector('.transcript');
+                let last = -1, still = 0;
+                const look = () => {
+                    const now = transcript.scrollTop;
+                    still = now > 0 && now === last ? still + 1 : 0;
+                    last = now;
+                    if (still >= 5) done(); else requestAnimationFrame(look);
+                };
+                requestAnimationFrame(look);
+            })"""
+        )
         await phone.evaluate("() => { document.querySelector('.transcript').scrollTop = 0; }")
         await phone.locator(clasp).click()
         await expect(phone.locator(below)).to_be_in_viewport()
