@@ -107,6 +107,9 @@ from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
 from mainplate.conversation import turn_prefix
+from mainplate.conversation import with_diffs
+from mainplate.conversation import wrote_in
+from mainplate.conversation import wrote_key
 from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.durability import deferred_until
@@ -249,6 +252,7 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.Command(said="git status"),
     records.Result(status=1, output="", took=timedelta(seconds=0.08)),
     records.Tree(tree="a" * 40),
+    records.Wrote(diff="--- a.py\n+++ a.py\n@@ -1 +1 @@\n-old\n+new"),
     records.Response(response={"kind": "response", "parts": []}),
     records.Refused(why="prompt is too long", status=400),
     records.Deferred(until=WHEN + timedelta(days=3), why="429: the usage limit has been reached"),
@@ -339,6 +343,38 @@ class TestWhatAStepHolds:
         assert records.Prompt.model_validate({"kind": "prompt", "said": "go", "invented_later": 1}).said == "go"
         with pytest.raises(ValidationError):
             records.STEP.validate_python({"kind": "approval", "said": "go"})
+
+
+class TestReadingABatchsDiff:
+    """The net change a batch recorded, read back by request and attached to the panel that drew it."""
+
+    def test_wrote_in_reads_each_batchs_diff_by_request(self) -> None:
+        recorded = {
+            wrote_key(1, 0): records.Wrote(diff="--- a\n+++ a").recorded(),
+            wrote_key(1, 1): records.Wrote(diff="--- b\n+++ b").recorded(),
+            wrote_key(2, 0): records.Wrote(diff="--- c\n+++ c").recorded(),
+        }
+
+        assert wrote_in(recorded, 1) == {0: "--- a\n+++ a", 1: "--- b\n+++ b"}
+
+    def test_a_turn_with_no_diff_yet_reads_nothing(self) -> None:
+        assert wrote_in({}, 1) == {}
+
+    def test_with_diffs_puts_a_tool_panels_diff_on_it_and_touches_nothing_else(self) -> None:
+        tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
+        other = Panel(turn=1, at=2, kind="assistant", blocks=(), asked=0)
+
+        got_tool, got_other = with_diffs((tool, other), {0: "--- a\n+++ a"})
+
+        assert got_tool.diff == "--- a\n+++ a"
+        assert got_other.diff is None
+
+    def test_a_batch_that_changed_nothing_is_drawn_same_as_one_that_never_differed(self) -> None:
+        tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
+
+        (got,) = with_diffs((tool,), {0: ""})
+
+        assert got.diff == "", "an empty diff is a diff, and the page draws nothing for either"
 
 
 class TestForgettingWhatCameBefore:

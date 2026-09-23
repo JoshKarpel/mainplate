@@ -89,6 +89,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
@@ -144,6 +145,7 @@ from mainplate.durability import parse_refused
 from mainplate.durability import parse_returned
 from mainplate.durability import parse_took
 from mainplate.durability import parse_tree
+from mainplate.durability import parse_wrote
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
 from mainplate.loop import Agent
@@ -759,6 +761,19 @@ def tree_key(turn: int, at: int) -> StepKey:
     numbering here and the numbering of `turn:{n}:model:{i}` advance together.
     """
     return f"{turn_prefix(turn)}:tree:{at}"
+
+
+def wrote_key(turn: int, at: int) -> StepKey:
+    """
+    Where the net change the `at`-th request's tool batch made is recorded.
+
+    Numbered by the request whose *response* produced the batch, in step with `tree_key` one request
+    along: the diff under `wrote:{at}` is `tree:{at}` against `tree:{at+1}`, so it exists only once
+    the request after the batch has been snapshotted. Built here and by `Stepping.key("wrote")` there,
+    with the same drift hazard `tree_key` carries and the same answer, an assertion in
+    `test_conversation.py`.
+    """
+    return f"{turn_prefix(turn)}:wrote:{at}"
 
 
 def heard_key(turn: int, at: int) -> StepKey:
@@ -1550,6 +1565,16 @@ class Panel:
 
     `None` for the person's own panel and for a steer, which is the same thing said twice: neither
     came out of a response, so neither opens a request.
+    """
+
+    diff: str | None = None
+    """
+    The net change this request's tool batch made to the worktree, as the unified diff a pass recorded.
+
+    Carried on a tool panel rather than on a rule, because it is about what the *batch* did and a batch
+    is what one tool panel draws. `None` is every other kind of panel, a batch the turn ended before
+    its diff was taken, and the ordinary case of an empty one: the page draws a figure only where the
+    diff has something in it, so nothing distinguishes "recorded nothing" from "recorded no change".
     """
 
     @property
@@ -2514,6 +2539,23 @@ def tooks_in(recorded: Mapping[str, object], turn: int, responses: Sequence[Mode
     return {call: held.took for call, held in calls_in(recorded, turn, responses).items() if held.took is not None}
 
 
+def wrote_in(recorded: Mapping[str, object], turn: int) -> dict[int, str]:
+    """
+    The net change each of a turn's tool batches made, by the request that produced it.
+
+    A batch whose diff has not been taken yet is simply absent, which is the running turn's own state:
+    the record lands when the request *after* the batch snapshots, so the panel watching the batch
+    runs draws no figure until then rather than a placeholder nothing fills in. Absent and empty read
+    the same to the page, which draws only where a diff has something in it.
+    """
+    wanted = f"{turn_prefix(turn)}:wrote:"
+    found: dict[int, str] = {}
+    for key, value in recorded.items():
+        if key.startswith(wanted):
+            found[int(key[len(wanted) :])] = parse_wrote(value)
+    return found
+
+
 def responses_in(messages: Sequence[ModelMessage]) -> tuple[ModelResponse, ...]:
     """The model's own turns within a settled turn, which is what carries what the turn cost."""
     return tuple(message for message in messages if isinstance(message, ModelResponse))
@@ -2673,6 +2715,21 @@ def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Pane
     )
 
 
+def with_diffs(panels: Iterable[Panel], wrote: Mapping[int, str]) -> tuple[Panel, ...]:
+    """
+    The panels with each tool panel carrying the diff its batch recorded, and the rest untouched.
+
+    A tool panel is what draws a batch, so the diff computed for that batch's request rides on it
+    rather than on a rule; `None` where none was recorded, which is a batch the turn ended before
+    diffing, and an empty one, which is a batch that changed nothing. The page draws a figure only
+    where the returned reading is not `None`, so those two read alike there.
+    """
+    return tuple(
+        replace(panel, diff=wrote.get(panel.asked)) if panel.kind == "tool" and panel.asked is not None else panel
+        for panel in panels
+    )
+
+
 def transcript(recorded: Mapping[str, object]) -> Transcript:
     """
     The whole conversation, read out of the checkpoint that is the only record of it.
@@ -2709,7 +2766,9 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answering = responses_in(said)
         panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
         blocks = parted(said, tooks_in(recorded, turn, answering))
-        panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
+        panels.extend(
+            with_diffs(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))), wrote_in(recorded, turn))
+        )
         spent[turn] = spent_on(answering)
         asking[turn] = requests_in(recorded, turn, answering)
         latest = answering[-1].timestamp if answering else latest
@@ -2724,7 +2783,9 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answering = responded(recorded, turn)
         panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
         blocks = blocks_from(recorded, held, turn, answering)
-        panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
+        panels.extend(
+            with_diffs(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))), wrote_in(recorded, turn))
+        )
         if answering:
             spent[turn] = spent_on(answering)
             asking[turn] = requests_in(recorded, turn, answering)

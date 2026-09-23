@@ -243,6 +243,26 @@ the time anybody reads the page the file has moved on. A `ToolReturn` carrying a
 `tools` is refused by the loop rather than dropped, since either is a promise to the model this loop
 does not keep.
 
+### The batch's diff
+
+**A batch runs several tools at once, and none of them sees the whole change, so the snapshot
+records it.** An edit hands back its own diff and a create its new file, but a `bash` can rewrite
+anything and hands nothing back; only the worktree knows what the batch did, because the worktree is
+where it did it. `Stepping.request` captures the tree before every request, so the trees around a
+request whose response produced tool calls are both in hand the moment the *next* request snapshots,
+and the diff between them - `git diff tree:{i} tree:{i+1}`, untracked files included - is the batch's
+net change, recorded under `wrote:{i}` and replayed rather than recomputed. It is the one diff that
+covers an `edit`, a `create` and a `bash` alike, which is why it is what [the page](console.md#the-batchs-diff)
+draws below a tool panel, and why an edit's own diff is now the fine print inside the call.
+
+**A session with no worktree records an empty diff, and the page draws nothing for it.** The two
+trees only exist where there is a repository to snapshot, so a scratch-only session's batch is as
+invisible to this as a batch that changed nothing - which is the honest reading, since a scratch has
+no history to diff against, and is why the mechanism stays on the snapshot rather than being
+rebuilt as a second one for files nobody is versioning. A turn a plugin ends at a tool call has no
+next request to snapshot, so its batch's diff is the one state that is never taken; the calls' own
+rendering still shows what each did.
+
 ## Two refusals rather than omissions
 
 **There is no `write`**: a tool that overwrites a whole file is the escape hatch that makes anchored

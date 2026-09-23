@@ -373,6 +373,25 @@ class Worktree:
         listed = await self.demand("ls-tree", "-r", "--name-only", tree)
         return tuple(line for line in listed.splitlines() if line)
 
+    async def diff(self, before: str, after: str) -> str:
+        """
+        The change between two trees, as the unified diff git prints for it.
+
+        Both trees are immutable objects already in this repository's store, so the answer is settled
+        and could be recomputed from the hashes at any time; it is called once and the *text* recorded,
+        rather than run again on every replay or render, which is the same bargain `capture` makes.
+        `--no-renames` keeps the output to added and removed lines rather than `rename from` / `rename
+        to` sections a reader gets nothing from, and `--no-ext-diff` stops a repository's `.gitattributes`
+        from naming an external diff driver for some extension, which would run a program the tree
+        chose.
+
+        An unchanged pair prints nothing and exits 0, which is an empty diff rather than a fault.
+        """
+        ran = await self.git("diff", "--no-renames", "--no-ext-diff", before, after)
+        if not ran.ok:
+            raise SnapshotFailed(f"git diff {before[:8]} {after[:8]} failed ({ran.code}): {ran.err or ran.out}")
+        return ran.out
+
 
 @dataclass(frozen=True, slots=True)
 class Worktrees:
