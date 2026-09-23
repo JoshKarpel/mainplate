@@ -185,7 +185,9 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
             yield f"http://{server.host}:{server.port}", service
 
 
-async def reading(browser: Browser, viewport: ViewportSize, java_script_enabled: bool = True) -> BrowserContext:
+async def reading(
+    browser: Browser, viewport: ViewportSize, java_script_enabled: bool = True, has_touch: bool = False
+) -> BrowserContext:
     """
     A context in the gallery's own zone, **and carrying the cookie that says so**, which together are
     what keeps `paintClock` out of every test here.
@@ -211,7 +213,10 @@ async def reading(browser: Browser, viewport: ViewportSize, java_script_enabled:
     context of its own for exactly this reason.
     """
     context = await browser.new_context(
-        viewport=viewport, java_script_enabled=java_script_enabled, timezone_id=ZONE.key
+        viewport=viewport,
+        java_script_enabled=java_script_enabled,
+        has_touch=has_touch,
+        timezone_id=ZONE.key,
     )
     await context.add_cookies(
         [{"name": ZONE_COOKIE, "value": quote(ZONE.key, safe=""), "domain": "127.0.0.1", "path": "/"}]
@@ -3384,6 +3389,10 @@ class TestWhereTheCursorIsAfterSending:
     conversation is type again, that is a click or a Tab of finding the box before every message
     after the first.
 
+    On a touch screen the box is not, and it is the same reason opening a session does not put the
+    cursor in the box: focus brings the keyboard up over the answer the reader is now watching for,
+    so there is nothing to type into until they touch it.
+
     It is also a matter of *when*: htmx re-enables what it disabled just after the event this is
     driven from, so a focus asked for any sooner is asked of a box that is still disabled and takes
     nothing. That failure looks exactly like no focus rule at all.
@@ -3408,6 +3417,20 @@ class TestWhereTheCursorIsAfterSending:
 
         await expect(page.locator("#transcript")).to_contain_text("one more thing")
         await expect(page.locator(".composer textarea")).to_be_focused()
+
+    async def test_the_cursor_stays_off_the_box_when_a_touch_screen_sends(
+        self, browser: Browser, console: tuple[str, Service]
+    ) -> None:
+        context = await reading(browser, viewport=VIEWPORT, has_touch=True)
+        try:
+            page = await context.new_page()
+            await a_conversation(console, page)
+            await page.fill(".composer textarea", "and another thing")
+            await page.click(".sender > button")
+            await expect(page.locator("#transcript")).to_contain_text("and another thing")
+            await expect(page.locator(".composer textarea")).not_to_be_focused()
+        finally:
+            await context.close()
 
 
 class TestTheShelf:

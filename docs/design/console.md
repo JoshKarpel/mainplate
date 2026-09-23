@@ -569,15 +569,23 @@ note over it would price a request nobody can make. The transcript ends in the s
 and the rule under the last turn is the way on. A session stalled on a missing endpoint keeps its
 refusing box, because a configuration put back *does* enable it, and that is the whole difference
 between the two stops.
-
+**The box does not take the focus on arrival**, because reaching a session is reading what was
+said first, and the fork page is the one box that opens with somebody already there to type, so it
+is the one that takes it. On a phone the keyboard comes up under whatever is focused, and a box
+that grabbed the focus would cover the conversation it belongs to before a word of it had been
+read. Returning the cursor after a send, below, is the different case: that is a box somebody has
+just written into and will write into again.
 **And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
 button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
-flight, so without this the cursor is on nothing at all by the time the answer swaps in. *When*
+flight, so without this the cursor is on nothing at all by the time the answer swaps in. Not on a
+touch screen, where taking it back brings the keyboard up over the answer the reader is now watching
+for: there the box waits to be touched. *When*
 matters as much as whether: htmx re-enables what it disabled just after dispatching
 `htmx:finally:request`, so the focus is asked for a turn of the event loop later, and asked any
 sooner it is asked of a box that is still disabled and takes nothing. Only where nothing else has
 claimed the focus meanwhile, so a reader who went to the search box while the message was in flight
-is left where they went. `TestWhereTheCursorIsAfterSending` drives both ways of sending, and it too
+is left where they went. `TestWhereTheCursorIsAfterSending` drives both ways of sending, and that a
+touch screen is left alone, and it too
 has to be a browser: the focus is a live property the server never renders, and the ordering it
 turns on is htmx's rather than ours.
 

@@ -1837,7 +1837,9 @@
       );
       // And sending takes the focus off the box whichever way it was sent: the button takes it on a
       // click, and `hx-disable` blurs the box itself while the post is in flight. Either way the
-      // next thing somebody does is type again, so the box is where the cursor belongs.
+      // next thing somebody does is type again, so the box is where the cursor belongs. Not on a
+      // touch screen, where putting it back brings the keyboard up over the answer the reader is now
+      // watching for: there the box waits to be touched.
       //
       // A turn of the event loop later, because htmx dispatches this event and re-enables what it
       // disabled immediately afterwards: focused any sooner, the box is still disabled and takes
@@ -1849,6 +1851,7 @@
         if (!box) return;
         setTimeout(() => {
           const holding = document.activeElement;
+          if (window.matchMedia("(hover: none)").matches) return;
           if (holding === null || holding === document.body) box.focus();
         }, 0);
       });
