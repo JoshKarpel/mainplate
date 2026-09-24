@@ -4,6 +4,8 @@ from collections.abc import Awaitable
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 from itertools import pairwise
@@ -14,6 +16,7 @@ from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
 from conftest import INSTRUCTIONS
 from conftest import WHEN
+from conftest import Deferring
 from conftest import Provider
 from conftest import Refusing
 from conftest import Scripted
@@ -25,10 +28,9 @@ from conftest import recorded_turn
 from conftest import said_at
 from conftest import started
 from conftest import steered_at
+from conftest import usage_limit_reached
 from pydantic import ValidationError
-from pydantic_ai.exceptions import IncompleteToolCall
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
@@ -73,8 +75,8 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import altogether
 from mainplate.conversation import blocks_of
 from mainplate.conversation import conversing
-from mainplate.conversation import cut_off_in
-from mainplate.conversation import cut_off_why
+from mainplate.conversation import deferred_in
+from mainplate.conversation import deferred_key
 from mainplate.conversation import failed_key
 from mainplate.conversation import failure_in
 from mainplate.conversation import heard_key
@@ -84,6 +86,7 @@ from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import panelled
 from mainplate.conversation import parse_choice
+from mainplate.conversation import parse_deferred
 from mainplate.conversation import parse_delivered
 from mainplate.conversation import parse_instructions
 from mainplate.conversation import parse_messages
@@ -104,8 +107,12 @@ from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
 from mainplate.conversation import turn_prefix
+from mainplate.conversation import with_diffs
+from mainplate.conversation import wrote_in
+from mainplate.conversation import wrote_key
 from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
+from mainplate.durability import deferred_until
 from mainplate.durability import parse_refused
 from mainplate.durability import stepping
 from mainplate.durability import terminally
@@ -245,8 +252,11 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.Command(said="git status"),
     records.Result(status=1, output="", took=timedelta(seconds=0.08)),
     records.Tree(tree="a" * 40),
+    records.Wrote(diff="--- a.py\n+++ a.py\n@@ -1 +1 @@\n-old\n+new"),
     records.Response(response={"kind": "response", "parts": []}),
     records.Refused(why="prompt is too long", status=400),
+    records.Deferred(until=WHEN + timedelta(days=3), why="429: the usage limit has been reached"),
+    records.Failed(why="OSError('the store went away')", at=9),
     records.Returned(returned={"lines": [1, 2]}, took=timedelta(seconds=0.25)),
     records.Messages(messages=[]),
     records.Instructions(said="answer as a fixture would"),
@@ -264,6 +274,8 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.Confirmed(),
     records.Injected(said=("`apps/web/AGENTS.md`, guidance for this part of the repository:",)),
     records.End(said=("the quality checks are failing:",), at=2),
+    records.Environment(values={"PATH": "/opt/mise/shims:/usr/bin"}),
+    records.Archived(at=WHEN + timedelta(hours=5)),
 )
 
 
@@ -287,7 +299,6 @@ class TestWhatAStepHolds:
 
         An arm added without a case here is not a failing test but a *silent* one: the suite goes on
         passing and the record nobody round-tripped is the one a dump or a migration finds out about.
-        Three arms had already arrived that way before this asked.
 
         Asked of `Step` itself rather than against a written-down count, so adding an arm is one line
         here and adding a number somewhere is never the fix.
@@ -295,6 +306,24 @@ class TestWhatAStepHolds:
         arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
 
         assert {type(each).__name__ for each in EVERY_RECORD} == arms
+
+    def test_every_record_there_is_is_an_arm(self) -> None:
+        """
+        **The half the check above cannot do**, and the reason it has to be asked of the hierarchy.
+        That one holds two hand-written lists against each other, so a record missing from *both* is
+        invisible to it, and four had arrived that way: a `Deferred`, a `Failed`, an `Environment`
+        and an `Archived` were written to checkpoints that `Step` could not read, with the suite
+        green throughout.
+
+        Subclassing `Record` is what nobody can forget, because it is how a record is declared at
+        all. So the list nothing may leave out is derived from that, and what is stated here is only
+        the exception: `Named` and `Enrolled` are members of `Declared` and `Registered` and are
+        never a checkpoint value on their own, which is a thing no schema says and this has to.
+        """
+        arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
+        nested = {"Named", "Enrolled"}
+
+        assert {each.__name__ for each in records.Record.__subclasses__()} - arms == nested
 
     def test_a_choice_is_deliberately_not_an_arm(self) -> None:
         """
@@ -314,6 +343,38 @@ class TestWhatAStepHolds:
         assert records.Prompt.model_validate({"kind": "prompt", "said": "go", "invented_later": 1}).said == "go"
         with pytest.raises(ValidationError):
             records.STEP.validate_python({"kind": "approval", "said": "go"})
+
+
+class TestReadingABatchsDiff:
+    """The net change a batch recorded, read back by request and attached to the panel that drew it."""
+
+    def test_wrote_in_reads_each_batchs_diff_by_request(self) -> None:
+        recorded = {
+            wrote_key(1, 0): records.Wrote(diff="--- a\n+++ a").recorded(),
+            wrote_key(1, 1): records.Wrote(diff="--- b\n+++ b").recorded(),
+            wrote_key(2, 0): records.Wrote(diff="--- c\n+++ c").recorded(),
+        }
+
+        assert wrote_in(recorded, 1) == {0: "--- a\n+++ a", 1: "--- b\n+++ b"}
+
+    def test_a_turn_with_no_diff_yet_reads_nothing(self) -> None:
+        assert wrote_in({}, 1) == {}
+
+    def test_with_diffs_puts_a_tool_panels_diff_on_it_and_touches_nothing_else(self) -> None:
+        tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
+        other = Panel(turn=1, at=2, kind="assistant", blocks=(), asked=0)
+
+        got_tool, got_other = with_diffs((tool, other), {0: "--- a\n+++ a"})
+
+        assert got_tool.diff == "--- a\n+++ a"
+        assert got_other.diff is None
+
+    def test_a_batch_that_changed_nothing_is_drawn_same_as_one_that_never_differed(self) -> None:
+        tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
+
+        (got,) = with_diffs((tool,), {0: ""})
+
+        assert got.diff == "", "an empty diff is a diff, and the page draws nothing for either"
 
 
 class TestForgettingWhatCameBefore:
@@ -444,7 +505,7 @@ class TestForgettingWhatCameBefore:
             # An answered turn always has a spend, even where every count on it is zero: what makes
             # it absent is a turn that has recorded no response at all, not one that cost nothing.
             spent={0: Spent(asked=0, answered=0, cost=None)},
-            requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None)),)},
+            requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None), when=WHEN),)},
             # When the last response landed, which is what the composer reads to say whether the
             # provider still holds this conversation's prefix.
             answered_at=WHEN,
@@ -529,6 +590,30 @@ class TestForgettingWhatCameBefore:
             ModelResponse(parts=[FilePart(content=BinaryContent(b"\x00", media_type="image/png")), TextPart("and")])
         ]
         assert blocks_of(turn, {}) == (Prose(text="and"),)
+
+    def test_reasoning_a_gateway_handed_back_as_tagged_text_is_read_as_reasoning(self) -> None:
+        """
+        Some OpenAI-compatible gateways return a reasoning summary as a text part wrapped in the
+        tags a model thinks inside, one bold title on a line of its own between them. Read as it
+        arrived that is an assistant panel saying `<think>`, with the tags' newlines drawn as breaks
+        above and below the title.
+        """
+        turn: list[ModelMessage] = [ModelResponse(parts=[TextPart("<think>\n**Updating archive logic**\n</think>")])]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Updating archive logic**"),)
+
+    def test_prose_after_the_closing_tag_is_still_the_answer(self) -> None:
+        turn: list[ModelMessage] = [
+            ModelResponse(parts=[TextPart("<think>\n**Planning the fix**\n</think>\n\nAn interval, not a load.")])
+        ]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Planning the fix**"), Prose(text="An interval, not a load."))
+
+    def test_a_tag_mentioned_mid_sentence_is_a_word_and_not_a_wrapper(self) -> None:
+        turn: list[ModelMessage] = [ModelResponse(parts=[TextPart("The wire wraps a summary in <think> tags.")])]
+        assert blocks_of(turn, {}) == (Prose(text="The wire wraps a summary in <think> tags."),)
+
+    def test_a_thinking_part_that_arrived_with_its_tags_on_is_unwrapped_too(self) -> None:
+        turn: list[ModelMessage] = [ModelResponse(parts=[ThinkingPart("<think>\n**Locating imports**\n</think>")])]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Locating imports**"),)
 
     def test_a_message_that_is_not_text_is_refused_rather_than_rendered(self) -> None:
         with pytest.raises(ValidationError):
@@ -1207,8 +1292,8 @@ class TestAnsweringASession:
             recorded=await service.checkpointer.load(SESSION),
             extend=extending(service.checkpointer),
         )
-        with stepping(run, turn_prefix(0)):
-            await agent.run("hello")
+        with stepping(run, turn_prefix(0)) as scope:
+            await agent.run("hello", (), scope)
         await service.checkpointer.release(holder)
         recorded = await service.checkpointer.load(SESSION)
         assert messages_key(0) not in recorded
@@ -1430,7 +1515,7 @@ class TestWhatOnePassDoes:
         recorded = await planting.checkpointer.load(session.id)
         told = system_prompt_in(parse_messages(recorded[messages_key(0)]))
         assert told is not None, "the control: nothing carried means nothing to differ over"
-        assert "You are working in a git worktree" in told, (
+        assert "You are working in a git checkout" in told, (
             "the other control: the note about this session's places is the part that used to be "
             "composed after the record was written, so without it the two agree by having no "
             "chance to disagree"
@@ -1440,6 +1525,24 @@ class TestWhatOnePassDoes:
             "one shape compose the same string and share a cached prefix"
         )
         assert parse_instructions(recorded[instructions_key(0)]) == told
+
+    async def test_what_the_page_draws_from_a_reply_is_said_in_every_session(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        The console's to say rather than the operator's, so it is composed beside the note about the
+        session's places and reaches the record the same way: an operator who rewrites the standing
+        instructions keeps the one sentence saying what the page can show.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = parse_instructions(recorded[instructions_key(0)])
+        assert "labelled `mermaid` or `svg` is drawn as a picture" in told
+        assert told.index(INSTRUCTIONS) < told.index("`mermaid`"), "after the operator's own, whose word it never takes"
 
     async def test_the_system_prompt_is_settled_before_the_first_answer_and_never_recomposed(
         self, service: Service, workspaces: Workspaces
@@ -1790,10 +1893,11 @@ class TestAnAnswerCutOffAtTheOutputLimit:
     """
     The other request no pass can ever get past: one the provider answered, and cut off.
 
-    Pydantic AI raises over an answer stopped at its output limit with nothing in it the loop can act
-    on, and it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left
-    as an ordinary failure it would be replayed into the same exception once per lease for ever,
-    which is the loop the refusal record exists to close, so it is written where a refusal is.
+    The loop raises over an answer stopped at its output limit with nothing in it it can act on, and
+    it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left as an
+    ordinary failure it would be replayed into the same exception once per lease for ever, which is
+    the loop the refusal record exists to close, so it is written where a refusal is. What the reason
+    says is pinned in `test_durability.py`, where the loop is driven directly.
     """
 
     CUT_OFF = ModelResponse(parts=[ThinkingPart(content="let me think about")], finish_reason="length", timestamp=WHEN)
@@ -1845,26 +1949,223 @@ class TestAnAnswerCutOffAtTheOutputLimit:
         assert ended == Blocked(listening=frozenset({opened_key(1)}))
         assert refusal_in(await service.checkpointer.load(SESSION)) is None
 
-    def test_the_reason_names_the_number_that_was_sent(self) -> None:
-        """The number is what somebody looks up, and its absence is what a session with none should say."""
-        assert "output limit of 4096 tokens" in cut_off_why(UnexpectedModelBehavior("cut"), 4096)
-        assert "default output limit" in cut_off_why(UnexpectedModelBehavior("cut"), None)
-
-    def test_a_tool_call_cut_off_is_said_to_be_one(self) -> None:
-        assert "tool call" in cut_off_why(IncompleteToolCall("cut"), 128_000)
-        assert "tool call" not in cut_off_why(UnexpectedModelBehavior("cut"), 128_000)
-
-    def test_only_the_last_answer_decides_and_only_where_it_was_cut_off(self) -> None:
+    async def test_a_tool_call_cut_off_stalls_the_session_and_is_said_to_be_one(self, service: Service) -> None:
         """
-        An earlier answer stopped at the limit that still carried a usable call was acted on, and the
-        turn went on, so the reading is of the last answer and no other.
+        The other shape of the same cut-off: the model ran out of room writing a call's arguments.
+        Left to the retry path the loop would tell the model its arguments were malformed and ask
+        again, which spends a request on an answer that was never wrong. It stalls like the
+        thinking-only case and the reason says which of the two it was.
         """
-        whole = ModelResponse(parts=[TextPart("done")], timestamp=WHEN)
-        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF), model_key(0, 1): kept(whole)}, 0) is None
-        assert cut_off_in({model_key(0, 0): kept(self.CUT_OFF)}, 0) == self.CUT_OFF
-        assert cut_off_in({}, 0) is None
+        await waiting(service, "hello")
+        cut_off = ModelResponse(
+            parts=[ToolCallPart("read", '{"path": "READ', "call-read-0")], finish_reason="length", timestamp=WHEN
+        )
+        scripted = Scripted(script=(cut_off,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert ended == Completed(Stalled())
+        assert scripted.asked == 1, "the model was not asked to try again"
+        refused = parse_refused(recorded[refused_key(0, 1)])
+        assert refused.status is None
+        assert "tool call" in refused.why
 
 
 def kept(answered: ModelResponse) -> object:
-    """One answer as `CheckpointedModel.request` records it, so a reading is tested against the real shape."""
+    """One answer as `Stepping.request` records it, so a reading is tested against the real shape."""
     return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
+
+
+def in_a_while(hours: int = 3) -> datetime:
+    """
+    A moment ahead of the clock a pass actually reads, to the second a provider would name one in.
+
+    The *real* clock, which is the one thing in this suite that is not the 2031 fixture: `resume`
+    takes `now_utc` unless a driver says otherwise, so what a deferral is compared against is now.
+    Whole seconds because that is what `resets_at` carries, and a moment that did not survive the
+    round trip would be a test failing on the microseconds it invented.
+    """
+    return datetime.fromtimestamp(int((datetime.now(UTC) + timedelta(hours=hours)).timestamp()), UTC)
+
+
+class TestARequestTheProviderWillNotTakeYet:
+    """
+    A session told to come back later, which is `Refused`'s opposite: the request is fine.
+
+    What it closes is the loop `RequestRefused` closes one answer along, and at a much larger scale.
+    A pass that raises is redelivered when its lease elapses, so a session against a subscription
+    whose allowance resets next week asks a provider that is already saying no once a minute for
+    days. The provider said when it would take the request; this is the console believing it.
+    """
+
+    async def test_a_deferred_request_suspends_the_pass_until_the_moment_the_provider_named(
+        self, service: Service
+    ) -> None:
+        """
+        `Sleeping` and not `Completed`, which is the whole of what the worker needs: it schedules the
+        delivery for exactly that moment rather than redelivering onto the lease.
+        """
+        await waiting(service, "hello")
+        until = in_a_while()
+        deferring = Deferring(body=usage_limit_reached(until))
+
+        ended = await pass_at(service, deferring.body_of())
+
+        assert ended == Sleeping(key=deferred_key(0, 0), due=until)
+        assert deferring.asked == 1, "the control: the provider really was asked once"
+
+    async def test_the_wait_is_written_down_where_the_page_reads_it(self, service: Service) -> None:
+        """
+        Recorded as well as scheduled, because a session waiting four days must not draw three dots
+        for four days. The provider's own words come across, so the page can say a plan's limit was
+        reached rather than that something went wrong.
+        """
+        await waiting(service, "hello")
+        until = in_a_while()
+
+        await pass_at(service, Deferring(body=usage_limit_reached(until)).body_of())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert deferred_key(0, 0) == "turn:0:deferred:0"
+        held = deferred_in(recorded)
+        assert held is not None
+        assert held.until == until
+        assert "usage_limit_reached" in held.why, "the provider's own words, not a code standing in for them"
+        assert model_key(0, 0) not in recorded, "there is no answer, so nothing pretends there is one"
+
+    async def test_being_deferred_again_records_a_new_moment_rather_than_keeping_the_old_one(
+        self, service: Service
+    ) -> None:
+        """
+        **The reason a wait is keyed by how many there have been and not by the request that caused
+        it.** The pass that comes back asks the same request again, so a second deferral keyed by the
+        request would land on a key already holding the first moment, the store would keep that one,
+        and the session would wake onto a deadline already past - which is the hot loop the wait
+        exists to close, reached through the back door.
+        """
+        await waiting(service, "hello")
+        first, second = in_a_while(1), in_a_while(5)
+
+        await pass_at(service, Deferring(body=usage_limit_reached(first)).body_of())
+        again = await pass_at(service, Deferring(body=usage_limit_reached(second)).body_of())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert again == Sleeping(key=deferred_key(0, 1), due=second)
+        assert parse_deferred(recorded[deferred_key(0, 0)]).until == first, "and the first one is left as it was"
+        assert deferred_in(recorded).until == second  # type: ignore[union-attr]
+
+    async def test_a_retry_after_header_is_the_same_statement_in_the_other_spelling(self, service: Service) -> None:
+        """
+        The standard way a provider says it, which Pydantic AI already parses into seconds from now.
+
+        Read as a moment rather than kept as a duration, for `Run.sleep`'s reason: a deadline
+        survives the pass that heard it and seconds from a moment nobody recorded do not.
+        """
+        await waiting(service, "hello")
+
+        ended = await pass_at(service, Deferring(headers={"retry-after": "90"}).body_of())
+
+        assert isinstance(ended, Sleeping)
+        assert timedelta(seconds=80) < ended.due - datetime.now(UTC) <= timedelta(seconds=90)
+
+    async def test_an_error_that_names_no_moment_is_left_exactly_as_it_was(self, service: Service) -> None:
+        """
+        The default, and the safe way round: a 429 with nothing in it to wait for is a pass that
+        raises, which the worker redelivers on the lease exactly as it did before there were waits.
+        """
+        await waiting(service, "hello")
+
+        with pytest.raises(ModelHTTPError):
+            await pass_at(service, Deferring(body="slow down").body_of())
+
+        assert deferred_in(await service.checkpointer.load(SESSION)) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(None, id="nothing"),
+            pytest.param("slow down", id="prose"),
+            pytest.param({"type": "usage_limit_reached"}, id="no moment in it"),
+            pytest.param({"resets_at": "soon"}, id="not a number"),
+            pytest.param({"resets_at": True}, id="a boolean, which is a number in Python and not here"),
+            pytest.param({"resets_at": 1e30}, id="past what a clock can hold"),
+        ],
+    )
+    def test_a_body_with_no_moment_in_it_is_no_moment(self, body: object) -> None:
+        """
+        Somebody else's shape, read for one field and trusted for nothing: every way of not saying
+        when is the same answer, which is the answer that changes nothing.
+        """
+        now = datetime.now(UTC)
+        assert deferred_until(ModelHTTPError(status_code=429, model_name="fixture", body=body), now) is None
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            pytest.param(503, id="a provider that failed and guessed when it would be back"),
+            pytest.param(500, id="a provider that failed and said nothing about why"),
+            pytest.param(408, id="a request that timed out"),
+        ],
+    )
+    def test_only_a_rate_limit_parks_a_session_however_honest_the_header(self, status: int) -> None:
+        """
+        **The difference is whether the provider knows.** A `429` is a window it is keeping itself,
+        so the moment it names is a fact; every other code that reaches here is transient, and a
+        header on one is a guess about when something outside its control will be fixed. Believed,
+        a `503` with a day in it turns a blip into a day of silence at the moment the ordinary
+        redelivery would have got an answer on its next attempt.
+        """
+        now = datetime.now(UTC)
+        honest = ModelHTTPError(status_code=status, model_name="fixture", headers={"retry-after": "86400"})
+
+        assert deferred_until(honest, now) is None
+
+    def test_a_moment_already_past_is_not_a_wait(self) -> None:
+        """
+        Honoured, it would schedule a wakeup for the past, be redelivered at once, and ask the same
+        question as fast as the queue could turn it around - which is worse than the retry it
+        replaces.
+        """
+        now = datetime.now(UTC)
+        behind = ModelHTTPError(status_code=429, model_name="fixture", body={"resets_at": (now.timestamp() - 60)})
+
+        assert deferred_until(behind, now) is None
+
+    def test_a_header_is_still_read_where_the_body_names_a_moment_already_gone(self) -> None:
+        """
+        Both spellings held against the clock on their own, because a provider echoing the window
+        that has just closed would otherwise take the answer and throw away a usable header on the
+        same response - which puts the session back on the redelivery the wait exists to end.
+        """
+        now = datetime.now(UTC)
+        both = ModelHTTPError(
+            status_code=429,
+            model_name="fixture",
+            body={"resets_at": (now - timedelta(minutes=1)).timestamp()},
+            headers={"retry-after": "90"},
+        )
+
+        named = deferred_until(both, now)
+
+        assert named is not None
+        assert timedelta(seconds=80) < named - now <= timedelta(seconds=90)
+
+    async def test_a_wait_the_turn_that_took_it_got_past_is_history(self, service: Service) -> None:
+        """
+        **The wait belongs to a turn, and a turn reaches its messages by getting past every wait it
+        took.** Any message a person sends makes the delivery ready at once, so a short wait is
+        routinely outlived by the turn that took it: read on the clock alone, the moment would keep
+        the page saying the provider will not take another request for the rest of its window, of a
+        session that has already been answered.
+        """
+        await waiting(service, "hello")
+        await pass_at(service, Deferring(body=usage_limit_reached(in_a_while())).body_of())
+
+        assert deferred_in(await service.checkpointer.load(SESSION)) is not None, "the control: the turn is owed one"
+
+        await pass_at(service, Provider().body())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert messages_key(0) in recorded, "the turn this waited under has answered"
+        assert deferred_in(recorded) is None

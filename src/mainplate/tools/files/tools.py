@@ -12,9 +12,10 @@
 # the same answer. `Path.resolve` is what makes the symlink case work, since it is the only check
 # that follows one.
 #
-# **Git metadata is out of reach through the anchored file tools.** Ordinary Git is available through
-# `bash`, where it runs inside the sandbox. Keeping `.git` sealed here stops a line-editing call from
-# treating internal Git files as repository content and bypassing Git's own locking and formats.
+# **A path can also be in reach and still refused**, which is `Root.sealed`: git's own directory at a
+# checkout's root is git's to write, and `bash` runs git. These tools write from the parent and pass
+# through no sandbox, so what that buys is that an `edit` never becomes a way to rewrite a ref or a
+# config line underneath git's locking.
 #
 # There are *two* places a session may reach, and they are not symmetric. A relative path is inside
 # the worktree unless a call names another root, because what a conversation is about is the
@@ -46,17 +47,20 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from difflib import unified_diff
 from functools import cache
 from pathlib import Path
 from typing import Final
 from typing import assert_never
 
 from pydantic_ai import ModelRetry
+from pydantic_ai.messages import ToolReturn
 from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.roots import RootName
 from mainplate.snapshots import POINTER
 from mainplate.snapshots import Worktree
+from mainplate.tools.files.anchors import CONTEXT
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import EditRefused
 from mainplate.tools.files.anchors import Moved
@@ -75,19 +79,14 @@ MAX_LINES: Final = 1500
 # slipped past the decode check rather than on anything anybody meant to read.
 MAX_BYTES: Final = 2 * 1024 * 1024
 
-# How many times a model may be told it got a call wrong before the turn fails.
-#
-# Above Pydantic AI's default of one, because a refusal here is *designed* to be corrected: a stale
-# anchor, a `find` that occurs twice, a batch whose operations overlap are all things the message
-# says how to fix, and one attempt is not enough to make that promise good. Observed rather than
-# guessed at: a smaller model got the operation shape wrong on its first call and the default limit
-# turned a correctable mistake into a failed turn.
-RETRIES: Final = 3
-
 # The most rows one listing will show. A bound on the pathological case rather than a page size, the
 # way `MAX_LINES` is: `depth` is the knob, and this is what stops a large `depth` on a large
 # repository from spending a context window before the model has asked its first real question.
 MAX_ROWS: Final = 400
+
+# Under what name an edit's diff rides beside its reply, in the metadata the loop records and the
+# page reads. Named here because the page reads it by this name and nothing else does.
+DIFF: Final = "diff"
 
 
 class ListingFailed(RuntimeError):
@@ -160,6 +159,7 @@ class GitTracked:
 
     It holds the `Worktree` rather than only its path because enumeration runs Git, and Git against
     model-writable configuration must run through the worktree's confinement.
+    """
 
     worktree: Worktree
 
@@ -176,8 +176,10 @@ class GitTracked:
     @property
     def sealed(self) -> tuple[str, ...]:
         """
-        `.git`, because it is Git's private metadata rather than a repository file. The agent changes
-        it through ordinary Git in `bash`, where hooks and configured programs stay confined.
+        `.git` and everything under it, because it is git's own state rather than the repository's
+        files. A line edit of `.git/config` or of a ref would bypass git's locking and its formats,
+        and `bash` already runs git itself, confined like every other command. The sealing is about
+        correctness, not about what a session may reach: the same bytes are one `git config` away.
         """
         return (POINTER,)
 
@@ -230,7 +232,7 @@ class Scratch:
 
     @property
     def sealed(self) -> tuple[str, ...]:
-        """Nothing: this is not a worktree, so there is no pointer here to protect."""
+        """Nothing: this is not a checkout, so a `.git` here is just a file."""
         return ()
 
 
@@ -356,10 +358,10 @@ class Files:
         here = ((self.against(root) if root else wheres[0]) / path).resolve()
         for found, where in zip(self.roots, wheres, strict=True):
             if here == where or where in here.parents:
-                if any(here == where / name for name in found.sealed):
+                if any(here == where / name or where / name in here.parents for name in found.sealed):
                     raise Refused(
-                        f"{path!r} is Git's own metadata for this session's repository rather than "
-                        "a file of its own. Nothing here may read or change it."
+                        f"{path!r} is inside git's own directory for this session's repository rather "
+                        "than a file of the repository. Change it with git through `bash`."
                     )
                 return Located(path=here, root=found)
         named = " and ".join(str(each) for each in wheres)
@@ -429,7 +431,7 @@ class Files:
             case _ as unreachable:
                 assert_never(unreachable)
 
-    async def edit(self, path: str, operations: Sequence[Operation], root: str = "") -> str:
+    async def edit(self, path: str, operations: Sequence[Operation], root: str = "") -> Edited:
         located = self.resolved(path, root)
         # The read and the write are one critical section, not two. Holding this around the write
         # alone would leave each caller writing out a whole file it read *before* the other one's
@@ -441,7 +443,8 @@ class Files:
             # `newline=""` again, so the endings `Text` just put back are written as they are rather
             # than translated a second time on the way out.
             await asyncio.to_thread(found.write_text, text.rejoined(done.lines), encoding="utf-8", newline="")
-        return reported(self.naming(path, located), done)
+        named = self.naming(path, located)
+        return Edited(said=reported(named, done), diff=diffed(named, text.lines, done.lines))
 
     async def create(self, path: str, content: str, root: str = "") -> str:
         located = self.resolved(path, root)
@@ -515,6 +518,34 @@ def reading(path: str, total: int, start: int, stop: int) -> str:
 
 def remapping(moved: Moved) -> str:
     return f"  {moved.was} is now {moved.now}   {moved.line.strip()[:60]}"
+
+
+@dataclass(frozen=True, slots=True)
+class Edited:
+    """
+    What one edit hands back: the reply the model reads, and the diff of the change for the page.
+
+    Two values rather than one string, because they are for two readers who want different things.
+    The model wants the changed regions with their fresh anchors, so it can keep editing without a
+    re-read; a person wants to see what went away as well as what arrived, and the reply cannot
+    carry that without spending the model's tokens on lines it is never going to address. So the
+    diff rides beside the reply as `ToolReturn.metadata`, which the loop records and the model is
+    never sent.
+    """
+
+    said: str
+    diff: str
+
+
+def diffed(path: str, before: Sequence[str], after: Sequence[str]) -> str:
+    """
+    The change as a unified diff, in the ordinary shape with `CONTEXT` lines either side of a hunk.
+
+    Computed here rather than at render time because this is the only moment both versions of the
+    file are in hand: by the time a page is drawn the file has moved on, and the reply the model got
+    holds the lines that arrived and not the ones that went.
+    """
+    return "\n".join(unified_diff(before, after, fromfile=path, tofile=path, n=CONTEXT, lineterm=""))
 
 
 def reported(path: str, done: Written) -> str:
@@ -647,7 +678,7 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         """
         return await guarded(files.read(path, offset, limit, root))
 
-    async def edit(path: str, operations: list[Operation], root: str = "") -> str:
+    async def edit(path: str, operations: list[Operation], root: str = "") -> ToolReturn:
         r"""
         Change a file by naming lines with their anchors, never by retyping them.
 
@@ -699,7 +730,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
                 Left out, it is the first one, which is what a bare name has always meant.
 
         """
-        return await guarded(files.edit(path, operations, root))
+        edited = await guarded(files.edit(path, operations, root))
+        return ToolReturn(return_value=edited.said, metadata={DIFF: edited.diff})
 
     async def create(path: str, content: str, root: str = "") -> str:
         """
@@ -719,9 +751,9 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         return await guarded(files.create(path, content, root))
 
     for tool in (read, edit, create):
-        toolset.add_function(tool, retries=RETRIES)
+        toolset.add_function(tool)
     # Asked for as `list`, which is the word a model reaches for, and defined as `listing`, because
     # `list` is a builtin and shadowing one inside this scope is a lint error rather than a style
     # question. The name the model sees is the only one that matters, so it is set here explicitly.
-    toolset.add_function(listing, name="list", retries=RETRIES)
+    toolset.add_function(listing, name="list")
     return toolset

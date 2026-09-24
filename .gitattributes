@@ -1,0 +1,8 @@
+# Vendored bytes are stored as published. `scripts/vendored.toml` records a digest for each of
+# these, and `tests/test_vendored.py` holds the checkout against it, so git may not normalise a line
+# ending on the way in: a licence published with CRLF checked out as LF is a digest the test refuses
+# on every machine but the one it was vendored on. The same files the pre-commit hooks step around.
+src/mainplate/assets/*.min.js -text
+src/mainplate/assets/*-LICENSE.txt -text
+src/mainplate/assets/*-OFL.txt -text
+src/mainplate/assets/*.woff2 -text

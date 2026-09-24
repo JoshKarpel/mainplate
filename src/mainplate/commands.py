@@ -1,10 +1,17 @@
 # What a person runs themselves, beside the conversation rather than inside it.
 #
-# Commands run through the same workspace confinement as model `bash`: the checkout and scratch are
-# writable, the parent environment is absent, and network follows the session's recorded choice. This
-# is required now that `.git/config` is model-writable; an unconfined shell in the checkout would let
-# a model stage a hook or Git helper for the next person-run command to execute with parent authority.
-# The distinction from model commands is authorship and presentation, not filesystem privilege.
+# **Behind the same sandbox as the model's own `bash`**, and that is forced rather than chosen. A
+# session's checkout owns its `.git`, so its configuration is the model's to write, and several of
+# its keys name a program git runs: a hook, `core.fsmonitor`, a filter. A person's `git commit` run
+# here unconfined would run whatever the model last put there, as the service user, with everything
+# that user holds. So a command here reaches the checkout, its store read-only and the scratch, under
+# the session's own network answer and the environment its setup recorded, exactly as the model's
+# would; what differs is who typed it and that no model is told.
+#
+# What that takes away is the person's credentials, so `git push` in here has nothing to push with.
+# Pushing is `Commands.push`'s instead: the branch crosses into the store as a bundle and the store
+# pushes it, as this console, reading no configuration the session wrote.
+#
 # Nothing here is ever told to a model. The record exists so the page can draw a run and a reload
 # can find it again; putting it in the history is a message somebody writes. See the key scheme in
 # `conversation.py`.
@@ -15,21 +22,26 @@ import asyncio
 import logging
 import os
 import signal
+from collections.abc import Awaitable
+from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import timedelta
 from pathlib import Path
+from typing import Final
 
 from without_durability.interfaces import Checkpointer
 
 from mainplate.conversation import Result
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
-from mainplate.settings import DEFAULT_PATIENCE
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
-from mainplate.sandbox import sandbox_command
+from mainplate.settings import DEFAULT_PATIENCE
+from mainplate.snapshots import SnapshotFailed
+from mainplate.snapshots import Worktree
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +54,10 @@ MOST_OUTPUT = 200_000
 BLOCK = 64 * 1024
 
 CUT = "[…output above this point was dropped]\n"
+
+# What a push is recorded as, where a command records what was typed: the word the composer answers
+# to, so the panel says what somebody asked for.
+PUSHED: Final = "push"
 
 # What a command that was killed before it could exit is recorded as. Outside the range a process
 # can exit with (0-255) and outside the negatives a signal produces, so it is not mistakable for
@@ -101,19 +117,30 @@ def kill(process: asyncio.subprocess.Process) -> None:
         return
 
 
-async def ran(
-    said: str,
-    where: Path,
-    patience: timedelta,
-    into: bytearray,
-    confinement: InAWorktree | None = None,
-    venue: Venue = Venue.CONFINED,
-) -> Result:
+@dataclass(frozen=True, slots=True)
+class Running:
     """
-    One command, run in `where` as this process's own user, and what came of it.
+    Where a person's command runs: the session's own sandbox, as its `bash` would get it.
+
+    `environment` is what the session's setup recorded, so `just test` finds the toolchain the
+    repository's plugin installed, as it would for the model.
+    """
+
+    confinement: InAWorktree
+    venue: Venue
+    environment: Mapping[str, str]
+
+    @property
+    def where(self) -> Path:
+        return self.confinement.worktree.root
+
+
+async def ran(said: str, running: Running, patience: timedelta, into: bytearray) -> Result:
+    """
+    One command, run in the session's sandbox, and what came of it.
 
     A **shell** and not an argument vector, because what is in the box is what somebody would type:
-    `git commit -m 'x' && git push` is one thought and two processes, and splitting it here would
+    `git add -A && git commit -m 'x'` is one thought and two processes, and splitting it here would
     turn the obvious thing to type into a refusal. The shell is the reason this cannot be an
     allowlist of commands either, which is the same argument `sandbox.py` makes one level up.
 
@@ -121,31 +148,33 @@ async def ran(
     they interleave wrongly or not at all, and nobody has ever wanted a build's errors in a second
     column.
 
+    `cwd` is the checkout even though `--chdir` is what puts the command there, so a checkout that
+    does not exist yet is a `FileNotFoundError` naming it rather than bwrap's own complaint.
+
     A timeout kills the group and records what the command managed to say, rather than raising: a
     run that hit the bound is a result to read, not an error to explain.
     """
     began = asyncio.get_running_loop().time()
-    if confinement is None:
-        process = await asyncio.create_subprocess_shell(
-            said,
-            cwd=where,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
-    else:
-        sandbox = await confined_by(confinement)
-        process = await asyncio.create_subprocess_exec(
-            sandbox_command(),
-            *sandbox.argv(at=str(where), venue=venue, home=str(confinement.scratch)),
-            "/bin/sh",
-            "-c",
-            said,
-            cwd=where,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
+    confinement = running.confinement
+    await asyncio.to_thread(confinement.scratch.mkdir, parents=True, exist_ok=True)
+    process = await asyncio.create_subprocess_exec(
+        confinement.worktree.bwrap,
+        *confined_by(confinement).argv(
+            at=str(running.where),
+            venue=running.venue,
+            home=str(confinement.scratch),
+            environment=running.environment,
+        ),
+        "/bin/sh",
+        "-c",
+        said,
+        cwd=running.where,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        # Its own process group, so `kill` can reach bwrap and, through its pid namespace, whatever
+        # the shell started. See `kill`.
+        start_new_session=True,
+    )
     reading = process.stdout
     if reading is None:  # pragma: no cover - a pipe was asked for, so there is one
         raise RuntimeError("a command was started with no way to read what it says")
@@ -164,6 +193,18 @@ async def ran(
         raise
     return Result(
         status=status,
+        output=trimmed(bytes(into)),
+        took=timedelta(seconds=asyncio.get_running_loop().time() - began),
+    )
+
+
+async def pushing(worktree: Worktree, url: str, into: bytearray) -> Result:
+    """One push of the checkout's branch, as a result the page draws the way it draws a command's."""
+    began = asyncio.get_running_loop().time()
+    came = await worktree.push(url)
+    into.extend(came.stdout + came.stderr)
+    return Result(
+        status=came.code,
         output=trimmed(bytes(into)),
         took=timedelta(seconds=asyncio.get_running_loop().time() - began),
     )
@@ -215,16 +256,9 @@ class Commands:
     patience: timedelta = DEFAULT_PATIENCE
     running: dict[asyncio.Task[None], Slot] = field(default_factory=dict)
 
-    def start(
-        self,
-        slot: Slot,
-        said: str,
-        where: Path,
-        confinement: InAWorktree | None = None,
-        venue: Venue = Venue.CONFINED,
-    ) -> None:
+    def start(self, slot: Slot, said: str, running: Running) -> None:
         """
-        Run `said` in `where`, and record what came of it under the slot already claimed for it.
+        Run `said` in the session's sandbox, and record what came of it under the slot already claimed.
 
         Returns as soon as the command is scheduled, because somebody is waiting on the request that
         posted it and a build is minutes. What the page shows meanwhile is the command with no result
@@ -234,18 +268,25 @@ class Commands:
         This is the control-plane argument the worker already answers for cloning, one step along: a
         POST records an intention and something else does the slow part.
         """
-        task = asyncio.create_task(self.record(slot, said, where, confinement, venue), name=f"command {slot.session} {slot.entry}")
+        self.scheduled(slot, lambda holding: ran(said, running, self.patience, holding))
+
+    def push(self, slot: Slot, worktree: Worktree, url: str) -> None:
+        """
+        Push the checkout's branch to the repository, and record what came of it like a command.
+
+        Its own arm rather than a command somebody types, because the one thing a command in the
+        sandbox cannot do is the one thing this is: reach the repository as the person. The branch
+        crosses into the store and the store pushes it, so no configuration the session wrote is read
+        by anything holding a credential. See `Worktree.push`.
+        """
+        self.scheduled(slot, lambda holding: pushing(worktree, url, holding))
+
+    def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
+        task = asyncio.create_task(self.record(slot, work), name=f"command {slot.session} {slot.entry}")
         self.running[task] = slot
         task.add_done_callback(lambda done: self.running.pop(done, None))
 
-    async def record(
-        self,
-        slot: Slot,
-        said: str,
-        where: Path,
-        confinement: InAWorktree | None = None,
-        venue: Venue = Venue.CONFINED,
-    ) -> None:
+    async def record(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
         """
         The whole of one run: do it, then say what happened, whichever way it ended.
 
@@ -263,9 +304,7 @@ class Commands:
         """
         holding = bytearray()
         try:
-            if confinement is not None:
-                await asyncio.to_thread(confinement.scratch.mkdir, parents=True, exist_ok=True)
-            came = await ran(said, where, self.patience, holding, confinement, venue)
+            came = await work(holding)
         except asyncio.CancelledError:
             await asyncio.shield(self.result(slot, self.stopped(holding)))
             raise
@@ -281,9 +320,11 @@ class Commands:
         except FileNotFoundError as missing:
             came = self.stopped(
                 holding,
-                f"there is nothing at {where} to run in: a session's worktree is made on its first"
-                f" turn, so a command sent before that has nowhere to go ({missing.strerror})",
+                f"there is nothing at {missing.filename} to run in: a session's worktree is made on its"
+                f" first turn, so a command sent before that has nowhere to go ({missing.strerror})",
             )
+        except SnapshotFailed as failed:
+            came = self.stopped(holding, f"this could not be pushed: {failed}")
         except OSError as failed:
             came = self.stopped(holding, f"this could not be run: {failed!r}")
         await self.result(slot, came)

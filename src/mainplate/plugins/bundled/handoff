@@ -3,10 +3,11 @@
 # and starts again from that document.
 #
 # **This is the plugin the protocol was read off**, so it is worth knowing what it exercises: a tool
-# with a schema, a correctable refusal, a delivery carrying a boundary and a tone, a value back to
-# the model, a turn-boundary condition decided on numbers the payload carries, a card whose two
-# controls are its two settings, and an answer in the composer under its own leader. Everything but
-# `before_request`, `inject` and `instructions`, which is what `guidance` is for.
+# with a schema, a correctable refusal, a delivery carrying a boundary and a tone, a turn ended from
+# inside the call that ends it, state it keeps for itself between events, a value back to the model, a
+# turn-boundary condition decided on numbers the payload carries, a card whose two controls are its
+# two settings, and an answer in the composer under its own leader. Everything but `before_request`,
+# `inject` and `instructions`, which is what `guidance` is for.
 #
 # It reads one JSON object on stdin and prints one on stdout. Nothing here imports mainplate, and
 # that is the point rather than an inconvenience: a bundled plugin runs on exactly the path a
@@ -208,22 +209,39 @@ def answer(payload: dict[str, Any]) -> dict[str, Any]:
         # reason the event carries both jobs rather than being two.
         return DESCRIBED
     if event == "tool":
-        return handing(payload)
+        return handing(payload, payload.get("state") or {})
     if event == "compose":
         return {"deliver": [asked(str(payload.get("said") or ""))]}
     if event == "after_turn":
-        return crossing(payload, settings)
+        return crossing(payload, settings, payload.get("state") or {})
     return {}
 
 
-def handing(payload: dict[str, Any]) -> dict[str, Any]:
+def handing(payload: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """
-    Three effects out of one call: a correctable refusal, a delivery, and a value back to the model.
+    Five effects out of one call: a correctable refusal, a delivery, an end, a write, and a value back.
 
     `forget` is why this is worth a mechanism at all. A handoff that did not clear the context would
     be a summary of the conversation appended to the conversation, which is the one shape that costs
     tokens and buys nothing.
+
+    **`end` is why the delivery is the last thing the turn does.** The document carries the boundary,
+    so the next turn opens on it and starts again from there; every request this turn went on to make
+    would be written into a history about to be thrown away. Left to run on, such a turn spends real
+    money on work nothing reads, which is what happened before this asked for the end.
+
+    `handed` covers what the end cannot, which is a model asking for two of these in one response:
+    both calls run before the turn stops, and the second finds what the first wrote. It is the plugin's
+    own state rather than a control, because nobody sets it and no card draws it.
     """
+    if state.get("handed"):
+        return {
+            "return": (
+                "This conversation has already been handed off. That document is what the next model "
+                "is told; nothing further is needed here."
+            ),
+            "end": True,
+        }
     written = str((payload.get("args") or {}).get("document") or "").strip()
     if len(written) < LEAST:
         return {
@@ -242,14 +260,16 @@ def handing(payload: dict[str, Any]) -> dict[str, Any]:
                 "tone": "strong",
             }
         ],
+        "end": True,
+        "set": {"handed": True},
         "return": (
             "Recorded. This conversation's context starts again from that document, and everything "
-            "said before it stays in the transcript for a person to read."
+            "said before it stays in the transcript for a person to read. This turn ends here."
         ),
     }
 
 
-def crossing(payload: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+def crossing(payload: dict[str, Any], settings: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """
     Whether the turn that just ended is the one that should be followed by a handoff.
 
@@ -267,18 +287,24 @@ def crossing(payload: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any
 
     A model that answered the ask in prose rather than by calling the tool is therefore not asked
     again until a person says something, which is a retry per human action rather than one per turn.
+
+    **This is also where `handed` is let go**, on every path and whatever else is decided here. What
+    that flag guards is two `hand_off` calls in one model response, and the first of them ends the
+    turn; so anything after this boundary is a turn of its own and starts clean. Written only when
+    there is something to clear, so an ordinary turn boundary still asks for nothing.
     """
+    cleared = {"set": {"handed": False}} if state.get("handed") else {}
     if not settings.get("hands_off", True):
-        return {}
+        return cleared
     opened = payload.get("opened_on") or {}
     if opened.get("plugin") == payload.get("plugin"):
-        return {}
+        return cleared
     reserve = int(settings.get("reserve", RESERVE)) * THOUSAND
     context = int(payload.get("context") or 0)
     window = payload.get("window")
     if standing(context, int(window) if window is not None else None, reserve) != "due":
-        return {}
-    return {"deliver": [asked("")]}
+        return cleared
+    return dict(cleared, deliver=[asked("")])
 
 
 def main() -> int:

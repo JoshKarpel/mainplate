@@ -41,7 +41,6 @@ from mainplate.pages import CACHE_ID
 from mainplate.service import Service
 from mainplate.sessions import Footprint
 from mainplate.sessions import read_session
-from mainplate.snapshots import Worktree
 
 
 class TestArchivingASession:
@@ -150,7 +149,7 @@ class TestTheNewestTree:
         assert forked is not None
         ending = parse_tree((await planting.checkpointer.load(forked.id))[opening_tree_key(1)])
         assert ending is not None
-        assert "src/after.txt" in await Worktree(root=workspaces.clones.at(FIXTURE)).paths(ending)
+        assert "src/after.txt" in await workspaces.clones.store(FIXTURE).paths(ending)
 
     async def test_a_fork_of_a_turn_still_plants_at_that_turns_own_opening(self, service: Service) -> None:
         """The control: re-asking turn 0 sees the files turn 0 saw, not the newest ones."""
@@ -186,9 +185,7 @@ async def working(service: Service, workspaces: Workspaces, places: Places) -> t
 
 
 class TestTakingAnArchivedSessionOffTheDisk:
-    async def test_every_directory_goes_and_git_stops_naming_the_worktree(
-        self, service: Service, workspaces: Workspaces, places: Places
-    ) -> None:
+    async def test_every_directory_goes(self, service: Service, workspaces: Workspaces, places: Places) -> None:
         planting, session = await working(service, workspaces, places)
         await planting.archive(session)
         holder = Footprints(current={session: Footprint(allocated=30_000, measured_at=WHEN)})
@@ -196,8 +193,7 @@ class TestTakingAnArchivedSessionOffTheDisk:
         await reconciled(planting, places, holder, now=lambda: WHEN)
 
         assert not any(place.exists() for place in places.of(session, FIXTURE))
-        worktrees = workspaces.clones.worktrees(FIXTURE, workspaces.root)
-        assert workspaces.at(session) not in await worktrees.planted()
+        assert not workspaces.worktrees(FIXTURE).planted(session)
         assert holder.current[session] == Footprint(allocated=0, measured_at=WHEN)
 
     async def test_the_files_it_ended_with_are_captured_before_the_worktree_goes(
@@ -212,8 +208,7 @@ class TestTakingAnArchivedSessionOffTheDisk:
         recorded = await planting.checkpointer.load(session)
         ending = parse_tree(recorded[ARCHIVED_TREE_KEY])
         assert ending is not None
-        clone = Worktree(root=workspaces.clones.at(FIXTURE))
-        assert "src/made.txt" in await clone.paths(ending)
+        assert "src/made.txt" in await workspaces.clones.store(FIXTURE).paths(ending)
 
     async def test_a_session_a_pass_holds_keeps_its_files_until_the_claim_ends(
         self, service: Service, workspaces: Workspaces, places: Places
@@ -277,10 +272,13 @@ class TestWhatThePageDoesWithAnArchivedSession:
         assert 'class="composer"' not in answered_with.text
         assert 'name="prompt"' not in answered_with.text
         assert f'id="{CACHE_ID}"' not in answered_with.text
-        assert '<p class="stalled">Archived Mar 14,' in answered_with.text
-        # The card is the fact, as one row: when, in the words the sidebar dates a session in.
+        assert '<p class="stalled">Archived 2031-03-14 ' in answered_with.text
+        # The card is the fact, as one row: when, in the form the sidebar dates a session in.
         assert '<div class="archive__head">archived</div>' in answered_with.text
-        assert '<div class="fact"><dt>since</dt><dd>Mar 14,' in answered_with.text
+        # Whole in the title, down to the second and carrying the offset, and the form the sidebar
+        # dates a row in beside it. The second is the store's own and is not asserted.
+        assert '<div class="fact"><dt>since</dt><dd title="2031-03-14 15:09:' in answered_with.text
+        assert '+00:00">2031-03-14 15:09</dd>' in answered_with.text
         assert f'href="/sessions/{session.id}/forks/new?at=1"' in answered_with.text
         assert '<details class="archive">' not in answered_with.text
 
@@ -292,7 +290,7 @@ class TestWhatThePageDoesWithAnArchivedSession:
             page = await caller.get("/")
 
         assert 'class="session archived"' in page.text
-        assert '<span class="archived" title="Archived Mar 14,' in page.text
+        assert '<span class="archived" title="Archived 2031-03-14 ' in page.text
 
     async def test_a_live_session_offers_the_card_behind_a_disclosure(self, app: ASGIApp, service: Service) -> None:
         session = await started(service, "first", DEFAULT_CHOICE)

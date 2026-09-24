@@ -13,6 +13,7 @@ from http.server import SimpleHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from urllib.parse import quote
 
 import pytest
 import pytest_asyncio
@@ -20,6 +21,7 @@ from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
 from conftest import FIXTURE_NAME
 from conftest import LEASE
+from conftest import WORDED
 from conftest import already
 from conftest import answered_with
 from conftest import came_back
@@ -28,6 +30,8 @@ from conftest import registered
 from conftest import run
 from conftest import started
 from playwright.async_api import Browser
+from playwright.async_api import BrowserContext
+from playwright.async_api import FloatRect
 from playwright.async_api import Locator
 from playwright.async_api import Page
 from playwright.async_api import Route
@@ -54,6 +58,7 @@ from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
 from mainplate.pages import CACHE_ID
 from mainplate.pages import OPENING
+from mainplate.pages import ZONE_COOKIE
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.installed import BUNDLED_ROOT
 from mainplate.plugins.installed import Enrolled
@@ -63,7 +68,8 @@ from mainplate.plugins.protocol import Described
 from mainplate.plugins.running import Spawned
 from mainplate.service import Service
 from mainplate.sessions import read_tending
-from mainplate.snapshots import Worktree
+from scripts.gallery import CAPTIONS
+from scripts.gallery import ZONE
 from scripts.gallery import pages
 from scripts.gallery import write
 
@@ -178,6 +184,45 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
             yield f"http://{server.host}:{server.port}", service
 
 
+async def reading(
+    browser: Browser, viewport: ViewportSize, java_script_enabled: bool = True, has_touch: bool = False
+) -> BrowserContext:
+    """
+    A context in the gallery's own zone, **and carrying the cookie that says so**, which together are
+    what keeps `paintClock` out of every test here.
+
+    The script asks for the page again when the zone it was drawn against is not the reader's, so a
+    browser left on the runner's zone would reload the first page of every test that opens one - a
+    navigation in the middle of a fixture, arriving at whichever moment the machine was slow enough
+    to allow.
+
+    **The timezone alone is only half of it**, and the half that covers the gallery: those pages are
+    on disk, rendered by `gallery.ZONE`, so a browser in that zone agrees with them. A test on the
+    live `console` fixture is answered by a real console, which draws in *its* own zone until a
+    request carries one - the runner's, which is nobody's Chicago - so those pages came back drawn
+    against another clock and reloaded exactly as a first-time reader's would. The cookie is what a
+    returning reader has and what the server reads, so seeding it makes the console render in the
+    context's zone from the first request. Percent-encoded because that is what the script writes and
+    what the server's parse undoes.
+
+    Both are on `127.0.0.1`, and a cookie ignores ports, so one covers the gallery's server and the
+    console's whichever ports they were handed.
+
+    `TestTheClockAPageIsDrawnAgainst` is where the reload itself is under test, and it asks for a
+    context of its own for exactly this reason.
+    """
+    context = await browser.new_context(
+        viewport=viewport,
+        java_script_enabled=java_script_enabled,
+        has_touch=has_touch,
+        timezone_id=ZONE.key,
+    )
+    await context.add_cookies(
+        [{"name": ZONE_COOKIE, "value": quote(ZONE.key, safe=""), "domain": "127.0.0.1", "path": "/"}]
+    )
+    return context
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def page(browser: Browser) -> AsyncIterator[Page]:
     """
@@ -187,7 +232,7 @@ async def page(browser: Browser) -> AsyncIterator[Page]:
     origin, so a shared context would let one test's folds, theme and muted kinds decide what
     the next test renders.
     """
-    context = await browser.new_context(viewport=VIEWPORT)
+    context = await reading(browser, viewport=VIEWPORT)
     try:
         yield await context.new_page()
     finally:
@@ -196,8 +241,13 @@ async def page(browser: Browser) -> AsyncIterator[Page]:
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def phone(browser: Browser) -> AsyncIterator[Page]:
-    """The same thing on a phone, in a context of its own for the reason `page` is."""
-    context = await browser.new_context(viewport=PHONE)
+    """
+    The same thing on a phone: the narrow window and, with it, a touch screen, in a context of its own
+    for the reason `page` is. The touch is what a phone is once the question is whether focus brings a
+    keyboard up - `has_touch` sets the `(hover: none)` the script reads - and the width is all a phone's
+    layout needs, so both are here rather than either.
+    """
+    context = await reading(browser, viewport=PHONE, has_touch=True)
     try:
         yield await context.new_page()
     finally:
@@ -212,7 +262,7 @@ async def unscripted(browser: Browser) -> AsyncIterator[Page]:
     Its own context because `javaScriptEnabled` is a context setting rather than a page one, and it
     is the only fixture here that wants the console's own file *not* to run.
     """
-    context = await browser.new_context(viewport=VIEWPORT, java_script_enabled=False)
+    context = await reading(browser, viewport=VIEWPORT, java_script_enabled=False)
     try:
         yield await context.new_page()
     finally:
@@ -861,6 +911,13 @@ class TestTheSessionListOnAPhone:
         # showing through the gap. A wheel rather than a touch, since it lands on whatever is under
         # the pointer the same way, and the browser's own scrolling is what either ends up driving.
         await phone.goto(f"{gallery}/session.html", wait_until="load")
+        # With every drawing drawn and every image decoded first: a picture arriving above the
+        # viewport while this measures is a height change the browser's scroll anchoring answers
+        # with a pixel of its own.
+        await expect(phone.locator("[data-draw][aria-busy]")).to_have_count(0, timeout=15_000)
+        await phone.wait_for_function(
+            "() => Array.from(document.querySelectorAll('img.drawing')).every((image) => image.complete)"
+        )
         await phone.locator(clasp).click()
         await expect(phone.locator(below)).to_be_in_viewport()
         first = await phone.locator(above).bounding_box()
@@ -875,7 +932,23 @@ class TestTheSessionListOnAPhone:
         await expect(phone.locator(below)).to_be_hidden()
         await phone.mouse.move(x, y)
         await phone.mouse.wheel(0, 200)
-        await phone.wait_for_function("() => document.querySelector('.transcript').scrollTop > 0")
+        # Until the wheel's scroll has *stopped*, not merely begun: it is animated over several
+        # frames, and put back to the top partway through, the rest of it lands a pixel below the
+        # top. Stopped is the same position for a few frames running, since this Chromium sends no
+        # `scrollend` for it.
+        await phone.evaluate(
+            """() => new Promise((done) => {
+                const transcript = document.querySelector('.transcript');
+                let last = -1, still = 0;
+                const look = () => {
+                    const now = transcript.scrollTop;
+                    still = now > 0 && now === last ? still + 1 : 0;
+                    last = now;
+                    if (still >= 5) done(); else requestAnimationFrame(look);
+                };
+                requestAnimationFrame(look);
+            })"""
+        )
         await phone.evaluate("() => { document.querySelector('.transcript').scrollTop = 0; }")
         await phone.locator(clasp).click()
         await expect(phone.locator(below)).to_be_in_viewport()
@@ -996,13 +1069,13 @@ class TestWhatScrollsOnTheStartPage:
 
 
 # Where a conversation draws monospace, which is the fenced blocks a model answers in and the body of
-# every tool call it makes. Both are on one grid, and both have to be, because a read's gutter is a
-# column of box drawing and it arrives in the second.
+# every tool call it makes. Both are on one grid, and both have to be, because a tree a command
+# prints is a column of box drawing and it arrives in the second.
 MONOSPACE = (".text pre code", ".tool__body pre")
 
 # Three rows of box drawing, which is a corner reaching down, a bar reaching both ways, and a corner
 # reaching up. The corners are here because they reach one way only and so have the least ink to
-# join with; the run is drawn as one column because that is what a read's gutter is.
+# join with; the run is drawn as one column because that is what the side of a tree or a table is.
 JOINING = ("┌", "│", "└")
 
 
@@ -1010,8 +1083,8 @@ class TestTheGridMonospaceIsDrawnOn:
     """
     Box drawing joins into lines rather than into dashes.
 
-    A model answers in tables and trees, and every `read` comes back as lines behind a `│` gutter, so
-    this is most of what a panel in this console ever shows. Two rows of it join on two conditions:
+    A model answers in tables and trees, and a command's output is full of both, so this is much of
+    what a panel in this console ever shows. Two rows of it join on two conditions:
     the row pitch is no more than the span of the glyph's own ink, and the pitch is a whole number of
     pixels, or each row lands on a different subpixel phase and the joins falling between two device
     rows draw as two half-lit ones.
@@ -1130,6 +1203,140 @@ class TestHowReasoningIsSet:
         assert drawn == ["italic", "normal", "normal"]
 
 
+class TestDrawingAFence:
+    """
+    A fence labelled `mermaid` or `svg` is shown as the picture it describes, and a press shows the
+    text it was written as, and back.
+
+    A browser because the picture is an image the page makes: whether the browser could draw it is a
+    property of its own parse and nothing the markup says, and whether the diagram library is fetched
+    only for a page that holds a diagram is a property of the requests the page makes.
+    """
+
+    async def drawable(self, page: Page, gallery: str, kind: str) -> Locator:
+        """The first fence of one drawable kind, drawn, with its button offering the text."""
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        pre = page.locator(f"pre:has(> code.language-{kind})").first
+        await expect(pre.locator(".draw")).to_have_text("code", timeout=15_000)
+        return pre
+
+    async def loaded(self, image: Locator) -> bool:
+        return bool(await image.evaluate("(image) => image.complete && image.naturalWidth > 0"))
+
+    async def test_an_svg_is_drawn_as_it_was_written_and_the_code_is_a_press_away_and_back(
+        self, page: Page, gallery: str
+    ) -> None:
+        pre = await self.drawable(page, gallery, "svg")
+        image = pre.locator("img.drawing")
+        await expect(image).to_be_visible()
+        await expect(pre.locator("code")).to_be_hidden()
+        assert await self.loaded(image), "the browser parsed what was written as an image"
+        assert (await image.get_attribute("src") or "").startswith("data:image/svg+xml"), (
+            "an image and never inline markup"
+        )
+        await pre.locator(".draw").click()
+        await expect(pre.locator("code")).to_be_visible()
+        await expect(image).to_have_count(0)
+        await expect(pre.locator(".draw")).to_have_text("draw")
+        await pre.locator(".draw").click()
+        await expect(pre.locator("img.drawing")).to_be_visible()
+        await expect(pre.locator(".draw")).to_have_text("code")
+
+    @pytest.mark.timeout(30)
+    async def test_the_diagram_library_is_fetched_for_a_page_with_a_diagram_and_not_otherwise(
+        self, page: Page, gallery: str
+    ) -> None:
+        """Three and a half megabytes a page with no diagram on it must not pay for."""
+        fetched: list[str] = []
+        page.on("request", lambda request: fetched.append(request.url))
+        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await expect(page.locator(".panel pre")).to_have_count(0)
+        assert not any("mermaid" in url for url in fetched), "nothing on a page with no diagram"
+        pre = await self.drawable(page, gallery, "mermaid")
+        image = pre.locator("img.drawing")
+        await expect(image).to_be_visible(timeout=15_000)
+        assert any(url.endswith("/assets/mermaid.min.js") for url in fetched), "and the library where there is one"
+        assert await self.loaded(image), "the library's SVG draws as an image"
+        # At the diagram's own size rather than the block's: the library declares a percentage
+        # width, which inside an image would be the whole block.
+        box = await image.bounding_box()
+        assert box is not None
+        assert box["width"] < 600, f"a three-node flowchart drawn {box['width']}px wide is one stretched to the block"
+
+    @pytest.mark.timeout(30)
+    async def test_a_diagram_that_cannot_be_drawn_says_so_in_the_block(self, page: Page, gallery: str) -> None:
+        """A parse error is a sentence in the block's place rather than nothing at all, or a bomb."""
+        pre = await self.drawable(page, gallery, "mermaid")
+        # Shown as text, rewritten to something that is not a diagram, and drawn again: what is
+        # drawn is keyed by the text, so the new text is a new drawing.
+        await pre.locator(".draw").click()
+        await pre.locator("code").evaluate("(code) => { code.textContent = 'this is not any kind of diagram'; }")
+        await pre.locator(".draw").click()
+        said = pre.locator(".drawing--failed")
+        await expect(said).to_contain_text("Not drawn:", timeout=15_000)
+        await expect(pre.locator("img.drawing")).to_have_count(0)
+        await expect(pre.locator(".draw")).to_have_text("code")
+
+    async def test_a_fence_that_is_not_a_picture_takes_no_button(self, page: Page, gallery: str) -> None:
+        await self.drawable(page, gallery, "svg")
+        plain = page.locator(".panel pre:has(> code:not(.language-mermaid):not(.language-svg))").first
+        await expect(plain.locator(".copy")).to_have_count(1)
+        await expect(plain.locator(".draw")).to_have_count(0)
+
+    async def test_the_copy_button_stays_in_its_corner_and_the_draw_button_stands_to_its_left(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        The copy button sits where it does on every other block, so a reader's hand finds it in the
+        same place whether a block can be drawn or not; what makes room is the other button.
+        """
+        pre = await self.drawable(page, gallery, "svg")
+        plain = page.locator(".panel pre:has(> code:not(.language-mermaid):not(.language-svg))").first
+        drawable_copy = await pre.locator("[data-copy]").bounding_box()
+        plain_copy = await plain.locator("[data-copy]").bounding_box()
+        draw = await pre.locator(".draw").bounding_box()
+        pre_box = await pre.bounding_box()
+        plain_box = await plain.bounding_box()
+        assert drawable_copy is not None
+        assert plain_copy is not None
+        assert draw is not None
+        assert pre_box is not None
+        assert plain_box is not None
+
+        def right_inset(button: FloatRect, block: FloatRect) -> float:
+            return (block["x"] + block["width"]) - (button["x"] + button["width"])
+
+        assert abs(right_inset(drawable_copy, pre_box) - right_inset(plain_copy, plain_box)) < 1
+        assert draw["x"] + draw["width"] < drawable_copy["x"], "the draw button is wholly to the left of copy"
+
+    async def test_the_copy_button_hands_over_the_text_whichever_is_showing(self, page: Page, gallery: str) -> None:
+        """A picture is a rendering of the text, so what is copied is the text: the copy button reads it, hidden or not."""
+        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        pre = await self.drawable(page, gallery, "svg")
+        written = str(await pre.locator("code").text_content()).strip()
+        await expect(pre.locator("code")).to_be_hidden()
+        await pre.locator("[data-copy]").click()
+        taken = str(await page.evaluate("() => navigator.clipboard.readText()"))
+        assert taken.strip() == written
+        assert "Not drawn" not in taken, "and none of what the script seated in the block"
+
+    async def test_pressing_the_button_does_not_mark_the_panel_as_news(self, page: Page, gallery: str) -> None:
+        """The button's own word changes on the press, and a panel's signature must not read it."""
+        pre = await self.drawable(page, gallery, "svg")
+        panel = pre.locator("xpath=ancestor::*[contains(concat(' ', @class, ' '), ' panel ')]").first
+        await pre.locator(".draw").click()
+        await expect(pre.locator("code")).to_be_visible()
+        assert await panel.get_attribute("data-fresh") is None
+
+
+async def test_every_gallery_page_has_a_caption_and_nothing_else_does() -> None:
+    """
+    The documentation site lists the gallery from `CAPTIONS`, so a page without one would be listed
+    with nothing beside it and a caption without a page would name a link to nowhere.
+    """
+    assert set(CAPTIONS) == set(pages())
+
+
 class TestWhatComesOutOfACopyButton:
     """
     What a panel says and what a block of code holds, lifted off the page.
@@ -1211,6 +1418,22 @@ class TestWhatComesOutOfACopyButton:
         assert await self.clipboard(page) == folded
         # And it is the call rather than the one line of its summary: what it was handed is in there.
         assert "called with" in folded
+
+    async def test_a_read_copies_the_file_and_none_of_the_anchors_the_model_was_sent(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        What the block draws and what its button hands over are the same string, and neither has
+        the anchors in it: they are the model's names for lines, and a reader lifting a function out
+        of a read wants the function.
+        """
+        panel = await self.copying(page, gallery, "tool")
+        fold = panel.locator("details.tool").first
+        await fold.locator("summary").click()
+        block = fold.locator(".tool__body pre").first
+        assert "qwrt" not in await block.inner_text()
+        await block.locator(".copy").click()
+        assert (await self.clipboard(page)).strip() == 'WAITING = "every 1s"\n\nSWAP = "outerMorph"'
 
     async def test_a_stretch_of_reasoning_copies_the_same_whether_it_is_open_or_folded(
         self, page: Page, gallery: str
@@ -1296,7 +1519,7 @@ class TestSayingSomethingWasCopiedThroughASwap:
         await expect(page.locator(".panel[data-kind=thinking] .copy")).to_have_count(1)
 
 
-# One response of a turn, as the capability records it partway through: the model reasoned and asked
+# One response of a turn, as `Stepping` records it partway through: the model reasoned and asked
 # for two files at once. Two calls because that is the state worth watching arrive - they run
 # together, so one comes back while the other is still out.
 PARTWAY = answered_with(
@@ -1986,7 +2209,7 @@ class TestTheLineAShutPanelStandsFor:
             "lines => lines.map(line => line.textContent)"
         )
 
-        assert named == ["read", "bash", "read, read"]
+        assert named == ["read", "read", "edit, create, bash", "bash", "read, read"]
 
 
 class TestFoldingADocumentTheConsoleHandedOver:
@@ -2825,15 +3048,15 @@ class TestNamingAModeFromTheKeyboard:
         answer in full, and Enter takes whichever row the arrows have arrived at.
 
         A bare `/` is the one prefix every answer fits, so on a session with files and a turn being
-        answered it offers `next`, `forget`, `run` and `keep` at once, which is what makes this a
-        test of the *position* rather than of there happening to be one row left. The arrow is what
-        proves it: without it, taking the first row and taking the row the keyboard is on are the
-        same thing and the key could be wrong in a way nothing here would see.
+        answered it offers `next`, `forget`, `run`, `push` and `keep` at once, which is what makes
+        this a test of the *position* rather than of there happening to be one row left. The arrow is
+        what proves it: without it, taking the first row and taking the row the keyboard is on are
+        the same thing and the key could be wrong in a way nothing here would see.
         """
         await a_session_with_files(working, page)
         await page.click(".composer textarea")
         await page.keyboard.type("/")
-        await expect(page.locator(".sender__option:visible")).to_have_count(4)
+        await expect(page.locator(".sender__option:visible")).to_have_count(5)
         await page.keyboard.press("ArrowDown")
         await page.keyboard.press("Enter")
 
@@ -3037,9 +3260,9 @@ class TestNarrowingTheBranches:
     """
 
     async def test_the_branches_are_offered_once_a_repository_is_picked(
-        self, page: Page, working: tuple[str, Service], worktree: Worktree
+        self, page: Page, working: tuple[str, Service], origin: Path
     ) -> None:
-        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await run("git", "branch", "release/2.1", cwd=origin)
 
         await a_start_page(working, page)
 
@@ -3049,14 +3272,14 @@ class TestNarrowingTheBranches:
         await expect(page.locator(".basis__found-one")).to_have_count(2)
 
     async def test_typing_cuts_the_list_to_what_matches_anywhere_in_a_name(
-        self, page: Page, working: tuple[str, Service], worktree: Worktree
+        self, page: Page, working: tuple[str, Service], origin: Path
     ) -> None:
         """
         Anywhere rather than at the front, because a branch is named `feature/the-thing` far more
         often than it is named for the word you remember about it.
         """
-        await run("git", "branch", "feature/anchored-edits", cwd=worktree.root)
-        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await run("git", "branch", "feature/anchored-edits", cwd=origin)
+        await run("git", "branch", "release/2.1", cwd=origin)
         await a_start_page(working, page)
 
         await page.click(".basis__box")
@@ -3065,13 +3288,13 @@ class TestNarrowingTheBranches:
         assert await showing_branches(page) == ["feature/anchored-edits"]
 
     async def test_pressing_one_puts_it_in_the_box(
-        self, page: Page, working: tuple[str, Service], worktree: Worktree
+        self, page: Page, working: tuple[str, Service], origin: Path
     ) -> None:
         """
         The press has to survive the focus leaving the box, which is what `mousedown` is for: on a
         `click` the list would shut under the press and nothing would be taken.
         """
-        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await run("git", "branch", "release/2.1", cwd=origin)
         await a_start_page(working, page)
         await page.click(".basis__box")
 
@@ -3081,13 +3304,13 @@ class TestNarrowingTheBranches:
         await expect(page.locator(".basis__found")).to_be_hidden()
 
     async def test_the_keyboard_steps_the_list_and_takes_one(
-        self, page: Page, working: tuple[str, Service], worktree: Worktree
+        self, page: Page, working: tuple[str, Service], origin: Path
     ) -> None:
         """
         What makes it a search box rather than a mouse-only menu. Enter is only swallowed while the
         reader is actually on an entry, because this field's form is the one that starts the session.
         """
-        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await run("git", "branch", "release/2.1", cwd=origin)
         await a_start_page(working, page)
         await page.click(".basis__box")
 
@@ -3098,7 +3321,7 @@ class TestNarrowingTheBranches:
         await expect(page.locator(".basis__found")).to_be_hidden()
 
     async def test_escape_shuts_the_list_without_leaving_the_page(
-        self, page: Page, working: tuple[str, Service], worktree: Worktree
+        self, page: Page, working: tuple[str, Service], origin: Path
     ) -> None:
         await a_start_page(working, page)
         await page.click(".basis__box")
@@ -3176,6 +3399,25 @@ class TestNarrowingTheBranches:
         await expect(page.locator("#basis-loading")).to_be_hidden()
 
 
+class TestWhereTheCursorIsOnArrival:
+    """
+    In the box where there is a keyboard, and off it where there is a touch screen, the moment a
+    session's page lands.
+
+    A browser, because it is the script's own doing: the server renders no `autofocus`, and whether a
+    box takes the cursor on arrival depends on whether taking it would bring a keyboard up, which only
+    the browser knows.
+    """
+
+    async def test_a_pointer_opens_with_the_cursor_in_the_box(self, page: Page, console: tuple[str, Service]) -> None:
+        await a_conversation(console, page)
+        await expect(page.locator(".composer textarea")).to_be_focused()
+
+    async def test_a_phone_opens_without_it(self, phone: Page, console: tuple[str, Service]) -> None:
+        await a_conversation(console, phone)
+        await expect(phone.locator(".composer textarea")).not_to_be_focused()
+
+
 class TestWhereTheCursorIsAfterSending:
     """
     Back in the box, whichever way the message left it.
@@ -3185,6 +3427,10 @@ class TestWhereTheCursorIsAfterSending:
     answer swaps in the cursor is on nothing at all. Since the next thing anybody does in a
     conversation is type again, that is a click or a Tab of finding the box before every message
     after the first.
+
+    On a touch screen the box is not, and it is the same reason opening a session does not put the
+    cursor in the box: focus brings the keyboard up over the answer the reader is now watching for,
+    so there is nothing to type into until they touch it.
 
     It is also a matter of *when*: htmx re-enables what it disabled just after the event this is
     driven from, so a focus asked for any sooner is asked of a box that is still disabled and takes
@@ -3210,6 +3456,15 @@ class TestWhereTheCursorIsAfterSending:
 
         await expect(page.locator("#transcript")).to_contain_text("one more thing")
         await expect(page.locator(".composer textarea")).to_be_focused()
+
+    async def test_a_phone_sends_and_the_box_stays_off_the_cursor(
+        self, phone: Page, console: tuple[str, Service]
+    ) -> None:
+        await a_conversation(console, phone)
+        await phone.fill(".composer textarea", "and another thing")
+        await phone.click(".sender > button")
+        await expect(phone.locator("#transcript")).to_contain_text("and another thing")
+        await expect(phone.locator(".composer textarea")).not_to_be_focused()
 
 
 class TestTheShelf:
@@ -3511,6 +3766,60 @@ class TestTheLineWhereNothingIsHappening:
         assert moved > 0, "the control: the server really did hand over a figure to count down from"
         await expect(due).not_to_have_text(before)
 
+    @pytest.mark.parametrize(("remaining", "said"), WORDED)
+    async def test_a_width_is_worded_the_way_the_server_words_it(
+        self, page: Page, gallery: str, remaining: int, said: str
+    ) -> None:
+        """
+        The server draws the first figure with `elapsed` and this repaints the same element a second
+        later with `soon`, so a width the two word differently is a countdown that changes shape
+        while somebody is looking at it, which reads as the figure having moved when nothing has.
+
+        Two tests rather than one because neither half can see the other, over one table so neither
+        can grow a width alone: `WORDED` in `conftest.py` is what both are parametrised from, and
+        `TestHowLongAWaitIsWordedIn` in `test_attending.py` is the server's side of these rows.
+        """
+        await page.goto(f"{gallery}/failed.html", wait_until="load")
+
+        # The clock is stopped for the repaint rather than nudged, so what is left is *exactly* the
+        # figure under test: nudged, the seconds a minutes-wide wait prints would be however long the
+        # repaint took to run, which is a test asserting something else on a slow machine. And the
+        # figure is read back inside the same stop, because the line repaints itself once a second
+        # against the real clock - so a `to_have_text` on the live element would be racing an
+        # interval that puts `any moment` there a tick later.
+        worded = await page.evaluate(
+            """(remaining) => {
+                const line = document.getElementById("attention");
+                line.dataset.due = String(remaining);
+                line.seenAt = 0;
+                const running = Date.now;
+                Date.now = () => 0;
+                try {
+                    document.dispatchEvent(new CustomEvent("htmx:after:swap"));
+                    return line.querySelector(".attention__due").textContent;
+                } finally {
+                    Date.now = running;
+                }
+            }""",
+            remaining,
+        )
+
+        assert worded == said
+
+    async def test_a_wait_the_provider_asked_for_carries_the_moment_and_counts_down_to_it(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        The pair, on the one arm that has both: a countdown reading `4d 14h` is not a plan, and a
+        moment with nothing beside it does not say how far off it is.
+        """
+        await page.goto(f"{gallery}/deferred.html", wait_until="load")
+        line = page.locator("#attention")
+
+        await expect(line.locator(".attention__when")).to_have_attribute("datetime", re.compile(r"^2031-03-19T"))
+        await expect(line.locator(".attention__due")).to_have_text(re.compile(r"^\d+d \d+h$"))
+        assert "attention--waiting" in (await line.get_attribute("class") or ""), "and it is not drawn as a fault"
+
     async def test_a_page_with_nothing_wrong_draws_no_such_line(self, page: Page, gallery: str) -> None:
         """
         The control the rest of this rests on. A line drawn through healthy turns would be a console
@@ -3519,3 +3828,184 @@ class TestTheLineWhereNothingIsHappening:
         await page.goto(f"{gallery}/answering.html", wait_until="load")
 
         await expect(page.locator("#attention")).to_have_count(0)
+
+
+class TestTheClockAPageIsDrawnAgainst:
+    """
+    The script's half of the zone loop, which has to be a browser: nothing else knows a reader's zone.
+
+    What a markup assertion can see is that the server honours a cookie, and `test_console.py` pins
+    that. What only a browser can show is the rest of the loop - that the cookie gets *written*, that
+    a page drawn against another clock is asked for again, and that a page already drawn against the
+    reader's is left alone. The last one is what every other fixture here depends on, which is why it
+    is pinned rather than assumed.
+    """
+
+    async def navigating(self, page: Page) -> str:
+        """Whether this document was loaded or reloaded, which is how the loop is observed at all."""
+        return str(await page.evaluate("() => performance.getEntriesByType('navigation')[0].type"))
+
+    async def test_a_page_drawn_against_another_clock_is_asked_for_again_in_the_readers(
+        self, browser: Browser, console: tuple[str, Service]
+    ) -> None:
+        """
+        The console renders in its own zone until a browser says otherwise, and then in the browser's.
+
+        Tokyo because it is nobody's console zone on any runner this suite is likely to meet, so the
+        first render really is against a different clock from the reader's.
+        """
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+        context = await browser.new_context(viewport=VIEWPORT, timezone_id="Asia/Tokyo")
+        try:
+            page = await context.new_page()
+            # The reload abandons the parse where it stands, and `DOMContentLoaded` fires on what was
+            # abandoned, so the load nobody sees is still a document this file is handed. Watched
+            # here because this is the one test that takes that path on purpose.
+            raised: list[str] = []
+            page.on("pageerror", lambda error: raised.append(error.message))
+            await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+
+            await expect(page.locator("html")).to_have_attribute("data-zone", "Asia/Tokyo")
+            assert await self.navigating(page) == "reload", "which it reached by asking for the page again"
+            assert raised == [], "and the load it threw away wired nothing rather than raising"
+            # Percent-encoded, which is what the slash in every zone name is written with and what
+            # the server's own parse undoes.
+            assert [one["value"] for one in await context.cookies() if one["name"] == "zone"] == ["Asia%2FTokyo"]
+        finally:
+            await context.close()
+
+    async def test_the_clock_a_page_was_drawn_against_is_where_the_head_can_read_it(
+        self, page: Page, gallery: str
+    ) -> None:
+        """
+        On `<html>`, which is what keeps the discarded load from ever being painted.
+
+        The script's first block runs before `<body>` exists - that is what pins the theme without a
+        flash - so an answer parked on the body is one the check cannot see, and the reload above
+        would never fire at all. The test above is what fails when this moves; this is what says why.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+
+        assert await page.evaluate("() => document.documentElement.dataset.zone") == ZONE.key
+        assert await page.evaluate("() => document.body.dataset.zone") is None, "and not where it cannot be read"
+
+    async def test_a_live_console_is_drawn_in_the_contexts_clock_from_the_first_request(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        **The half the timezone alone does not cover**, and what every live-console test depends on.
+
+        The gallery is on disk in `ZONE`, so a context in that zone agrees with it. A real console
+        draws in its *own* zone until a request carries one, which on any runner is not Chicago, so
+        without the cookie `reading` seeds these pages came back against another clock and reloaded -
+        a navigation in the middle of a fixture, at whichever moment the machine was slow enough to
+        allow, in roughly every test that opens a live page.
+        """
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+
+        await expect(page.locator("html")).to_have_attribute("data-zone", ZONE.key)
+        assert await self.navigating(page) == "navigate", "nothing to fix, so nothing was asked for again"
+
+    async def test_a_page_already_in_the_readers_clock_is_left_alone(self, page: Page, gallery: str) -> None:
+        """
+        The state every other fixture here depends on, which is why it is pinned rather than assumed.
+
+        The gallery is drawn against `ZONE` and these contexts read in it, so there is nothing to
+        fix: a reload landing in the middle of a fixture would arrive at whichever moment the machine
+        was slow enough to allow, and every test that opens a page would be racing it.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(page.locator("html")).to_have_attribute("data-zone", ZONE.key)
+
+        assert await self.navigating(page) == "navigate", "nothing to fix, so nothing was asked for again"
+
+    async def test_two_spellings_of_one_clock_are_not_a_difference(
+        self, browser: Browser, console: tuple[str, Service]
+    ) -> None:
+        """
+        A machine's zone database and a browser frequently name the same clock differently.
+
+        `Etc/UTC` is what `/etc/localtime` says on a server and `UTC` is what the browser calls it,
+        and `Asia/Calcutta` against `Asia/Kolkata` is the same thing one alias along. Compared as
+        strings, every console running in UTC would hand every browser one reload per visit for a
+        page that was already printing exactly the right time.
+        """
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+        context = await browser.new_context(viewport=VIEWPORT, timezone_id="Etc/UTC")
+        # The console asked for by its other name, which is what a machine whose `/etc/localtime`
+        # points at `Etc/UTC` serves without being asked at all. Said in the cookie rather than left
+        # to the runner's own clock, so this is the same test on a laptop in Chicago.
+        await context.add_cookies([{"name": "zone", "value": "Etc/UTC", "url": url}])
+        try:
+            page = await context.new_page()
+            await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+            await expect(page.locator("html")).to_have_attribute("data-zone", "Etc/UTC")
+
+            assert await self.navigating(page) == "navigate", "one clock, two spellings, no reload"
+        finally:
+            await context.close()
+
+    async def test_a_cookie_this_did_not_write_costs_one_reload_and_not_the_page(
+        self, browser: Browser, console: tuple[str, Service]
+    ) -> None:
+        """
+        **A cookie is arbitrary text**, and this block runs before the rest of the file exists.
+
+        `decodeURIComponent` raises on a malformed escape, and raising here unwinds out of the whole
+        IIFE: `start` is never reached, so the page has no folds, no copy buttons, no live connection
+        and no composer, which is worse than the script being absent. Read as nothing instead, the
+        console writes a good value over the top of it and the reader pays the one reload a first
+        visit costs anyway.
+        """
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+        context = await browser.new_context(viewport=VIEWPORT, timezone_id="Asia/Tokyo")
+        await context.add_cookies([{"name": ZONE_COOKIE, "value": "%E0%A4%A", "url": url}])
+        try:
+            page = await context.new_page()
+            # What a throw here actually costs is every line after it, and the file is one block, so
+            # the error itself is the assertion rather than any one thing that went unwired.
+            raised: list[str] = []
+            page.on("pageerror", lambda error: raised.append(error.message))
+            await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+
+            assert raised == [], "a value it could not read must not take the rest of the file with it"
+            await expect(page.locator("html")).to_have_attribute("data-zone", "Asia/Tokyo")
+            written = [one["value"] for one in await context.cookies() if one["name"] == ZONE_COOKIE]
+            assert written == ["Asia%2FTokyo"], "and a good value was written over the one it could not read"
+        finally:
+            await context.close()
+
+    async def test_a_browser_that_keeps_no_cookies_is_left_on_the_page_it_got(
+        self, browser: Browser, console: tuple[str, Service]
+    ) -> None:
+        """
+        **The reload is worth doing once**, and is never worth doing twice.
+
+        Where the origin's cookies are blocked the write is a silent no-op, so the request carries no
+        zone, the console keeps drawing in its own, and a guard that trusted the write would ask for
+        the page again on every load for ever. Read back, the answer is that this reader's zone
+        cannot reach the server at all, and a console drawn against the wrong clock is a page worth
+        keeping over a page that never finishes loading.
+        """
+        url, service = console
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
+        context = await browser.new_context(viewport=VIEWPORT, timezone_id="Asia/Tokyo")
+        # Cookies refused by the document rather than by the context, which is what a browser set to
+        # block this origin's storage does and what Playwright has no switch for.
+        await context.add_init_script(
+            "Object.defineProperty(document, 'cookie', {get: () => '', set: () => {}, configurable: true});"
+        )
+        try:
+            page = await context.new_page()
+            await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+
+            assert await self.navigating(page) == "navigate", "asked for once, and not again"
+            await expect(page.locator("html")).not_to_have_attribute("data-zone", "Asia/Tokyo")
+        finally:
+            await context.close()

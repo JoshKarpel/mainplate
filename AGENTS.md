@@ -1,7 +1,8 @@
 # AGENTS.md
 
-mainplate is a chat console over a Pydantic AI agent whose sessions are durable workflows.
-[`README.md`](README.md) is what it does and why; this is the map for changing it.
+mainplate is a chat console over its own durable model-and-tool loop, using Pydantic AI for provider
+requests and normalized messages. [`README.md`](README.md) is what it does and why; this is the map
+for changing it.
 
 `CLAUDE.md` beside it is one line importing this file, so Claude Code reads the same words every
 other harness does. `AGENTS.md` is the one that holds them, because it is the name the ecosystem
@@ -30,14 +31,17 @@ written in two places.
 ```console
 $ just setup            # uv sync, the browser, and pre-commit as a git hook
 $ just dependencies     # the same without the hook, which is the half a session's `.mainplate/setup` runs
+$ just vendor           # every script and face somebody else wrote, fetched and checked against scripts/vendored.toml
 $ just test             # mypy, then pytest
 $ just test tests/test_console.py::TestTheConsole  # extra args go straight to pytest
 $ just check            # pre-commit over all files, then mypy
 $ just serve            # foreground, on port 8101 so it never fights the installed service
 $ just demo             # the same, on a database of its own, for poking without touching real sessions
 $ just seed             # the gallery's fixtures into that database, so there is something to click
+$ just reseed           # the same from nothing, which is what a changed fixture needs: seed skips a session it already has
 $ just gallery          # render every page to build/gallery, as files a browser can open
 $ just shots            # render every page and screenshot it, wide and phone, into build/shots
+$ just replay           # measure what replaying a turn costs, over a stand-in provider
 $ just docs             # serve the documentation site with live reload
 $ just docs-build       # build it into ./site, strictly
 $ just install          # this checkout as a user systemd unit, on the default port 8100
@@ -70,7 +74,7 @@ the session on the cheapest model the endpoint lists and say the shortest thing 
 Reach for a frontier model only when the change is about what a frontier model does differently, and
 say so.
 
-## A worktree is a session's to write, so the parent must not read anything out of it
+## A worktree is a session's to write, so the parent must not run git against it
 
 The console process holds the credential, the store and the service user's whole filesystem; the
 sandbox holds a session's worktree, bound read-write because a session has to work in it. **Anything
@@ -78,22 +82,29 @@ the parent runs against that worktree is running with one side's authority over 
 input**, and the mistake is never a missing check, it is a program that goes and *finds* something
 rather than being handed it.
 
-Git is the standing example and the reason this has a section. Its configuration names programs it
-runs (`core.fsmonitor` fires inside `git add`, and the list is open-ended), a session's worktree is a
-linked one whose `.git` is a pointer file the session can replace, and a failing monitor makes git
-scan normally, so the capture succeeds and nothing reports it. So `Worktree.gitdir` names git's
-directory and `Worktree.git` passes `--git-dir` with `--work-tree`, which reads the configuration out
-of the read-only clone and consults the tree's not at all.
+Git is the standing example and the reason this has a section. A session's worktree is a complete
+checkout with a `.git` of its own, so its configuration and hooks are the session's to write, and
+several configuration keys name programs git runs (`core.fsmonitor` fires inside `git add`, and the
+list is open-ended). A failing monitor makes git scan normally, so a capture run in the parent would
+succeed and nothing would report that a program ran. So the parent runs no git against a worktree at
+all: `Worktree.git` runs it behind `bwrap`, and what comes back is a listing or a bundle.
 
 What must hold when adding to the parent:
 
-- **Never run git in a session's worktree without naming its directory.** A bare `git -C <worktree>`
-  in `snapshots.py`, in a tool, in a page or in a script is the whole vulnerability restored.
-- **Never take a path out of a worktree and act on it in the parent.** Derive it, the way
-  `Worktrees.gitdir` does, or receive it from the console's own state.
-- **Never carry a session's worktree as a path and rebuild a `Worktree` from it.** The rebuilt one
-  names no git directory, which is the discovery mode, and nothing about the call site changes to
-  say so. Pass the value.
+- **Never run git against a session's worktree in the parent.** Not `git -C <worktree>`, not
+  `--git-dir <worktree>/.git`, not in `snapshots.py`, a tool, a page, a plugin or a script. Reach a
+  worktree through `Worktree.git`, which confines it.
+- **Git in the parent is for the `Store` and nothing else.** `Store.git` names the bare clone with
+  `--git-dir`; `git_at` is for the directory clones are made under and for a checkout still being
+  built, before any session has written to it.
+- **What crosses from a sandbox is data.** A bundle is fetched by the store, refused if it is a link
+  or not a regular file, and the tree it carries is read back out of the store rather than taken on
+  the worktree's word. Never take a path out of a worktree and act on it in the parent.
+- **Never carry a session's worktree as a path and rebuild a `Worktree` from it** somewhere that then
+  runs git with it the ordinary way. Pass the value, which knows its store and its sandbox.
+- **A console-tier plugin runs unconfined**, and is handed the worktree's path. The bundled guidance
+  plugin reads the index through `GIT_INDEX_FILE` against an empty repository of its own; anything
+  else there that runs git has to do the same.
 - **Prefer the sandbox** where the parent has no reason to be the one running it at all. That is the
   [plugins-as-scripts](docs/design/plugins.md) argument, and it is the same argument.
 
@@ -116,7 +127,7 @@ change:
 - [`docs/design/forking.md`](docs/design/forking.md): how a session changes its mind, and why there
   is no rewind.
 - [`docs/design/composer.md`](docs/design/composer.md): dispositions, leaders, the shelf, `forget`,
-  handoff, steering, and running a command.
+  handoff, steering, running a command, and pushing.
 - [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's worktree,
   where in it and on what branch, snapshots, where everything a session keeps on disk is and what it
   takes, and archiving, which takes it away while keeping the conversation.
@@ -127,8 +138,9 @@ change:
 - [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
   anything to the parent that runs a program against a session's worktree.**
-- [`docs/design/durability.md`](docs/design/durability.md): the stepwise capability, and what one
-  pass does.
+- [`docs/design/durability.md`](docs/design/durability.md): the model-and-tool loop, the steps it
+  records, what one pass does, what a session does when a provider says to come back later, and what
+  replaying a turn costs, which `just replay` measures rather than asserts.
 - [`docs/design/plugins.md`](docs/design/plugins.md): the protocol a plugin speaks, the events it is
   sent, the effects it may ask for, and the settings step in front of running any of them. **Nothing
   executes a plugin before somebody presses the button on that step**, which is a trust boundary and
@@ -137,8 +149,8 @@ change:
   repository ready to work in is a plugin too**, which is where the two grants a repository's plugin
   has at `setup` and at no other event are written down. **This repository carries that plugin in
   `.mainplate/`**, described below.
-- [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, the
-  picker, and the message box.
+- [`docs/design/console.md`](docs/design/console.md): the live connection, panels and rules, which
+  clock a moment is printed against, the picker, and the message box.
 - [`docs/design/assets.md`](docs/design/assets.md): the three shapes, the one value that scales the
   page, and the vendored monospace face box drawing depends on.
 - [`docs/design/deployment.md`](docs/design/deployment.md): the systemd unit `mainplate install`
@@ -177,8 +189,9 @@ events and **prints nothing**, so nothing asks it anything again.
 Three things follow for anybody changing it:
 
 - **`just dependencies` and never `just setup`**, because the other half of `setup` installs a git
-  hook into the clone's common directory, which is shared by every worktree of it and bound read-only
-  in a session. A step that has to write git belongs in the composer's `Run`, as the person.
+  hook, and whether a session's commits run pre-commit is for that session to decide with `pre-commit
+  install` in its own checkout, from `bash` or the composer's `Run`, rather than something a setup
+  plugin does to every session.
 - **The `PATH` it writes is the session's whole `PATH`.** Leave the system directories on the end,
   or the session's commands lose `sh`.
 - **It installs into `$MAINPLATE_SCRATCH` and never `$HOME`.** `$HOME` inside it is the plugin's own

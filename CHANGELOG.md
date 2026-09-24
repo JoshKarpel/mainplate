@@ -8,11 +8,103 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **A worktree session can stage files through a closed `git` tool.** It stages named literal paths,
-  every tracked change, every change including untracked files, or registers new files with intent
-  to add so pre-commit hooks can see generated output without hiding its content in the index. It
-  accepts no command string or Git options, runs through the same pinned Git directory snapshots
-  use, and cannot commit, change branches or remotes, or push.
+- **`/push` sends a session's branch to its repository.** It takes nothing from the box, pushes the
+  branch the session's worktree is on under the same name with this console's credentials, never
+  forced, and draws what git said the way a command's result is drawn. It reads nothing the session
+  configured: the commit crosses into the console's own clone of the repository and is pushed from
+  there.
+- **A batch of tool calls is drawn with its diff below the panel.** The net change the whole batch
+  made, as a `git diff` between the snapshots around it, so an `edit`, a `create` and a `bash` that
+  ran at once read as one change rather than three or none; an `edit`'s own diff is still a press
+  away inside its now-collapsed call. Nothing is drawn where the batch changed no file, and a
+  scratch-only session, with no worktree to snapshot, shows none, as before.
+- **A fence labelled `mermaid` or `svg` is drawn.** The picture it describes stands where the code
+  would, SVG as it was written or the diagram as the mermaid library renders it in your theme, and a
+  button to the left of `copy` puts the text back and takes it away again. The picture is an image,
+  so nothing a model wrote runs on the page, and the library is fetched only for a page with a
+  diagram on it.
+- **The session list says `working`** on a row while a pass is answering its session or one is
+  scheduled to, beside `new` where both are true, so a row that says something arrived and a row
+  that says something is still coming can be told apart without opening either.
+- **A session with no repository gets a scratch directory and `bash` inside it.** Somewhere to run a
+  script or keep a note across turns, reaching nothing else on the machine; `read`, `edit` and
+  `create` reach it too. Where there is no sandbox to run a command in, such a session reaches
+  nothing, as before.
+- **A new mark.** A watch movement's mainplate, in the console's blue, on the tab and the installed
+  app's icon.
+- **Every session is told what the page draws.** One sentence of the console's own, composed beside
+  the note about what its tools reach, says that a `mermaid` or `svg` fence is drawn as a picture, so
+  a model with a flow or a figure to show writes one. The operator's standing instructions are left
+  alone, so rewriting those keeps it.
+- **A call opens on what it did rather than on JSON.** `bash` shows its command coloured as shell
+  above what came back; `edit` shows the diff of the change, with line numbers, in place of its
+  operations and its reply; `read` and `create` show the file coloured by its own grammar, with the
+  anchors the model was sent left out, so what is drawn and what the copy button hands over are
+  both the file, and a `create` that wrote its file shows the tool's reply alone rather than the
+  file twice. An `edit` and a `create` are drawn open, since what they did is what a reader
+  watching a turn is watching for; every other call is drawn shut as before, and the dock's
+  fold-all puts the open ones away at once. Every other tool, a plugin's included, shows its arguments one to
+  a row and its return as it was. The diff is recorded by the tool beside its reply, so an edit made
+  before this release opens as it always did.
+
+### Fixed
+- **A reasoning summary a gateway hands back as text is read as reasoning.** Some OpenAI-compatible
+  gateways return one wrapped in `<think>` tags as an ordinary text part, which the console drew as
+  an assistant panel saying `<think>` with a blank line above and below the title. The tags and
+  their newlines come off and the title goes to a reasoning panel; anything after the closing tag is
+  still the answer.
+- **The composer no longer grabs the keyboard on a phone.** It took the focus when its page arrived
+  and again once a message had gone, which on a phone puts the keyboard up over the conversation
+  somebody had come to read; it now waits to be touched. Forking still puts the cursor in the box
+  holding the message to edit, and a pointer still finds the cursor in the box on arrival and back
+  after a send.
+
+### Changed
+- **A session's worktree is a checkout of its own, and git works in it.** It has its own `.git`, so
+  `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
+  nobody else's, and `git fetch` brings the repository's current branches with no network, since
+  `origin` is the console's own clone. Its objects are borrowed from that clone, read-only, rather
+  than copied. Snapshots move into the clone under refs of the session's own, so a rebase in the
+  session rewrites nothing a fork plants from. Every git against a worktree, the console's own
+  snapshots and `list` included, now runs behind the same sandbox as `bash`, because a worktree's git
+  configuration is the session's to write; a command typed into the composer runs there too. A
+  session planted before this is adopted in place the first time it is next answered or archived,
+  keeping its files, its branch and what it had staged. A console without `bubblewrap` offers no
+  repository at all.
+- **A command's status reads `exit 0` rather than `ok`**, one shape down the column with the colour
+  alone picking out the statuses that are not zero, and a command with no output says `no output`
+  where it said `said nothing`, folded, since its line, its time and its status are all there is.
+- **`just seed` plants what the stills show.** The gallery and the seeder read one table of fixture
+  sessions, so the demo database now carries the commands a person ran, the boundary a `forget`
+  draws, the diagram and SVG fences, and a different model per branch, exactly as the screenshots
+  do. A command still running moved to the in-flight page, since a command that never finishes is
+  honest under a pass and not in a settled session.
+- **The vendored htmx is the published 4.0.0 build**, where it was a build of the same version
+  with one byte's difference, and every vendored script and face is now recorded with its release
+  and digest in `scripts/vendored.toml`.
+- **Every rule says when its answer came back**, leading the figures it already carried, so a
+  conversation reads as a timeline rather than as a pile of counts: `09:32 · 3.4s · ↑96K …`. The
+  turn's own rule says when its first answer landed, so the moments read down the page in the order
+  they happened, and the whole moment down to the second is in the hover. Nothing new is recorded
+  for it, since a response has always carried its own timestamp. On a phone the fraction of the
+  window goes to make room, because the gauge along the rule already says it.
+- **Moments are printed in your own timezone.** Everything stays recorded in UTC; the browser tells
+  the console which clock it keeps, in a cookie, and the console draws every moment against it - the
+  rules, the session list's dates, the cache note and the archived sentence alike. Without the
+  script a page is drawn against the console's own zone, which for a unit on your own machine is the
+  same answer. A reader in another timezone pays one reload on their first visit.
+- **A session told to come back later waits for exactly that long.** A provider that rate limits a
+  request and says when it will take one - a subscription's usage limit with its `resets_at`, or a
+  standard `Retry-After` - parks the session until that moment instead of being retried every lease
+  for however many days that is, and the page says which limit was reached and when the next attempt
+  goes out. A 429 that names no moment is retried as it was before, and so is every other failure
+  that carries a moment: what the provider knows about its own limit, it does not know about an
+  outage.
+- **An anchored `grep` tool** searches Git-known repository text with a line-oriented regular
+  expression and returns bounded matching regions carrying the same anchors as `read`, so a match can
+  go straight to `edit` without a second call solely to acquire its address. An optional glob narrows
+  files, context and result counts are bounded, ignored trees stay out, and shell search remains for
+  multiline, structural and unusually configured queries.
 - **A live pass renews its durability lease.** The lease is a short liveness window, so a session
   whose worker dies is available again quickly, while a separate one-hour budget still covers the
   longest model request and stops a live pass that never finishes.
@@ -54,7 +146,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the date, where it was a paragraph. Nothing sits under the message box any more, and what
   sits above it is only what the next press depends on: whether the cache is warm and what
   re-sending costs, and the sentence saying what the press will do. The sentence over a command box
-  names the repository and branch a command runs in, which is where somebody about to `git push`
+  names the repository and branch a command runs in, which is where somebody about to commit or push
   reads it. The session's total is no longer drawn beside the box, since the running total on the
   last rule is the same figure and moves with the transcript.
 - **The message box is one card**, the text with a row of tools along its bottom and Send at the
@@ -72,7 +164,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   archived session is the worktree as the reconciler found it; it used to plant at the repository's
   head, which is files the conversation never saw.
 - What a session takes on disk, on its row in the sidebar and on its card in the rail:
-  its worktree, git's directory for it, its scratch and its plugins' scratches, counted as `du`
+  its worktree, `.git` included, its scratch and its plugins' scratches, counted as `du`
   counts them. Measured by a sweep on a timer (`measure_every`, five minutes by default) rather than
   when a page is drawn, since a session that fetched a toolchain holds tens of thousands of files;
   the figure's title says when it was measured. `Places.of` is the one list of which directories are
@@ -84,7 +176,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
   written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
   reaches nothing it was not handed. It may contribute a tool, instructions, a card of settings, an
-  answer in the composer, and a message put into the conversation; it may be shipped with the
+  answer in the composer, and a message put into the conversation, and it may end the turn one of its
+  tools was called in, for a call whose effect leaves the rest of that turn with nothing to do; it
+  may be shipped with the
   console, installed by the operator in `config.yaml`, or carried by the repository a session works
   in. Handoff and the guidance below are both plugins, which is what makes the pair a test of the
   protocol rather than two examples of it - and what makes either replaceable.
@@ -137,8 +231,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   respect, with a switch on the settings step, so a session reading a repository rather than working
   in it can leave it off and open exactly as it would over a repository carrying no such plugin. This
   repository carries one, which installs mise, the tools `mise.toml` pins, and `just dependencies` -
-  the half of `just setup` a session can run, split out because the other half installs a git hook
-  into a clone bound read-only.
+  the half of `just setup` that belongs to every session, split out because the other half installs
+  a git hook, which is a session's own choice to make.
 - **A plugin may stand in front of a turn ending.** A plugin that asks for `before_turn_end` is told each
   time the model has answered and would stop, and an `inject` from it keeps the turn going: what it
   said is put to the model in the console's voice and the model is asked again inside the same turn,
@@ -232,8 +326,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   may be empty: what it does with the text is point the handoff at something, appended to the standing
   ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
   it writes are drawn as their own `note` kind, because every other message in a conversation was
-  typed by somebody. It ships as a **plugin** rather than as part of the console, which is what makes
-  every word of it replaceable: install your own beside it and turn ours off with one switch.
+  typed by somebody. Handing over is the last thing its turn does: the document carries the boundary,
+  so the next turn starts from it, and anything the delivering turn went on to say would be written
+  into a history about to be thrown away. It ships as a **plugin** rather than as part of the console,
+  which is what makes every word of it replaceable: install your own beside it and turn ours off with
+  one switch.
 - **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
   writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
   handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
@@ -322,6 +419,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The console drives its own model-and-tool loop**, and `StepwiseDurability` is gone with the
+  Pydantic AI agent graph it was a capability of. Pydantic AI still makes every provider request and
+  types every message; what the console owns now is the order of a turn, which is what durability
+  was always about: the allowance, the inbox cursor, a plugin's injection, the tree snapshot, the
+  request, the response, and each tool's return are recorded by the same `Stepping` in the same
+  places, handed to the loop as a value rather than found through a context variable under somebody
+  else's hooks. What went with the graph is what the console never used: structured output, native
+  and deferred tools, and the request cap a turn had to switch off. **A tool turning a call down is
+  now recorded like a tool answering it**, under the call's key with the outcome saying which, so a
+  resumed pass replays the refusal the model was actually sent instead of running the tool again to
+  hear what it would say now. The graph's retry budget went with it: a refusal is the call's result,
+  and nothing counts how many a turn has had.
+- **Every date is printed `2031-03-14 10:20`**, where it was `Mar 14, 10:20`, and a full stamp in a
+  hover carries the offset rather than a zone abbreviation: `2031-03-14 10:09:26-05:00` where it was
+  `Mar 14, 10:09:26 CDT`. One canonical form at every reader, on the grounds that this is a console
+  for programmers: it sorts lexicographically, it reads the same in Berlin as in Chicago, and an
+  offset cannot be resolved two ways where `CST` is both US Central and China Standard. Which
+  *instant* is shown still follows the reader's own clock; only how it is written no longer does.
 - **A tool call's row says what it acted on**, beside the tool's name: the path a `read` or an
   `edit` took, with which lines or how many operations, and the first line of what `bash` ran, with
   how many lines follow. That is what makes the other half affordable: **every call is drawn shut,

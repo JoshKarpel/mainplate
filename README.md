@@ -2,15 +2,17 @@
 
 A coding agent that keeps its own sessions.
 
-A chat console in front of a [Pydantic AI](https://ai.pydantic.dev) agent, where a conversation is
-a durable workflow rather than a process's memory. Ask it something, kill the server, start it
-again: the session is where you left it, and the reply that was in flight is answered rather than
-lost.
+A chat console over a durable model-and-tool loop, using [Pydantic AI](https://ai.pydantic.dev) for
+provider requests and normalized messages. A conversation is a workflow rather than a process's
+memory: kill the server during a reply, start it again, and the session resumes where it stopped.
 
-It is early and it is experimental. A session that picks a repository gets a git worktree of its
-own and the agent can read, edit and create files in it; the work so far is mostly about the
+It is early and it is experimental. A session that picks a repository gets a checkout of its own and
+the agent can read, edit and create files in it and run git there; the work so far is mostly about the
 substrate underneath, because a coding agent that forgets what it was doing when its process dies
 is the failure worth designing out first.
+
+What it looks like is [the gallery](https://joshkarpel.github.io/mainplate/gallery/): every page of
+the console, rendered from fixtures, that can be opened and folded and searched without running one.
 
 ## Running it
 
@@ -87,8 +89,7 @@ own card in the rail.
 Pick a repository and two more fields appear: **where in it to start** and **what branch to start
 there**, both optional. Left blank the worktree is checked out at the repository's default branch as
 it stands now, on a branch named after the session (`mainplate/349e2f1e`), so a `git commit` from
-the box under the conversation has somewhere to live and `git push origin HEAD` does the obvious
-thing. The starting point is a search over the branches the repository actually has, read from the
+the box under the conversation has somewhere to live and `/push` sends it under that name. The starting point is a search over the branches the repository actually has, read from the
 repository rather than from this console's copy, so it works on the very first session you start on
 one.
 
@@ -232,33 +233,47 @@ that stays alive but never finishes. Every model request and every tool call is 
 a pass that reaches the provider and then dies does not pay for that answer twice, and a tool that
 already read a file is not run again against a directory that has moved since.
 
+**A provider that says to come back later is taken at its word.** A request turned down for now
+with a moment attached - a subscription's usage limit and its reset time, or a `Retry-After` -
+parks the session until exactly that moment rather than being retried every lease for however many
+days that is, and the page says which limit was reached and when the next attempt goes out.
+
 ## How the agent edits files
 
 What a session's tools reach is one of the things it picks when it is created. A session working in
-a repository gets `list`, `read`, `edit` and `create` over its own git worktree and a scratch
-directory beside it, refusing any path outside the two. One working on the whole machine gets the
-same four with no such boundary. One reaching nothing gets no tools at all, which is what this
-console was before there were repositories: a place to talk.
+a repository gets `read`, `edit` and `create` over its own checkout and a scratch directory
+beside it, and repository-only `list` and `grep` over the worktree. One working on the whole machine
+gets the first three with no such boundary, while the repository-only pair refuse. One reaching
+nothing gets no tools at all, which is what this console was before there were repositories: a place
+to talk.
 
 Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
 Every command runs in a mount namespace of its own holding exactly what that session reaches and a
 read-only system, so your home directory and the console's configuration are not in it, and the
 network is off unless the session asked for it. What a command does get as its home is the session's
 own scratch directory, which is where a repository's own setup plugin installs whatever a session
-needs to run its tests, once, before the first message. Inside a worktree the repository's git objects go in
-read-only: `status`, `diff`, `log` and `blame` all answer, while `commit` and `stash` fail. That is
-deliberate, because the conversation is how work is recorded here and committing is yours to do.
+needs to run its tests, once, before the first message.
 
-A separate `git` tool can stage named paths, every tracked change, every change including untracked
-files, or register a new path with `--intent-to-add` so pre-commit sees generated files. It accepts
-no command string or Git options, and cannot commit, change branches or remotes, or push.
+The checkout's git is the session's own: `add`, `commit`, `rebase`, `stash` and the rest work as
+they would anywhere, and `git fetch` brings the repository's current branches with no network,
+because `origin` is this console's own clone. Nothing in there can push. Every snapshot the
+conversation keeps is taken out of the checkout into that clone, so a rebase in the session rewrites
+nothing a fork plants from. Without `bubblewrap` no repository is offered at all, since git in a
+checkout reads configuration the session can write and has to be confined as surely as a command.
 
-**Run** in the composer is where you do it: the same command from there runs outside all of this, as
-you, in the same worktree.
+**Run** in the composer runs a command you type in the same sandbox, under the same network answer,
+so a hook the model left in `.git` can reach no more from your `git commit` than from its own.
+**Push** sends the checkout's branch to the repository with this console's credentials, never
+forced, without reading anything the session configured.
 
 `list` asks git what is there rather than walking the directory, so a `.gitignore` is obeyed and an
 installed environment never reaches the model, while a file the agent itself just wrote does. A
 directory past the depth you asked for is summarised by a count rather than opened.
+
+`grep` searches those same Git-known files with a line-oriented regular expression and returns
+matching regions with the anchors `edit` accepts. That removes the second read a shell `rg` needs
+before a match can be changed. Its result count and context are bounded; multiline, structural and
+unusually configured searches remain shell commands.
 
 **A line is addressed by a hash of its own content, not by its position.** A read puts a four-letter
 anchor in front of every line:
@@ -314,8 +329,11 @@ folds, from its own row**, so the dock's fold-everything button turns a finished
 its own outline; shut, a row carries the front of what is in it.
 
 A **rule** stands at every round trip, carrying what is true of that request rather than of any
-panel in it: the worktree it was made against, how long it took, what it spent in tokens and money,
-and a fold showing the JSON the checkpoint actually holds for it. Since the checkpoint *is* the
+panel in it: the worktree it was made against, when the answer came back, how long it took, what it
+spent in tokens and money, and a fold showing the JSON the checkpoint actually holds for it. Every
+moment the console prints is recorded in UTC and drawn against your own clock, which your browser
+tells it in a cookie, and written `2031-03-14 10:20` at everybody rather than in each reader's own
+conventions: one stamp that sorts and reads the same anywhere. Since the checkpoint *is* the
 conversation, that is the state itself rather than a debug view of it. The rule's own line is a
 **gauge** of how much of the model's context window the request carried, filled from the left and
 shading toward red, so scrolling down a long conversation shows the line lengthen and warm. What a
@@ -376,10 +394,12 @@ inferred from what you typed, so what you are about to press always says what it
   replacing what is there, so several assemble into one message. It lives in your browser, so it
   does not follow you to another machine yet.
 - **Run** is the one that is not a message. It runs what is in the box in this session's worktree,
-  as *you* rather than as the agent, and the model is never told, so committing at the end of a
-  session costs it no context and reaches no provider. It is still recorded, so it draws as a
-  `command` panel with what it exited with, survives a reload, and a fork carries it. `! ` into an
-  empty box is its own shorter key, and the box stays a command box after each run.
+  in the session's own sandbox, and the model is never told, so committing at the end of a session
+  costs it no context and reaches no provider. It is still recorded, so it draws as a `command`
+  panel with what it exited with, survives a reload, and a fork carries it. `! ` into an empty box is
+  its own shorter key, and the box stays a command box after each run.
+- **Push** takes nothing from the box. It sends the branch the worktree is on to the repository,
+  under the same name and never forced, and draws what git said the way a command's result is drawn.
 
 Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
 often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
@@ -415,8 +435,8 @@ Named plainly, because they are the next things rather than omissions nobody not
   VM. Anywhere else it reaches nothing, so the picker does not appear and the console is a place to
   talk. Reaching GitHub through an App, so this works off exe.dev, is another class behind the same
   interface.
-- **Nothing removes a worktree.** A session's clone and worktree stay after it, because nothing
-  deletes a session either.
+- **Nothing prunes a clone.** Archiving a session takes its worktree away, but the repository's
+  clone keeps every tree any session snapshotted, so a fork can still plant at it, and it only grows.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.

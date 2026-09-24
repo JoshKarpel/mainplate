@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from calling import calling
@@ -20,6 +21,7 @@ from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
+from mainplate.pages import Reader
 from mainplate.pages import footprint_note
 from mainplate.pages import sized
 from mainplate.service import Service
@@ -51,9 +53,14 @@ class TestSizing:
         assert sized(allocated) == drawn
 
     def test_the_sentence_behind_the_figure_names_the_directories_and_the_time(self) -> None:
-        note = footprint_note(Footprint(allocated=46_400_000, measured_at=WHEN))
+        """The moment is the reader's clock, like every other moment the page prints."""
+        swept = Footprint(allocated=46_400_000, measured_at=WHEN)
 
-        assert note == "44 MiB on disk across this session's worktree, scratch and plugins, measured at 15:09"
+        assert footprint_note(swept, Reader(zone=ZoneInfo("UTC"))).endswith("measured at 15:09")
+        assert footprint_note(swept, Reader(zone=ZoneInfo("Asia/Tokyo"))).endswith("measured at 00:09")
+        assert footprint_note(swept, Reader(zone=ZoneInfo("UTC"))).startswith(
+            "44 MiB on disk across this session's worktree, scratch and plugins,"
+        )
 
 
 class TestMeasuring:
@@ -103,15 +110,14 @@ def places(tmp_path: Path) -> Places:
             root=tmp_path / "worktrees",
             scratch=tmp_path / "scratch",
             reaching=Reaching(current=Reachable(repositories=())),
+            bwrap=None,
         ),
         plugins=tmp_path / "plugins",
     )
 
 
 class TestWhereASessionsDirectoriesAre:
-    def test_a_session_in_a_repository_has_its_checkout_and_scratches(
-        self, places: Places, tmp_path: Path
-    ) -> None:
+    def test_a_session_in_a_repository_has_its_checkout_and_scratches(self, places: Places, tmp_path: Path) -> None:
         assert places.of("ab" * 16, "test:fixture") == (
             tmp_path / "worktrees" / ("ab" * 16),
             tmp_path / "scratch" / ("ab" * 16),

@@ -15,10 +15,10 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 import pytest
 from pydantic import SecretStr
-from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
@@ -31,7 +31,9 @@ from pydantic_ai.settings import ModelSettings
 from without_asgi import ASGIApp
 from without_durability.interfaces import claimed
 from without_durability.interfaces import inbox_key
+from without_durability.memory import MemoryCheckpointer
 from without_durability.stepwise import Run
+from without_durability.stepwise import extending
 from without_durability.stepwise import resume
 
 from mainplate import records
@@ -52,17 +54,22 @@ from mainplate.conversation import Ended
 from mainplate.conversation import conversing
 from mainplate.conversation import heard_key
 from mainplate.conversation import opened_key
+from mainplate.durability import stepping
 from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
+from mainplate.loop import Agent
 from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.installed import Enrolled
+from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_session
+from mainplate.snapshots import Store
 from mainplate.snapshots import Worktree
+from mainplate.snapshots import branch_named
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
 # it chose rather than on the wall clock. Not midnight and not the epoch, so a formatting bug that
@@ -134,6 +141,17 @@ CATALOGUE = Catalogue(offered={name: offering(name) for name in OFFERED}, defaul
 INSTRUCTIONS = "Answer as a fixture would."
 
 
+async def ask(agent: Agent, said: str = "hello") -> tuple[ModelMessage, ...]:
+    checkpointer = MemoryCheckpointer()
+    holder = await claimed(checkpointer, "asking")
+    try:
+        run = Run(holder=holder, checkpointer=checkpointer, recorded={}, extend=extending(checkpointer))
+        with stepping(run, "turn:0") as scope:
+            return await agent.run(said, (), scope)
+    finally:
+        await checkpointer.release(holder)
+
+
 @dataclass(slots=True)
 class Stand:
     """
@@ -175,9 +193,8 @@ class Watching(FunctionModel):
     """
     A stand-in model that records the settings each request was handed.
 
-    Asserting on `Agent.model_settings` would only say the agent was constructed with something. What
-    is worth pinning is that the value survives the capability stack and reaches the request, since
-    `StepwiseDurability` wraps every model this console builds.
+    The stand-in records what reaches the low-level model request, after the loop has composed the
+    wire and session settings.
 
     Here rather than in one suite because two want it now: what a session asked of a model and what
     its wire asked for are two questions with one way of answering them.
@@ -186,6 +203,7 @@ class Watching(FunctionModel):
     def __init__(self) -> None:
         super().__init__(lambda messages, info: ModelResponse(parts=[TextPart("ok")]))
         self.seen: list[ModelSettings | None] = []
+        self.instructions: list[tuple[str, ...]] = []
 
     async def request(
         self,
@@ -194,6 +212,7 @@ class Watching(FunctionModel):
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         self.seen.append(model_settings)
+        self.instructions.append(tuple(part.content for part in model_request_parameters.instruction_parts or ()))
         return await super().request(messages, model_settings, model_request_parameters)
 
 
@@ -231,12 +250,12 @@ class Provider:
         shared = self.model()
         return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
 
-    def agent(self) -> Agent[None, str]:
+    def agent(self) -> Agent:
         """
         The agent a pass would build for the default choice, for a test driving one directly.
 
-        Built through `agent_for` rather than assembled here, so a test standing in for half a pass
-        is running the capability stack a real pass runs and not a second one that resembles it.
+        Built through `agent_for` rather than assembled here, so the test drives the same model loop
+        as a real pass rather than a second one that resembles it.
         """
         return agent_for(self.endpoints(), DEFAULT_CHOICE, INSTRUCTIONS)
 
@@ -323,6 +342,78 @@ class Refusing:
 
     def body(self) -> Callable[[Run], Awaitable[Ended]]:
         return conversing(self.endpoints(), INSTRUCTIONS)
+
+
+@dataclass(slots=True)
+class Deferring:
+    """
+    A stand-in model that will not answer *now* and says when it will.
+
+    `Refusing` one answer along: the request is fine and the provider is busy, over quota, or on a
+    plan whose allowance is spent. Which of those it is arrives in the body or the headers, so both
+    are settable and a test says the shape it is about rather than this deciding for it.
+
+    `asked` counts what reached it, which is what tells a pass that waited from one that asked again:
+    a session suspended on a deadline must reach no provider at all until that deadline passes.
+    """
+
+    body: object = None
+    headers: Mapping[str, str] | None = None
+    asked: int = 0
+
+    def model(self) -> FunctionModel:
+        def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            self.asked += 1
+            raise ModelHTTPError(status_code=429, model_name="fixture", body=self.body, headers=self.headers)
+
+        return FunctionModel(respond)
+
+    def endpoints(self) -> Wires:
+        shared = self.model()
+        return Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    def body_of(self) -> Callable[[Run], Awaitable[Ended]]:
+        return conversing(self.endpoints(), INSTRUCTIONS)
+
+
+def usage_limit_reached(resets_at: datetime) -> dict[str, object]:
+    """
+    The body an OpenAI subscription answers a spent allowance with, as it actually arrives.
+
+    Written out whole rather than trimmed to the field that is read, because what these tests are
+    about is picking one moment out of somebody else's shape: a body cut down to `resets_at` would
+    pass whatever the parse did with the rest of it.
+    """
+    return {
+        "type": "usage_limit_reached",
+        "message": "The usage limit has been reached",
+        "plan_type": "plus",
+        "resets_at": int(resets_at.timestamp()),
+        "eligible_promo": None,
+        "resets_in_seconds": int((resets_at - datetime.now(UTC)).total_seconds()),
+    }
+
+
+WORDED: Final = (
+    pytest.param(547, "9m 7s", id="minutes"),
+    pytest.param(12_300, "3h 25m", id="hours"),
+    pytest.param(3_600, "1h 0m", id="a whole hour keeps its zero"),
+    pytest.param(396_000, "4d 14h", id="days"),
+    pytest.param(86_400, "1d 0h", id="a whole day keeps its zero"),
+)
+"""
+How long a wait has left, and the one wording both sides of the page must reach for it.
+
+`elapsed` in `pages.py` draws the first figure and `soon` in `mainplate.js` repaints the same element
+a second later, so the two implementations are deliberately written twice and their *expectations*
+must not be: asserted against a copy apiece, a width added to one side and not the other is a drift
+neither test reports. Parametrised from here, adding a row is an edit in one place that both sides
+then have to satisfy.
+
+Every width above a minute, which is what the contract covers. Below one the figure is a turn's own
+duration rather than a countdown, so `elapsed` has widths there that no wait ever reaches and
+`test_attending.py` pins those alone.
+"""
 
 
 def calls(*wanted: tuple[str, Mapping[str, object]]) -> ModelResponse:
@@ -541,54 +632,100 @@ FIXTURE = "test:fixture"
 FIXTURE_NAME = "me/fixture"
 
 
+# The session the `worktree` fixture is planted for. Shaped like a real id, and not one `started`
+# ever hands out, so a test that also starts sessions never finds this one's checkout in its way.
+PLANTED: Final = "0f" * 16
+
+
 @pytest.fixture
-async def worktree(tmp_path: Path) -> Worktree:
+async def origin(tmp_path: Path) -> Path:
     """
-    A real repository, because everything worth checking against one is what git actually does.
+    The repository a stand-in forge reaches, which is where every checkout here comes from.
 
-    A stand-in for git would be a second implementation of the thing under test, and the questions
-    asked of this - does a gitignored file come across, does the reader's index move, does a tree
-    survive `gc`, does a branch name resolve to today's commit - are exactly the ones only git can
-    answer.
-
-    Here rather than beside the snapshot tests because two suites need it now: what a command a
-    person runs does to a worktree is the same kind of question, asked from the other end.
+    A real one, because everything worth checking against one is what git actually does. A stand-in
+    for git would be a second implementation of the thing under test, and the questions asked of
+    this - does a gitignored file come across, does the reader's index move, does a tree survive
+    `gc`, does a branch name resolve to today's commit - are exactly the ones only git can answer.
     """
-    root = tmp_path / "repo"
+    root = tmp_path / "origin"
     (root / "src").mkdir(parents=True)
     await run("git", "init", "-q", "-b", "main", cwd=root)
     await run("git", "config", "user.email", "probe@example.invalid", cwd=root)
     await run("git", "config", "user.name", "probe", cwd=root)
     (root / ".gitignore").write_text(".env\nbuilt/\n")
     (root / "src" / "kept.txt").write_text("original\n")
-    (root / ".env").write_text("SECRET=shh\n")
-    (root / "built").mkdir()
-    (root / "built" / "artifact.bin").write_text("generated\n")
     await run("git", "add", "-A", cwd=root)
     await run("git", "commit", "-qm", "first", cwd=root)
-    return Worktree(root=root)
+    return root
 
 
 @pytest.fixture
-async def workspaces(worktree: Worktree, tmp_path: Path) -> Workspaces:
+def bwrap() -> str:
     """
-    Somewhere to clone the repository above and to plant each session's worktree of it.
+    Where the sandbox binary is, and a loud failure if it is not anywhere.
+
+    Not skipped when it is missing, for the same reason the browser tests are not: a check nobody
+    runs is a check that catches nothing, and git against a checkout only ever runs behind it.
+    """
+    return sandbox_command()
+
+
+@pytest.fixture
+async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
+    """
+    Somewhere to clone the repository above and to plant each session's checkout of it.
 
     Both outside the repository deliberately, and these tests would not notice if they were not: a
-    worktree planted *inside* it would be captured by the snapshots it exists to take, so every
+    checkout planted *inside* it would be captured by the snapshots it exists to take, so every
     session would hold a copy of every other session's files.
     """
     reaching = Reaching(
-        current=Reachable(
-            repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root)),)
-        )
+        current=Reachable(repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(origin)),))
     )
     return Workspaces(
         clones=Clones(root=tmp_path / "clones"),
         root=tmp_path / "worktrees",
         scratch=tmp_path / "scratch",
         reaching=reaching,
+        bwrap=bwrap,
     )
+
+
+def checkout_in(root: Path, bwrap: str) -> Worktree:
+    """
+    A directory a test set up itself, as the checkout the file tools and `list` are handed.
+
+    Its store is an empty directory beside it, which is enough for the sandbox to bind and holds
+    nothing, so what git answers about the checkout comes from the checkout alone. For a test about
+    listing or editing files; a test about snapshots wants the planted `worktree`.
+    """
+    store = root.parent / f"{root.name}-store"
+    store.mkdir(exist_ok=True)
+    return Worktree(root=root, store=Store(path=store), session=PLANTED, bwrap=bwrap)
+
+
+@pytest.fixture
+async def worktree(workspaces: Workspaces) -> Worktree:
+    """
+    A session's checkout, planted the way a session's first pass plants one.
+
+    With an ignored `.env` and `built/` in it, which a clone never carries, because what a snapshot
+    leaves out is half of what these tests ask.
+
+    Here rather than beside the snapshot tests because several suites need it: what a command a
+    person runs does to a checkout is the same kind of question, asked from the other end.
+    """
+    planted = await workspaces.plant(PLANTED, FIXTURE, branch=branch_named(PLANTED))
+    if planted is None:
+        raise RuntimeError("the fixture repository could not be planted")
+    # Stated rather than left to whatever the machine running the suite copied in, so a commit made
+    # in here works the same with or without an operator identity to copy.
+    await run("git", "config", "user.email", "probe@example.invalid", cwd=planted.root)
+    await run("git", "config", "user.name", "probe", cwd=planted.root)
+    (planted.root / ".env").write_text("SECRET=shh\n")
+    (planted.root / "built").mkdir()
+    (planted.root / "built" / "artifact.bin").write_text("generated\n")
+    return planted
 
 
 def already(service: Service) -> Callable[[], AbstractAsyncContextManager[Service]]:

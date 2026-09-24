@@ -20,11 +20,16 @@ lets the interesting half be tested with a list of strings.
 
 ## Which tools a session gets
 
-**Over its *files*, that is decided by its `isolation`, not by whether it picked a repository.**
-A session on `WORKTREE` gets `list`, `read`, `edit` and `create` over its checkout and scratch;
-one on `EVERYTHING` gets the four file tools over `/`, where `list` refuses because nothing there
-is in Git; one on `NOTHING` gets none. `bash` is added to the first two wherever there is a sandbox,
-and ordinary Git is part of that shell rather than a console-owned tool.
+**Over its *files*, that is decided by its `isolation`, not by whether it picked a repository.** A
+session on `WORKTREE` gets `read`, `edit` and `create` over its worktree and scratch, and `list` and
+`grep` over the worktree. One on `EVERYTHING` gets the first three over `/`, while `list` and `grep`
+refuse because nothing there is in git. One on `NOTHING` gets the first three over [its
+scratch](sandbox.md#the-scratch-directory) alone, which is nothing *of the machine*: a conversation
+that is not about a repository still wants to run a script or keep a note across turns, and a
+relative path there means the scratch. `bash` is added to all three wherever there is a sandbox to
+run it in, and on `NOTHING` the file tools come only with it, because the scratch is made by the
+first command and a `read` over a directory nothing creates is a tool that can only fail, which is
+worse than none and costs a description on every request.
 
 **`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
 with no files still has exactly one toolset rather than none. It is not an exception to the rule
@@ -78,9 +83,40 @@ the three with a ceiling, which is `MAX_ROWS` rather than a habit. Against that,
 costs around 400 tokens on every request, so it pays for itself if it heads off roughly one runaway
 enumeration in several thousand requests.
 
-**It runs Git inside the same confinement as `bash`.** The fixed `ls-files` argv is console-owned,
-but the checkout's Git configuration is model-writable and may name programs. `Worktree.git` therefore
-runs it through bubblewrap, with no network, parent environment, or path outside this session.
+**It runs git inside the same sandbox as `bash`.** The `ls-files` argv is this console's, but the
+worktree's configuration is the session's to write and may name a program git runs, so
+`Worktree.git` runs it behind `bwrap` with no network, no parent environment and nothing outside
+the session's checkout and its store. The cost, stated: a namespace per call, which a `list` run in
+the parent did not pay. See [what runs, and as whom](security.md).
+
+## `grep`
+
+**It is the search whose answer `edit` can use directly.** A shell `rg` or `grep` returns line
+numbers, so finding a line to change takes a second `read` solely to acquire its anchor. `grep`
+returns each matching region through the same `Anchored.rendered` as `read`, with the anchor computed
+over the whole file rather than over the slice being shown. The next call can edit the result, and a
+file that changed meanwhile gets the ordinary stale-anchor refusal rather than a special search
+case.
+
+It asks `GitTracked.entries`, like `list`, so a directory search covers tracked and new files while
+leaving ignored environments and build trees out. It is repository-only for the same reason:
+scratch and whole-machine searches already have `rg` or `grep` under `bash`, and walking them in the
+parent would add a second unbounded enumerator. A path naming one file may still search it directly.
+
+The expression is a line-oriented Python regular expression. An optional repository-relative glob
+narrows the file set, context is bounded to three lines on each side, and at most one hundred
+matching lines come back. Binary, oversized, vanished and otherwise unreadable files are skipped and
+counted rather than making a repository-wide search fail on an unrelated artifact. Multiline,
+structural and unusually configured searches stay with `bash`.
+
+**Its standing cost is another tool definition in every filesystem-enabled request**, plus a second
+search interface beside the shell. That is bought for the observed common sequence it removes:
+`bash` finds a line, `read` repeats the read to get an anchor, and only then can `edit` act.
+
+`grep_tools` and `file_tools` receive the same `Files` value, not equivalent ones. The value carries
+the per-path locks, so sharing it prevents an edit from writing while grep is reading. Once the lock
+is released the result is only a value; anchors make later staleness fail loudly without keeping any
+search state.
 
 ## A line is addressed by a hash of its own content
 
@@ -194,6 +230,39 @@ new file; `edit` renders the changed regions and names any anchor that moved els
 property rather than two conveniences, and it is what lets a run of edits happen with no re-read
 between them.
 
+**`edit` also records the diff of what it changed, beside the reply and outside it.** The reply
+shows the lines that arrived with their fresh anchors, which is what the model needs to keep going;
+what it cannot say without spending the model's tokens on lines it will never address is what went
+away, and that is the half a person reading the conversation wants. So the tool hands back Pydantic
+AI's `ToolReturn`, with the reply as its `return_value` and a unified diff under `metadata`, which
+is the slot for what the application reads and the model is never sent. The loop splits the two
+before anything is written, so the diff is on the call's record and on the `ToolReturnPart` built
+from it, and [the page](console.md#what-an-open-call-shows) draws an edit as the diff. Computed at
+the one moment both versions of the file are in hand, and recorded rather than derived, because by
+the time anybody reads the page the file has moved on. A `ToolReturn` carrying a `content` or a
+`tools` is refused by the loop rather than dropped, since either is a promise to the model this loop
+does not keep.
+
+### The batch's diff
+
+**A batch runs several tools at once, and none of them sees the whole change, so the snapshot
+records it.** An edit hands back its own diff and a create its new file, but a `bash` can rewrite
+anything and hands nothing back; only the worktree knows what the batch did, because the worktree is
+where it did it. `Stepping.request` captures the tree before every request, so the trees around a
+request whose response produced tool calls are both in hand the moment the *next* request snapshots,
+and the diff between them - `git diff tree:{i} tree:{i+1}`, untracked files included - is the batch's
+net change, recorded under `wrote:{i}` and replayed rather than recomputed. It is the one diff that
+covers an `edit`, a `create` and a `bash` alike, which is why it is what [the page](console.md#the-batchs-diff)
+draws below a tool panel, and why an edit's own diff is now the fine print inside the call.
+
+**A session with no worktree records an empty diff, and the page draws nothing for it.** The two
+trees only exist where there is a repository to snapshot, so a scratch-only session's batch is as
+invisible to this as a batch that changed nothing - which is the honest reading, since a scratch has
+no history to diff against, and is why the mechanism stays on the snapshot rather than being
+rebuilt as a second one for files nobody is versioning. A turn a plugin ends at a tool call has no
+next request to snapshot, so its batch's diff is the one state that is never taken; the calls' own
+rendering still shows what each did.
+
 ## Two refusals rather than omissions
 
 **There is no `write`**: a tool that overwrites a whole file is the escape hatch that makes anchored
@@ -212,16 +281,21 @@ symptom, at the price of a per-repository configuration decision on every write.
 
 The at-least-once window. Anchored `edit` has one, since a re-run edit fails loudly on anchors its
 own first run invalidated; an arbitrary shell command re-runs silently. That is the cost of `step`
-rather than `transact`, see [durability](durability.md#the-capability), and it is unchanged by the
+rather than `transact`, see [durability](durability.md#the-loop-and-its-steps), and it is unchanged by the
 sandbox, which bounds where a command reaches and says nothing about how many times it runs.
 
 ## Refusals reach the model
 
 Everything a tool turns down arrives as a `ModelRetry`, because all of it is correctable from the
-message: a stale anchor, a `find` occurring twice, a batch that overlaps. `RETRIES` is above
-Pydantic AI's default of one for that reason, and the reason is observed rather than theoretical: a
-smaller model got an operation's shape wrong once and the default turned a correctable mistake into
-a failed turn.
+message: a stale anchor, a `find` occurring twice, a batch that overlaps. The loop treats it exactly
+as it treats a `ToolFailed`, which is the other verdict a tool can give: the call's result, marked
+failed, recorded under the call's key and replayed from there rather than run again. No count of
+refusals ends a turn. There was one, inherited from Pydantic AI's retry budget, and the reason it is
+gone is observed rather than theoretical: a smaller model got an operation's shape wrong once and a
+budget of one turned a correctable mistake into a failed turn, where a budget of three was a number
+picked to make that stop happening. What bounds a model that keeps getting a call wrong is what
+bounds a model that keeps calling a tool that keeps failing, which is the priced turn on the [cost
+page](cost.md), not a count of one kind of mistake.
 
 A call a *plugin* turns away is the other kind, and arrives as the call's return rather than as a
 retry: the call was well-formed and is not happening, which is an answer to act on rather than a

@@ -6,6 +6,7 @@ import pytest
 from conftest import OFFERED
 from conftest import Stand
 from conftest import Watching
+from conftest import ask
 from pydantic_ai.settings import ThinkingEffort
 from pydantic_ai.settings import ThinkingLevel
 
@@ -61,7 +62,7 @@ class TestWhatAChoiceAsksOfAModel:
         endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
         chosen = Choice(endpoint="here", model="ripe/careful", thinking="xhigh")
 
-        await agent_for(endpoints, chosen, INSTRUCTIONS).run("hello")
+        await ask(agent_for(endpoints, chosen, INSTRUCTIONS))
 
         assert watcher.seen == [{"thinking": "xhigh"}]
 
@@ -74,6 +75,6 @@ class TestWhatAChoiceAsksOfAModel:
         watcher = Watching()
         endpoints = Wires(by_endpoint={"here": Stand(offers=OFFERED["here"], responding=watcher)})
 
-        await agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), INSTRUCTIONS).run("hello")
+        await ask(agent_for(endpoints, Choice(endpoint="here", model="ripe/careful"), INSTRUCTIONS))
 
         assert watcher.seen == [None]

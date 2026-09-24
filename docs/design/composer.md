@@ -10,8 +10,8 @@ each one writes, which is also the order of how much they can break:
 - **A steer** is not a disposition and not a thing anybody asks for: it is what happens to an
   ordinary message that a pass finds while it is working. Nothing about the write differs.
 - **A command** is the one that is not a message at all. It goes in the same queue, is read out of
-  it by nobody, runs a process outside the sandbox everything else here runs behind, and is never
-  told to a model.
+  it by nobody, runs a process in the session's sandbox, and is never told to a model. A push is
+  recorded the same way.
 
 Sorting them this way is what keeps the cheap ones cheap. Three of the four need no new mechanism.
 
@@ -66,6 +66,10 @@ drawn as the step-outs they were, because a recorded value is not the console's 
   the session has a worktree to run a command in, and posting it to one that has none is a `422`
   rather than a silence, since a command that vanished is indistinguishable from one that did
   nothing. See [Run](#run).
+- `push` is `Service.push`, which sends the worktree's branch to its repository. It is offered where
+  `run` is, and it is the one console answer that takes **nothing** from the box: its button carries
+  `formnovalidate`, the boundary allows an empty message for it, and text typed beside it is a
+  `422`. See [Push](#push).
 - A **steer** is [below](#steer). It is not one of these and never was a choice a form makes: it is
   what becomes of a `here` message that a pass finds while it is working.
 
@@ -262,8 +266,8 @@ control is refused.** A bare `clear` names nothing, so beside a transcript that 
 reads as a claim about the transcript; naming the *context* says the one thing that was cleared and
 leaves the phrase true. That is [the plain technical word](../philosophy.md#the-words) at the one
 place a reader meets this mechanism, and it is two words rather than a sentence because a rule now
-carries six figures beside it: what a reader needs there is the noun and the verb, and the fork link
-under the same finger already says what to do about it.
+carries seven figures beside it: what a reader needs there is the noun and the verb, and the fork
+link under the same finger already says what to do about it.
 
 **It sits in the middle of the rule, between two of the gaps that hold the line apart.** A rule has
 the turn's own controls at one end and its figures at the other, and a boundary belongs to neither:
@@ -379,22 +383,18 @@ one a running turn may take and `records.Prompt` is one it must not, which is ho
 `forget` say what they mean; a pass draining its queue stops at the first prompt. See [the key
 scheme](checkpoints.md#the-key-scheme).
 
-**It is appended to `request_context.messages` in `before_model_request`, and emphatically not
-`ctx.enqueue`, which was tried and delivered every steer one round trip late.** Pydantic AI's own
-drain capability is ordered `outermost`, so it empties the queue in *its* `before_model_request`
-before this one runs: a message enqueued there misses the request it was read for and lands in the
-next one. That cost a round trip nobody asked for, drew the steer's panel below the answer it was
-meant to shape, and made `heard:{i}` a claim about a request that never heard it.
+**It is appended by `Agent.before_request`, immediately before the model request it belongs to.**
+The durable cursor is taken first, then a new `ModelRequest` carrying the steer is appended to the
+history. A steer travelling beside a batch of tool results therefore follows those results and
+reaches the same provider request, while remaining its own message in `turn:{n}:messages` for the
+transcript to draw.
 
-Appending is sound for the two reasons the enqueue was reached for. `_agent_graph` builds the
-request context with `messages=ctx.state.message_history[:]`, a *copy*, and what
-`before_model_request` returns is adopted wholesale (`ctx.state.message_history[:] = messages`), so
-the steer lands in `turn:{n}:messages` and the transcript draws it with nothing else taught about
-it. And a *new* message is added rather than an existing one mutated, which is the thing the docs
-actually forbid. Pydantic AI merges consecutive trailing requests for the wire with the tool parts
-first, so a steer travelling beside a batch of results arrives after them in one request and is
-recorded as its own message. It is emphatically not `CheckpointedModel.request` either: anything
-added at the model reaches that one request and never the recorded history.
+A new message is appended rather than an existing one mutated, and nothing merges it into the tool
+returns beside it for the wire either: both providers take a request that arrives as consecutive
+messages, the Anthropic mapper already emits that shape of its own accord, and one message per thing
+said is what the transcript reads back. The cost, stated: the wire sees two user entries where the
+graph this loop replaced sent one, and a provider that stopped accepting that would be found by a
+live turn rather than a test.
 
 **What it reads is the pass's own snapshot rather than the store**, which is `Run.pending`'s own
 shape: entries are ordinary records, so they are already in the snapshot the pass loaded on its way
@@ -415,7 +415,7 @@ resumed pass reading live would ask a question the first pass never asked, and `
 is the *answer* to a question, so a replay that asked a different one would be pairing an answer
 with a prompt nobody gave. The record is a **cursor**, which is why nothing is carried on the scope
 any more: where the record was a list of texts and the next request needed a count of them, it is
-now a place in a queue that the next drain simply reads. Reading the inbox is the capability
+now a place in a queue that the next drain simply reads. Reading the inbox is the loop
 reaching into conversation state, so it arrives **injected** as `Draining`, symmetric with `Pricer`
 and for the same cycle.
 
@@ -448,17 +448,16 @@ turn ended from being drawn as a steer of a turn whose settled reading does not 
 
 ## Run
 
-The one answer in the menu that is not a message, and the only thing this console does that runs
-outside the sandbox everything else runs behind. `! ` typed into an empty box is the shortcut to it.
+The one answer in the menu that is not a message: the text runs as a shell command in the session's
+worktree. `! ` typed into an empty box is the shortcut to it.
 
-**As the person and not as the agent, and that is the whole point rather than a gap.** A session's
-`isolation` bounds what a *model* asked for, and [`sandbox.py`](sandbox.md) binds the clone
-read-only precisely so no tool can write a history no panel shows and no fork inherits. `git commit`
-and `git push` are the person's to run, and confining them is what would make this pointless. What
-it adds to the blast radius is nothing new: a session on `Filesystem.EVERYTHING` already hands a
-model the store, every other conversation, and `config.yaml` with the credentials in it. What it
-does mean is that who can reach this console is the whole of what guards it, which was already true
-and is now worth saying.
+**Typed by the person and confined like the agent.** It runs behind [the same
+sandbox](sandbox.md) as the model's `bash`, under the session's network answer and the environment
+its setup recorded, so `just test` finds the toolchain the repository's plugin installed. That is
+forced rather than chosen: the worktree's `.git` is the model's to write, hooks included, and a
+person's `git commit` run as the service user would run whatever the model last put there with
+everything that user holds. What it costs is the person's own `$HOME` and credentials, which nothing
+typed here can reach; `git commit`, `rebase` and the rest work, and pushing is [`/push`](#push).
 
 **Recorded and not told**, which is the split [the key scheme](checkpoints.md#the-key-scheme) rests
 on: what a command exited with is settled the moment it exits, and nothing will ever rewrite it.
@@ -507,7 +506,10 @@ command doing its job as one that broke.
 model reaching for context, so what it returned is something a reader opens to check the work; a
 command is a line the person typed, and what it said is the whole of why they typed it. It is still
 a `<details>`, so it folds, the dock's fold controls reach it, and a reader who has read one can put
-it away; it simply does not have to be opened to be read.
+it away; it simply does not have to be opened to be read. The one command drawn folded is the one
+with no output: its line, its time and its status are all there is to read and all three are on the
+summary, so open it would spend a row on the sentence saying there is nothing under it. It is drawn
+open while it runs, like every command, so one that finishes with output is already open to be read.
 
 **A fold's frame shuts it, and not only its summary.** A summary is one row at the top of a box that
 may be several screens of output, so putting a long one away meant scrolling back up to the single
@@ -538,11 +540,15 @@ so the decision is recorded exactly as a press on the summary is.
 the frame stops and the output starts is a fact about the rendered layout that no markup assertion
 can see.
 
-**And a command that said nothing says so**, rather than drawing the empty pane that being open
-exposed. Plenty of them do, `git diff --quiet` being the gallery's own example, as is every command
-whose whole answer is its exit status, and a blank rectangle under one reads as output that failed
-to arrive. It is a stated absence for the same reason `no reference record` is. A command still
-*running* gets no body at all, since "said nothing" is a claim about a finished one.
+**And a command with no output says so**, rather than drawing the empty pane that being open
+exposed. Plenty of them have none, `git diff --quiet` being the gallery's own example, as is every
+command whose whole answer is its exit status, and a blank rectangle under one reads as output that
+failed to arrive. It is a stated absence for the same reason `no reference record` is. A command
+still *running* gets no body at all, since "no output" is a claim about a finished one. The status
+beside it is the number in every case, `exit 0` included: one shape down the column, with the colour
+alone picking out the statuses that are not zero, since what a status means is the program's to say
+and a word of the console's own for zero was a second vocabulary for the one value every program
+agrees on.
 
 **That is what makes the fold a decision in two directions, and the script keeps both.** A call the
 server renders shut can be opened and a command it renders open can be shut, so `mainplate.js` holds
@@ -576,11 +582,33 @@ the markup either way.
 
 `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the box
 takes the terminal's monospace and a heavier edge on top of the button and the sentence every mode
-gets. That sentence names the repository and the branch the command runs in, because a `git push`
-typed there lands on that branch and a generated branch name is not one anybody can work out from
-the repository's; it is the one fact about the session the box still has to carry now that [what
-the session is stands in the rail](console.md#the-message-box).
+gets. That sentence names the repository and the branch the command runs in, because a commit typed
+there lands on that branch, `/push` sends it, and a generated branch name is not one anybody can work
+out from the repository's; it is the one fact about the session the box still has to carry now that
+[what the session is stands in the rail](console.md#the-message-box).
 
 The mode is entered from the box and left from the box, both by a key pressed while it has the
 focus, and it is deliberately *not* stored: it is a mode within a visit, like following the end,
 rather than a decision about a conversation.
+
+## Push
+
+`/push` sends the branch the session's worktree is on to its repository, under the same name. It is
+the one thing `Run` cannot do, because a push needs the console's credential and nothing that holds
+one may read the worktree's configuration: the branch is read in the sandbox and parsed before it is
+anybody's argument, its commit crosses into the store as a bundle unless the store already has it,
+and the store pushes it with its own configuration. [What runs, and as
+whom](security.md#a-persons-command-and-a-push) is why.
+
+**It takes nothing from the box.** There is one branch to push and one place to push it, so the
+answer does not demand a message, and text typed beside it is refused rather than quietly dropped: a
+message sent under the wrong answer should come back to the person who typed it.
+
+**Never forced.** A remote branch that moved on is git's own refusal, recorded as the result, rather
+than something to override from a button. A person who means to force it has a checkout of their own
+to do that from.
+
+**Recorded like a command**, with `push` as its text and the result beside it, so the panel sits
+where it was pressed and reads exactly like a `Run`: what git said, the time it took, and the status
+as a number. Offered where `Run` is, since both need a worktree, and a session on a repository no
+forge currently reaches is refused, since there is nowhere to push to.

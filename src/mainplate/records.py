@@ -63,6 +63,7 @@ type StepKind = Literal[
     "heard",
     "model",
     "refused",
+    "deferred",
     "failed",
     "tool",
     "messages",
@@ -75,6 +76,7 @@ type StepKind = Literal[
     "end",
     "environment",
     "archived",
+    "wrote",
 ]
 """
 What a record says it is, and what a turn's keys are named by.
@@ -335,6 +337,28 @@ class Tree(Record):
     tree: str | None = None
 
 
+class Wrote(Record):
+    """
+    The net change one request's tool batch made to the worktree, as a unified diff.
+
+    Computed where the two trees are both in hand, which is the moment the *next* request's snapshot is
+    taken, and recorded rather than derived: every later pass replays the diff instead of running git
+    again, and by the time a page is drawn the worktree has moved on. The diff is over the whole
+    worktree and across every tool the batch ran, an `edit`, a `create` and a `bash` alike, because
+    that is the one thing only a snapshot can see: what `bash` touched is invisible to any of the
+    tools themselves.
+
+    An empty `diff` is "no file changed", not "nothing recorded" - a batch that merely read, or one
+    whose writes came to nothing, still ran, and the page draws nothing for the difference between
+    the two rather than spending a row on it. Absence of the record is the third state: the turn
+    ended before its next request could be snapshotted, as a handoff ends it, so no batch's diff was
+    ever taken.
+    """
+
+    kind: Literal["wrote"] = "wrote"
+    diff: str
+
+
 class Response(Record):
     """
     One model response, as the provider answered it.
@@ -383,6 +407,36 @@ class Refused(Record):
 
     why: str
     status: int | None = None
+
+
+class Deferred(Record):
+    """
+    A model request the provider would not take *now*, and the moment it said to come back.
+
+    **`Refused`'s other neighbour, and the difference is a clock.** A refusal is about the request:
+    the recorded history and the recorded message will never change, so no pass will ever be taken
+    and the session stops. This is about the minute: a usage limit reached, a rate limit hit, a
+    provider asking to be left alone for a while. The request is fine and will be made again.
+
+    What makes it worth recording rather than leaving to the worker's own redelivery is that the
+    provider said *when*. Left to the redelivery, a session against a subscription's weekly limit
+    asks the same question once a lease for however many days that is, and each attempt is a real
+    request to a provider already saying no. Recorded, the pass suspends until `until` and the queue
+    wakes it then - which is `Run.sleep`'s shape with a deadline somebody else chose.
+
+    **A settled value, like every other record here**: a moment that was named, by a provider, at a
+    request that had already been made. A later attempt that is deferred again is a new record under
+    the next position, because it is a new answer to a new question.
+
+    `why` is the provider's own words, so a page can say a plan's limit was reached rather than
+    "deferred". It carries no status: what is acted on here is the moment, and the code that came
+    with it is in `why` where the provider put it.
+    """
+
+    kind: Literal["deferred"] = "deferred"
+
+    until: datetime
+    why: str
 
 
 class Archived(Record):
@@ -452,12 +506,54 @@ class Returned(Record):
     retires the window where a return was recorded and its duration was not, because there is now one
     write rather than two.
 
+    **A call that failed is this same record with `outcome` saying so**, and `returned` holding what
+    the tool said about it. A tool turning a call down and a tool failing at it are one thing from
+    the model's side, a result that says what went wrong, and they are one thing here so that a
+    replay hands the loop the very words the model was sent rather than running the tool again to
+    find out what it would say this time. The default is what every record written before the field
+    existed meant.
+
     Named `Returned` and not `Tool`, which means a member of a toolset.
     """
 
     kind: Literal["tool"] = "tool"
     returned: object
     took: timedelta | None = None
+    outcome: Literal["success", "failed"] = "success"
+
+    ended: bool = False
+    """
+    Whether the turn stopped here, because a plugin answered this call with an `end`.
+
+    **On the call's own record, so that where a turn stopped is a fact two passes agree on.** A turn
+    is cut short from inside the loop carrying it, and the plugin that asked is consulted once: a
+    resumed pass replays this record rather than asking again, so a flag held only in memory would
+    have the first pass end the turn here and every later one run on past it.
+
+    Positional rather than a record of its own per turn, because *where* is the whole of what it says:
+    a turn that ended after its third call has to replay two calls and then stop, which a fact about
+    the turn cannot express.
+
+    Defaulted, so every call recorded before this existed reads as one the turn ran on past, which is
+    what all of them were.
+    """
+
+    metadata: object = None
+    """
+    What the tool recorded beside its return for the page, which the model is never sent.
+
+    Pydantic AI's own slot, under its own name: a tool hands one back as `ToolReturn.metadata`, and
+    the loop carries it onto the `ToolReturnPart` it builds from this record, so both readings of a
+    call see the same value. `edit` is the one writer, and what it writes is the diff of what it
+    changed, which the reply the model gets does not carry: the reply shows the changed regions with
+    fresh anchors so the model can keep editing, and what a reader wants is what went away as well
+    as what arrived.
+
+    A fact about the call, settled when it returns and never rewritten, which is what lets it be
+    recorded rather than looked up: the file it was computed from has moved on by the time anybody
+    reads the page. Defaulted, so every call recorded before this existed reads as one that recorded
+    nothing beside its return, which is what all of them did.
+    """
 
 
 class Messages(Record):
@@ -668,6 +764,8 @@ type Step = Annotated[
     | Tree
     | Response
     | Refused
+    | Deferred
+    | Failed
     | Messages
     | Returned
     | Instructions
@@ -675,7 +773,10 @@ type Step = Annotated[
     | Registered
     | Confirmed
     | Injected
-    | End,
+    | End
+    | Environment
+    | Wrote
+    | Archived,
     Field(discriminator="kind"),
 ]
 """
@@ -685,6 +786,13 @@ Any one record, told apart by its own tag.
 Everywhere else parses by key, because the caller already knows what it asked for and a type demanded
 is stronger than a type discovered - and because an unknown tag is a hard failure here, where an
 unknown field is not.
+
+**Every record a checkpoint key may hold, and so the session-scoped ones too.** An arm missing here
+is not a tag this reads loosely, it is a session this cannot read at all: a bag holding one raises,
+and the sessions holding the ones easiest to leave out - archived, failed, deferred - are exactly the
+ones a migration is being written for. `Named` and `Enrolled` are the other way round and are
+deliberately out: they are members of `Declared` and `Registered` and are never a checkpoint value on
+their own, so a bag will not hold one.
 
 `choice` is not an arm, and that is a decision rather than an oversight. It is already a record this
 console owns and has grown fields twice without a migration, so the shape argument that put an

@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from typing import Final
 
 from without_durability import INBOX
@@ -277,6 +278,18 @@ class Session:
     mark: a phone that read the answer has read it for the laptop too.
     """
 
+    attention: Attention | None = None
+    """
+    What the worker is doing about this session right now, or nothing where nobody has asked.
+
+    Filled by `Service.listed` from one reading of the claim and the queue for every session, and
+    left empty by `parse_session`, for the footprint's reason: it is live control-plane state and
+    not a fact about the session, true at the instant it was read and at no other, so it is not a
+    column and not in the checkpoint. The list draws it as the word beside `new`, because a row that
+    says something arrived and a row that says something is still coming are two different reasons
+    to open a session.
+    """
+
     @property
     def latest(self) -> datetime:
         """
@@ -284,6 +297,59 @@ class Session:
         nobody has written to yet.
         """
         return self.last_said_at or self.created_at
+
+
+@dataclass(frozen=True, slots=True)
+class Claimed:
+    """A pass holds this session right now, which is what a live claim on it means."""
+
+
+@dataclass(frozen=True, slots=True)
+class Queued:
+    """No pass holds this session and the queue will hand it to the next worker that reads."""
+
+
+@dataclass(frozen=True, slots=True)
+class Delayed:
+    """
+    No pass holds this session and the delivery for it is held back until `until` from now.
+
+    Which is what a pass that fell over leaves behind: the worker deliberately does not answer for a
+    delivery whose pass raised, so the queue keeps the row it reserved and reclaims it once the lease
+    elapses. That is the state this whole reading exists to name, because on the page it used to be
+    indistinguishable from a reply being written.
+
+    A duration and not a moment, so the page never subtracts two machines' clocks: the store measured
+    it against its own, and the script counts down from what it was handed. `cache_note` is the same
+    bargain one field along.
+    """
+
+    until: timedelta
+
+
+@dataclass(frozen=True, slots=True)
+class Idle:
+    """
+    No pass holds this session and nothing is scheduled to.
+
+    The ordinary state of a settled conversation, and a real fault where something is outstanding:
+    a message nobody will ever answer, which nothing else on the page can show.
+    """
+
+
+type Attention = Claimed | Queued | Delayed | Idle
+"""
+What the worker is doing about one session, as the claim and the queue answer between them.
+
+**Not a fact about the conversation, so it is not in the checkpoint and must not be.** It is live
+control-plane state that changes several times per pass and is true only at the instant it is read,
+where a checkpoint holds what was said and never changes at all. Read on every render, next to the
+count that decides whether to render, and `service.py` is where it is read; the arms are here
+because a `Session` row carries one.
+
+Four arms rather than two booleans, because two of the four combinations cannot happen and a reader
+of a pair would have to know which. A sealed union in the shape `Ended` already has here.
+"""
 
 
 def mint_session_id() -> str:
@@ -474,30 +540,15 @@ async def saw(database: Database, session: str) -> None:
 # highest row the store has filed for anybody, how many sessions there are, and how far every look
 # has got in total. The sum rather than the highest mark, because a look at any one session moves
 # the sum and only a look at the furthest-on session would move the maximum. `max(seq)` is the
-# table's primary key, so the first is an index endpoint and not a scan.
+# table's primary key, so the first is an index endpoint and not a scan. The index's half of the
+# list's token; `Service.listing_token` reads it beside the store's half, which is what the worker
+# is doing, since the row draws that too.
 LISTING = """
 SELECT (SELECT max(seq) FROM workflow_checkpoint),
        count(*),
        coalesce(sum(seen_seq), 0)
   FROM sessions
 """
-
-
-async def listing_token(database: Database) -> str:
-    """
-    Whether the list is worth drawing again, as a token compared for inequality and nothing else.
-
-    What a live connection asks several times a second, beside the session's own token, so it has to
-    cost less than the list it guards. It moves when any session records anything, when a session is
-    made, and when a look at any session advances its mark; it does not move for what a sweep measures
-    a session taking on disk, which a row draws whenever it is next drawn for another reason.
-    """
-
-    def query(connection: sqlite3.Connection) -> str:
-        filed, count, looked = connection.execute(LISTING).fetchone()
-        return f"{filed}:{count}:{looked}"
-
-    return await database.run(query)
 
 
 # The two columns on their own, without the join every other read here makes. A pass wants a

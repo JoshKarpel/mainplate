@@ -4,12 +4,18 @@ from collections.abc import Callable
 
 import pytest
 from markupsafe import Markup
+from pygments.token import Token
 
+from mainplate.markup import DRAWABLE
 from mainplate.markup import HIGHLIGHT
+from mainplate.markup import LANGUAGE_PREFIX
 from mainplate.markup import TOKENS
 from mainplate.markup import as_document
 from mainplate.markup import as_message
+from mainplate.markup import highlighted
+from mainplate.markup import language_of
 from mainplate.markup import linked_text
+from mainplate.markup import token_class
 
 PYTHON = """```python
 async def handler(session: str) -> int:
@@ -50,6 +56,88 @@ class TestWhatReachesThePage:
     def test_a_language_nobody_has_heard_of_renders_rather_than_raising(self) -> None:
         """The fence's label is written by a model, so an unknown one must not be an exception."""
         assert "gibberish here" in as_message("```notalanguage\ngibberish here\n```")
+
+
+class TestColouringOneLineAtATime:
+    """
+    What a call's body is coloured with: the same tokens a fence gets, cut where the lines are, so
+    the page can draw something in front of each line.
+    """
+
+    def test_each_line_comes_back_as_its_own_markup(self) -> None:
+        lines = highlighted("python", "def f():\n    return 1  # one\n")
+        assert len(lines) == 3
+        assert lines[0].startswith('<span class="k">def</span>')
+        assert '<span class="nf">f</span>' in lines[0]
+        assert '<span class="c1"># one</span>' in lines[1]
+        assert lines[2] == ""
+
+    def test_a_string_spanning_lines_is_coloured_on_both(self) -> None:
+        lines = highlighted("python", 'x = """a\nb"""')
+        assert len(lines) == 2
+        assert lines[0].endswith('<span class="s2">a</span>')
+        assert lines[1].startswith('<span class="s2">b</span>')
+
+    def test_a_comment_spanning_lines_is_cut_where_they_are(self) -> None:
+        """A lexer that hands back one token for several lines still comes back as one run per line."""
+        lines = highlighted("css", "/* one\ntwo */")
+        assert len(lines) == 2
+        assert lines[0] == '<span class="c">/* one</span>'
+        assert lines[1] == '<span class="c">two */</span>'
+
+    def test_what_is_in_the_text_is_escaped(self) -> None:
+        (line,) = highlighted("python", "x = '<b>'")
+        assert "&lt;b&gt;" in line
+        assert "<b>" not in line
+
+    def test_a_bare_carriage_return_leaves_the_text_uncoloured_rather_than_misaligned(self) -> None:
+        """The one preprocessing step no lexer option turns off is the one that would add a line."""
+        lines = highlighted("python", "def f():\rpass\ndone")
+        assert lines == ("def f():\rpass", "done")
+
+    def test_a_tab_is_kept_as_one(self) -> None:
+        (line,) = highlighted("python", "\treturn 1")
+        assert line.startswith("\t")
+
+    @pytest.mark.parametrize(
+        ("path", "language"),
+        [("a.py", "python"), ("src/x.css", "css"), ("Makefile", "make"), ("AGENTS.md", "markdown"), ("notes", None)],
+    )
+    def test_a_file_is_coloured_by_the_grammar_its_name_says(self, path: str, language: str | None) -> None:
+        assert language_of(path) == language
+
+    def test_a_kind_of_token_the_table_does_not_name_takes_its_nearest_named_ancestors_class(self) -> None:
+        assert token_class(Token.Name.Function.Nobody) == "nf"
+        assert token_class(Token.Text) == ""
+
+
+class TestWhichFencesCanBeDrawn:
+    """
+    The fence's label reaches the page on exactly two labels, as the class the script draws from.
+
+    The label is written by a model, so which labels reach the page is a closed set for the reason
+    the token allowlist is: a class per label would be a class of the model's choosing.
+    """
+
+    @pytest.mark.parametrize("label", ["mermaid", "svg"])
+    def test_a_drawable_label_is_kept_on_the_code_it_wraps(self, label: str) -> None:
+        rendered = as_message(f"```{label}\nsomething to draw\n```")
+        assert f'<code class="{LANGUAGE_PREFIX}{label}">' in rendered
+        assert f"{LANGUAGE_PREFIX}{label}" in DRAWABLE
+
+    @pytest.mark.parametrize("label", ["python", "text", "notalanguage", "language-svg"])
+    def test_every_other_label_is_stripped_on_the_way(self, label: str) -> None:
+        """
+        The formatter puts every label on the page and the sanitiser takes all but two off, so the
+        set is closed by the same allowlist that closes the tokens rather than by a second check.
+        """
+        rendered = as_message(f"```{label}\nx = 1\n```")
+        assert LANGUAGE_PREFIX not in rendered
+        assert "x" in rendered
+
+    def test_a_label_that_is_markup_cannot_break_out_of_the_attribute(self) -> None:
+        rendered = as_message('```svg"><script>alert(1)</script>\nx\n```')
+        assert "<script>" not in rendered
 
 
 class TestWhereANewlineIsALineBreak:

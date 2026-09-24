@@ -63,14 +63,12 @@ the conversation rather than a note about it, which is the right side of the lin
 does mean the wire's own reading of what was said now includes text the model never wrote.
 
 **Every wire streams, and no wire chooses.** `Wire.model` hands back a `Streamed`, whose `request`
-opens a streaming request, drains every event, and returns the finished `ModelResponse`, so
-`CheckpointedModel` records a whole response and `agent.run` is still what the console drives. A
-plain request is not one every endpoint takes: exe.dev's OpenAI wire refuses every model with
-`{"detail": "Stream must be set to true"}`, and Anthropic's SDK refuses a request asking for a
-model's whole output limit the same way. The cost, stated: nothing reaches a reader any sooner,
-because the events are thrown away as they arrive. What it buys is that the day a page reads a turn
-as it arrives, the events exist and the work left is `CheckpointedModel.request_stream` recording
-them ([durability](durability.md)).
+opens a streaming request, drains every event, and returns the finished `ModelResponse` for
+`Stepping.request` to record. A plain request is not one every endpoint takes: exe.dev's OpenAI wire
+refuses every model with `{"detail": "Stream must be set to true"}`, and Anthropic's SDK refuses a
+request asking for a model's whole output limit the same way. The cost, stated: nothing reaches a
+reader any sooner because the events are thrown away as they arrive. Live output means recording
+those events from the model loop rather than adding a second request path.
 
 **`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
 conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input

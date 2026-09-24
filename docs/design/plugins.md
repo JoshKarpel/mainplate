@@ -9,9 +9,9 @@ The protocol was not designed and then tried against something. It was read off 
 ../plugins/handoff.md), which is the most demanding thing this console does that a plugin should be
 able to do, and which turns out to need almost everything at once.
 
-`hand_off` alone produced three separate effects from one call: a correctable refusal where the
-document was too short to be one, a message delivered into the inbox carrying a boundary, and a value
-back to the model.
+`hand_off` alone produces five separate effects from one call: a correctable refusal where the
+document is too short to be one, a message delivered into the inbox carrying a boundary, the turn
+stopping there, a note to itself that it has handed over, and a value back to the model.
 
 And the tool was the smaller half. The whole of it, and what each part became:
 
@@ -20,6 +20,8 @@ And the tool was the smaller half. The whole of it, and what each part became:
 | `hand_off`, its description, `document: str` | a **tool** contribution: name, description, JSON Schema |
 | refused a document under `LEAST` characters | a **retry** effect, correctable rather than a fault |
 | wrote a message with a boundary to the inbox | a **deliver** effect, with a boundary and attribution |
+| the rest of that turn is written into a history about to be thrown away | an **end** effect, stopping the turn once the call is answered |
+| had to know it had already handed over, one call ago | a **set** the writer itself reads back, laid over the pass's snapshot |
 | returned `Recorded. …` to the model | a **return** effect |
 | asked once the reserve was crossed | an **after_turn** event carrying the numbers to decide on |
 | never fired twice running | that payload saying what the turn *opened on*, and who asked for it |
@@ -524,7 +526,7 @@ Each carries its own payload and takes its own effects. They are a short list th
 | Event | Fired | Payload beyond `session` and settings | Effects it may ask for |
 |---|---|---|---|
 | `setup` | once per session, before its first turn | nothing | the contributions above |
-| `tool` | the model called one of its tools | `tool`, `args` | `return`, `retry`, `deliver`, `set` |
+| `tool` | the model called one of its tools | `tool`, `args` | `return`, `retry`, `deliver`, `end`, `set` |
 | `before_tool` | the model called any tool, and it has not run yet | `tool`, `args` | `refuse`, `deliver`, `set` |
 | `before_request` | a model request is about to be sent | `messages` | `inject`, `deliver`, `set` |
 | `before_turn_end` | the model has answered and the turn would end | `turn`, `opened_on`, `attempt` | `inject`, `deliver`, `set` |
@@ -538,10 +540,11 @@ rather than one that arrives permitting everything. `deliver` and `set` are on e
 carries an answer at all, since a note and a write make sense wherever a plugin is asked something;
 what is narrow is `return` and `retry`, which answer a call and so belong to the event that is one,
 `refuse`, which decides whether a call happens and so belongs to the event that stands in front of
-one, and `inject`, which needs a request to append to: `before_request` has the one about to go out,
-and at `before_turn_end` an injection is what *makes* one. `setup` takes no effects because its answer is
-a `Described` rather than an `Answered`: what a plugin wants remembered from it is a `set` on the
-first event that carries one.
+one, `inject`, which needs a request to append to: `before_request` has the one about to go out,
+and at `before_turn_end` an injection is what *makes* one, and `end`, which is
+[a turn stopped from inside a call](#ending-a-turn-from-inside-a-call). `setup` takes no effects
+because its answer is a `Described` rather than an `Answered`: what a plugin wants remembered from it
+is a `set` on the first event that carries one.
 
 Every payload also carries `worktree` and, for a confined plugin, `scratch`: where this session's
 files are and where this plugin alone may write. `worktree` is on all of them rather than only the
@@ -607,7 +610,7 @@ turn left unfinished for reasons that are the console's rather than the conversa
 loop, which is the split `Crossed` made and `Noting` now makes for every plugin: putting a message in
 an inbox *queues* the session, and that is a fact about the queue in front of a pass rather than
 about answering one. A `tool` answer is the exception and is written where it is asked, because
-`wrap_tool_execute` wraps the whole call in a step - so a resumed pass replays the recorded return
+`Stepping.call` records the whole call in a step - so a resumed pass replays the recorded return
 and writes no second entry. A `before_turn_end` answer is a step of its own and is performed inside it
 for the same reason.
 
@@ -622,9 +625,10 @@ pass still holding the claim on it. It is the split
 | Effect | Means | Where |
 |---|---|---|
 | `return` | hand this value back to the model | `tool` only |
-| `retry` | tell the model to try again, correctably | `tool` only, becomes a `ModelRetry` |
+| `retry` | tell the model to try again, correctably | `tool` only, the call's result marked failed |
 | `refuse` | do not run this call, and tell the model why | `before_tool` only, becomes the call's return |
 | `deliver` | put this message in the session's inbox | anywhere |
+| `end` | stop the turn once this call is answered | `tool` only |
 | `set` | write these values into my own store | anywhere |
 
 `deliver` carries `said`, `forget`, and [how its panel is drawn](#how-a-plugins-panel-is-drawn), and
@@ -636,6 +640,50 @@ that orders them and opens a turn per message.
 deliberately, which is what keeps every plugin speaking one language and keeps the set of things a
 plugin can do to a conversation readable in one table. An answer asking for an effect the event it
 answers has no room for is **refused**, naming the plugin, rather than quietly doing nothing.
+
+### Ending a turn from inside a call
+
+**`end` exists because a handoff's turn used to run on after handing over.** The document a
+`hand_off` delivers carries a boundary, so the next turn opens on it and starts the model's history
+again from there; every request the delivering turn went on to make was therefore written into a
+history about to be thrown away. One session spent four further model requests that way and then, not
+having been stopped, called `hand_off` a second time - which queued a second document carrying a
+second boundary, so the turn that would have worked from the first was itself about to be forgotten.
+
+**The effect is the plugin's to ask for rather than something inferred from the delivery.** A note's
+`forget` describes what happens to the turn that *opens on* it, and reading a control-flow decision
+about the delivering turn out of that field would put two meanings in one boolean and leave the
+script saying nothing about either. `bundled/handoff` asks in the line that hands over, which is where
+somebody reading it looks.
+
+**It is not the symmetric opposite of `before_turn_end`'s `inject`, and reading it that way misleads.**
+An injection keeps a turn going by *saying something*; the turn continuing is a consequence of there
+being a new request to answer. `end` says nothing and is control flow alone, which makes it the one
+effect in the table that is neither an utterance nor a write. That is the cost of having it, and it is
+why the cell is `tool` and nothing else: the events on either side have nothing to end, since
+`before_tool` answers whether a call runs, `before_turn_end` is asked because the turn is already
+stopping, and `after_turn` is asked once it has.
+
+**The call is still answered; what does not happen is asking the model again.** The `return` is
+recorded and the request carrying it is composed, so the transcript shows the result and the history
+stays well-formed. Stopping one node earlier would leave a turn whose last word is a call nothing
+answered, which draws as a spinner that never stops and which no provider will accept at the head of
+the next request. Pydantic AI has no way to end a run from inside a tool - `result.py` says as much
+where it imagines a future `EndRun` - so `answering_turn` drives `agent.iter` and breaks between
+nodes, and carries the pending `ModelRequestNode`'s own request, since that node appends it to the
+history only when it runs and it is not going to run.
+
+**It is recorded on the call's step, which is what makes two passes agree.** The plugin that asks is
+consulted once; every later pass replays the call from its record without asking again, so a turn
+ended in a flag alone would stop there on the first pass and run on past it on every pass after. The
+asking travels through a context variable rather than a field on the shared scope, because Pydantic AI
+runs concurrent tool calls in a task apiece: a `hand_off` running beside a `read` must not make the
+`read`'s record claim the turn stopped there.
+
+**A turn a plugin ended is not offered to `before_turn_end`.** The two would contradict each other -
+one says the turn is over, the other exists to say it is not - so asking would invite an injection
+into a turn whose successor is already queued. The end wins because it is the more specific answer: a
+plugin that wants a turn kept going has the gate and is welcome to it.
 
 ### Refusing a call
 
@@ -685,15 +733,17 @@ A setting's value is a switch's or a number's, because that is what a control ca
 whatever JSON the plugin likes. Both are settled per session, so a fork starts with none and two
 sessions running one plugin never see each other's.
 
-**What a plugin is handed is a snapshot taken once at the top of the pass, and a `set` reaches the
-next pass and no event of this one.** Not another plugin's event, and not the writer's own: a plugin
-that writes at `tool` and reads at `after_turn` in the same turn reads what the pass began with. Once
-rather than re-read per event, because a setting is a place two writers share, and a switch flicked
-while a turn was in flight would have that turn answered under one value and judged under another.
-The bundled plugins and this repository's own never notice, because every `set` they make rides
-beside a `deliver` and a delivery ends the pass; a plugin that writes without delivering is the one
-this costs, and it is stated here because a plugin author will assume the store reads back what was
-just written.
+**What a plugin is handed is a snapshot taken once at the top of the pass, with that plugin's own
+writes laid over it.** Once rather than re-read per event, because a setting is a place two writers
+share: a switch flicked while a turn was in flight would have that turn answered under one value and
+judged under another. What the snapshot holds back is therefore *somebody else's* write, and a plugin
+reading back its own bookkeeping is not somebody else - so a `set` at `tool` is there at `after_turn`,
+and at the next `tool` of the same response.
+
+That overlay is not a refinement. Without it the handoff's guard against handing over twice in one
+model response could not work at all: both calls would read `handed` as unset, and both would deliver
+a document carrying a boundary. A name written as null is removed rather than held, which is what
+`json_patch` does to the column underneath, so the overlay says exactly what a later pass will say.
 
 ### What a delivered message becomes
 
@@ -762,10 +812,9 @@ time. That is a constraint on the console rather than a hazard to warn plugin au
 > answer through a mechanism it already has.**
 
 **Tool calls already satisfy this, which is the permissive half and the one that is easy to get
-wrong.** `StepwiseDurability.wrap_tool_execute` wraps every tool call in a step and writes a
-`records.Returned`, so a plugin-provided tool's answer is recorded and a resumed pass replays it
-without running the script again. Tools are the *safest* thing a plugin can contribute, not a
-forbidden one.
+wrong.** `Stepping.call` writes every tool call as a `records.Returned`, so a plugin-provided
+answer is recorded and a resumed pass replays it without running the script again. Tools are the
+*safest* thing a plugin can contribute, not a forbidden one.
 
 **So the line is not "outside the agent's loop", which is where this was first drawn and is too
 tight.** What decides is whether the answer is a *value the console can write down*, and two points
@@ -776,7 +825,7 @@ inside a turn qualify:
   record a return would have been, so a call that was turned away and a call that ran are replayed
   by one mechanism. [Refusing a call](#refusing-a-call) is what that buys.
 - **Whatever is added to a request before it is sent.** `guiding` already does exactly this: it
-  appends system-voice guidance in `before_model_request`, cheaply, because an appended message
+  appends system-voice guidance in `Agent.before_request`, cheaply, because an appended message
   costs the cached prefix nothing where an edited instruction re-prices every request under it.
   Today that is safe by being a pure function of the history it is handed. A plugin cannot be
   trusted to be pure, so the same point offered to a plugin records what was injected and replays
@@ -1268,7 +1317,7 @@ Two costs, both real:
 
 One question sorts them: **can you describe mainplate with this absent and still have mainplate?**
 
-- **`StepwiseDurability`: no.** It is the checkpoint, and the checkpoint is the conversation.
+- **The durable model-and-tool loop: no.** It is the checkpoint, and the checkpoint is the conversation.
 - **The file tools' isolation table: no.** [Which tools a session gets is a pure function of its
   recorded `Choice.isolation`](tools.md#which-tools-a-session-gets), and a registry would make it a
   function of the choice *and* the configuration at the moment of the pass.
@@ -1322,9 +1371,10 @@ told.
 `$MAINPLATE_ENV` putting mise's shims first, then mise's own directory, then the system's, and
 **prints nothing**. So it declares no events and is never asked anything again, and nothing in the
 console knows what a shim is, where mise keeps them, or that Python has an interpreter directory.
-`just dependencies` and not `just setup`, because the other half of that recipe installs a git hook
-into the clone's common directory, which is shared by every worktree of it and bound read-only in a
-session: that step is a person's to run once per clone, from [the composer's `Run`](composer.md#run).
+`just dependencies` and not `just setup`, because the other half of that recipe installs a git hook,
+and whether a session's commits run pre-commit is that session's to decide, with `pre-commit install`
+in its own worktree from `bash` or [the composer's `Run`](composer.md#run), rather than something a
+setup plugin does to every session.
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
 ours and turns ours off with one switch on the settings step. The two are separate plugins with
@@ -1389,8 +1439,8 @@ after the fact, because the checkpoint is written once.
 
 ### The file tools are excluded by a rule rather than by difficulty
 
-`read`, `edit`, `list` and `bash` are not awkward to port. They are **forbidden by this design's own
-constraint**: [which tools a session gets is a pure function of its recorded
+`read`, `edit`, `list`, `grep` and `bash` are not awkward to port. They are **forbidden by this
+design's own constraint**: [which tools a session gets is a pure function of its recorded
 `Choice.isolation`](tools.md#which-tools-a-session-gets), and routing that through a registry would
 make it a function of the choice *and* whatever configuration held at the moment of the pass, so a
 replayed pass would build a different agent than the one whose answers are recorded. They stay the

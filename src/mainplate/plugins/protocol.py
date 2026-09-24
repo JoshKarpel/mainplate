@@ -80,12 +80,12 @@ runtime reading of a static thing and this is eight words. `test_plugins.py` is 
 against each other.
 """
 
-type Effect = Literal["return", "retry", "refuse", "inject", "deliver", "set"]
+type Effect = Literal["return", "retry", "refuse", "inject", "deliver", "end", "set"]
 """Every thing a plugin may ask the console to do, which the console does and the plugin never does."""
 
 ALLOWED: Final[Mapping[Event, frozenset[Effect]]] = {
     "setup": frozenset(),
-    "tool": frozenset(("return", "retry", "deliver", "set")),
+    "tool": frozenset(("return", "retry", "deliver", "end", "set")),
     "before_tool": frozenset(("refuse", "deliver", "set")),
     "before_request": frozenset(("inject", "deliver", "set")),
     "before_turn_end": frozenset(("inject", "deliver", "set")),
@@ -106,6 +106,17 @@ answers is whether the call happens at all. `inject` belongs to the two events t
 append to: `before_request` has the one about to go out, and at `before_turn_end` an injection is what
 *makes* one, since the turn goes on to carry it rather than ending. `deliver` and `set` are
 everybody's, since a note and a write make sense wherever a plugin is asked anything.
+
+`end` is a tool call's alone too, and for a narrower reason than `return`'s: a turn can only be cut
+short from inside the loop that is carrying it, and a tool call is the one moment a plugin is asked
+anything from in there. The events on either side have nothing to end - `before_tool` answers whether
+a call runs, `before_turn_end` is asked because the turn is already stopping, and `after_turn` is
+asked once it has.
+
+**It is not the symmetric opposite of `before_turn_end`'s `inject`, and reading it that way will
+mislead.** An injection keeps a turn going by *saying something*, and the turn continuing is a
+consequence of there being a new request to answer. `end` says nothing and is control flow alone,
+which makes it the one effect that is not an utterance or a write. That is the cost of having it.
 
 **`setup` is empty because no answer to it is an `Answered` at all**: what a plugin returns there is
 `Described`, parsed by `setting_up`, which never reaches here. The row is written out rather than
@@ -394,6 +405,28 @@ class Answered(Speech):
     deliver: tuple[Delivery, ...] = ()
     inject: tuple[str, ...] = ()
 
+    end: bool = False
+    """
+    Whether the turn this call was made in stops once the call has been answered.
+
+    **The call is still answered and the model is simply not asked again.** The `return` is recorded
+    and the request carrying it is composed, so the transcript shows the result and the history stays
+    well-formed; what does not happen is sending that request. A turn stopped one node earlier would
+    end on a call nothing answered, which draws as a spinner that never stops and which no provider
+    will accept at the head of the next request.
+
+    What it is for is a call whose effect makes the rest of the turn worthless rather than merely
+    unnecessary. A handoff is the worked example: the document it delivers carries a boundary, so the
+    next turn starts from that document and every request this turn makes afterwards is written into
+    a history that is about to be thrown away. Left to run on, such a turn spends real money on work
+    nothing will ever read, and gives the model the chance to call the tool a second time.
+
+    **A turn and never the pass**, which is the distinction to hold on to: the pass goes on to open
+    the next turn, and on a handoff that next turn is the one that opens on the document. A plugin
+    that wants the session to stop has no way to say so and should not - what stops a session is an
+    empty inbox.
+    """
+
     setting: Mapping[str, object] = Field(default_factory=dict, alias="set")
     """
     Values to write into this plugin's own store, which is one place holding two kinds of thing.
@@ -665,6 +698,7 @@ def asked_for(answered: Answered) -> frozenset[Effect]:
             *(("refuse",) if answered.refuse is not None else ()),
             *(("inject",) if answered.inject else ()),
             *(("deliver",) if answered.deliver else ()),
+            *(("end",) if answered.end else ()),
             *(("set",) if answered.setting else ()),
         }
     )

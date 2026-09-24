@@ -33,12 +33,12 @@ nothing.
 
 The boundaries that actually hold are both *inside* the process and per session rather than per
 service, which is what a unit setting can never be: `Files.resolved` for the file tools, and a mount
-namespace for `bash`.
+namespace for `bash`, for a command the person runs, and for every git against a worktree.
 
 That is also why the service is not itself confined. It holds the credential, the store, and every
-session's worktree, all of which it needs, so the useful boundary is the one around what a model
-asked for and not the one around the console. What that leaves guarding it is who can reach the
-console, which is [what a command the person runs](composer.md#run) already rests on.
+session's worktree, all of which it needs, so the useful boundary is the one around what a session
+reaches and not the one around the console. What that leaves guarding it is who can reach the
+console, since anybody who can may start a session on the whole machine.
 
 ## Ports
 

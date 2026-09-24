@@ -3,23 +3,28 @@
 How a turn is recorded step by step so a crash resumes rather than restarts, and what one pass of a
 session actually does.
 
-## The capability
+## The loop and its steps
 
-`StepwiseDurability` is a Pydantic AI capability on the *public* extension surface,
-`AbstractCapability` plus `WrapperModel`. `pydantic_ai.durable_exec._base` and `_utils` are what the
-bundled Temporal/DBOS/Prefect capabilities share, and their module docstring reserves them; almost
-everything in them is about crossing a serialization boundary that does not exist here, since
-`without-durability` runs the body in this process. Do not reach for them.
+`loop.Agent` is the model-and-tool loop this console needs, over Pydantic AI's `Model`, message,
+settings and toolset types. Pydantic AI still owns each provider's request and response format; the
+console owns when to request, call tools, accept text, ask a plugin whether the turn may end, and
+stop a pass.
 
-The capability finds its checkpoint through a `ContextVar` set by `stepping(run, prefix,
-workspace)`, because no Pydantic AI hook carries one. Outside such a block it is transparent, which
-is what keeps a durable-capable agent usable in a script or a test.
+That makes durability ordinary control flow rather than a capability wrapped around somebody
+else's loop. `Agent.before_request` spends the allowance before recording the inbox cursor and
+plugin injections, `Stepping.request` snapshots the worktree and records the model response, and
+`Stepping.call` records each tool return under the call's own id. All three receive the `Stepping`
+value explicitly from `conversing`; no ambient checkpoint or capability ordering is involved.
 
-It wraps two things, `wrap_model_request` and `wrap_tool_execute`, and the second is required rather
-than an optimisation. A tool that *reads* answers differently every time it is asked, so a pass that
-re-ran one would resume the conversation against a file that moved since the model was told what it
-said. A tool that *writes* has already written, and re-running it here fails against anchors its own
-first run invalidated, which is a refusal for an edit that actually succeeded.
+Pydantic AI's toolsets still derive schemas and validators from the Python functions. The loop asks
+each toolset for its definitions, validates a call, and runs the calls in one response concurrently.
+**Whatever a tool says about a call is the call's result**, recorded under its key: a return, a
+`ToolFailed`, and a `ModelRetry` are one record with an outcome, because all three are something the
+model is sent over the network, and a replay has to hand the loop the same words rather than run the
+tool again to hear what it would say now. The graph told the last two apart and counted one of them
+against a retry budget; the loop counts nothing, and what it deliberately does not carry besides is
+the graph's structured outputs, native tools, deferred calls, dynamic capabilities, or model
+selection: none is part of this console's contract.
 
 Two rules the mechanism asks for, both easy to break silently:
 
@@ -61,8 +66,8 @@ after another pass has taken the session and be repeated; set it too long and a 
 holds the session for that long. A dead process still costs only the lease.
 
 `Settings.allowance` is the whole of it: **one setting with a live value, never a second code
-path.** `CheckpointedModel.request` spends one on each *live* request and `Allowance.take` refuses
-the one that would go past it, which raises `AllowanceSpent` and unwinds `agent.run`; `conversing`
+path.** `Agent.before_request` spends one on each *live* request and `Allowance.take` refuses
+the one that would go past it, which raises `AllowanceSpent` and unwinds the model loop; `conversing`
 catches that outside the run and returns `Progressed`. An allowance of `None` is unbounded, which is
 exactly what a pass was before there was a number here, so the tradeoff is a dial rather than a
 branch.
@@ -72,7 +77,7 @@ snapshot**. A message typed while one request is running is absent from that pas
 becomes visible when the next pass loads one. At one, that boundary sits before the next model
 request; raised to four, the message can wait behind three more requests made from the old snapshot.
 A wider pass is safe from liveness expiry, but it is not equivalent: it trades steering latency for
-fewer passes, store reads, and graph replays.
+fewer passes, store reads, and loop replays.
 
 Six things there are decided rather than incidental:
 
@@ -81,7 +86,7 @@ Six things there are decided rather than incidental:
   live is what its key says, which is why the key is taken before the check and the snapshot in
   front of it is taken after: a request that was never made leaves no tree recorded ahead of it.
 - **The refusal happens before anything at all is recorded for the request**, which is earlier than
-  the request itself. `before_model_request` runs first and records how far the turn has read, so a
+  the request itself. `Agent.before_request` runs first and records how far the turn has read, so a
   pass that drained and *then* refused would leave a cursor for a request nobody made; the next pass
   replays it, and a message delivered meanwhile waits for the request after the one it should have
   reached. So `Stepping.allow` is called there, before the drain, and again at the request, and it
@@ -106,12 +111,10 @@ Six things there are decided rather than incidental:
   answers two turns, and a fresh count per turn would let it make one live request for each under a
   budget sized for one. So `conversing` makes one `Allowance` per pass and hands the same one to
   every `stepping` scope in it.
-- **The turn itself is unbounded.** Pydantic AI caps a run at fifty requests by default, and
-  `answering_turn` turns that off rather than raising it. The cap counts replayed requests as well
-  as live ones, so a long turn reaches it on the same pass however it is resumed, and it raises
-  something no arm of `conversing` catches: a `Failed` record, redelivered into the same wall every
-  lease. What a session may spend is a question about money, and the bound belongs where money is
-  counted, which is the priced turn on the [cost page](cost.md) and not a count of round trips.
+- **The turn itself is unbounded.** The loop keeps making requests for as long as tools and end
+  plugins keep it going. What a session may spend is a question about money, and the bound belongs
+  where money is counted, which is the priced turn on the [cost page](cost.md), not a count of round
+  trips.
 
 ## Carrying the turn on, and stopping
 
@@ -161,16 +164,17 @@ read as terminal, a transient error stalls a session that would have recovered o
 other way costs a redelivery per lease until somebody looks.
 
 **An answer the model was cut off in is the one settled thing that is not a 4xx**, and `conversing`
-names it rather than `terminally`, because it is not raised on the request at all. A response stopped
-at its output limit with nothing in it the loop can act on - all thinking, or a tool call broken off
-mid-arguments - is recorded like any other, and Pydantic AI raises `UnexpectedModelBehavior` over it
-*afterwards*, from inside the agent graph. Every input to that answer is recorded, so a redelivery
-replays the same answer into the same exception once per lease for ever, which is exactly the loop
-above. So `converse` catches that exception, reads the last recorded answer of the turn, and where
-it was stopped at the limit writes a `Refused` with no status under the request the turn could not
-go on to make and reports `Stalled`. Anything else the graph raises is left to propagate, since a
-raise this console cannot account for is the transient default. What is worth stating is that this
-should be rare: a request is sent with the model's whole output limit
+names it rather than `terminally`, because it is not raised by the provider request. A response
+stopped at its output limit with nothing the loop can act on is recorded like any other, and the loop
+then raises `CannotGoOn` over it: for all thinking and no words, and for a tool call broken off
+mid-arguments, which it checks for *before* validating the call, because truncated arguments fail
+validation like any bad call's and the retry path would otherwise spend a request telling the model
+its arguments were wrong. The same exception covers the other answers that are recorded,
+deterministic, and unanswerable: one the content filter emptied, and one asking for two tool calls
+under a single id. `conversing` has one arm for it, which writes a `Refused` with no status under the
+request the turn could not go on to make, in the loop's own words, and reports `Stalled`. Anything
+else the loop raises stays the transient default, because a raise this console cannot account for
+is one a redelivery might get past. The cut-off should be rare: a request is sent with the model's whole output limit
 ([endpoints](endpoints.md#what-a-request-may-generate)), so reaching it is a model that ran to its
 ceiling without finishing a thought, and the cut-off answer stays on the page for what it is.
 
@@ -179,7 +183,7 @@ value in a write-once store for a reason worth keeping: what a request is made o
 history and the recorded message, neither of which will ever change, so a turn refused at request
 `i` is refused at request `i` on every later pass. Sharing the index with `turn:{n}:model:{i}` is
 the point, since the two are the question and the reason there is no answer and exactly one of them
-exists. `CheckpointedModel.request` reads it *before* the allowance and the snapshot, so a pass
+exists. `Stepping.request` reads it *before* the allowance and the snapshot, so a pass
 spends nothing on a question already answered and captures no tree in front of a request nobody
 makes.
 
@@ -190,6 +194,74 @@ conversation *past* a refused turn is `fork` at it, which drops the turn's own r
 keeping everything under them, and the sentence on the page says so. `refusal_in` is what the page
 reads, of the turn being answered and no other: a refusal on a turn that later answered is history,
 and the transcript is where history goes.
+
+## A request the provider will not take yet
+
+**A refusal is about the request and this is about the minute**, which is the whole of the split.
+`429` is on the retryable list above, so a session that hits a rate limit or spends a plan's weekly
+allowance is a pass that raises and a delivery the worker redelivers when the lease elapses. That is
+the right answer when nothing is known about *when* the limit lifts, and a poor one when the
+provider has just said:
+
+```text
+ModelHTTPError("status_code: 429, model_name: openai/gpt-5.6-sol, body: {'type':
+'usage_limit_reached', 'message': 'The usage limit has been reached', 'plan_type': 'plus',
+'resets_at': 1790303879, 'resets_in_seconds': 398418}")
+```
+
+Four and a half days at one attempt a minute is six thousand real requests to a provider already
+saying no, with nothing on the page to say why. So `deferred_until` reads the moment out of the
+error - `resets_at` in the body, or the standard `Retry-After` header, which Pydantic AI already
+parses into seconds and which is the same statement in the other spelling - and
+`Stepping.request` raises `RequestDeferred` instead of letting the error through.
+`conversing` catches it, records what the provider said, and **suspends the pass on that moment**,
+which the worker answers by scheduling the delivery for exactly then. Only a moment *ahead of now*
+counts: one already past would schedule a wakeup for the past, be redelivered at once, and ask the
+same question as fast as the queue could turn it around, which is worse than the retry it replaces.
+Each spelling is held against that test on its own and the first that passes is the answer, because
+a body echoing the window that has just closed would otherwise take the answer and discard a usable
+header on the same response. An error naming no moment is raised exactly as it was, which is every
+429 this console saw before.
+
+**A `429` and nothing else is read this way**, which is narrower than `Retry-After` itself, and the
+reason is whether the provider *knows*. A rate or usage limit is a window it is keeping, so the
+moment it names is a fact about its own bookkeeping. `terminally` calls every 5xx transient, so
+without the gate they arrive here too, and a 5xx header is a guess about when something the provider
+does not control will be fixed: a gateway shedding load with `503` and `Retry-After: 86400` would
+park a session for a day, at the moment an ordinary redelivery would have got an answer on its next
+attempt. The cost, stated: **a provider that meant its `503` header is asked again on the lease
+anyway**, which is a handful of requests it did not want, bought by this console's worst case being
+one lease rather than however long somebody else's header said.
+
+**The suspension is `ScheduledWakeup` raised directly rather than `Run.sleep` taken**, and the
+difference is which record holds the deadline. `sleep` computes and stores one of its own, `now +
+duration`, so this console would be writing down a moment it was *told* as though it had chosen it,
+and the page would be reading the copy rather than the fact. Raising the suspension with the key of
+the record it already wrote is one deadline in one place, and `stopped_at` takes a suspension a
+workflow raised itself for precisely this.
+
+**`turn:{n}:deferred:{i}` is counted by how many waits there have been and not by the request that
+caused one**, which is the opposite of what a refusal does and the one thing to get right here. A
+refusal is settled, so the request's own position names it once. A wait is not: the pass that comes
+back asks the same request again, and a provider that defers it a second time has named a *new*
+moment. Keyed by the request, that moment would land on a key already holding the old one, the store
+would keep the first value, and the pass would wake onto a deadline already past - the hot loop this
+exists to close, reached through the back door. Counted, each wait is its own record and the record
+is what advances the count. A session against a limit that keeps being reached accumulates one of
+these per reset rather than one per lease.
+
+The page reads the newest one **under the turn being answered** and draws it [as a wait rather than a
+fault](console.md#every-panel-folds-from-its-own-row), with the moment and a countdown to it. Two
+tests stand between the record and the page and they answer different questions. Whose wait it is,
+because a turn reaches its `messages` by getting past every wait it took, so a moment named for a
+turn that has since answered is history: any message a person sends makes the delivery ready at once,
+and a short wait is routinely outlived by the turn that took it. And whether the wait is still on,
+which is a comparison against a clock, so `Service.read` makes it and the page is handed the answer.
+
+The cost, stated: **the console believes the provider.** A gateway that names a moment far out
+parks the session until then, and nothing shortens that but a person writing a message, which queues
+the session and gets the same answer one request earlier. That is the same bargain the recorded
+refusal takes, and the same way out.
 
 ## A pass that falls over
 
@@ -218,11 +290,9 @@ fault.
 
 **It does not promise the retry will work, and the page says so.** Most of what lands here is fixable
 and the next pass carries on; some of it is not, because what a pass replays is *recorded*. A model
-response the agent graph will not accept - a thinking-only response cut off by the output limit, say
-- is recorded before the graph ever sees it, so every later pass replays the same record, raises the
-same exception, and never reaches a provider at all. Nothing in `reporting` can tell those apart, so
-the sentence says what the mechanism does and names the way out of the second, which is `fork` at
-that turn.
+response the loop cannot process for a reason it does not classify as a refusal is replayed into the
+same exception without asking the provider again. Nothing in `reporting` can tell deterministic
+failures from transient ones, so the sentence names `fork` at that turn as the way out.
 
 ## What the worker is doing about a session
 
@@ -247,6 +317,13 @@ something outstanding is the exception and needs no failure beside it: a message
 queues it are written in one commit, and a pass asks for the next one from inside itself, so there is
 no race that produces one.
 
+**`Delayed` has a second cause now, and it is a deliberate one**: a pass that
+[suspended on a moment a provider named](#a-request-the-provider-will-not-take-yet) is a delivery
+held back until exactly then. It is told from the failure the same way, by what is recorded beside
+it - a `Deferred` still ahead of now rather than a live `Failed` - so nothing here had to learn a
+fifth arm, and the page draws the two differently because they mean opposite things about whether
+anything is wrong.
+
 **It is in `Service.token` as well, and that is what makes any of it visible.** A pass that falls over
 records nothing, so a token made of the record count alone holds still while the page sits under a
 spinner - the failure this exists to end. The claim and the delivery are what move when the worker
@@ -265,18 +342,47 @@ change.
 
 ## What replay costs
 
-**Measured rather than reasoned about**, and it is not where it looks. Each pass re-runs `converse`
-from the top, so a turn of *n* requests replays O(n²) steps; record parsing is 1.4% of a 40-round
-turn and `load` is 0.8% to 2.4% against real SQLite. The dominant term is Pydantic AI rebuilding its
-frozen `RunContext` once per capability per hook, which is upstream's. Absolute figures: about 65ms
-per pass, 2.2s spread across a 40-round turn that costs minutes of provider time.
+Each pass re-runs the current turn's loop from the top over its recorded responses and returns, so a
+turn of *n* requests replays O(n²) steps across its passes. No provider or tool is reached twice;
+what is repeated is the loop's own work between steps, which is this console's own.
 
-**Do not build a record cache or a fetch-only-what-is-missing store for this**: loads are already
-linear and parsing is 1.4%, so the quadratic is somewhere a store-level cache cannot reach. Raising
-the allowance cuts the pass count, graph replay, and re-loading together, but makes a steer wait
-behind the live requests left in the pass. Keep the default at one unless measured replay cost is
-worth that loss of responsiveness; revisit the store only if very large `read` returns become
-common.
+**`just replay` is what measures it**, and it is the answer to any argument about this section: it
+drives one turn twice over a stand-in provider and a real worktree, unbounded and then a pass per
+request, and prints the difference, the per-pass series and a profile. It reaches no provider, so
+running it before and after a change to `loop.py` or `durability.py` costs nothing.
+
+What it says is that **the per-already-recorded-request term is not flat**, so the turn is worse than
+quadratic: it grows by about half again between a forty-request turn and a hundred-and-sixty-request
+one. Almost none of that is parsing. Where a long turn's replay actually goes:
+
+- **Pydantic AI's `prepare_messages` is the largest single term**, around a quarter. `Agent.request`
+  composes the history for the wire before handing it to `Stepping.request`, so a replayed request
+  pays it too, over a history that is longer every time.
+- **Two walks of the whole checkpoint are next**, together around a fifth, and both are for the
+  inbox. `since_last` calls `drains_in` for this turn's cursors, and `Run.delivered` walks the same
+  keys again for the entries past the last one. Each is O(checkpoint) inside a loop already O(n²),
+  and the checkpoint grows with the turn, which is what makes the per-request term climb.
+- **Parsing a record back out of the store is around three percent**, which is where the last
+  measurement under the graph put it and is what removing the graph left behind: the graph's own
+  per-hook context rebuilding was the dominant term, and it is gone.
+
+**The two walks are the console's own and so are where its own fixes are.** Composing a key inside
+one of them costs a key per recorded key per request, which is why `drains_in` builds both names it
+compares against above its loop; that alone is worth a quarter of the per-request term. What is left
+is the walk itself, and shrinking *that* means indexing the checkpoint by turn on the way in, which
+is a change to what a pass holds rather than a tidy-up, and is not worth making until a real turn is
+long enough to feel it.
+
+Do not build a record cache or a fetch-only-what-is-missing store for any of this: the quadratic is
+not where a store can reach it, and a cache would sit in front of a `load` that is already one query.
+Raising the allowance cuts pass count and replay together, but makes a steer wait behind the live
+requests left in the pass, so the console keeps the default at one unless measured replay cost is
+worth that loss of responsiveness.
+
+The cost of knowing this, stated: `scripts/replay.py` is a second driver of a pass, beside the
+worker and beside the suite, and it repeats what `conftest` sets up because it is neither. A change
+to how a session is made ready reaches it, and nothing fails when it does not, because it is a script
+that prints numbers rather than a test that asserts on them.
 
 **The tests default to unbounded and the console ships one.** A test about a conversation drives a
 whole turn in one pass and says nothing about how a pass is cut; `TestWhatOnePassDoes` is where the

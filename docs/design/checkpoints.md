@@ -24,13 +24,15 @@ This console's is the rest:
 | `result:{entry}` | What the command delivered under `{entry}` exited with, said and took | `Commands`, when it finishes |
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |
-| `turn:{n}:tree:{i}` | The worktree before the i-th model request | `StepwiseDurability` |
-| `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `StepwiseDurability` |
-| `turn:{n}:model:{i}` | The i-th model response of that turn | `StepwiseDurability` |
-| `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `StepwiseDurability` |
-| `turn:{n}:tool:{id}` | What one tool call returned and how long it ran | `StepwiseDurability` |
+| `turn:{n}:tree:{i}` | The worktree before the i-th model request | `Stepping.request` |
+| `turn:{n}:wrote:{i}` | The net change the i-th request's tool batch made, as a unified diff over the whole worktree; empty where nothing changed | `Stepping.request`, once the next snapshot is taken |
+| `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `Stepping.steering` |
+| `turn:{n}:model:{i}` | The i-th model response of that turn | `Stepping.request` |
+| `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `Stepping.request` |
+| `turn:{n}:deferred:{i}` | The i-th time this turn was told to come back later, and the moment the provider named | The conversation body |
+| `turn:{n}:tool:{id}` | What one tool call returned, or why it failed, how long it ran, and what the tool recorded beside its return for the page | `Stepping.call` |
 | `turn:{n}:end:{j}` | The turn's j-th end: what the plugins said when it tried to end, and how many responses it had made; empty where they let it go. Only where a plugin asked for `before_turn_end` | The conversation body |
-| `turn:{n}:messages` | What the agent run produced | The conversation body |
+| `turn:{n}:messages` | What the model loop produced | The conversation body |
 | `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |
 | `archived` | That somebody archived the session, and when | `Service.archive`, on the press |
 | `archived:tree` | What the worktree held when it was taken off the disk | The reconciler in `archive.py`, just before uprooting it |
@@ -79,6 +81,14 @@ exactly while `at` is still what the session holds, because anything recorded si
 got past it. That is `turn:{n}:refused:{i}`'s rule against a count rather than against a turn, and it
 has to be a count because a pass can fall over where no turn names it - planting a worktree, reading
 a declaration, running a setup.
+
+**`turn:{n}:deferred:{i}` counts waits and not requests**, which is `refused:{i}`'s rule turned
+round and the one place in this space where that is right. A refusal is settled, so the request's
+own position names it once and every later pass finds the answer under the key it was about to use.
+A wait is about the minute: the pass that comes back asks the same request again, and a provider
+that defers it a second time names a *new* moment, which keyed by the request would land on a key
+already holding the old one and be dropped by a write-once store. See [a request the provider will
+not take yet](durability.md#a-request-the-provider-will-not-take-yet) for what that would cost.
 
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model requests
 happen in a fixed order, so counting them names a step the same way on every pass, and the tree
@@ -169,7 +179,7 @@ without being taught that either.
 readers (`opened_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`, read
 by `choice_of` and `reached` for the body, `transcript`, `so_far` and `responded` for the page,
 `before` for a fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them
-for the writers, from a turn prefix and a kind, which is what lets one capability name a step
+for the writers, from a turn prefix and a kind, which is what lets the durability layer name a step
 without importing the conversation. `tree_key(n, i)` and `Stepping.key("tree")` therefore produce
 the same string from opposite ends, and nothing enforces that: change one and change the other. That
 is [one fact in two places](../philosophy.md#one-fact-in-two-places), paid the usual way, and the
@@ -213,7 +223,11 @@ shape change.
 for the whole policy: a duration could not sit beside a bare tool return without being
 indistinguishable from a tool that returned a field of that name, so it needed a key, and the key
 brought a window where a return was recorded and its duration was not. One record, one write, no
-window, and `tooks_in` and `blocks_from` now read one mapping rather than being handed two.
+window, and `tooks_in` and `blocks_from` now read one mapping rather than being handed two. The
+envelope is also where what a tool records *beside* its return goes, under Pydantic AI's own name
+for the slot, `metadata`: [an edit's diff](tools.md#every-tool-that-writes-hands-back-anchors) is
+the one thing written there, it is a fact about the call settled the moment the call returns, and
+a bare return would have had nowhere to put it either.
 
 **Every record carries its own `kind`**, which is a second copy of what its key already says, and
 the copy is the point: parsed by key alone, a record written under the wrong one is silently

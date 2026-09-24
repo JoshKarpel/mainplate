@@ -24,8 +24,12 @@ from pathlib import Path
 from typing import Final
 from typing import Protocol
 
+from mainplate.sandbox import NoSandbox
+from mainplate.snapshots import Store
 from mainplate.snapshots import Worktree
 from mainplate.snapshots import Worktrees
+from mainplate.snapshots import demanded
+from mainplate.snapshots import git_at
 
 logger = logging.getLogger(__name__)
 
@@ -200,9 +204,9 @@ class Clones:
     Where this console keeps the repositories it has been given, one bare clone each.
 
     **Bare**, and that is the whole shape of it: a bare repository has no working tree, so there is
-    no "main" checkout to be confused with a session's, and every worktree is a linked one made
-    from the same object store. It is also what makes a fork cheap, since the tree a fork checks
-    out is already an object here.
+    no "main" checkout to be confused with a session's. Each is the `Store` every session's checkout
+    of that repository borrows its objects from, which is also what makes a fork cheap, since the
+    tree a fork checks out is already an object here.
 
     Clones live under one root and are named by the repository id rather than by its URL, so the
     same repository reached through a different forge tomorrow is still the same directory.
@@ -213,9 +217,12 @@ class Clones:
     def at(self, repository: str) -> Path:
         return self.root / f"{repository.replace('/', '%')}.git"
 
-    def worktrees(self, repository: str, under: Path) -> Worktrees:
-        """The worktrees of one repository, which is what a session is actually planted in."""
-        return Worktrees(repo=self.at(repository), root=under)
+    def store(self, repository: str) -> Store:
+        return Store(path=self.at(repository))
+
+    def worktrees(self, repository: str, under: Path, bwrap: str) -> Worktrees:
+        """The checkouts of one repository, which is what a session is actually planted in."""
+        return Worktrees(store=self.store(repository), root=under, bwrap=bwrap)
 
     def cloned(self, repository: str) -> bool:
         """Whether this repository is already on disk, which is a question with no I/O in it."""
@@ -235,8 +242,7 @@ class Clones:
         a precondition for planting: a machine that is offline, or a repository whose integration was
         detached this morning, still gets the worktree it would have got before this existed.
         """
-        here = self.at(repository.id)
-        fetched = await Worktree(root=here, trusted=True).git(
+        fetched = await self.store(repository.id).git(
             "fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*"
         )
         if not fetched.ok:
@@ -263,7 +269,7 @@ class Clones:
         self.root.mkdir(parents=True, exist_ok=True)
         try:
             async with asyncio.timeout(LISTING.total_seconds()):
-                listed = await Worktree(root=self.root, trusted=True).git("ls-remote", "--heads", "--refs", "--", repository.url)
+                listed = await git_at(self.root, "ls-remote", "--heads", "--refs", "--", repository.url)
         except TimeoutError:
             logger.warning(f"{repository.name} did not say what branches it has within {LISTING}")
             return ()
@@ -276,32 +282,56 @@ class Clones:
         """
         The repository on disk, cloned if this is the first time it has been asked for.
 
-        Idempotent, so a second session on the same repository is a worktree rather than a second
+        Idempotent, so a second session on the same repository is a checkout rather than a second
         clone. The clone is bare and the URL is passed as an argument to `git clone` deliberately:
         on exe.dev it carries no credential at all, because there is none to carry.
+
+        **Nothing unreachable is ever pruned from it**, set on every call so a clone made before this
+        was true gets it too. A checkout borrows the store's objects without the store knowing which,
+        so a commit a session merged from a branch the remote has since deleted is one only the
+        checkout still refers to, and a `gc` pruning it would break that checkout's history. The
+        cost, stated: a store only grows.
         """
         here = self.at(repository.id)
-        if self.cloned(repository.id):
-            return here
-        self.root.mkdir(parents=True, exist_ok=True)
-        logger.info(f"cloning {repository.name} from {repository.forge}")
-        await Worktree(root=self.root, trusted=True).demand("clone", "--bare", repository.url, str(here))
+        if not self.cloned(repository.id):
+            self.root.mkdir(parents=True, exist_ok=True)
+            logger.info(f"cloning {repository.name} from {repository.forge}")
+            cloning = ("clone", "--bare", repository.url, str(here))
+            demanded(await git_at(self.root, *cloning), cloning)
+            # A clone just made is current, so its branches are what a `refresh` would have fetched.
+            # Copied under `refs/remotes/origin/` from the clone itself, with no network, because
+            # that is the namespace `resolve` prefers and a checkout's `git fetch` reads.
+            await self.store(repository.id).demand("fetch", "--quiet", ".", "+refs/heads/*:refs/remotes/origin/*")
+        await self.store(repository.id).demand("config", "gc.pruneExpire", "never")
         return here
 
 
 @dataclass(frozen=True, slots=True)
 class Workspaces:
     """
-    Where repositories are cached and where each session's complete checkout lives.
+    Where a session's files come from and where they live: clones of repositories, checkouts of
+    clones.
 
-    The bare cache is trusted parent state. A session gets a normal clone of it, with private Git
-    metadata, so local Git writes cannot change another session or the cache.
+    One value rather than several passed around together, because they only mean anything as a
+    set: a checkout is of a clone, a clone is of something a forge reaches, and git runs against a
+    checkout only behind `bwrap`. It is what the worker is handed to make a session's files exist,
+    and what the service is handed to say where they are.
     """
 
     clones: Clones
     root: Path
     scratch: Path
     reaching: Reaching
+
+    bwrap: str | None
+    """
+    What confines every git that reads a checkout, or nothing on a machine without it.
+
+    Nothing means no session works in a repository here: a checkout's configuration is its
+    session's to write, so a machine that cannot confine git has nowhere safe to snapshot one.
+    `app.py` offers no repository on such a machine, and anything that reaches for a checkout
+    regardless is refused with `NoSandbox`.
+    """
 
     def at(self, session: str) -> Path:
         """Where a session's files are, which is a question a page asks and never a call that fails."""
@@ -323,12 +353,22 @@ class Workspaces:
         """
         return self.scratch / session
 
+    def worktrees(self, repository: str) -> Worktrees:
+        """Every session's checkout of one repository, refused where nothing could confine git in one."""
+        if self.bwrap is None:
+            raise NoSandbox(f"nothing confines git on this machine, so no session may work in {repository!r}")
+        return self.clones.worktrees(repository, self.root, self.bwrap)
+
     def worktree(self, session: str, repository: str) -> Worktree:
         """
-        A session's complete checkout, paired with the trusted store that keeps its snapshots after
-        the checkout is archived.
+        A session's checkout, knowing which store it borrows from, which is what lets a snapshot of it
+        be kept after the checkout is gone.
+
+        The repository is asked for rather than derived from the session because nothing here holds
+        a session's choice, and the callers all have it: a checkout is only ever named for a session
+        that picked a repository.
         """
-        return self.clones.worktrees(repository, self.root).worktree(session)
+        return self.worktrees(repository).worktree(session)
 
     def named(self, repository: str) -> Repository | None:
         return self.reaching.current.offers(repository)
@@ -381,14 +421,14 @@ class Workspaces:
         rather than one per pass: a session's second turn finds its worktree planted and never
         reaches this at all.
         """
+        worktrees = self.worktrees(repository)
         cloning = not self.clones.cloned(repository)
         if cloning:
             found = self.named(repository)
             if found is None:
                 return None
             await self.clones.ensure(found)
-        worktrees = self.clones.worktrees(repository, self.root)
-        if not cloning and tree is None and worktrees.at(session) not in await worktrees.planted():
+        if not cloning and tree is None and not worktrees.planted(session) and worktrees.linked(session) is None:
             reached = self.named(repository)
             if reached is not None:
                 await self.clones.refresh(reached)

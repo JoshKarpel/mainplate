@@ -1,9 +1,9 @@
 # The philosophy of mainplate
 
-mainplate is a chat console over a Pydantic AI agent whose sessions are durable workflows. This is
-the standard new work here is measured against: one idea about where a conversation lives, a
-vocabulary for naming things, and the handful of rules that keep being the answer in a design
-argument.
+mainplate is a chat console over its own durable model-and-tool loop, using Pydantic AI for provider
+requests and normalized messages. This is the standard new work here is measured against: one idea
+about where a conversation lives, a vocabulary for naming things, and the handful of rules that keep
+being the answer in a design argument.
 
 It is not the authority on what the code currently does. The [design
 notes](https://joshkarpel.github.io/mainplate/design/) are, and where one of them says this console
@@ -69,6 +69,24 @@ exactly what one without it does.
 The theme is the reader's across every session; the other two are facts about one conversation, so
 they are keyed by session id. That scoping is load-bearing rather than tidy: every session shares
 one origin, so an unscoped key would be one conversation's decisions imposed on all of them.
+
+**The zone cookie is the one thing that goes the other way**, and it is not an exception to any of
+this. It carries what the *browser* knows rather than what the reader decided, it is a cookie rather
+than storage because the server is what has to read it, and what it is for is drawing a recorded
+moment against the right clock rather than keeping a second copy of one. Every moment stays in the
+checkpoint in UTC, and the cookie decides nothing but how it is printed.
+
+It arrives as a `Reader`, which is the value a page is handed to answer "who is this drawn for", and
+the test for what may join it there is that last clause: a credential shares the same header and does
+not belong, because it gates whether a page is drawn at all rather than being something a page draws
+with. Anything that would decide what the page *says* rather than how it reads is the thing to push
+back on, for the reason everything above it is.
+
+**A locale would pass that test and is declined anyway**, which is worth saying because it is the
+obvious next field and is not one. Every moment prints `%Y-%m-%d %H:%M` at everybody: this console
+is for programmers, and one unambiguous stamp that sorts lexicographically beats each reader's own
+conventions. So the *instant* follows the reader and the *writing* of it never does, and the zone
+may stay `Reader`'s only field for good.
 
 Two things the script holds are deliberately *not* stored, and the line between them is worth
 keeping. What a reader has folded, and whether they are following the end, are modes within a visit

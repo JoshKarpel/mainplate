@@ -23,7 +23,7 @@ is why `Declaring.runs` takes a repository and a boolean rather than a `Choice`.
 
 ## What must not change without deciding to
 
-- **The vocabulary is closed and the console owns it.** A fifth effect, a seventh event or a third
+- **The vocabulary is closed and the console owns it.** A seventh effect, a ninth event or a third
   kind of control is something somebody adds deliberately, in `protocol.py`, with a line in the
   design note saying what it costs. It is not something a plugin can add.
 - **`extra="forbid"` on everything crossing the boundary.** A plugin that wrote `tool` where the word
@@ -75,6 +75,12 @@ So a change to what a handoff says, what it costs, or when it fires is a change 
 the console learns about it through `setup` like any other. The price is stated: `bundled/guidance`
 carries a `description:` line reader rather than a YAML parser, because a plugin with no dependencies
 is worth more here than the general case of a field nothing else reads.
+
+**A console-tier plugin must not run git against the worktree the ordinary way.** It runs as the
+operator, unconfined, and the worktree's `.git/config` is the session's to write, so `git -C
+<worktree>` runs whatever that configuration names. `bundled/guidance` reads the index through
+`GIT_INDEX_FILE` against an empty bare repository of its own; copy that rather than disabling one
+setting at a time. See [what runs, and as whom](../../../docs/design/security.md).
 
 Both are run for real in `tests/test_plugins.py`, over a real pipe, and both are exercised end to end
 by `tests/test_app.py`, which is the one place `open_console` installs them.

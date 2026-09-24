@@ -54,11 +54,10 @@ class Places:
     `$HOME` can never sit under a directory the model writes, and what decides that is which root
     each namespace is *bound*; this binds nothing. It reads what the others made, and it says so.
 
-    Every path is derived from the session id and roots configured at startup. The checkout is one
-    directory now, including its private `.git`, so there is no second per-session Git directory to
-    discover or count.
-
+    Derived rather than listed: every path here comes from the session id and the roots this console
+    was started with, and none from reading anything a session wrote.
     """
+
     workspaces: Workspaces
     plugins: Path
     """
@@ -71,9 +70,9 @@ class Places:
         """
         Every directory that is this session's and nothing else's, whether or not it exists yet.
 
-        The complete checkout, including its private Git metadata, plus the session scratch and all
-        plugin scratches. The trusted repository cache and snapshot store are shared infrastructure,
-        so archiving leaves them in place to keep recorded trees forkable.
+        The checkout, `.git` and all, where the session works in a repository; the scratch and the
+        plugins' scratches either way. Not the store, which every session on that repository shares
+        and which holds the snapshots that keep a checkpoint forkable once the rest is gone.
         """
         worked_in = (self.workspaces.at(session),) if repository is not None else ()
         return (*worked_in, self.workspaces.scratch_at(session), self.plugins / session)

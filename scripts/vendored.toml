@@ -1,0 +1,42 @@
+# Everything this console serves that somebody else wrote: where it was published, pinned to a
+# release, and the digest the copy in `src/mainplate/assets/` has to match. `just vendor` fetches
+# each one and writes nothing unless every one hashes to what is recorded here, and
+# `tests/test_vendored.py` holds the copies on disk against the same table with no network. Bumping
+# one is editing the version in its `url`, running `just vendor`, reading the digest it refuses on,
+# and recording it here once the file has been looked at.
+#
+# Each licence is vendored the same way, because it ships in the same directory. The table is keyed
+# by the name the file has in `assets/`, and a name here is the whole of what `vendor.py` knows. A
+# row with a `member` is that path inside the zip at its `url`, which is how a face published in a
+# release archive is a row like a script published as itself; its digest is the member's own.
+
+["htmax.min.js"]
+url = "https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/htmax.min.js"
+sha256 = "2b90cb1844656b9f025805b479288cea2877c7f91068a845c4106ebf5d87a315"
+
+["htmax-LICENSE.txt"]
+url = "https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/LICENSE"
+sha256 = "d3d2456f76414f2456104660ebd65aff1c04cd7966b942bdabd63f3cdb316a38"
+
+["mermaid.min.js"]
+url = "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js"
+sha256 = "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8"
+
+["mermaid-LICENSE.txt"]
+url = "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/LICENSE"
+sha256 = "ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80"
+
+["JuliaMono-Regular.woff2"]
+url = "https://github.com/cormullion/juliamono/releases/download/v0.63.2/JuliaMono-webfonts.zip"
+member = "webfonts/JuliaMono-Regular.woff2"
+sha256 = "cd371c92e94978a6888b71e89a4b57f443604ad63595150511ceb7d5c354b857"
+
+["JuliaMono-Bold.woff2"]
+url = "https://github.com/cormullion/juliamono/releases/download/v0.63.2/JuliaMono-webfonts.zip"
+member = "webfonts/JuliaMono-Bold.woff2"
+sha256 = "9ffd596514e31ba6317fffbf367c51c4ff93f2a68a1499c3e80ac9309dcd68fa"
+
+["JuliaMono-OFL.txt"]
+url = "https://github.com/cormullion/juliamono/releases/download/v0.63.2/JuliaMono-webfonts.zip"
+member = "LICENSE"
+sha256 = "bae3beff9e15f1a680c2764c4bbdb25b995b9bf539aeaf8467482a495c75ad0c"

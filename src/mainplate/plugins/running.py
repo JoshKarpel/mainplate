@@ -441,7 +441,7 @@ class Spawned:
         do its job. Something to remember per session it already has, in the payload's `state`.
 
         A repository's runs behind `--clearenv` inside a namespace that reaches the worktree it was
-        handed, its clone read-only, a directory of its own, and nothing else - so it is handed no
+        handed, its store read-only, a directory of its own, and nothing else - so it is handed no
         environment here at all, because `bwrap` has already taken this process's away. The scratch
         is named on the payload as well as in the environment, so a plugin parsing JSON and a line of
         shell reach the same directory.
@@ -499,7 +499,7 @@ class Spawned:
         confinement = InAWorktree(
             worktree=worktree, scratch=scratch, scratch_named=SCRATCH_NAMED, session_scratch=session_scratch
         )
-        sandbox = await confined_by(confinement)
+        sandbox = confined_by(confinement)
         argv = (
             self.bwrap,
             *sandbox.argv(

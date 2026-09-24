@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from calling import calling
@@ -19,10 +20,13 @@ from pydantic import ValidationError
 from without_asgi import ASGIApp
 from without_durability.interfaces import inbox_key
 
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.app import build_app
+from mainplate.commands import PUSHED
 from mainplate.commands import UNFINISHED
 from mainplate.commands import Commands
+from mainplate.conversation import SETUP_ENVIRONMENT_KEY
 from mainplate.conversation import Command
 from mainplate.conversation import Panel
 from mainplate.conversation import Result
@@ -34,11 +38,12 @@ from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
 from mainplate.conversation import transcript
+from mainplate.forge import Reachable
+from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.pages import BASIS_ID
 from mainplate.pages import BRANCHES_ID
 from mainplate.service import Service
-from mainplate.snapshots import Worktree
 from mainplate.snapshots import branch_named
 
 # Nothing here is slow on purpose, so a bound well under the suite's own is what a runaway command
@@ -79,7 +84,7 @@ async def planted(service: Service, workspaces: Workspaces, chosen: Choice) -> s
     agent and a whole turn along with it to produce one directory.
     """
     session = await started(service, "hello", chosen)
-    await workspaces.plant(session.id, FIXTURE)
+    await workspaces.plant(session.id, FIXTURE, branch=chosen.branch or branch_named(session.id))
     return session.id
 
 
@@ -273,12 +278,12 @@ class TestHowACommandIsDrawn:
         async with calling(app) as caller:
             drawn = await caller.get(f"/sessions/{session.id}")
 
-        assert "said nothing" in drawn.text
+        assert "no output" in drawn.text
         assert "<pre>" not in drawn.text
 
     async def test_a_command_still_running_has_no_body_at_all(self, app: ASGIApp, service: Service) -> None:
         """
-        Nothing to say either way yet: `said nothing` is a claim about a finished command, and a
+        Nothing to say either way yet: `no output` is a claim about a finished command, and a
         console that made it about a running one would be reporting an absence it cannot know about.
         """
         session = await started(service, "have a look", DEFAULT_CHOICE)
@@ -288,7 +293,7 @@ class TestHowACommandIsDrawn:
             drawn = await caller.get(f"/sessions/{session.id}")
 
         assert "just test" in drawn.text
-        assert "said nothing" not in drawn.text
+        assert "no output" not in drawn.text
         assert 'class="ran__body"' not in drawn.text
 
 
@@ -327,14 +332,10 @@ class TestRunningOne:
 
         assert (await ran(running, session, "exit 3")).status == 3
 
-    async def test_a_git_write_lands_in_the_worktree_because_nothing_confines_it(
+    async def test_a_git_write_lands_in_the_worktree(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        """
-        The point of the whole thing. A session's `isolation` bounds what a *model* asked for, and
-        the clone is bound read-only inside that sandbox precisely so no tool can write history;
-        `git commit` is the person's, so it runs outside all of it and actually commits.
-        """
+        """The point of the whole thing: the checkout's git is the session's, so a commit commits."""
         session = await planted(running, workspaces, on_fixture)
         where = workspaces.at(session)
         (where / "src" / "kept.txt").write_text("edited by hand\n")
@@ -347,6 +348,55 @@ class TestRunningOne:
 
         assert came.status == 0
         assert await run("git", "log", "-1", "--format=%s", cwd=where) == "from the console"
+
+    async def test_a_hook_the_model_left_runs_where_the_model_could_already_reach(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice, tmp_path: Path
+    ) -> None:
+        """
+        Why a person's command is confined at all. A hook is a file in the checkout's `.git`, which
+        the model writes; a person's `git commit` run as the service user would run it with
+        everything that user holds. The hook runs, since that is what hooks are for, and what it
+        tries to reach outside the sandbox is not there.
+        """
+        session = await planted(running, workspaces, on_fixture)
+        where = workspaces.at(session)
+        escaped = tmp_path / "escaped"
+        hook = where / ".git" / "hooks" / "pre-commit"
+        hook.write_text(f"#!/bin/sh\necho the hook ran\ntouch {escaped}\n")
+        hook.chmod(0o755)
+
+        came = await ran(
+            running, session, "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m x"
+        )
+
+        assert "the hook ran" in came.output, "the control: the hook is one git actually ran"
+        assert not escaped.exists()
+
+    async def test_a_command_runs_under_what_the_setup_recorded(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        As the model's own commands do, so the toolchain a repository's setup installed is on the
+        `PATH` of a command the person types too.
+        """
+        session = await planted(running, workspaces, on_fixture)
+        await running.checkpointer.supply(
+            session, SETUP_ENVIRONMENT_KEY, records.Environment(values={"GREETING": "set up"}).recorded()
+        )
+
+        came = await ran(running, session, 'echo "$GREETING"')
+
+        assert came.output.strip() == "set up"
+
+    async def test_the_person_s_home_is_not_in_there(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+        assert Path.home().is_dir(), "the control: this path really is there outside the sandbox"
+
+        came = await ran(running, session, f"ls {Path.home()} >/dev/null 2>&1 && echo VISIBLE || echo DENIED")
+
+        assert came.output.strip() == "DENIED"
 
     async def test_a_command_that_will_not_stop_is_killed_and_says_so(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -445,6 +495,58 @@ class TestRunningOne:
         assert "the console stopped" in came.output
 
 
+class TestPushingOne:
+    """
+    The session's branch reaching its repository, recorded where a command's result would be.
+
+    The fixture's origin is a path, which takes a push the way a forge would.
+    """
+
+    async def test_a_push_sends_the_branch_and_records_what_git_said(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice, origin: Path
+    ) -> None:
+        session = await planted(running, workspaces, replace(on_fixture, branch="try-it-this-way"))
+        await ran(
+            running, session, "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m x"
+        )
+        made = await run("git", "rev-parse", "HEAD", cwd=workspaces.at(session))
+
+        entry = await running.push(session)
+
+        assert entry is not None
+        came = await settled(running, session, entry)
+        assert came.status == 0, came.output
+        assert "try-it-this-way" in came.output
+        assert await run("git", "rev-parse", "refs/heads/try-it-this-way", cwd=origin) == made
+        assert (await running.checkpointer.load(session))[entry] == recorded_command(PUSHED)
+
+    async def test_a_push_the_remote_refuses_is_a_result_rather_than_a_fault(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice, origin: Path
+    ) -> None:
+        """Never forced, so a branch that moved on at the remote comes back as git's own refusal."""
+        session = await planted(running, workspaces, replace(on_fixture, branch="main"))
+        (origin / "src" / "kept.txt").write_text("moved on at the remote\n")
+        await run("git", "commit", "-aqm", "elsewhere", cwd=origin)
+        await ran(
+            running, session, "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m x"
+        )
+
+        entry = await running.push(session)
+
+        assert entry is not None
+        came = await settled(running, session, entry)
+        assert came.status != 0
+        assert "rejected" in came.output
+
+    async def test_a_session_on_a_repository_nobody_reaches_has_nowhere_to_push(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+        gone = replace(running, workspaces=replace(workspaces, reaching=Reaching(current=Reachable(repositories=()))))
+
+        assert await gone.push(session) is None
+
+
 class TestThroughTheConsole:
     """
     The composer's `Run`, which is one more answer to what happens to what you typed rather than a
@@ -509,10 +611,34 @@ class TestThroughTheConsole:
             plain = await caller.get(f"/sessions/{without.id}")
 
         assert 'value="run"' in offered.text
+        assert 'value="push"' in offered.text
         assert 'value="run"' not in plain.text
-        # The sentence over a command box is where the branch a `git push` lands on is read, now
-        # that nothing under the box names it.
-        assert f"Run it in {running.repository_of(on_fixture)} @ {branch_named(with_files)}, as you" in offered.text
+        assert 'value="push"' not in plain.text
+        # The sentence over a command box is where the branch a commit lands on is read, now that
+        # nothing under the box names it.
+        assert f"Run it in {running.repository_of(on_fixture)} @ {branch_named(with_files)}," in offered.text
+
+    async def test_pushing_through_the_console_takes_an_empty_box(
+        self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+
+        async with calling(app) as caller:
+            answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "", "disposition": "push"})
+
+        assert answer.status == 200
+        assert recorded_command(PUSHED) in (await running.checkpointer.load(session)).values()
+
+    async def test_pushing_with_something_in_the_box_is_refused_rather_than_dropped(
+        self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+
+        async with calling(app) as caller:
+            answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "hello", "disposition": "push"})
+
+        assert answer.status == 422
+        assert recorded_command(PUSHED) not in (await running.checkpointer.load(session)).values()
 
 
 class TestStartingSomewhereThroughTheForm:
@@ -583,8 +709,8 @@ class TestOfferingWhereToStart:
     def app(self, running: Service) -> ASGIApp:
         return build_app(already(running))
 
-    async def test_picking_a_repository_offers_its_branches(self, app: ASGIApp, worktree: Worktree) -> None:
-        await run("git", "branch", "release/2.1", cwd=worktree.root)
+    async def test_picking_a_repository_offers_its_branches(self, app: ASGIApp, origin: Path) -> None:
+        await run("git", "branch", "release/2.1", cwd=origin)
 
         async with calling(app) as caller:
             answer = await caller.get(f"/fragments/branches?workspace={FIXTURE}")

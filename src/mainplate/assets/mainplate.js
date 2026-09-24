@@ -115,11 +115,57 @@
     } catch {}
   };
 
-  // --- Theme -------------------------------------------------------------
+  // The one thing here the *server* reads back, which is why it is a cookie and not storage: the
+  // zone a page's moments are printed in is decided while the page is being rendered, so the answer
+  // has to ride on the request for the document itself. Everything else in this file is the reader's
+  // and stays in this browser. See `ZONE_COOKIE` in `pages.py`, and `paintClock` below.
+  const ZONE_COOKIE = "zone";
+
+  // A cookie is arbitrary text the way storage is, and this runs before `start` exists, so a value
+  // it cannot decode must be nothing rather than a throw: `decodeURIComponent` raises on a malformed
+  // escape, and raising here unwinds out of the whole file, leaving a page with no folds, no copy
+  // buttons, no live connection and no composer. Nothing at all is also the *right* answer, not only
+  // the safe one - a value this did not write is not a zone this asked for - and the caller writes a
+  // good one over the top of it.
+  const cookieValue = (name) => {
+    for (const pair of document.cookie.split(";")) {
+      const [key, ...rest] = pair.split("=");
+      if (key.trim() !== name) continue;
+      try {
+        return decodeURIComponent(rest.join("="));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  // Whether two zone names are the same clock right now, asked of the browser rather than decided by
+  // comparing the strings. They are frequently not the same string for the same clock: a machine
+  // whose zone database says `Etc/UTC` is a browser that says `UTC`, and `Asia/Calcutta` is
+  // `Asia/Kolkata`, so a string comparison would ask for the page again on every load of a console
+  // that is already printing exactly the right time. A name this browser does not know throws, which
+  // is a difference and is answered as one.
   //
-  // The one thing that runs before the document exists. This script is a blocking tag in the head
-  // precisely so the reader's choice is pinned on <html> before the first paint: applied any later
-  // and a page opened dark flashes light on the way there.
+  // It compares what a reader would actually see, which is what the page is about: two zones that
+  // agree now and disagree in some past summer are not worth a reload over a transcript's rules.
+  const sameClock = (drawn, named) => {
+    try {
+      const now = Date.now();
+      const said = (zone) =>
+        new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "short", timeStyle: "long" }).format(now);
+      return said(drawn) === said(named);
+    } catch {
+      return false;
+    }
+  };
+
+  // --- Theme and clock ---------------------------------------------------
+  //
+  // The two things that run before the document exists. This script is a blocking tag in the head
+  // precisely so both can: the reader's chosen theme is pinned on <html> before the first paint,
+  // because applied any later a page opened dark flashes light on the way there, and the clock a
+  // page was drawn against is checked here for the same reason one field along.
 
   const THEME_KEY = "mainplate:theme";
 
@@ -130,7 +176,54 @@
 
   applyTheme(asTheme(held(THEME_KEY)));
 
+  const paintClock = () => {
+    // Which zone every moment on this page is printed in is the server's decision, and this is the
+    // whole of how it learns what to decide: the browser knows its reader's zone, the server does
+    // not, and a cookie is the one thing that reaches the request for the document itself. A header
+    // this file added would reach the swaps and not the page they land in, which is a transcript
+    // whose rules disagree with the rows beside them.
+    //
+    // **It formats nothing.** The page arrives with every moment already drawn - in a rule, in a
+    // hover, inside a sentence - so rewriting them here would mean a second implementation of what
+    // a date looks like, in a language that cannot see the first. Asking for the page again costs
+    // one load, once, and keeps the one implementation.
+    //
+    // **Here rather than in `start`**, which is what keeps that load from being seen: the server
+    // says which clock it drew against on <html>, whose open tag the parser has already read by the
+    // time this runs, so a page for the wrong zone is thrown away before it is painted rather than
+    // after. `document.body` does not exist yet, which is exactly why the answer is not on it.
+    const named = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!named) return;
+    const asked = cookieValue(ZONE_COOKIE);
+    if (asked !== named) {
+      // `secure` where the page was served over TLS and not otherwise, since a console reached over
+      // plain http on a machine somebody is sitting at would never see the cookie come back at all.
+      const safely = location.protocol === "https:" ? "; secure" : "";
+      document.cookie = `${ZONE_COOKIE}=${encodeURIComponent(named)}; path=/; max-age=31536000; samesite=lax${safely}`;
+      // **Read back rather than assume it took**, which is what stops the reload below being
+      // infinite. Where the origin's cookies are blocked the write above is a silent no-op: the
+      // request carries no zone, the server keeps drawing in its own, and every load would ask for
+      // the page again having changed nothing about what the next one can say. A console drawn
+      // against the wrong clock is worth one reload and is not worth a loop, so where the answer
+      // cannot reach the server this leaves the page it got.
+      if (cookieValue(ZONE_COOKIE) !== named) return;
+    }
+    // Only where this browser had not already asked for this zone, which is what keeps it from
+    // being a loop: the server writes back the zone it *used*, so a name its own zone database
+    // does not have comes back as the console's own and would otherwise be asked for for ever.
+    // A page with no moment on it says nothing at all and is left alone.
+    const drawn = document.documentElement.dataset.zone;
+    if (drawn !== undefined && !sameClock(drawn, named) && asked !== named) location.reload();
+  };
+
+  paintClock();
+
   const start = () => {
+    // **There may be no document left to wire.** `paintClock` above can ask for the page again from
+    // the head, which abandons the parse where it stands - and `DOMContentLoaded` still fires on
+    // what was abandoned, with no `<body>` ever built. Everything below is about a page a reader is
+    // going to look at, and this one is already being replaced, so there is nothing here to do.
+    if (document.body === null) return;
     // The theme is the reader's and holds across every session; everything else below is a fact
     // about one conversation, so it is stored under that conversation's own id.
     const session = document.body.dataset.session || "?";
@@ -160,6 +253,11 @@
     let sentFrom = null; // the box a message has just left, so the cursor can be put back in it
     let copied = null; // the panel whose copy button is saying so
     let saying = null; // and the timer that stops it saying it
+
+    // The drawable blocks a reader asked to see as text rather than as the picture they are drawn
+    // as by default, by the name their copy button has. Not stored, for `following`'s reason: which
+    // way round a diagram is shown is a mode within a visit.
+    let asCode = new Set();
 
     let shelf = []; // text kept and not sent, as {name, text}
 
@@ -228,6 +326,10 @@
     };
 
     const composerBox = () => document.querySelector('.composer textarea[name="prompt"]');
+    // A phone or tablet, where putting the cursor back in the box brings the keyboard up over the
+    // page. `hover: none` is the browser's own flag for this and no width constant has to be kept in
+    // step with the stylesheet's.
+    const touchScreen = () => window.matchMedia("(hover: none)").matches;
 
     // --- Reading the conversation ---------------------------------------
 
@@ -363,9 +465,9 @@
       const box = transcript();
       if (!box) return;
       // Only a fold the reader has actually acted on is forced, and it is forced *either* way. The
-      // server renders a call shut and a command open, so one set of ids to reopen would put back
-      // every command a reader had put away; what has to survive a swap is the decision, whichever
-      // way it went. A fold nobody has touched is left where the server put it.
+      // server renders a read shut and an edit or a command open, so one set of ids to reopen would
+      // put back every command a reader had put away; what has to survive a swap is the decision,
+      // whichever way it went. A fold nobody has touched is left where the server put it.
       box.querySelectorAll(FOLDS).forEach((fold) => {
         const decided = folds.get(fold.id);
         if (decided !== undefined) fold.open = decided;
@@ -385,8 +487,12 @@
     // Encoded rather than joined, so two blocks cannot be split differently and read the same: the
     // separator that would need is a character rendered text is not allowed to contain, and there
     // is no such character.
-    const signature = (panel) =>
-      JSON.stringify(Array.from(panel.querySelectorAll(":scope > .block"), (block) => block.textContent));
+    //
+    // Through `wordsOf`, so what this file seated in a block is not in the block's signature: the
+    // buttons are taken off before a swap and put back after the signature is read, so a repaint
+    // between swaps would otherwise find every panel changed by the word on its own button, and a
+    // draw button that says `code` once pressed would mark its panel as news for being pressed.
+    const signature = (panel) => JSON.stringify(Array.from(panel.querySelectorAll(":scope > .block"), wordsOf));
 
     // Worked out here rather than taken from the swap, because morphing reports nothing a listener
     // can hear: `htmx:before:morph:node` is an extension hook rather than a DOM event, and it fires
@@ -719,6 +825,214 @@
       });
     };
 
+    // --- Drawings ----------------------------------------------------------
+    //
+    // A fence labelled `mermaid` or `svg` is a picture written as text, drawn as the picture, with
+    // a button in its corner that puts the text back and takes it away again. What is drawn is an
+    // *image*: the text becomes a `data:` URL on an `<img>`, after mermaid has turned a diagram into
+    // SVG, or as written where it already is SVG. An image is the one way to put markup a model
+    // wrote on the page with nothing in it running: SVG loaded as an image executes no script,
+    // follows no link and fetches nothing, which is the browser's own rule rather than any
+    // sanitising done here. The cost, stated: text in a drawing cannot be selected or searched, and
+    // it is set in the browser's faces rather than the page's.
+    //
+    // The library is three and a half megabytes and is fetched the first time a diagram is on the
+    // page, so a page with none pays nothing for it. Where it is served is on `<html>`, put there
+    // by `pages.py`, because an asset's address is the server's to say.
+    //
+    // Which blocks are shown as text is a value here and reapplied after every swap, like the
+    // folds: the morph would otherwise put a diagram back in front of the code somebody had just
+    // asked for. A block is named the way its copy button is, by the panel and the position in it.
+
+    // The class the sanitiser lets through on a fence's `<code>`, and what each is drawn as; see
+    // `DRAWABLE` in `markup.py`, which is the one place a label is allowed onto the page.
+    const DRAWABLE = { "language-mermaid": "mermaid", "language-svg": "svg" };
+
+    // What each text drew, by kind, theme and text: `{ src }`, `{ failed }`, or `{ pending: true }`
+    // while the answer is on its way. Keyed by text rather than by block, so a transcript morphed
+    // twenty times while a turn streams draws each diagram once.
+    const pictures = new Map();
+    let library = null; // the diagram library, once asked for
+    let numbered = 0; // mermaid wants an id per render that nothing on the page already has
+
+    const inTheDark = () => {
+      const chosen = document.documentElement.dataset.theme;
+      if (chosen === "dark" || chosen === "light") return chosen === "dark";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    };
+
+    const mermaidLoaded = () => {
+      if (library) return library;
+      library = new Promise((resolve, reject) => {
+        const tag = document.createElement("script");
+        tag.src = document.documentElement.dataset.mermaid;
+        tag.onload = () => resolve(window.mermaid);
+        tag.onerror = () => {
+          // Let go, so a press after the network comes back asks again rather than failing for ever.
+          library = null;
+          reject(new Error("the diagram library could not be fetched"));
+        };
+        document.head.appendChild(tag);
+      });
+      return library;
+    };
+
+    // A diagram at its own size. The library declares its width as a percentage of whatever holds
+    // it, which inside an image is the whole block, so a three-node flowchart would be drawn as
+    // wide as the code was. Its `viewBox` is the size it drew at, and that is what the image is
+    // told it is; `max-width: 100%` on the image still shrinks a wide one to the block.
+    const sized = (svg) => {
+      const document_ = new DOMParser().parseFromString(svg, "image/svg+xml");
+      const root = document_.documentElement;
+      const box = (root.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
+      if (box.length === 4 && box[2] > 0 && box[3] > 0) {
+        root.setAttribute("width", String(box[2]));
+        root.setAttribute("height", String(box[3]));
+        root.removeAttribute("style");
+      }
+      return new XMLSerializer().serializeToString(root);
+    };
+
+    // The SVG one block's text is: rendered where it is a diagram, and taken as written where it
+    // is SVG already. `strict` has the library escape any markup a label carries, and rendering
+    // errors come back as a rejection rather than as a picture of a bomb put on the page.
+    const rendered = async (kind, text, dark) => {
+      if (kind === "svg") return text;
+      const mermaid = await mermaidLoaded();
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        suppressErrorRendering: true,
+        theme: dark ? "dark" : "default",
+      });
+      const { svg } = await mermaid.render(`drawing-${(numbered += 1)}`, text);
+      return sized(svg);
+    };
+
+    const asImage = (svg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+    // Asked for once per text and repainted when it arrives. Nothing here holds an element across
+    // the await: the whole transcript may be morphed between the ask and the answer, and what the
+    // answer is for is a text, which is still on the page or is not.
+    const picture = (kind, text) => {
+      const dark = inTheDark();
+      const key = `${kind}:${dark}:${text}`;
+      const known = pictures.get(key);
+      if (known) return known;
+      const pending = { pending: true };
+      pictures.set(key, pending);
+      rendered(kind, text, dark)
+        .then((svg) => pictures.set(key, { src: asImage(svg) }))
+        .catch((error) => pictures.set(key, { failed: String(error && error.message ? error.message : error) }))
+        .then(() => paintDrawings());
+      return pending;
+    };
+
+    const drawableKind = (code) => {
+      const found = Object.keys(DRAWABLE).find((named) => code.classList.contains(named));
+      return found ? DRAWABLE[found] : null;
+    };
+
+    // One element in the block's place, replaced only when it has to be another kind: an `<img>` for
+    // a picture and a `<span>` for why there is none, both before the code so the button's position
+    // in its corner is the same whichever is showing.
+    const seatedDrawing = (pre, code, tag) => {
+      let element = pre.querySelector(":scope > .drawing");
+      if (element && element.tagName !== tag) {
+        element.remove();
+        element = null;
+      }
+      if (!element) {
+        element = document.createElement(tag);
+        element.className = "drawing";
+        pre.insertBefore(element, code);
+      }
+      return element;
+    };
+
+    const paintDrawings = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll(".panel").forEach((panel) => {
+        panel.querySelectorAll("pre").forEach((pre, at) => {
+          const code = pre.querySelector(":scope > code");
+          const kind = code && drawableKind(code);
+          if (!kind) return;
+          const name = `${panel.id}:${at}`;
+          let button = pre.querySelector(":scope > [data-draw]");
+          if (!button) {
+            button = document.createElement("button");
+            button.type = "button";
+            button.className = "copy draw";
+            button.dataset.draw = name;
+            pre.insertBefore(button, code);
+          }
+          const drawing = pre.querySelector(":scope > .drawing");
+          if (asCode.has(name)) {
+            code.hidden = false;
+            if (drawing) drawing.remove();
+            button.textContent = "draw";
+            button.title = kind === "svg" ? "Draw this SVG" : "Draw this diagram";
+            button.removeAttribute("aria-busy");
+            return;
+          }
+          const text = code.textContent;
+          const state = picture(kind, text);
+          if (state.pending) {
+            // The code stays while the picture is on its way, and the button says it is.
+            button.setAttribute("aria-busy", "true");
+            button.title = "Drawing";
+            return;
+          }
+          button.removeAttribute("aria-busy");
+          button.textContent = "code";
+          button.title = "Show the text this was drawn from";
+          code.hidden = true;
+          if (state.failed) {
+            const said = seatedDrawing(pre, code, "SPAN");
+            said.classList.add("drawing--failed");
+            said.textContent = `Not drawn: ${state.failed}`;
+            return;
+          }
+          const image = seatedDrawing(pre, code, "IMG");
+          image.alt = kind === "svg" ? "An SVG drawing" : "A diagram";
+          if (image.getAttribute("src") !== state.src) {
+            // An SVG the browser cannot parse loads as nothing, which is the one failure the render
+            // above cannot see: it is reported here, by the image itself, and painted like the rest.
+            image.onerror = () => {
+              pictures.set(`${kind}:${inTheDark()}:${text}`, { failed: "the browser could not draw this as an image" });
+              paintDrawings();
+            };
+            image.src = state.src;
+          }
+        });
+      });
+    };
+
+    // Taken off before a swap, for the copy buttons' reason, and the code shown again so the morph
+    // meets the markup the server sent rather than one this file hid.
+    const stripDrawings = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-draw], .drawing").forEach((element) => element.remove());
+      box.querySelectorAll("pre > code[hidden]").forEach((code) => {
+        code.hidden = false;
+      });
+    };
+
+    const wireDraw = () => {
+      document.addEventListener("click", (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const button = pressed.closest("[data-draw]");
+        if (!button) return;
+        const name = button.dataset.draw;
+        if (asCode.has(name)) asCode.delete(name);
+        else asCode.add(name);
+        paintDrawings();
+      });
+    };
+
     // --- Search ----------------------------------------------------------
 
     const clearHits = () => {
@@ -865,8 +1179,19 @@
       if (seconds <= 0) return "any moment";
       const minutes = Math.floor(seconds / 60);
       if (minutes < 1) return `${Math.ceil(seconds)}s`;
-      const spare = Math.floor(seconds % 60);
-      return spare ? `${minutes}m ${spare}s` : `${minutes}m`;
+      // Days and hours as well, because what this counts down is no longer only a lease: a provider
+      // deferring a session until its allowance resets is days out, and `6623m` is a figure a reader
+      // has to divide twice.
+      //
+      // **`elapsed` in `pages.py`, unit for unit, including the unit that is zero.** The server
+      // renders the first value of every one of these and this takes over a second later, so a wait
+      // landing on a whole hour drawn as `1h 0m` and repainted as `1h` is a figure that changes
+      // shape while a reader is looking at it, which reads as the countdown having moved. Two units
+      // always, and the width holds still.
+      if (minutes < 60) return `${minutes}m ${Math.floor(seconds % 60)}s`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours}h ${minutes % 60}m`;
+      return `${Math.floor(hours / 24)}d ${hours % 24}h`;
     };
 
     // How long until the worker looks at this session again, counted here rather than on the server.
@@ -902,6 +1227,7 @@
       paintOverride();
       paintCopies();
       paintCopied();
+      paintDrawings();
       paintCache();
       paintDue();
       paintNumbers();
@@ -1232,11 +1558,12 @@
     // reading a set of ids back off the page could not tell a decision from a default.
     //
     // **Every toggle is taken as the reader's, and that is only true because the server never
-    // changes its mind.** Where a fold starts is decided per kind and never per render - a call is
-    // shut whether or not it has come back, a command is open - so a morph delivering a result adds
-    // no `open` and removes none the reader did not set, and the only toggles left are presses. A
-    // server that drew a call open while it was out broke exactly this: the morph's own toggle was
-    // recorded as a decision, and every call a reader watched arrive stayed open for good.
+    // changes its mind.** Where a fold starts is decided per kind and never per render - a read is
+    // shut and an edit is open whether or not either has come back, a command is open - so a morph
+    // delivering a result adds no `open` and removes none the reader did not set, and the only
+    // toggles left are presses. A server that drew a call open while it was out and shut once it
+    // returned broke exactly this: the morph's own toggle was recorded as a decision, and every
+    // call a reader watched arrive stayed open for good.
     //
     // The dock's third button is the way back from any decision, and it is why the *server* still
     // says where each fold started: see `data-opens` and `opens` in `pages.py`.
@@ -1269,7 +1596,7 @@
     // system prompt - and the exemption is about the content rather than about either shape. A press
     // that *ended* a drag is out for the same reason: a browser reports one as a click on whatever
     // the pointer came to rest over, so a selection still standing is a press that was not aimed at
-    // the frame. `said nothing` is this console's own sentence rather than the command's, so it stays
+    // the frame. `no output` is this console's own sentence rather than the command's, so it stays
     // part of the frame.
     //
     // Shutting only. Opening is the summary's, because a shut panel is a summary and little else, and
@@ -1301,6 +1628,8 @@
           applyTheme(theme);
           hold(THEME_KEY, theme);
           paint(theme);
+          // A diagram is drawn in the theme's own palette, so the ones showing are drawn again.
+          paintDrawings();
         });
       });
     };
@@ -1512,7 +1841,9 @@
       );
       // And sending takes the focus off the box whichever way it was sent: the button takes it on a
       // click, and `hx-disable` blurs the box itself while the post is in flight. Either way the
-      // next thing somebody does is type again, so the box is where the cursor belongs.
+      // next thing somebody does is type again, so the box is where the cursor belongs. Not on a
+      // touch screen, where putting it back brings the keyboard up over the answer the reader is now
+      // watching for: there the box waits to be touched.
       //
       // A turn of the event loop later, because htmx dispatches this event and re-enables what it
       // disabled immediately afterwards: focused any sooner, the box is still disabled and takes
@@ -1524,6 +1855,7 @@
         if (!box) return;
         setTimeout(() => {
           const holding = document.activeElement;
+          if (touchScreen()) return;
           if (holding === null || holding === document.body) box.focus();
         }, 0);
       });
@@ -1539,7 +1871,7 @@
     // summary alone and one button would give two different answers a click apart.
     const wordsOf = (node) => {
       const taken = node.cloneNode(true);
-      taken.querySelectorAll("[data-copy]").forEach((button) => button.remove());
+      taken.querySelectorAll("[data-copy], [data-draw], .drawing").forEach((seated) => seated.remove());
       return taken.textContent;
     };
 
@@ -1554,7 +1886,10 @@
     // A tool call is the block that is not simply its own text either: its parts are a name, what it
     // was handed and what it gave back, and run together they are one unreadable line. So the pairs
     // are read off the list the server already draws them as, which keeps the labels in one place -
-    // "called with" and "returned" are written in `pages.py` and nowhere here.
+    // "called with", "returned" and "diff" are written in `calls.py` and nowhere here. A diff's
+    // line numbers are an attribute the stylesheet paints rather than text, so they are not in
+    // what comes out here, which is the point: copying a diff copies the diff. A read's anchors are
+    // not on the page at all.
     //
     // A command is the same problem in a smaller shape: the line, the status and the output run
     // together read as one word followed by a wall. Its line is what somebody copying almost always
@@ -1743,6 +2078,7 @@
         if (event.target !== transcript()) return;
         clearHits();
         stripCopies();
+        stripDrawings();
       });
       document.addEventListener("htmx:after:swap", () => repaint());
     };
@@ -1842,6 +2178,7 @@
     wireDue();
     wireSend();
     wireCopy();
+    wireDraw();
     wireFresh();
     wireSwaps();
     wireShapes();
@@ -1859,6 +2196,12 @@
       landed = named;
     }
     repaint(false);
+
+    // The box is where a pointer belongs on arrival, since a session opens at the end where the box
+    // is and the next thing somebody with a keyboard does is type. `preventScroll` so taking it does
+    // not move the page the reader has just arrived at; a touch screen is left alone, for the reason
+    // below the sends.
+    if (!touchScreen()) composerBox()?.focus({ preventScroll: true });
   };
 
   if (document.readyState === "loading") {

@@ -22,10 +22,11 @@
 #     turn:{n}:opened      the entry this turn took, recorded by `Run.receive` in the body below
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request
-#     turn:{n}:model:{i}   the i-th model response of that turn, written by `StepwiseDurability`
-#     turn:{n}:tool:{id}   what one tool call returned and how long it took, named by the call's
-#                          own id
-#     turn:{n}:messages    the messages the agent run produced, which is the turn's own answer
+#     turn:{n}:model:{i}   the i-th model response of that turn, written by `Stepping.request`
+#     turn:{n}:tool:{id}   what one tool call returned, or why it failed, and how long it took,
+#                          named by the call's own id
+#     turn:{n}:deferred:{i} the i-th time this turn was told to come back later, and when
+#     turn:{n}:messages    the messages the model loop produced, which is the turn's own answer
 #
 # **Every one of those holds a record from `records.py` rather than a bare value**, which is what
 # lets any of them grow a field without a migration. The two cursors are the exception, and their
@@ -70,8 +71,8 @@
 # different session rather than by rewriting this one.
 #
 # `messages` is what makes resuming cheap. The stepwise mechanism re-runs the code *between*
-# steps, so a body that looped over every past turn would re-drive the agent graph for all of
-# them on every pass: no provider calls, since those are recorded, but the graph's own work, once
+# steps, so a body that looped over every past turn would re-drive the model-and-tool loop for all of
+# them on every pass: no provider calls, since those are recorded, but the loop's own work, once
 # per turn per pass. Recording each turn's new messages instead means `reached` can reconstruct
 # the history by reading, and the pass drives the agent exactly once, for the turn actually being
 # answered.
@@ -79,6 +80,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -87,6 +89,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
@@ -100,9 +103,6 @@ from typing import Literal
 from typing import assert_never
 from typing import cast
 
-from pydantic_ai import Agent
-from pydantic_ai.exceptions import IncompleteToolCall
-from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -115,17 +115,18 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_json
 from without_durability.interfaces import INBOX
 from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
+from without_durability.stepwise import ScheduledWakeup
 from without_durability.stepwise import StepKey
 
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Wires
 from mainplate.agent import agent_for
+from mainplate.agent import drawing_note
 from mainplate.agent import reaching
 from mainplate.durability import TOOK
 from mainplate.durability import Allowance
@@ -133,16 +134,23 @@ from mainplate.durability import AllowanceSpent
 from mainplate.durability import Draining
 from mainplate.durability import Gating
 from mainplate.durability import Injecting
+from mainplate.durability import RequestDeferred
 from mainplate.durability import RequestRefused
+from mainplate.durability import Stepping
 from mainplate.durability import as_recorded
+from mainplate.durability import ending_turn
 from mainplate.durability import parse_injected
 from mainplate.durability import parse_model_response
 from mainplate.durability import parse_refused
 from mainplate.durability import parse_returned
 from mainplate.durability import parse_took
 from mainplate.durability import parse_tree
+from mainplate.durability import parse_wrote
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
+from mainplate.loop import Agent
+from mainplate.loop import CannotGoOn
+from mainplate.loop import Keeping
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import ending
@@ -451,14 +459,22 @@ class Disposition(Enum):
     to it - and because a control of its own would spend a slot in the row above the box, which is
     the row a phone has least of.
 
-    **As the person and not as the agent.** A session's `isolation` bounds what a *model* asked for,
-    and the clone is bound read-only inside that sandbox precisely so no tool can write history. That
-    is what makes this the useful half: `git commit` and `git push` are the person's to run, and
-    confining them is what would make this pointless. The authority is nothing new - a session on
-    `Filesystem.EVERYTHING` already hands a model the store and `config.yaml` - but it does mean who
-    can reach this console is the whole of what guards it.
+    **Typed by the person and confined like the agent.** The checkout's git configuration is the
+    session's to write, so a command run here with the person's authority would run whatever the
+    model last put in a hook. It gets the session's sandbox instead, which is where `git commit`
+    already works; what it cannot do is push, which is `PUSH`.
 
     Recorded and not told, so nothing here reaches the model. See the key scheme."""
+
+    PUSH = "push"
+    """`Service.push`, which pushes the branch this session's checkout is on to its repository.
+
+    The one thing `RUN` cannot do, because a push needs the person's credential and nothing that
+    holds one may read the checkout's configuration. The branch crosses into the store and the store
+    pushes it, never forced, and what came of it is recorded where a command's would be.
+
+    It takes nothing from the box: there is one branch to push and one place to push it, so a message
+    typed beside it is refused rather than quietly dropped."""
 
     PARENT = "parent"
     """`Service.say` into the session this one was forked from, which is how a branch reports back.
@@ -499,8 +515,8 @@ LEADERS: Final[frozenset[str]] = frozenset(
 Every word the console's own composer can answer to, which no plugin of the operator's may claim.
 
 `here` is left out because it is never typed: it is what Send does, and Send is a button rather than
-a leader. Everything else is a row somebody can reach by `/word`, on *some* session - `run` only
-where there is a worktree, `parent` only on a fork, `next` only while a turn is being answered - and
+a leader. Everything else is a row somebody can reach by `/word`, on *some* session - `run` and `push`
+only where there is a worktree, `parent` only on a fork, `next` only while a turn is being answered - and
 the set is the union rather than what one session draws, since a leader that collided only while a
 turn was running would be a row that means two things some of the time.
 
@@ -721,6 +737,24 @@ def messages_key(turn: int) -> StepKey:
     return f"{turn_prefix(turn)}:messages"
 
 
+def turns_in(recorded: Mapping[str, object]) -> int:
+    """
+    How many turns this session has answered, which is also **the turn being answered**.
+
+    A turn records its messages by finishing, so the first turn with none is the one a pass would
+    open next, and the count and that turn are one number rather than two. Everything asked *of the
+    turn being answered* starts here: a refusal, a wait, the newest tree.
+
+    `reached`'s walk without the history, deliberately. That function parses every turn's messages
+    to hand back the conversation so far, which is the expensive half of it and is paid on a path a
+    page takes on every render; what these callers want is the number.
+    """
+    turn = 0
+    while messages_key(turn) in recorded:
+        turn += 1
+    return turn
+
+
 def tree_key(turn: int, at: int) -> StepKey:
     """
     What the worktree looked like before the `at`-th model request of this turn.
@@ -735,6 +769,19 @@ def tree_key(turn: int, at: int) -> StepKey:
     numbering here and the numbering of `turn:{n}:model:{i}` advance together.
     """
     return f"{turn_prefix(turn)}:tree:{at}"
+
+
+def wrote_key(turn: int, at: int) -> StepKey:
+    """
+    Where the net change the `at`-th request's tool batch made is recorded.
+
+    Numbered by the request whose *response* produced the batch, in step with `tree_key` one request
+    along: the diff under `wrote:{at}` is `tree:{at}` against `tree:{at+1}`, so it exists only once
+    the request after the batch has been snapshotted. Built here and by `Stepping.key("wrote")` there,
+    with the same drift hazard `tree_key` carries and the same answer, an assertion in
+    `test_conversation.py`.
+    """
+    return f"{turn_prefix(turn)}:wrote:{at}"
 
 
 def heard_key(turn: int, at: int) -> StepKey:
@@ -761,7 +808,7 @@ def heard_key(turn: int, at: int) -> StepKey:
 
 def model_key(turn: int, at: int) -> StepKey:
     """
-    The `at`-th model response of this turn, as `StepwiseDurability` recorded it.
+    The `at`-th model response of this turn, as `Stepping.request` recorded it.
 
     Read rather than merely written, because a turn's responses land one at a time while the turn
     is still running and its `messages` do not land until it ends. That is the whole of what lets a
@@ -804,6 +851,62 @@ def refused_key(turn: int, at: int) -> StepKey:
     the same drift hazard as `model_key`.
     """
     return f"{turn_prefix(turn)}:refused:{at}"
+
+
+def deferred_key(turn: int, at: int) -> StepKey:
+    """
+    That this turn waited, the `at`-th time it has, and until when.
+
+    **Counted by how many waits this turn has already taken, and not by the request that caused
+    one**, which is the difference from `refused_key` and the whole of what makes the wait work. A
+    refusal is settled, so the request's own position names it once and every later pass finds the
+    answer already there. A wait is not: the pass that comes back when the deadline passes asks the
+    same request again, and a provider that defers it a second time has named a *new* moment. Keyed
+    by the request, that moment would land on a key already holding the old one, the store would keep
+    the first value, and `Run.sleep` would read a deadline already past - so the session would ask
+    again as fast as the queue could turn it around, which is the loop the wait exists to close.
+
+    Counted instead, each wait is its own record, and the count advances because the record itself
+    is what advances it. What a session against a limit that keeps being reached accumulates is one
+    of these per wait, which is one per reset rather than one per lease.
+    """
+    return f"{turn_prefix(turn)}:deferred:{at}"
+
+
+def deferrals_in(recorded: Mapping[str, object], turn: int) -> int:
+    """How many times this turn has already waited, which is the key the next wait takes."""
+    at = 0
+    while deferred_key(turn, at) in recorded:
+        at += 1
+    return at
+
+
+def parse_deferred(recorded: object) -> records.Deferred:
+    """When a provider said a deferred request could be made again, as the record holding it."""
+    return records.Deferred.model_validate(recorded)
+
+
+def deferred_in(recorded: Mapping[str, object]) -> records.Deferred | None:
+    """
+    What the turn being answered is waiting out, or nothing where it is waiting out nothing.
+
+    **Asked of the turn being answered and of no other**, which is `refusal_in`'s rule and is the
+    whole of this function. A wait belongs to the turn that took it, and a turn only reaches its
+    `messages` by getting past every wait it took, so a wait under a turn that has answered is
+    history and the transcript is where history goes. Read without that test, a moment named for a
+    turn that has since completed keeps the page saying the provider will not take another request -
+    which it will, and already has: any message a person sends makes the delivery ready immediately,
+    so a short wait is routinely outlived by the turn that took it.
+
+    Neither index is searched for: `turns_in` is which turn, and `deferrals_in` already counts the
+    waits under it, so the newest is the last one it counted.
+
+    Whether that wait is still *on* is a second question, about the clock, which a page may not ask:
+    see `Conversation.deferred`, where the moment is compared against a `now()` the service takes.
+    """
+    turn = turns_in(recorded)
+    at = deferrals_in(recorded, turn)
+    return None if at == 0 else parse_deferred(recorded[deferred_key(turn, at - 1)])
 
 
 def tool_key(turn: int, call: str) -> StepKey:
@@ -1302,6 +1405,14 @@ class Returned:
     outcome: Outcome
     content: str
 
+    metadata: object = None
+    """
+    What the tool recorded beside its return for the page and the model was never sent.
+
+    Read out of the same two places `content` is, the call's record and the turn's messages, so the
+    two readings of a call carry it alike; see `records.Returned.metadata` for what writes it.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class ToolUse:
@@ -1462,6 +1573,16 @@ class Panel:
 
     `None` for the person's own panel and for a steer, which is the same thing said twice: neither
     came out of a response, so neither opens a request.
+    """
+
+    diff: str | None = None
+    """
+    The net change this request's tool batch made to the worktree, as the unified diff a pass recorded.
+
+    Carried on a tool panel rather than on a rule, because it is about what the *batch* did and a batch
+    is what one tool panel draws. `None` is every other kind of panel, a batch the turn ended before
+    its diff was taken, and the ordinary case of an empty one: the page draws a figure only where the
+    diff has something in it, so nothing distinguishes "recorded nothing" from "recorded no change".
     """
 
     @property
@@ -1626,26 +1747,46 @@ class Request:
     """
     One round trip to the model, as the rule at its boundary reports.
 
-    A request is the unit three recorded things are actually about - the tree taken before it, the
-    response it came back with, and what that response cost - and none of them is about a panel. That
-    is the whole reason a rule stands here: hung on panels, each had to be attributed to a chosen one.
+    A request is the unit four recorded things are actually about - the tree taken before it, the
+    response it came back with, what that response cost and when it landed - and none of them is
+    about a panel. That is the whole reason a rule stands here: hung on panels, each had to be
+    attributed to a chosen one.
     """
 
     at: int
     tree: str | None
     spent: Spent
+    when: datetime
+    """
+    When the provider's answer to this request came back.
+
+    `ModelResponse.timestamp` and no key of its own, for `response_took`'s reason one field along:
+    Pydantic AI stamps every response it builds, it survives the checkpoint round trip, and it is on
+    the response whether that came back from `turn:{n}:messages` or from the `turn:{n}:model:{i}`
+    step behind it. `Transcript.answered_at` is the same field read at the other end of a session.
+
+    **The clock is whichever process ran the pass**, which is this console's, so it is a moment to
+    print rather than a moment to subtract another from: see `Conversation.since` for the one place
+    this console does subtract two clocks and what that costs.
+    """
 
 
 def requests_in(recorded: Mapping[str, object], turn: int, responses: Sequence[ModelResponse]) -> tuple[Request, ...]:
     """
     What each of a turn's model requests is worth saying, in the order they were made.
 
-    The tree comes from `turn:{n}:tree:{i}` and the spend from the response's own usage, which are
-    the two halves of one request written by opposite ends: the snapshot is taken before the ask and
-    the usage comes back with the answer. Reading them together here is what lets one rule say both.
+    The tree comes from `turn:{n}:tree:{i}` and the spend and the moment from the response itself,
+    which are the two halves of one request written by opposite ends: the snapshot is taken before
+    the ask and the answer arrives with its own usage and stamp. Reading them together here is what
+    lets one rule say all three.
     """
     return tuple(
-        Request(at=at, tree=parse_tree(recorded.get(tree_key(turn, at))), spent=spent_on([response]))
+        Request(
+            at=at,
+            tree=parse_tree(recorded.get(tree_key(turn, at))),
+            spent=spent_on([response]),
+            when=response.timestamp,
+        )
         for at, response in enumerate(responses)
     )
 
@@ -1782,7 +1923,9 @@ def returns_in(messages: Sequence[ModelMessage]) -> dict[str, Returned]:
             continue
         for part in message.parts:
             if isinstance(part, ToolReturnPart):
-                found[part.tool_call_id] = Returned(outcome=part.outcome, content=part.model_response_str())
+                found[part.tool_call_id] = Returned(
+                    outcome=part.outcome, content=part.model_response_str(), metadata=part.metadata
+                )
             elif isinstance(part, RetryPromptPart) and part.tool_call_id is not None:
                 found[part.tool_call_id] = Returned(outcome="failed", content=part.model_response())
     return found
@@ -1822,15 +1965,47 @@ def blocks_in(
     for part in response.parts:
         match part:
             case TextPart(content=said) if said.strip():
-                yield Prose(text=said)
+                thought, rest = unthought(said)
+                if thought:
+                    yield Reasoning(text=thought)
+                if rest.strip():
+                    yield Prose(text=rest)
             case ThinkingPart(content=thought) if thought.strip():
-                yield Reasoning(text=thought)
+                inner, rest = unthought(thought)
+                yield Reasoning(text=thought if inner is None else f"{inner}\n\n{rest}".strip())
             case ToolCallPart(tool_name=tool, tool_call_id=call):
                 yield ToolUse(
                     tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call), took=took.get(call)
                 )
             case _:
                 continue
+
+
+# A reasoning summary as some OpenAI-compatible gateways hand one back in a text part: the tag pair
+# a model is trained to think inside, with the summary on lines of its own between them. Anchored at
+# the front, because a `<think>` a model *mentions* mid-sentence is prose about the tag and not one.
+THOUGHT: Final = re.compile(r"\A\s*<think>(?P<thought>.*?)</think>(?P<rest>.*)\Z", re.DOTALL)
+
+
+def unthought(content: str) -> tuple[str | None, str]:
+    """
+    The reasoning a part opens with inside `<think>` tags, and whatever follows the closing tag.
+
+    Nothing and the content untouched where it opens with no tag, which is every part from a
+    provider that puts reasoning in a part of its own. Where it does open with one, the reasoning is
+    trimmed of the newlines the tags stood on: a message's newlines are line breaks on the page, so
+    left in they draw a blank line above and below one bold title, which is what a page full of
+    summaries looked like before this. The tags themselves are gone rather than escaped, since they
+    are the wire's punctuation and not a word the model said.
+
+    Read here, at the one rule about what a part is worth reading as, and never written back: the
+    checkpoint holds the part as it arrived, and a reading that changed its mind about the tags is
+    a reading, not a migration.
+    """
+    found = THOUGHT.match(content)
+    if found is None:
+        return None, content
+    return found.group("thought").strip(), found.group("rest").strip()
 
 
 def interjected(message: ModelRequest) -> Iterator[Block]:
@@ -1933,16 +2108,18 @@ def returned_step(held: records.Returned) -> Returned:
     silently rewrites itself under the reader the moment the turn lands. Hence `to_json` rather than
     the standard library's `dumps`, whose spacing differs.
 
-    Always a success, because a tool that raised recorded no step at all: a `ModelRetry` propagates
-    out of the step and the call stays out until the retry lands, then reads as failed once the
-    turn's messages say so. A `ToolReturn` carrying metadata would be unwrapped by the settled
-    reading and not by this one, which is a difference to fix in the tool rather than here if one
-    is ever written.
+    A failure is wrapped in the `{"error": ...}` object the settled reading wraps a failed
+    `ToolReturnPart` in, for the same reason: the two readings of one call have to agree to the
+    character. What a tool recorded beside its return is on the record already unwrapped, because
+    the loop splits a `ToolReturn` before anything is written, so it is carried across as it is.
     """
     if held.returned is None:
-        return Returned(outcome="success", content="")
-    said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
-    return Returned(outcome="success", content=said)
+        said = ""
+    else:
+        said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
+    if held.outcome == "failed":
+        return Returned(outcome="failed", content=to_json({"error": said}).decode(), metadata=held.metadata)
+    return Returned(outcome="success", content=said, metadata=held.metadata)
 
 
 def recorded_command(said: str) -> dict[str, object]:
@@ -2011,11 +2188,14 @@ def drains_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
     One walk of the checkpoint in *record* order rather than two lookups by name, so nothing here
     depends on the drains being numbered consecutively - which they are, but the order is the
     property being used and the store already guarantees it.
+
+    **Both names it compares against are built once, above the walk**, and that is worth the two
+    extra lines. This runs once per model request, replayed requests included, over a checkpoint
+    that grows with the turn, so it is the innermost loop in a long turn's replay and a key composed
+    inside it is composed once per recorded key per request. `just replay` is what says so.
     """
-    heard = f"{turn_prefix(turn)}:heard:"
-    return tuple(
-        parse_cursor(value) for key, value in recorded.items() if key == opened_key(turn) or key.startswith(heard)
-    )
+    opened, heard = opened_key(turn), f"{turn_prefix(turn)}:heard:"
+    return tuple(parse_cursor(value) for key, value in recorded.items() if key == opened or key.startswith(heard))
 
 
 def steered(held: Sequence[Posted], since: str, upto: str) -> tuple[str, ...]:
@@ -2137,39 +2317,6 @@ def responded(recorded: Mapping[str, object], turn: int) -> tuple[ModelResponse,
     return tuple(responses)
 
 
-def cut_off_in(recorded: Mapping[str, object], turn: int) -> ModelResponse | None:
-    """
-    The last answer the turn being answered recorded, where the model was stopped at its output limit.
-
-    The *last* and no other, because that is the one Pydantic AI raises over: an earlier answer
-    stopped there and still carried a usable tool call was acted on and the turn went on. Nothing
-    here says whether that stop is a fault - a cut-off answer with text in it is returned as the
-    turn's answer, not raised - so this is read only once the loop has raised, to tell that raise
-    apart from every other.
-    """
-    answered = responded(recorded, turn)
-    if not answered or answered[-1].finish_reason != "length":
-        return None
-    return answered[-1]
-
-
-def cut_off_why(error: UnexpectedModelBehavior, cap: int | None) -> str:
-    """
-    What the page says of an answer the model was cut off in, in place of a provider's own words.
-
-    The number that was sent, because that is the one to look up, and the endpoint's default where
-    none was: a session on a model neither the endpoint nor the reference states a limit for is
-    exactly the one whose page should say so.
-    """
-    limit = f"its output limit of {cap} tokens" if cap is not None else "the endpoint's default output limit"
-    doing = (
-        "in the middle of a tool call"
-        if isinstance(error, IncompleteToolCall)
-        else "before it said anything this console could act on"
-    )
-    return f"the model was cut off at {limit} {doing}"
-
-
 def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None:
     """
     Everything a session loaded, or nothing at all where nobody has answered its settings step.
@@ -2274,15 +2421,10 @@ def refusal_in(recorded: Mapping[str, object]) -> records.Refused | None:
     answered is history and the transcript is where history goes; only one on the turn nothing has
     got past means the session has stopped.
 
-    Neither index is searched for. The turn is the first with no messages, which is what a pass would
-    open next, and the request is the one after the last that answered, which is what `responded`
-    already counts. The turn walk is `reached`'s without the history: this needs the number and not
-    the messages, and parsing every turn's messages is the expensive half of that function, on a path
-    a page takes on every render.
+    Neither index is searched for: `turns_in` is which turn, and the request is the one after the
+    last that answered, which is what `responded` already counts.
     """
-    turn = 0
-    while messages_key(turn) in recorded:
-        turn += 1
+    turn = turns_in(recorded)
     said = recorded.get(refused_key(turn, len(responded(recorded, turn))))
     return None if said is None else parse_refused(said)
 
@@ -2311,11 +2453,8 @@ def latest_tree(recorded: Mapping[str, object]) -> object | None:
     """
     if (held := recorded.get(ARCHIVED_TREE_KEY)) is not None:
         return held
-    turn = 0
-    while messages_key(turn) in recorded:
-        turn += 1
     newest: object | None = None
-    for behind in range(turn, -1, -1):
+    for behind in range(turns_in(recorded), -1, -1):
         at = 0
         while (tree := recorded.get(tree_key(behind, at))) is not None:
             newest = tree
@@ -2408,6 +2547,23 @@ def tooks_in(recorded: Mapping[str, object], turn: int, responses: Sequence[Mode
     return {call: held.took for call, held in calls_in(recorded, turn, responses).items() if held.took is not None}
 
 
+def wrote_in(recorded: Mapping[str, object], turn: int) -> dict[int, str]:
+    """
+    The net change each of a turn's tool batches made, by the request that produced it.
+
+    A batch whose diff has not been taken yet is simply absent, which is the running turn's own state:
+    the record lands when the request *after* the batch snapshots, so the panel watching the batch
+    runs draws no figure until then rather than a placeholder nothing fills in. Absent and empty read
+    the same to the page, which draws only where a diff has something in it.
+    """
+    wanted = f"{turn_prefix(turn)}:wrote:"
+    found: dict[int, str] = {}
+    for key, value in recorded.items():
+        if key.startswith(wanted):
+            found[int(key[len(wanted) :])] = parse_wrote(value)
+    return found
+
+
 def responses_in(messages: Sequence[ModelMessage]) -> tuple[ModelResponse, ...]:
     """The model's own turns within a settled turn, which is what carries what the turn cost."""
     return tuple(message for message in messages if isinstance(message, ModelResponse))
@@ -2421,8 +2577,8 @@ def so_far(recorded: Mapping[str, object], turn: int) -> tuple[Block, ...]:
     The second of the two readings of a turn, and the reason a reader watches one happen instead of
     waiting for the whole of it: `turn:{n}:messages` is written when the turn *ends*, where the
     responses and the results behind it are written as they arrive. Nothing here is a second copy of
-    anything - these are the records the durability capability already keeps so that a resumed pass
-    does not pay for the same request twice.
+    anything - these are the records `Stepping` already keeps so that a resumed pass does not pay
+    for the same request twice.
 
     What comes out is a *prefix* of what `blocks_of` will produce once the turn is answered: the
     same responses, in the same order, cut by the same rule, with the results that have not arrived
@@ -2567,6 +2723,21 @@ def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Pane
     )
 
 
+def with_diffs(panels: Iterable[Panel], wrote: Mapping[int, str]) -> tuple[Panel, ...]:
+    """
+    The panels with each tool panel carrying the diff its batch recorded, and the rest untouched.
+
+    A tool panel is what draws a batch, so the diff computed for that batch's request rides on it
+    rather than on a rule; `None` where none was recorded, which is a batch the turn ended before
+    diffing, and an empty one, which is a batch that changed nothing. The page draws a figure only
+    where the returned reading is not `None`, so those two read alike there.
+    """
+    return tuple(
+        replace(panel, diff=wrote.get(panel.asked)) if panel.kind == "tool" and panel.asked is not None else panel
+        for panel in panels
+    )
+
+
 def transcript(recorded: Mapping[str, object]) -> Transcript:
     """
     The whole conversation, read out of the checkpoint that is the only record of it.
@@ -2603,7 +2774,9 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answering = responses_in(said)
         panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
         blocks = parted(said, tooks_in(recorded, turn, answering))
-        panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
+        panels.extend(
+            with_diffs(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))), wrote_in(recorded, turn))
+        )
         spent[turn] = spent_on(answering)
         asking[turn] = requests_in(recorded, turn, answering)
         latest = answering[-1].timestamp if answering else latest
@@ -2618,7 +2791,9 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         answering = responded(recorded, turn)
         panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
         blocks = blocks_from(recorded, held, turn, answering)
-        panels.extend(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))))
+        panels.extend(
+            with_diffs(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))), wrote_in(recorded, turn))
+        )
         if answering:
             spent[turn] = spent_on(answering)
             asking[turn] = requests_in(recorded, turn, answering)
@@ -2683,16 +2858,6 @@ def recording(said: Sequence[ModelMessage]) -> Callable[[], Awaitable[object]]:
     return record
 
 
-type Keeping = Callable[[int, int], Awaitable[Sequence[str]]]
-"""
-What the session's plugins say when the turn tries to end, by which attempt at ending this is and
-how many responses the turn has made, taken under the key that records it.
-
-A function for `Injecting`'s reason: what answers it runs somebody else's script, and injecting the
-one question keeps the loop that carries a turn ignorant of what a plugin is.
-"""
-
-
 def keeping_through(run: Run, live: Live, turn: int, opened_on: Opening) -> Keeping | None:
     """
     What a session's plugins want put to the model when it tries to stop, recorded per attempt.
@@ -2718,47 +2883,14 @@ def keeping_through(run: Run, live: Live, turn: int, opened_on: Opening) -> Keep
 
 
 async def answering_turn(
-    agent: Agent[None, str], asked: str, history: Sequence[ModelMessage], keeping: Keeping | None
+    agent: Agent,
+    asked: str,
+    history: Sequence[ModelMessage],
+    scope: Stepping,
+    keeping: Keeping | None,
 ) -> tuple[ModelMessage, ...]:
-    """
-    One turn's worth of messages: the run, and every run after it that a plugin kept going.
-
-    **The gate in front of the turn ending, which is what a Claude Code `Stop` hook is.** The model has
-    answered and would stop; the session's plugins are asked; what any of them injected is put to the
-    model in the console's voice and the model is asked again, in the same turn, until it tries to
-    stop and nothing keeps it. Each run after the first carries no prompt of its own, because what
-    it carries is the request the injection made, appended to the history it continues from.
-
-    A `SystemPromptPart` and not a `UserPromptPart`, for `before_model_request`'s reason: nobody typed
-    it, and `interjected` draws the two apart by which part carried them. One request rather than
-    one per plugin, so what several plugins said arrives as one thing to answer.
-
-    The messages are composed here rather than read off the last result, because a run's
-    `new_messages` are the ones it made and the request that kept it going was made by this: a
-    turn's record is every run's messages with the requests between them, in the order the model
-    saw them.
-
-    `keeping` absent is a session none of whose plugins asked, and it runs exactly as it did before
-    the event existed: one run, and no record of it having been let go.
-
-    A turn may make as many requests as it takes. Pydantic AI caps a run at fifty by default, and
-    that cap counts replayed requests as well as live ones, so a long turn would reach it on the
-    same pass however it was resumed, raise something no arm of `conversing` catches, and be
-    redelivered into the same wall every lease. How much a session may spend is a question about
-    money and not about round trips, and it will be answered where money is counted.
-    """
-    unbounded = UsageLimits(request_limit=None)
-    said: list[ModelMessage] = list(
-        (await agent.run(asked, message_history=list(history), usage_limits=unbounded)).new_messages()
-    )
-    if keeping is None:
-        return tuple(said)
-    attempt = 0
-    while injected := await keeping(attempt, sum(1 for each in said if isinstance(each, ModelResponse))):
-        attempt += 1
-        said.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
-        said.extend((await agent.run(None, message_history=[*history, *said], usage_limits=unbounded)).new_messages())
-    return tuple(said)
+    """One turn's messages, through every model request and tool batch it takes."""
+    return await agent.run(asked, history, scope, keeping)
 
 
 class NoSuchRepository(LookupError):
@@ -3196,9 +3328,10 @@ def conversing(
         # every snapshot inside a turn is taken of it. A session with no repository has none, and
         # gets an agent with no file tools rather than tools that refuse every call.
         worktree = working_in(workspaces, run.workflow, chosen)
-        # Only where there is a worktree to sit beside: a session with no repository has nothing
-        # the scratch would be scratch *for*, and gets no tool that could reach it either.
-        scratch = None if workspaces is None or worktree is None else workspaces.scratch_at(run.workflow)
+        # Every session's, worktree or none: a session with no repository still runs things, and
+        # the scratch is where what they made is kept. Whether the isolation reaches it is
+        # `reaching`'s to say, and it says nothing of it on the whole-machine arm.
+        scratch = None if workspaces is None else workspaces.scratch_at(run.workflow)
         # The endpoint is asked for here and the agent is built per turn below, which is the same
         # check split in two. Without one there is no endpoint to answer on at all, and finding that
         # out before the first `awaiting` is what makes it a failure the console can explain rather
@@ -3281,6 +3414,10 @@ def conversing(
             storing=(
                 (lambda plugin, values: storings(run.workflow, plugin, values)) if storings is not None else unstored
             ),
+            # Unconditional, where the two above are capabilities a console may not have been given:
+            # ending a turn needs nothing of this console but the step that is already recording the
+            # call, so there is no console that can run a pass and cannot do it.
+            halting=ending_turn,
         )
         while True:
             asked = await opening_turn(run, at.turn)
@@ -3339,6 +3476,9 @@ def conversing(
                 instructions,
                 *live.instructions(),
                 reaching(chosen.isolation, worktree, scratch, bwrap).note,
+                # What the page draws from a reply, which is the console's to say and the same for
+                # every session, so it is last and constant: nothing under it moves between sessions.
+                drawing_note(),
             )
 
             async def composing(blocks: Sequence[str] = said_under) -> object:
@@ -3356,7 +3496,8 @@ def conversing(
             # catalogue and the reference, both reloadable under a pass, and a model whose endpoint
             # raised the number should get the new one on the next turn rather than the next
             # restart. It is not recorded, because it is a fact about the model and not a thing
-            # anybody said, and the number that mattered is the one the response was cut off at.
+            # anybody said, and the number that mattered is the one the response was cut off at,
+            # which the loop names from the settings it was sent with.
             cap = None if prices is None else prices.output_cap(chosen)
             agent = agent_for(
                 endpoints,
@@ -3394,7 +3535,7 @@ def conversing(
             keeping = keeping_through(run, live, at.turn, opening_of(asked))
             with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating) as scope:
                 try:
-                    answered = await answering_turn(agent, asked.said, at.history, keeping)
+                    answered = await answering_turn(agent, asked.said, at.history, scope, keeping)
                 except AllowanceSpent:
                     # Caught out here rather than anywhere inside the agent, because what it ends is
                     # the pass and not the request: every step this turn has taken is recorded, so
@@ -3406,18 +3547,28 @@ def conversing(
                     # asking to be refused again; the reason is already recorded, so the page can
                     # say what happened without this carrying anything back.
                     return Stalled()
-                except UnexpectedModelBehavior as error:
-                    # Raised by Pydantic AI *after* an answer was recorded rather than by the
-                    # provider on the request: the model was cut off at its output limit before it
-                    # said anything the loop could act on. Every input to that answer is recorded,
+                except RequestDeferred as deferred:
+                    # And the third answer: the request is fine and the provider named a minute to
+                    # come back in. Written down and then *suspended*, which is why this returns
+                    # nothing at all - a `ScheduledWakeup` is how a pass says it is owed a clock, and
+                    # the worker answers it by scheduling the delivery for exactly that moment. The
+                    # alternative is the worker's own redelivery, which is this console asking a
+                    # provider that is already saying no, once a lease, until the limit lifts.
+                    #
+                    # Raised from out here rather than from inside the loop, which is the same
+                    # reason `AllowanceSpent` is caught out here: a suspension is a `BaseException`,
+                    # and the loop has already come apart by the time this stands.
+                    await deferring(run, at.turn, deferred)
+                except CannotGoOn as error:
+                    # Raised by the loop over an answer *after* it was recorded rather than by the
+                    # provider on the request: cut off at its output limit, emptied by a content
+                    # filter, or unanswerable as it stands. Every input to that answer is recorded,
                     # so a redelivery would replay the same answer into the same exception, once per
                     # lease, for ever. It is settled the way a refusal is and written where one is,
                     # under the request the turn could not go on to make; see `Refused`. Anything
-                    # else this raises is left to propagate, which is the default and the safe way
-                    # round.
-                    if cut_off_in(run.recorded, at.turn) is None:
-                        raise
-                    await scope.refuse(scope.at("model"), records.Refused(why=cut_off_why(error, cap)))
+                    # else the loop raises is left to propagate, which is the default and the safe
+                    # way round.
+                    await scope.refuse(scope.at("model"), records.Refused(why=error.why))
                     return Stalled()
             said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
             ended, at = at.turn, Reached(turn=at.turn + 1, history=(*at.history, *said))
@@ -3442,6 +3593,31 @@ def conversing(
                 return Noting(notes)
 
     return converse
+
+
+async def deferring(run: Run, turn: int, deferred: RequestDeferred) -> None:
+    """
+    Record the moment a provider named, then suspend this pass until it comes round.
+
+    Two acts that have to be this way round. The record is what the page reads, so a session waiting
+    four days says so rather than drawing three dots for four days; and the suspension is what the
+    worker answers, by scheduling the delivery for exactly `until` instead of redelivering onto a
+    provider that is still saying no.
+
+    **`ScheduledWakeup` raised here rather than `Run.sleep` taken above**, which is the same
+    mechanism with the deadline supplied instead of computed. `sleep` records a deadline of its own,
+    `now + duration`, which would be this console writing down a moment it was *told* as though it
+    had chosen it - two records of one fact, and the recorded one would be the copy the page does not
+    read. `stopped_at` takes a suspension the workflow raised itself, which is exactly what this is.
+
+    It returns nothing because it never returns: the raise is the point, and the signature says the
+    caller has nothing to do afterwards.
+    """
+    at = deferrals_in(run.recorded, turn)
+    held = records.Deferred(until=deferred.until, why=deferred.why)
+    key = deferred_key(turn, at)
+    await run.step(key, partial(as_recorded, held), parse_deferred)
+    raise ScheduledWakeup(key, due=deferred.until)
 
 
 def injecting_through(run: Run, live: Live) -> Injecting:
@@ -3475,7 +3651,7 @@ def gating_through(live: Live) -> Gating:
     Whether a tool call may run, asked of a session's plugins from inside the step that records it.
 
     Not a step of its own, and that is the difference from `injecting_through`: the durability layer
-    asks this inside `wrap_tool_execute`'s own step, so the refusal is written into the call's
+    asks this inside `Stepping.call`'s own step, so the refusal is written into the call's
     `Returned` and replayed with it. A second key would be a second record of one call.
 
     A session none of whose plugins asked about `before_tool` spawns nothing here: the gate is

@@ -34,6 +34,15 @@ dependencies:
 setup: dependencies
     uv run pre-commit install
 
+# Every script this console serves that somebody else wrote, fetched from where it was published
+# and checked against the digest `scripts/vendored.toml` records before any of it is written. One
+# recipe and one table rather than a download apiece, so the check is applied to every one of them
+# and a script nobody checked has nowhere to land. Bumping one is editing the version in its `url`,
+# running this, and recording the digest it refuses on once the file has been looked at.
+[doc('Fetch the vendored scripts named in scripts/vendored.toml, each checked against its recorded digest')]
+vendor:
+    uv run python -m scripts.vendor
+
 # The stylesheet is a deliverable, and no string assertion checks one. These render every page from
 # fixture checkpoints and drive a real Chromium over them, so a styling change can be *looked at*.
 #
@@ -51,6 +60,15 @@ gallery:
 [doc('Screenshot every page, wide and phone, into build/shots')]
 shots *args: gallery
     uv run python -m scripts.shoot {{ GALLERY }} {{ SHOTS }} {{ args }}
+
+# Neither a test nor a gate: it prints numbers, fails nothing, and reaches no provider. Run it
+# before and after a change to `loop.py` or `durability.py`, and put the figures in
+# `docs/design/durability.md`, which is where the claim about what replay costs is written down.
+#
+# Extra arguments go straight to the script: `just replay --requests 40 --profile build/replay.prof`.
+[doc('Measure what replaying a turn costs, at several turn sizes')]
+replay *args:
+    uv run python -m scripts.replay {{ args }}
 
 # Behaviour rather than appearance is a different question and gets a different check, and those are
 # in the suite rather than here: what a still cannot show is that *two* panels are drawn as where the
@@ -112,6 +130,15 @@ demo *args:
 [doc('Put the gallery fixtures into the demo database')]
 seed *args:
     uv run python -m scripts.seed {{ if args == "" { DEMO_DATABASE } else { args } }}
+
+# `seed` skips a session the index already has, so a demo database seeded before a fixture changed
+# keeps serving the old checkpoints and says `skipped` for every row. This is the rebuild: the demo
+# database and the two files WAL leaves beside it, gone, and the fixtures planted again. Only ever
+# the demo database, which by its name never holds a real conversation.
+[doc('Remove the demo database and seed it again, for after a fixture changes')]
+reseed:
+    rm -f {{ DEMO_DATABASE }} {{ DEMO_DATABASE }}-wal {{ DEMO_DATABASE }}-shm
+    just seed
 
 # `uv sync` first, and it is not a convenience: the unit names this checkout's interpreter, so an
 # install from a stale environment points systemd at a venv missing whatever was just added. Run

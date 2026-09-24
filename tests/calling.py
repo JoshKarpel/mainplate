@@ -26,6 +26,14 @@ from without_http.testing import loopback_client
 BASE = "http://testserver"
 FORM = ((b"content-type", b"application/x-www-form-urlencoded"),)
 
+# The clock every caller here reads pages against unless it asks for another.
+#
+# Stated rather than left to the machine, for `WHEN`'s reason one step along: the console draws a
+# moment in whichever zone the request asks for and falls back to the machine's own, so a suite that
+# said nothing would assert `15:09` on a UTC runner and `10:09` on a laptop in Chicago. A test about
+# the conversion asks for a zone of its own.
+UTC_ZONE = "UTC"
+
 
 @dataclass(frozen=True, slots=True)
 class Answer:
@@ -49,6 +57,13 @@ class Caller:
     """The console as the two request shapes these tests make, and nothing more."""
 
     client: Client
+    zone: str = UTC_ZONE
+    """Which clock this caller reads moments against, carried on every request as the cookie."""
+
+    @property
+    def cookie(self) -> tuple[tuple[bytes, bytes], ...]:
+        """The zone cookie a browser would be sending by the time it has loaded one page."""
+        return ((b"cookie", f"zone={self.zone}".encode()),)
 
     async def get(self, path: str) -> Answer:
         return await self.send("GET", path)
@@ -70,11 +85,11 @@ class Caller:
         driving it through the loopback client at all: the response crosses the same encoder and
         decoder a socket would, so what a test reads is what a browser would.
         """
-        async with request(self.client, "GET", f"{BASE}{path}") as response:
+        async with request(self.client, "GET", f"{BASE}{path}", headers=self.cookie) as response:
             yield parse_events(response.body)
 
     async def send(self, method: str, path: str, form: Mapping[str, str] | None = None) -> Answer:
-        headers = () if form is None else FORM
+        headers = self.cookie if form is None else (*FORM, *self.cookie)
         body = b"" if form is None else urlencode(form).encode()
         async with request(self.client, method, f"{BASE}{path}", headers=headers, body=body) as response:
             return Answer(
@@ -85,7 +100,7 @@ class Caller:
 
 
 @asynccontextmanager
-async def calling(app: ASGIApp) -> AsyncIterator[Caller]:
+async def calling(app: ASGIApp, zone: str = UTC_ZONE) -> AsyncIterator[Caller]:
     """`app` served in memory for the block, with a caller pointed at it."""
     async with loopback_client(app) as client:
-        yield Caller(client=client)
+        yield Caller(client=client, zone=zone)

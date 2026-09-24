@@ -90,6 +90,7 @@ from mainplate.footprint import Places
 from mainplate.footprint import measuring
 from mainplate.forge import Clones
 from mainplate.forge import Forge
+from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
@@ -246,13 +247,27 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     # forge reaching nothing is an ordinary answer rather than a startup failure. Off exe.dev this
     # finds no repositories and the console is exactly what it was before there were any - a place
     # to talk, with no files.
-    reaching = Reaching(current=await reachable(FORGES))
+    #
+    # Reported rather than refused, which is `forge.offers`'s promise and not `catalogue.discover`'s
+    # refusal: a console with no sandbox is one whose sessions are offered no `bash` and no
+    # repository, since a checkout's git reads configuration the session writes and has to be
+    # confined as surely as a command. Nothing here leaves somebody holding a choice they cannot
+    # use, so it is not a reason not to start. Logged because the alternative - a shell and a
+    # repository list that quietly are not there - is the state nobody can diagnose.
+    try:
+        bwrap: str | None = sandbox_command()
+        logger.info(f"sandbox found: {bwrap}")
+    except NoSandbox as missing:
+        bwrap = None
+        logger.warning(f"no sandbox, so sessions get no shell and no repository: {missing}")
+    reaching = Reaching(current=await reachable(FORGES) if bwrap is not None else Reachable(repositories=()))
     logger.info(f"repositories reachable: {len(reaching.current.repositories)}")
     workspaces = Workspaces(
         clones=Clones(root=settings.workspace_root / "clones"),
         root=settings.workspace_root / "worktrees",
         scratch=settings.workspace_root / "scratch",
         reaching=reaching,
+        bwrap=bwrap,
     )
     # Read before ready like the other two, and unlike either of them it cannot refuse to start.
     # `refreshed` never raises: an unreachable database leaves the holder empty and every card
@@ -262,17 +277,6 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     references = References()
     if config.model_reference is not None:
         await refreshed(references, config.model_reference)
-    # Reported rather than refused, which is `forge.offers`'s promise and not `catalogue.discover`'s
-    # refusal: a console with no sandbox is one whose sessions keep every file tool and are offered
-    # no `bash`, which is exactly what this was before there was one. Nothing here leaves somebody
-    # holding a choice they cannot use, so it is not a reason not to start. Logged because the
-    # alternative - a shell tool that quietly is not there - is the state nobody can diagnose.
-    try:
-        bwrap: str | None = sandbox_command()
-        logger.info(f"sandbox found: {bwrap}")
-    except NoSandbox as missing:
-        bwrap = None
-        logger.warning(f"no sandbox, so sessions get no shell: {missing}")
     # Every plugin outside a worktree, which is the bundled set and whatever `config.yaml` installs.
     # Both are files this process cannot see change, so the *set* is fixed at startup; what each one
     # says is asked per session, on that session's own first pass, so a plugin edited on disk reaches

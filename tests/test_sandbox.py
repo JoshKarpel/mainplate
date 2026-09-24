@@ -4,16 +4,20 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from conftest import PLANTED
 
 from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InAScratch
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
 from mainplate.sandbox import Sandbox
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
-from mainplate.sandbox import sandbox_command
+from mainplate.sandbox import home_in
+from mainplate.sandbox import starting_at
 from mainplate.snapshots import Worktree
+from mainplate.snapshots import branch_named
 from mainplate.tools.bash.tools import HEAD_LINES
 from mainplate.tools.bash.tools import MAX_LINE
 from mainplate.tools.bash.tools import TAIL_LINES
@@ -33,33 +37,6 @@ async def run(*arguments: str, cwd: Path) -> str:
 
 
 @pytest.fixture
-def bwrap() -> str:
-    """
-    Where the sandbox binary is, and a loud failure if it is not anywhere.
-
-    Not skipped when it is missing, for the same reason the browser tests are not: a check nobody
-    runs is a check that catches nothing, and every assertion below is about what the sandbox
-    actually does rather than about what this code believes it asks for.
-    """
-    return sandbox_command()
-
-
-@pytest.fixture
-async def worktree(tmp_path: Path) -> Worktree:
-    """A complete checkout, which is the shape every session receives."""
-    source = tmp_path / "worktrees" / "session"
-    (source / "src").mkdir(parents=True)
-    (source / "README.md").write_text("hi\n")
-    (source / "src" / "app.py").write_text("print('hello')\n")
-    await run("git", "init", "-q", "-b", "main", cwd=source)
-    await run("git", "config", "user.email", "probe@example.invalid", cwd=source)
-    await run("git", "config", "user.name", "Probe", cwd=source)
-    await run("git", "add", "-A", cwd=source)
-    await run("git", "commit", "-qm", "first", cwd=source)
-    return Worktree(root=source)
-
-
-@pytest.fixture
 def scratch(tmp_path: Path) -> Path:
     """
     Where a session keeps what is not its repository's, beside the worktree rather than under it.
@@ -75,46 +52,108 @@ async def inside(worktree: Worktree, scratch: Path, bwrap: str, command: str) ->
     return await ran(InAWorktree(worktree=worktree, scratch=scratch), bwrap, Venue.CONFINED, command, seconds=20)
 
 
+class TestWhatAScratchOnlySessionReaches:
+    """
+    A session with no repository gets its scratch and nothing else of the machine.
+
+    Through the real tool and the real namespace, for the reason everything here is: what is
+    asserted is what a mount namespace with one bind in it actually does.
+    """
+
+    async def alone(self, scratch: Path, bwrap: str, command: str) -> str:
+        return await ran(InAScratch(scratch=scratch), bwrap, Venue.CONFINED, command, seconds=20)
+
+    async def test_a_command_starts_in_the_scratch_which_is_also_home_and_named(
+        self, scratch: Path, bwrap: str
+    ) -> None:
+        said = await self.alone(scratch, bwrap, 'echo "$PWD"; echo "$HOME"; echo "$MAINPLATE_SCRATCH"')
+        assert said.count(str(scratch)) == 3, said
+
+    async def test_the_scratch_is_made_by_the_first_command_and_kept_for_the_next(
+        self, scratch: Path, bwrap: str
+    ) -> None:
+        assert not scratch.exists(), "the fixture leaves making it to the tool"
+        await self.alone(scratch, bwrap, "echo kept > note.txt")
+        assert (scratch / "note.txt").read_text() == "kept\n"
+        assert "kept" in await self.alone(scratch, bwrap, "cat note.txt")
+
+    async def test_nothing_of_the_machine_is_in_there(self, scratch: Path, bwrap: str, worktree: Worktree) -> None:
+        """A worktree that exists on this machine is exactly the kind of thing a scratch-only session must not see."""
+        said = await self.alone(scratch, bwrap, f"ls {worktree.root} >/dev/null 2>&1 && echo VISIBLE || echo DENIED")
+        assert "DENIED" in said
+        said = await self.alone(scratch, bwrap, 'echo "worktree=${MAINPLATE_WORKTREE:-unset}"')
+        assert "worktree=unset" in said
+
+    async def test_a_scratch_only_sandbox_binds_the_scratch_and_nothing_else(self, scratch: Path) -> None:
+        sandbox = confined_by(InAScratch(scratch=scratch))
+        assert [(bind.path, bind.writable, bind.name) for bind in sandbox.places] == [(scratch, True, "scratch")]
+        assert starting_at(InAScratch(scratch=scratch)) == scratch
+        assert home_in(InAScratch(scratch=scratch)) == scratch
+
+
 class TestWhereTheCheckoutIs:
-    async def test_the_checkout_and_scratch_are_the_only_session_binds(
+    async def test_the_checkout_and_scratch_are_writable_and_the_store_is_read_only(
         self, worktree: Worktree, scratch: Path
     ) -> None:
-        sandbox = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
+        sandbox = confined_by(InAWorktree(worktree=worktree, scratch=scratch))
 
-        checkout, kept = sandbox.places
+        assert [(bind.path, bind.writable) for bind in sandbox.places] == [
+            (worktree.root, True),
+            (worktree.store.path, False),
+            (scratch, True),
+        ]
 
-        assert checkout.path == worktree.root
-        assert checkout.writable
-        assert kept.path == scratch
-        assert kept.writable
-
-    async def test_git_metadata_is_writable_inside_the_namespace(
+    async def test_git_writes_work_and_stay_in_the_checkout(
         self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
+        """
+        What owning its `.git` buys a session: commit, branch and rebase, as git does them anywhere.
+
+        Read back through the store for the other half: nothing a session's git did reached it.
+        """
+        before = await worktree.store.demand("for-each-ref", "--format=%(refname) %(objectname)")
+
         said = await inside(
             worktree,
             scratch,
             bwrap,
-            "echo edited >> README.md && git add README.md && "
-            "git commit -qm second && git branch topic && git log -1 --format=%s",
+            "echo edited >> src/kept.txt && git commit -qam second && git branch topic && git log -1 --format=%s",
         )
 
         assert "second" in said
-        assert await run("git", "branch", "--show-current", cwd=worktree.root) == "main"
+        assert await run("git", "branch", "--show-current", cwd=worktree.root) == branch_named(PLANTED)
         assert "topic" in await run("git", "branch", "--format=%(refname:short)", cwd=worktree.root)
+        assert await worktree.store.demand("for-each-ref", "--format=%(refname) %(objectname)") == before
+
+    async def test_the_store_cannot_be_written_from_in_there(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        said = await inside(
+            worktree, scratch, bwrap, f"touch {worktree.store.path}/planted 2>&1 && echo WROTE || echo DENIED"
+        )
+
+        assert "DENIED" in said
+        assert not (worktree.store.path / "planted").exists()
+
+    async def test_fetching_brings_the_stores_refreshed_branches_without_a_network(
+        self, worktree: Worktree, scratch: Path, bwrap: str
+    ) -> None:
+        said = await inside(worktree, scratch, bwrap, "git fetch -q origin && git branch -r")
+
+        assert "origin/main" in said
 
 
 class TestWhatTheVenueDecides:
     async def test_a_confined_command_gets_a_network_namespace_of_its_own(
         self, worktree: Worktree, scratch: Path
     ) -> None:
-        sandbox = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
+        sandbox = confined_by(InAWorktree(worktree=worktree, scratch=scratch))
 
         assert "--unshare-net" in sandbox.argv(at=str(worktree.root), venue=Venue.CONFINED)
 
     async def test_a_connected_command_keeps_the_hosts_network(self, worktree: Worktree, scratch: Path) -> None:
         """The only difference between the two, so the rest of the policy cannot drift between them."""
-        sandbox = await confined_by(InAWorktree(worktree=worktree, scratch=scratch))
+        sandbox = confined_by(InAWorktree(worktree=worktree, scratch=scratch))
         confined = sandbox.argv(at=str(worktree.root), venue=Venue.CONFINED)
         connected = sandbox.argv(at=str(worktree.root), venue=Venue.CONNECTED)
 
@@ -252,11 +291,11 @@ class TestTheScratchDirectory:
 
         assert str(worktree.root) in said
 
-    async def test_the_clone_is_not_named_because_nothing_should_be_writing_paths_into_it(
+    async def test_the_store_is_not_named_because_nothing_should_be_writing_paths_into_it(
         self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
-        # It is bound so that git works, not so that anybody addresses it. A name would invite a
-        # write to the one place the read-only bind exists to refuse.
+        # It is bound so that borrowed objects resolve, not so that anybody addresses it. A name
+        # would invite a write to the one place the read-only bind exists to refuse.
         said = await inside(worktree, scratch, bwrap, "env | grep -c MAINPLATE_ || true")
 
         assert "2" in said, "the worktree and the scratch, and nothing else"
@@ -266,8 +305,8 @@ class TestTheScratchDirectory:
         What a scratch directory under the worktree would get wrong.
 
         `list` passes `--others`, so an untracked directory inside the worktree is in every listing
-        and every `status` until something excludes it, and the only place to write that exclusion
-        is a git directory this command cannot write to.
+        and every `status` until something excludes it, and excluding it would mean an entry in the
+        session's own `.git/info/exclude` that anything the session runs could take out again.
         """
         await inside(worktree, scratch, bwrap, f"mkdir -p {scratch}/cache && echo x > {scratch}/cache/blob")
 
@@ -283,20 +322,20 @@ class TestWhatGitCanDoInThere:
     async def test_reading_git_works(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         said = await inside(worktree, scratch, bwrap, "git ls-files")
 
-        assert "README.md" in said
-        assert "src/app.py" in said
+        assert ".gitignore" in said
+        assert "src/kept.txt" in said
         assert "exit 0" in said
 
     async def test_status_and_log_work(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
-        (worktree.root / "README.md").write_text("hi\nedited\n")
+        (worktree.root / "src" / "kept.txt").write_text("edited\n")
 
         said = await inside(worktree, scratch, bwrap, "git status --porcelain && git log --oneline")
 
-        assert "M README.md" in said
+        assert "M src/kept.txt" in said
         assert "first" in said
 
     async def test_committing_works(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
-        (worktree.root / "README.md").write_text("hi\nedited\n")
+        (worktree.root / "src" / "kept.txt").write_text("edited\n")
 
         said = await inside(worktree, scratch, bwrap, "git add -A && git commit -m 'from the agent'")
 
@@ -304,12 +343,12 @@ class TestWhatGitCanDoInThere:
         assert await run("git", "log", "-1", "--format=%s", cwd=worktree.root) == "from the agent"
 
     async def test_stashing_works(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
-        (worktree.root / "README.md").write_text("hi\nedited\n")
+        (worktree.root / "src" / "kept.txt").write_text("edited\n")
 
         said = await inside(worktree, scratch, bwrap, "git stash && git stash list")
 
         assert "stash@{0}" in said
-        assert (worktree.root / "README.md").read_text() == "hi\n"
+        assert (worktree.root / "src" / "kept.txt").read_text() == "original\n"
 
 
 class TestWhatABashCallSaysBack:

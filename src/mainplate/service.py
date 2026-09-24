@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -34,7 +35,9 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import retention_for
+from mainplate.commands import PUSHED
 from mainplate.commands import Commands
+from mainplate.commands import Running
 from mainplate.commands import Slot
 from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
@@ -42,6 +45,8 @@ from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import declared_in
+from mainplate.conversation import deferred_in
+from mainplate.conversation import environment_in
 from mainplate.conversation import failure_in
 from mainplate.conversation import latest_tree
 from mainplate.conversation import opening_tree_key
@@ -60,7 +65,6 @@ from mainplate.conversation import transcript
 from mainplate.footprint import Footprints
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
-from mainplate.sandbox import InAWorktree
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import acted
@@ -75,10 +79,16 @@ from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
 from mainplate.reference import resending
+from mainplate.sandbox import InAWorktree
+from mainplate.sessions import LISTING
+from mainplate.sessions import Attention
+from mainplate.sessions import Claimed
+from mainplate.sessions import Delayed
+from mainplate.sessions import Idle
 from mainplate.sessions import Origin
+from mainplate.sessions import Queued
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
-from mainplate.sessions import listing_token
 from mainplate.sessions import mint_session_id
 from mainplate.sessions import name_from
 from mainplate.sessions import now_utc
@@ -113,55 +123,24 @@ SELECT
 """
 
 
-@dataclass(frozen=True, slots=True)
-class Claimed:
-    """A pass holds this session right now, which is what a live claim on it means."""
-
-
-@dataclass(frozen=True, slots=True)
-class Queued:
-    """No pass holds this session and the queue will hand it to the next worker that reads."""
-
-
-@dataclass(frozen=True, slots=True)
-class Delayed:
-    """
-    No pass holds this session and the delivery for it is held back until `until` from now.
-
-    Which is what a pass that fell over leaves behind: the worker deliberately does not answer for a
-    delivery whose pass raised, so the queue keeps the row it reserved and reclaims it once the lease
-    elapses. That is the state this whole reading exists to name, because on the page it used to be
-    indistinguishable from a reply being written.
-
-    A duration and not a moment, so the page never subtracts two machines' clocks: the store measured
-    it against its own, and the script counts down from what it was handed. `cache_note` is the same
-    bargain one field along.
-    """
-
-    until: timedelta
-
-
-@dataclass(frozen=True, slots=True)
-class Idle:
-    """
-    No pass holds this session and nothing is scheduled to.
-
-    The ordinary state of a settled conversation, and a real fault where something is outstanding:
-    a message nobody will ever answer, which nothing else on the page can show.
-    """
-
-
-type Attention = Claimed | Queued | Delayed | Idle
+# The claim and the delivery for every session at once, for the list: what `ATTENDED` reads for one
+# session, read for all of them in one statement rather than one per row, since the list is redrawn
+# whenever any session moves and a row per query would be a thread hop per session per redraw. The
+# count is left out because the list does not need it; the moment is read beside each row for the
+# reason it is above.
+ATTENDING = """
+SELECT workflow, MIN(held_until, alive_until), NULL, unixepoch('now', 'subsec') FROM workflow_claim
+UNION ALL
+SELECT workflow, NULL, visible_at, unixepoch('now', 'subsec') FROM workflow_queue WHERE namespace = :namespace
 """
-What the worker is doing about one session, as the claim and the queue answer between them.
 
-**Not a fact about the conversation, so it is not in the checkpoint and must not be.** It is live
-control-plane state that changes several times per pass and is true only at the instant it is read,
-where a checkpoint holds what was said and never changes at all. Read on every render, next to the
-count that decides whether to render.
-
-Four arms rather than two booleans, because two of the four combinations cannot happen and a reader
-of a pair would have to know which. A sealed union in the shape `Ended` already has here.
+# Whether the claim or the queue has moved for anybody, for the list's token beside `LISTING`'s three
+# numbers: a row appearing or going, and a claim renewed or a delivery rescheduled, all move one of
+# these. A sum rather than a maximum for the reason `LISTING` sums the marks, that any one row moving
+# has to move the whole.
+ATTENDING_TOKEN = """
+SELECT (SELECT coalesce(sum(held_until), 0) || ':' || count(*) FROM workflow_claim),
+       (SELECT coalesce(sum(visible_at), 0) || ':' || count(*) FROM workflow_queue WHERE namespace = :namespace)
 """
 
 
@@ -183,8 +162,23 @@ class Attended:
     due_at: float | None
     asked_at: float
 
+    @property
+    def attention(self) -> Attention:
+        """What the worker is doing about the session, as `attention_of` reads the three that say."""
+        return attention_of(self.claimed_until, self.due_at, self.asked_at)
 
-def attention_of(attended: Attended) -> Attention:
+
+def waiting_out(deferred: records.Deferred | None, now: datetime) -> records.Deferred | None:
+    """
+    A recorded wait, where it is still ahead of `now`, and nothing at all where it has passed.
+
+    Pure and separate from the read for `attention_of`'s reason: what a page draws is decided by one
+    comparison, and a comparison is a thing a test can hold without a store anywhere near it.
+    """
+    return deferred if deferred is not None and deferred.until > now else None
+
+
+def attention_of(claimed_until: float | None, due_at: float | None, asked_at: float) -> Attention:
     """
     What the worker is doing about a session, out of what the store said about it.
 
@@ -198,14 +192,15 @@ def attention_of(attended: Attended) -> Attention:
     due later is one held back, which is what the worker leaving a failed pass's delivery unanswered
     produces; no row at all is a session nothing is coming for.
 
-    Pure, and taking the reading rather than the session, so the states a page draws are testable
-    without a store: four values in, one arm out.
+    Pure, and taking the readings rather than the session, so the states a page draws are testable
+    without a store: three values in, one arm out. The three rather than an `Attended`, because the
+    list reads them for every session without the count that reading also carries.
     """
-    if attended.claimed_until is not None and attended.claimed_until > attended.asked_at:
+    if claimed_until is not None and claimed_until > asked_at:
         return Claimed()
-    if attended.due_at is None:
+    if due_at is None:
         return Idle()
-    waiting = attended.due_at - attended.asked_at
+    waiting = due_at - asked_at
     return Queued() if waiting <= 0 else Delayed(until=timedelta(seconds=waiting))
 
 
@@ -256,6 +251,24 @@ class Conversation:
     It is about the turn being answered rather than about any turn in the conversation. A refusal
     recorded against a turn that later answered is history, and history is what the transcript is
     for; only a refusal on the turn nothing has got past says the session has stopped.
+    """
+
+    deferred: records.Deferred | None = None
+    """
+    What this session is waiting out, where it is waiting out anything, and when that ends.
+
+    **The fifth way to be stopped, and the only one where nothing is wrong at all.** A missing
+    endpoint needs a configuration file put back, a refused request needs a fork, a setup that would
+    not run needs a switch moved, and a failed pass needs whatever fell over fixed. This one needs a
+    clock: a provider said when it would take the request again, the queue is holding the delivery
+    until then, and the page says so instead of drawing three dots for the four days a weekly limit
+    takes to reset.
+
+    **Two tests stand between the record and this field, and they answer different questions.**
+    `deferred_in` asks whose wait it is, so a moment named for a turn that has since answered is
+    history rather than a sentence on the page; `waiting_out` asks whether it is still on, because
+    whether a wait has passed is a question about the clock and a page may not ask one. See
+    `Conversation.since` for the second rule and `read` for where both comparisons are made.
     """
 
     failed: records.Failed | None = None
@@ -552,15 +565,43 @@ class Service:
         return replace(session, footprint=self.footprints.current.get(session.id))
 
     async def listed(self) -> tuple[Session, ...]:
-        return tuple(self.footprinted(session) for session in await read_sessions(self.database))
+        """
+        Every session as the list draws it: the index's row, what the last sweep measured it taking,
+        and what the worker is doing about it right now.
+
+        The last is filled here for the footprint's reason: it is a reading of the control plane and
+        not a fact about the session, so `parse_session` leaves it empty and the one caller that
+        draws it asks. Every session gets an answer, `Idle` for the ones the worker has nothing on.
+        """
+        attending = await self.attending()
+        return tuple(
+            replace(self.footprinted(session), attention=attending.get(session.id, Idle()))
+            for session in await read_sessions(self.database)
+        )
 
     async def saw(self, session: str) -> None:
         """A page showing this session as it now stands reached somebody; see `sessions.saw`."""
         await saw(self.database, session)
 
     async def listing_token(self) -> str:
-        """Whether the list of sessions is worth drawing again; see `sessions.listing_token`."""
-        return await listing_token(self.database)
+        """
+        Whether the list is worth drawing again, as a token compared for inequality and nothing else.
+
+        What a live connection asks several times a second, beside the session's own token, so it
+        has to cost less than the list it guards. It moves when any session records anything, when a
+        session is made, when a look at any session advances its mark, and when the worker takes a
+        session, lets it go, or schedules the next attempt at one, since the row says which of those
+        is so; it does not move for what a sweep measures a session taking on disk, which a row draws
+        whenever it is next drawn for another reason. `LISTING` is the index's half and the rest is
+        the store's, in one closure so the two are one thread hop.
+        """
+
+        def query(connection: sqlite3.Connection) -> str:
+            filed, count, looked = connection.execute(LISTING).fetchone()
+            held, due = connection.execute(ATTENDING_TOKEN, {"namespace": self.durable.scheduler.namespace}).fetchone()
+            return f"{filed}:{count}:{looked}:{held}:{due}"
+
+        return await self.database.run(query)
 
     async def read(self, session: str) -> Conversation | None:
         """
@@ -613,6 +654,11 @@ class Service:
             # pair is deliberate: the reason is a fact about a pass that is over and the attention is
             # true only at this instant, so one is in the checkpoint and the other is a read.
             failed=failure_in(recorded),
+            # A wait is on while the moment it names is still ahead, which is a question about the
+            # clock and so is answered here rather than on the page - the same rule `since` follows
+            # one field along. A moment already passed is a wait that is over, whether or not the
+            # pass it belongs to has run again.
+            deferred=waiting_out(deferred_in(recorded), self.now()),
             attention=await self.attention(session),
             repository=self.repository_of(chosen),
             worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
@@ -663,7 +709,29 @@ class Service:
 
     async def attention(self, session: str) -> Attention:
         """What the worker is doing about this session, as `attention_of` reads one `attended`."""
-        return attention_of(await self.attended(session))
+        return (await self.attended(session)).attention
+
+    async def attending(self) -> dict[str, Attention]:
+        """
+        What the worker is doing about every session it is doing anything about, by session.
+
+        A session absent from this is one with neither a claim nor a delivery, which is `Idle`; the
+        caller says so rather than this filling in a row for every session it has never heard of.
+        Read in one statement for the same reason `attended` is one: the two readings a row's
+        answer is made of come from one moment.
+        """
+        rows = await self.database.run(
+            lambda connection: connection.execute(ATTENDING, {"namespace": self.durable.scheduler.namespace}).fetchall()
+        )
+        readings: dict[str, tuple[float | None, float | None, float]] = {}
+        for workflow, held, due, asked in rows:
+            claimed_until, due_at, _ = readings.get(str(workflow), (None, None, float(asked)))
+            readings[str(workflow)] = (
+                claimed_until if held is None else float(held),
+                due_at if due is None else float(due),
+                float(asked),
+            )
+        return {workflow: attention_of(*reading) for workflow, reading in readings.items()}
 
     async def held(self, session: str) -> bool:
         """
@@ -767,9 +835,8 @@ class Service:
         chosen = chosen.settled()
         session = Session(id=mint_session_id(), created_at=self.now(), title=named)
         # A branch of its own where nobody named one, which is what stops a session working in a
-        # repository landing on a detached `HEAD`. That was the default until `Run` put `git commit`
-        # in the box under the conversation, and a commit on a detached `HEAD` is reachable only
-        # through the reflog. Filled *here* rather than in `settled`, because it takes the session's
+        # repository landing on a detached `HEAD`, where a commit is reachable only through the reflog
+        # and has no name to push under. Filled *here* rather than in `settled`, because it takes the session's
         # own id and `settled` is a rule about a choice rather than about a session.
         chosen = chosen.branching(session.id)
         await enrol(self.database, session)
@@ -845,8 +912,7 @@ class Service:
         #
         # `forked` is what drops the base and the branch the parent was started with. A fork plants
         # at the tree of the turn it re-asks, so a base beside that would be a second answer to where
-        # its files come from; and `git worktree add -b` refuses a branch already in use, so an
-        # inherited one is a worktree that cannot be planted at all.
+        # its files come from; and an inherited branch would be two sessions pushing one history.
         chosen = chosen.settled(forked=True)
         forked = Session(
             id=mint_session_id(),
@@ -956,25 +1022,52 @@ class Service:
         saying it had, and a record with nothing running would be a panel that never resolves.
 
         Nowhere to run one is `None` and not a raise: it is a state the page can explain, not a fault.
+
+        **In the session's sandbox**, under its own network answer and the environment its setup
+        recorded, for the reason `commands.py` opens with: the checkout's git configuration is the
+        model's to write.
         """
-        if self.commands is None or self.workspaces is None:
+        if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
             return None
         found = await self.read(session)
         if found is None or found.chosen is None or found.chosen.repository is None:
             return None
-        where = self.workspaces.at(session)
-        # Appended rather than delivered, because there is nothing for a worker to do about it: a
-        # command reaches no model, so waking a pass to look at one would be a pass with no work.
-        entry = await self.checkpointer.append(session, recorded_command(said))
-        self.commands.start(
-            Slot(session=session, entry=entry.key),
-            said,
-            where,
-            InAWorktree(
+        running = Running(
+            confinement=InAWorktree(
                 worktree=self.workspaces.worktree(session, found.chosen.repository),
                 scratch=self.workspaces.scratch_at(session),
             ),
-            found.chosen.isolation.venue,
+            venue=found.chosen.isolation.venue,
+            environment=environment_in(await self.checkpointer.load(session)),
+        )
+        # Appended rather than delivered, because there is nothing for a worker to do about it: a
+        # command reaches no model, so waking a pass to look at one would be a pass with no work.
+        entry = await self.checkpointer.append(session, recorded_command(said))
+        self.commands.start(Slot(session=session, entry=entry.key), said, running)
+        return entry.key
+
+    async def push(self, session: str) -> str | None:
+        """
+        Push this session's branch to its repository, and say which entry recorded it, or nothing
+        where there is no branch here to push or nowhere to push it.
+
+        Recorded as a command whose text is what was done, so the page draws it where it happened and
+        a reload finds it, like any `Run`. Nowhere to push is a repository no forge currently reaches,
+        which is `None` for the reason `run`'s is.
+        """
+        if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
+            return None
+        found = await self.read(session)
+        if found is None or found.chosen is None or found.chosen.repository is None:
+            return None
+        repository = self.workspaces.named(found.chosen.repository)
+        if repository is None:
+            return None
+        entry = await self.checkpointer.append(session, recorded_command(PUSHED))
+        self.commands.push(
+            Slot(session=session, entry=entry.key),
+            self.workspaces.worktree(session, found.chosen.repository),
+            repository.url,
         )
         return entry.key
 

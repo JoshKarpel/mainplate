@@ -30,8 +30,8 @@ the cross-cutting rules the pages cite rather than restate.
 - **[What runs, and as whom](security.md)** is the boundary between the parent and the sandbox: what
   is untrusted, why nothing trusted may discover its inputs from a tree a session can write, and
   what is deliberately left undefended.
-- **[Durability](durability.md)** is the Pydantic AI capability that records a turn step by step,
-  and what one pass of a session actually does.
+- **[Durability](durability.md)** is the model-and-tool loop that records a turn step by step, and
+  what one pass of a session actually does.
 - **[Plugins](plugins.md)** is how somebody adds to this console without editing it: the protocol a
   plugin speaks, the events it is sent, the effects it may ask for, and what has to be true before a
   repository's own plugin runs. Handoff and what a session is told are both plugins, which is what

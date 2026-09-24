@@ -152,8 +152,8 @@ the panel's own hands over what the panel says. Five things there are decided:
   Markdown carries its source in `data-markdown` and that is what the button hands over. It is not a
   second copy of anything: it is the same value the element was built from, put into the same
   render, and nothing else reads it. Only the kinds that *are* Markdown, since a tool's arguments
-  and its return are already shown verbatim and a fence renders as the characters it was written
-  with. Measured on the gallery's own conversation, carrying the sources costs the page 16%, most of
+  and its return are shown as the text they were, and a fence renders as the characters it was
+  written with. Measured on the gallery's own conversation, carrying the sources costs the page 16%, most of
   that the system prompt, which is the longest Markdown on any page and the one a reader is least
   likely to be copying from. It is carried all the same: a fold nobody opened costs bytes, and a
   fold somebody did open with no way to lift the prompt out of it costs the control.
@@ -204,7 +204,18 @@ devices - the phone that read the answer has read it for the laptop too - and be
 by reader the day there are readers to key it by. The word and not a dot, for the archived word's
 reason: a dot alone reads as a styling accident. In the console's own mark hue, because it is about
 the console's bookkeeping and not about who spoke. Never on an archived row, since nothing more is
-said in one, and never on the row being read, because serving that page is what marks it. A console
+said in one, and never on the row being read, because serving that page is what marks it.
+
+**A row says `working` while the worker has something to do about its session**, which is the other
+reason to open one: `new` says something arrived, and this says something is still coming. It is
+[what the worker is doing](durability.md) read for every session in one statement rather than one
+per row, since the list is redrawn whenever any session moves, and it is the reason the list's token
+carries the claim and the queue beside the index's three numbers: the row says which, so the list
+has to be drawn again when the answer changes. One word for three arms, with the title saying which
+of a pass answering now, a delivery the next pass will take, or one held back after a pass fell
+over; `Idle` draws nothing, because a settled session is the ordinary row. In the same face and hue
+as `new` and the regular weight beside its bold, since what has already arrived is the one to go
+and read. Never on an archived row, for `new`'s reason. A console
 upgraded onto the column has it filled to where every session stood, since `NULL` reads as never
 looked at and lighting every session at once would tell the reader nothing.
 
@@ -233,6 +244,123 @@ and the redirect lands on the session it closed, which is the page saying what j
 cost, stated: it covers the tail of a long name while it shows, which is the corner every row action
 lives in, and the whole name is in the title. It is not drawn on a phone, where nothing hovers; a
 session is opened and closed from its rail there.
+
+## Which clock a moment is printed against
+
+Every moment this console shows is recorded in UTC and printed in somebody's local time, and the
+question is whose. The browser is the only party that knows, and it cannot say so in time to matter
+unless it says it on the request for the document itself, so it says it in a **cookie**: the script
+writes `zone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`, the `reading` extractor reads
+it, and the `Reader` it parses into is threaded to the page functions as one more
+[already-answered question](../philosophy.md#a-page-is-a-pure-function-of-already-answered-questions).
+The rules, the session list's dates, the cache note and the archived sentence are all drawn from it,
+so nothing on the page is in a different clock from anything else on it.
+
+**A value rather than a parameter, because of the threading rather than any second field.** The
+clock reached two dozen page signatures as a parameter of its own, so the next reader-scoped answer
+would touch every one of them again; a field on `Reader` costs one line. What does not go on it is
+anything that is not a rendering input: a credential shares the `Cookie` header and is a gate in
+*front* of drawing a page rather than something a page draws with, so it never becomes a field. That
+line is what keeps `Reader` a value and not a drawer. The zone may well stay its only field, and
+that is fine - what the value buys is that a second one would be an edit in one place.
+
+One cookie per answer rather than one cookie carrying all of them. A single packed value would buy a
+format, a parser and a version to keep in step, where a name apiece stays independently writable by
+the script and independently readable by `cookie_value`, which already takes a name.
+
+## The format is canonical, and the zone is the only thing that varies
+
+`resolvedOptions()` names a `locale` and an `hourCycle` beside the `timeZone`, and **both are
+declined**. Every moment this console prints is `%Y-%m-%d %H:%M`, at everybody: this is a console
+for programmers, and a stamp that sorts lexicographically and reads the same to a reader in Berlin
+as to one in Chicago is worth more here than one in their own conventions. So only *which instant*
+follows the reader; *how it is written* never does.
+
+Three things fall out of that, and they are the reason it is worth stating rather than just doing:
+
+- **The axis is closed, not unfilled.** A locale field is not a cell waiting to be filled in later;
+  it is a thing decided against, so nobody should arrive at `Reader` and read one field as an
+  unfinished job.
+- **`strftime` stays sufficient.** A genuinely locale-aware render needs CLDR data through `babel`,
+  because Python's own `locale` module is process-global and so no use per request. Declining the
+  locale is what keeps that dependency out.
+- **The full stamp carries an offset, not an abbreviation.** `CST` is US Central and also China
+  Standard, so the abbreviation answers "whose 09:32" with a value two readers resolve differently.
+  `2031-03-14 10:09:26-05:00` cannot be read two ways, and it is the same text as the `datetime`
+  attribute beside it give or take the separator.
+
+The cost, stated: `2031-03-14 10:20` is three characters wider than `Mar 14, 10:20` in a 17rem
+sidebar column, and a reader who would rather see their own conventions does not get them.
+
+**The formatting stays on the server**, which is the whole reason for the cookie rather than a
+script that rewrites `<time>` elements after the fact. A moment inside a sentence - `Archived
+2031-03-18 04:02:17-05:00: nothing more is said in it` - cannot be rewritten without composing that
+sentence in JavaScript too, so the alternative is two implementations of what a date looks like, in
+two languages, one of which cannot see the other. The `<time>` element is still there, carrying the
+instant in its `datetime` attribute while its text carries the reader's clock.
+
+**Without the cookie a page is drawn against the console's own zone**, which `here()` reads from `TZ`
+or `/etc/localtime`, and that is the right answer rather than a fallback: the install this console
+documents is a user unit on the machine somebody is reading it from. UTC where neither says, which
+is what a container with no zone configured is actually keeping.
+
+The page writes back the zone it *used*, on `<html>` as `data-zone`, and that is what closes the
+loop rather than leaving one. A browser whose zone is not the one the page was drawn against asks for
+the page again, once; the cookie it wrote is what stops it asking twice, since a name this machine's
+zone database does not have comes back as the console's own and would otherwise be requested for
+ever. The cookie is **read back before the reload** rather than assumed, which is the same loop shut
+one step earlier: a browser blocking this origin's cookies makes the write a silent no-op, so the
+request would carry no zone, the console would keep drawing in its own, and every load would ask for
+a page that could not say anything new. Where the answer cannot reach the server at all, the reader
+keeps the page they got. Two spellings of one clock are not a difference, and that is asked of the
+browser rather than decided by comparing strings: `Etc/UTC` on a server is `UTC` in Chromium, and
+`Asia/Calcutta` is `Asia/Kolkata`, so a string comparison would hand every console running in UTC
+one reload per visit for a page that was already printing exactly the right time.
+
+**On `<html>` rather than on `<body>`, which is what keeps that reload from being seen.** `paintClock`
+runs in the script's first block, beside the theme and before the document exists, for the reason the
+theme is there: a page opened dark must not flash light on the way, and a page opened in Tokyo must
+not paint a column of London times on the way. The open tag of `<html>` has been parsed by the time
+that block runs and `document.body` is still `null`, so the answer has to be on the element that
+exists. Moved to the body the check does not fire late, it stops firing at all, and
+`TestTheClockAPageIsDrawnAgainst`'s browser tests are what say so.
+
+**Asking from the head abandons the parse where it stands**, which is the price of asking early and
+is worth knowing about rather than discovering: `DOMContentLoaded` still fires on what was abandoned,
+with no `<body>` ever built, so `start` is handed a document that is already being replaced. It
+returns rather than wiring it, and without that every first visit from another zone raises where the
+wiring reads the body.
+
+The reload is a reload and not an htmx request, which is worth stating because the smaller-looking
+change does not work: `htmx.ajax` into `body` swaps the body and leaves `<head>` and the `data-zone`
+on `<html>` exactly as they were, so the page would keep saying it was drawn against a clock it no
+longer is. That is `hx-boost`'s known limitation arriving in a place nobody boosted. There is one
+document to replace, and `location.reload()` is what replaces it.
+
+**Every page and every fragment says `Vary: cookie`**, which is the one thing the cookie obliges
+beyond reading it. These responses carry no `cache-control` at all, so a cache with nothing said to
+it falls back to its own heuristic, and the browser's is what this closes: a page cached before the
+script wrote the cookie and served again from that cache is a reader stuck on the console's clock
+for ever, since the script has already asked once and will not ask again. The stream needs nothing,
+being `no-store` already.
+
+The cost, stated: **a reader in a zone the console is not in pays one reload on their first visit**,
+and a reader with no script gets the console's clock. `TestTheClockAPageIsDrawnAgainst` exists in
+both suites, the server's half in `test_console.py` and the script's in a real browser, because
+neither half can see the other.
+
+**Where the line between the two halves falls** is worth saying once, because the countdown beside
+this makes the other choice and the pair reads as an inconsistency otherwise. A fact that reads the
+same in an hour is the server's: a moment, a date, a rule's `09:32`. A figure that is wrong a second
+later is the script's: `Due in 4d 14h`, `warm as of 12m`. So `elapsed` in `pages.py` and `soon` in
+`mainplate.js` really do both implement how a duration is worded, and they have to agree unit for
+unit, down to the unit that is zero: the server draws the first figure and the script repaints it a
+second later, so a wait landing on a whole hour written `1h 0m` and repainted `1h` changes shape
+while a reader is looking at it, which reads as the countdown having moved. That is the one piece of
+this deliberately written twice, and the width holding still is the price of it. A date is not in
+that category,
+which is the whole argument for the cookie: nothing about `2031-03-18 04:02` stops being true while
+somebody reads it, so there is no reason for a second implementation of it to exist.
 
 ## The picker
 
@@ -422,8 +550,8 @@ whatever stands against the box is read as being about the act of sending, and n
 they were settled when the session was made and took a row on every window and three on a phone to
 say so every turn. The rail is where facts about the whole session already stand, and on a phone it
 is behind the clasp, which is right for facts that never change. The one of them the box still needs
-is the branch, which somebody about to type `git push` has to be able to read, and the sentence over
-a command box names it. The session's total went with the line, because the running total on the
+is the branch, which somebody about to commit or press `/push` has to be able to read, and the
+sentence over a command box names it. The session's total went with the line, because the running total on the
 last rule is the same figure and moves with the transcript where a card in the rail sits stale until
 a reload. The cost, stated: the counts behind that total, tokens in and out over the whole session,
 are drawn nowhere now.
@@ -442,16 +570,26 @@ and the rule under the last turn is the way on. A session stalled on a missing e
 refusing box, because a configuration put back *does* enable it, and that is the whole difference
 between the two stops.
 
+**On a phone the box does not take the focus on arrival, and on a pointer it does.** At a keyboard
+reaching a session opens it at its end with the box on screen, and the next thing somebody working
+does is type, so the cursor is already there. On a phone the same focus is the keyboard coming up
+over the conversation before a word of it has been read, so the box is left alone until it is
+touched. The fork page is the one box that takes the focus on any screen, since reaching it is being
+there to edit a message. Returning the cursor after a send, below, is the same split: a pointer gets
+it back, a phone does not.
+
 **And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
 button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
-flight, so without this the cursor is on nothing at all by the time the answer swaps in. *When*
-matters as much as whether: htmx re-enables what it disabled just after dispatching
-`htmx:finally:request`, so the focus is asked for a turn of the event loop later, and asked any
-sooner it is asked of a box that is still disabled and takes nothing. Only where nothing else has
-claimed the focus meanwhile, so a reader who went to the search box while the message was in flight
-is left where they went. `TestWhereTheCursorIsAfterSending` drives both ways of sending, and it too
-has to be a browser: the focus is a live property the server never renders, and the ordering it
-turns on is htmx's rather than ours.
+flight, so without this the cursor is on nothing at all by the time the answer swaps in. Not on a
+touch screen, where taking it back brings the keyboard up over the answer the reader is now watching
+for: there the box waits to be touched. *When* matters as much as whether: htmx re-enables what it
+disabled just after dispatching `htmx:finally:request`, so the focus is asked for a turn of the
+event loop later, and asked any sooner it is asked of a box that is still disabled and takes
+nothing. Only where nothing else has claimed the focus meanwhile, so a reader who went to the search
+box while the message was in flight is left where they went. `TestWhereTheCursorIsAfterSending`
+drives both ways of sending and a touch screen being left alone, and it too has to be a browser: the
+focus is a live property the server never renders, and the ordering it turns on is htmx's rather
+than ours.
 
 ## Markdown, and the sanitiser
 
@@ -463,8 +601,8 @@ by whatever was pasted into the box, and this project's direction is an agent th
 repositories.
 
 Command and tool output is not Markdown, because its punctuation is the program's own text.
-`linked_text` keeps that text verbatim while making each `http` or `https` URL an anchor, so a
-`git push` pull-request URL can be followed without a reader having to select and paste it.
+`linked_text` keeps that text verbatim while making each `http` or `https` URL an anchor, so the
+pull-request URL a push prints can be followed without a reader having to select and paste it.
 It suppresses the source page as a referrer.
 Every other run is escaped before the anchor is built: output can name a URL, but it cannot supply
 markup or a different URL scheme.
@@ -480,6 +618,29 @@ nothing saying why. `guess_lang` is off: a wrong guess colours text by a grammar
 in, which reads worse than no colour. The palette is the console's own hues in `mainplate.css`, not
 an imported Pygments theme with its own opinion about light and dark.
 
+**Two fences are also pictures.** A fence labelled `mermaid` or `svg` keeps its label on the page, as
+a class on the `<code>` alone that the sanitiser lets through (`DRAWABLE` in `markup.py`, the only
+two labels that reach the page: `language-python` is put on by the same formatter and stripped like
+any other class), and the script draws it as the picture: an image where the code would be, SVG as
+it was written or what the mermaid library rendered from the diagram in the reader's theme, with a
+button to the left of `copy` that puts the text back and takes it away again. The copy button stays
+in its corner, where it is on every other block, and the other one is what makes room. **An image,
+and never inline
+markup**, because the text is a model's: SVG loaded through `<img>` runs no script, follows no link
+and fetches nothing, which is the browser's own rule rather than a sanitiser's, and it holds for the
+library's output as much as for the hand-written kind, so the library's `strict` level is a second
+guard rather than the one this rests on. The cost, stated: nothing in a drawing can be selected or
+found by the search, and it is set in the browser's faces rather than the page's. Which blocks are
+shown as text is a value the script holds and reapplies after every swap, like the folds, since a
+morph would otherwise put a diagram back in front of the code somebody had just asked for. The
+library is three and a half megabytes and is fetched the first time a diagram is on the page, so a
+page with none pays nothing for it; where it comes from is [what is
+vendored](assets.md#what-is-vendored). The model is told so: `drawing_note` in
+`agent.py` is composed into every session's instructions beside the note about what its tools reach,
+the console's own sentence rather than a line in the operator's standing instructions, so an
+operator who rewrites those keeps it, and a model that has a flow or a figure to show knows the page
+will draw one.
+
 The two converters, and why a message's newlines are treated differently from a document's, are in
 [what a session is told](../plugins/guidance.md#the-system-prompt-is-drawn-as-a-panel).
 
@@ -493,6 +654,15 @@ palette runs on one axis and every kind takes its side from it: cool is what the
 reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue decided by
 that rather than chosen for it. A part kind `parted` has no rendering for is passed over rather than
 refused, because the provider and Pydantic AI are both free to add one.
+
+**A text part that opens inside `<think>` tags is read as reasoning**, which is how some
+OpenAI-compatible gateways hand a reasoning summary back: not as a thinking part but as text, the
+tags a model is trained to think inside, with one bold title on a line of its own between them.
+Drawn as it arrived that was an assistant panel saying `<think>`, with a blank line above and below
+the title where the tags' own newlines became breaks. `unthought` takes the tags and their newlines
+off and gives the title to a reasoning panel, and anything after the closing tag stays prose. It is
+a reading and never a rewrite: the checkpoint holds the part as the wire sent it, and the page is
+what changed its mind.
 
 **The axis is who wrote it and not who was told**, which a command is the case that settles: it is
 the one kind on the person's side that no model ever saw, and what says so is the `title` on its
@@ -609,15 +779,26 @@ but the original beside the current.
 
 **`mainplate.js` records every toggle as the reader's decision, and what makes that true is that
 the server never changes its mind about a fold.** Where a fold starts is decided per kind and never
-per render: a call is shut whether or not it has come back, a command is open, a system prompt is
-away. So a morph delivering a result adds no `open` and removes none the reader did not set, and the
+per render: a read is shut and an edit is open whether or not either has come back, a command is
+open, a system prompt is away. So a morph delivering a result adds no `open` and removes none the
+reader did not set, and the
 only toggles left to record are presses. The script cannot tell a morph's toggle from a reader's,
 and does not try; a render whose answer moved between two states of the same fold would be recorded
 as a decision nobody made. That is exactly what drawing a call *open while it was out* did: the morph
 that delivered it recorded it open, and every call a reader watched arrive stayed open for good, so a
-turn of twenty reads was twenty open boxes. A call still out is drawn shut now, with the working mark
-in its summary saying it is out and [the subject beside its name](#what-a-folded-call-says) saying
-what it is about. `TestWatchingATurnArrive` pins it.
+turn of twenty reads was twenty open boxes. A call still out is drawn as its tool is drawn now, with
+the working mark in its summary saying it is out and [the subject beside its
+name](#what-a-folded-call-says) saying what it is about. `TestWatchingATurnArrive` pins it.
+
+**A `create` is drawn open and every other call shut.** What a reader watching a turn is watching for
+is what the model is doing to the repository, which is the new file a `create` made; what a read
+brought back or a command said, and an edit's operations and its reply, are context they reach for
+when they want to check the work. An `edit` used to be open too, for its diff, and is shut now
+because that diff moved: the whole batch's diff stands below the panel, covering every tool it ran
+at once, so an edit's own diff is the fine print a reader opens a call to see. Decided by the tool
+alone, for the reason above: a call drawn shut while it was out and open once its diff landed would
+be a default that moved, and the morph delivering the diff would be recorded as the reader opening
+it.
 
 **A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
 working, on its own panel, and it is the model's call, so a second panel of dots under it says the
@@ -647,6 +828,17 @@ field along: the server renders the figure and `data-due` lets the script keep i
 stream sends this region when the worker's standing *changes* and counting down is exactly the
 interval where it does not.
 
+**One arm of that line is not a failure at all**, and it outranks the rest: a session
+[waiting out a moment a provider named](durability.md#a-request-the-provider-will-not-take-yet).
+Nothing is wrong, nothing is refused, and the session is coming back, so it is drawn in the ordinary
+edge and ground rather than the red ones, which on this page mean a fault. It is the only arm
+carrying a **moment** as well as a countdown, and the pair is the point: a subscription's allowance
+resets days out, so `Due in 4d 14h` is a figure nobody can plan around and a moment with nothing
+beside it does not say how far off it is. The moment is a fact that reads the same in an hour, so it
+is the server's, and the countdown is wrong a second later, so it is the script's - which is the
+same split the rest of this line already makes. `elapsed` and the script's `soon` both grew an hours
+and a days width for it, since a wait of days read as `6623m 0s` before.
+
 **A panel whose default would otherwise move carries the working dots on its own row instead.** The
 panel saying a reply is being written, and a stretch of context whose instructions no pass has
 composed yet, are both drawn *shut* with the dots in the opening line's place. Two things fall out
@@ -659,8 +851,9 @@ no longer draw either way once a morph has recorded the state it delivered.
 **A call's summary names what it acted on, beside the tool's name**, so a turn of reads and edits
 reads as a list of paths with nothing opened: `read src/mainplate/pages.py lines 140–179`, `edit
 src/mainplate/pages.py 3 operations`, `bash grep -n overflow-x mainplate.css`. It is what makes
-drawing every call shut affordable, since what a reader scanning a turn wants from a call is what it
-touched, and what it was handed and what came back are the press away that the fold has always been.
+drawing a read or a command shut affordable, since what a reader scanning a turn wants from one is
+what it touched, and what it was handed and what came back are the press away that the fold has
+always been.
 
 Two slots, `said` and `extent`. The first is the subject, a path or a command's first line, and is
 the part that can be long, so the stylesheet lets it take the room the name and the outcome leave and
@@ -668,12 +861,92 @@ clip to an ellipsis rather than wrap; the whole of it is in the `title`. The sec
 subject - which lines, how many operations, how deep, how many more lines of command - and stays
 whole, because it is short and is the half a reader cannot recover from the path.
 
-**Named per tool, and only for this console's own.** `subject_of` in `pages.py` knows the four file
+**Named per tool, and only for this console's own.** `subject_of` in `calls.py` knows the four file
 tools and `bash`, and reads the one field that is the point of each call. A plugin's tool is named
 and nothing more: its arguments are its own vocabulary, and a guess at which of them is the subject
 is a second rendering of something the body already shows exactly. So is a malformed call, which is
 the one a reader most needs to open as it arrived, so nothing that is not a well-formed object with
 the field in it produces a subject at all.
+
+### What an open call shows
+
+**The body is drawn per tool where the console knows the tool, and as its arguments one to a row
+and its return verbatim where it does not.** `call_body` in `calls.py` is the whole of it. A call
+used to open on the JSON the model sent and the text the tool sent back, which put the one argument
+a reader came for behind a brace and a quoted key and drew a shell command as a string with its
+quotes escaped. What a reader opening a call wants is what it did, in the shape the thing has:
+
+- **`bash` is its command, coloured as shell, and its output as it came back.** The command stands
+  under `called with` with no name in front of it, since a coloured shell line says what it is by
+  its shape and the fold's own summary is already that line; `seconds` keeps its name, as a bare
+  number says nothing about which argument it was. The output still
+  opens with the command echoed, because that is what the model was sent and the return is shown as
+  the model saw it; the coloured line above it is the reader's, the echo below is the model's.
+- **`edit` is the diff.** The tool records a unified diff of the change beside its reply, as
+  [metadata the model is never sent](tools.md#every-tool-that-writes-hands-back-anchors), and the
+  body is that alone: the operations are the diff said in anchors and the reply is its right-hand
+  side said in anchors again, so either beside it would be the same change a third time. **The cost,
+  stated:** the anchors an edit was addressed by, and the ones its reply handed back, are not on the
+  panel, and a reader working out why the model's *next* edit was refused wants exactly those. They
+  are in the raw record on the request. An edit with no diff recorded - one that was refused, or one
+  recorded before the diff existed - shows its operations and its reply as every other call does.
+- **`read`, `create` and `grep` are lines of a file, with the anchors left out**, and a read or a
+  create is coloured by the grammar its path names, through the same Pygments tokens a fence gets
+  and the same palette. A search is not coloured, since its regions come from as many files as
+  matched and which grammar each is in would mean parsing the header line the tool wrote a second
+  time. A file Pygments knows no grammar for is left as it is, for the reason an unlabelled fence
+  is. **A `create` that wrote its file is its reply alone**, for the reason an edit is its diff
+  alone: the reply is the new file under the tool's line saying it was written, which is the
+  content the call was handed with a confirmation on top, so the arguments beside it would be the
+  file twice. A create that was refused keeps them, since the content is then nowhere else on the
+  page.
+
+**The anchors are not drawn.** Everything left of the bar is the tool talking, which `read` says to
+the model in the same words, and it is talking to the model: an anchor is the name a line answers
+to in an `edit`, and it says nothing to a person reading the file. Drawn faint they were still a
+column of four letters a reader learned to look past, so they are left out, and what is left to
+tell the file's lines from the tool's own - the header saying which file and which lines, the note
+that an anchor moved - is the tone a `data-said` line is set in. **The cost, stated:** a reader
+working out which line the model meant by `qwrt`, or why the model's next edit was refused, has to
+open the raw record on the request, and the page's own search finds no anchor because none is on
+the page.
+
+**A diff's line numbers are painted by the stylesheet from an attribute, and are not in the text.**
+`data-gutter` carries them and `::before` draws them, which is what makes the copy button on the
+block hand over the diff: the numbers are the console's and are not in the change. The `-` and `+`
+deliberately are text, since a diff copied without its marks is not one.
+
+**Each line is a block with its newline inside it.** A `<span>` per line, `display: block`, so a
+changed line in a diff paints its whole row rather than the words on it; the newline is the last
+character of the line rather than a text node between lines, so the block's `textContent` still
+reads as lines and a morph has nothing between the spans to reconcile.
+
+**A file's lines are coloured as one text, not one line at a time.** A string or a comment that
+runs over several lines is one token, and a lexer handed the lines separately would colour the
+inside of it as code. `highlighted` in `markup.py` hands the lexer the whole run and cuts the
+tokens where the lines are, which is what the HTML formatter's own line wrapping does too. What the
+lexer cannot be told not to do is turn a bare carriage return into a line break, so a run that
+comes back with a different number of lines is shown uncoloured rather than with every line's
+colour one line off from the line it belongs to.
+
+### The batch's diff
+
+**Below a tool panel's calls stands the net change the whole batch made, as one diff.**  A model
+issues several calls in one response and they run at once, so no single call's diff says what the
+batch did: an `edit`, a `create` and a `bash` together would each report its own slice, and a `bash`
+reports none at all. The batch's diff is `diff(tree:{i}, tree:{i+1})`, the two snapshots around the
+request whose response produced the batch, computed where they are both in hand and [recorded rather
+than derived](tools.md#the-batchs-diff). It is drawn only where the diff has something in it, so a
+batch that merely read spends no row, and it is where an edit's own diff moved *to*: the per-edit
+diff is still a press away inside the collapsed call, where the anchors and the fine-grained hunks
+live, but what a reader watching a turn sees by default is the whole change, every tool and every
+file at once.
+
+**Each file in the diff is a header line naming its path, then its hunks**, the same numbered lines
+an edit's diff draws, one gutter width across the whole block so the columns line up. The path is a
+line the console writes, marked `said`, and a binary change, which has no lines to show, is left out.
+The whole block draws nothing where the two trees are the same, which is the common case for a turn
+that read more than it wrote.
 
 ## The line a shut panel stands for
 
@@ -730,11 +1003,29 @@ reads it back with a real HTML parser.
 
 ## What the figures on a rule say
 
-Six of them, and none is picked out from the others: how long it took, how much context it carried
-and how much of that came out of the cache, how full the model's window is, how much came back, what
-it cost, and what the conversation has cost so far. The cost used to take a stronger ink, which read
-as the figure to look at; which one somebody is reading changes with what they are doing, so picking
-one is deciding that for them.
+Seven of them, and none is picked out from the others: when the answer landed, how long it took, how
+much context it carried and how much of that came out of the cache, how full the model's window is,
+how much came back, what it cost, and what the conversation has cost so far. The cost used to take a
+stronger ink, which read as the figure to look at; which one somebody is reading changes with what
+they are doing, so picking one is deciding that for them.
+
+**The moment leads and the duration follows it**, which is the pair read together: the answer landed
+at 09:32 and 3.4s of that was spent waiting on the provider. It is `ModelResponse.timestamp`, which
+is the only moment a request records and is already in the checkpoint, so nothing new is written
+down for it; what it is *not* is when the request went out, which is this figure less the one beside
+it and would be a moment on the page that nothing wrote down.
+
+A turn rule shows its **first** request's, which is the one figure there that comes from a request
+rather than from the turn. That is the way round it is so the moments read down the page in the
+order they happened: a turn's last answer, on the rule that opens it, would run backwards against
+the requests below. The title says which - `Turn 3 was first answered at …` against `Request 3.1 was
+answered at …` - exactly as the other figures' titles say whose they are.
+
+On a phone the rule now drops the **fraction of the window** as well as the cached count and the
+running total. That figure is the one here already drawn twice, since the gauge along the rule says
+it as a picture for no room at all, and the trade is stated: at that width the row holds six cells
+and the seventh pushed the cost onto a line of its own. Of the two, the moment is the one a reader
+on a phone came for and the one the gauge cannot say.
 
 **The input figure is the context and not the sum**, which is `Spent.context`'s argument said on the
 page. Every request of a turn carries the whole conversation again, so a summed input says what the
@@ -744,7 +1035,7 @@ is still true and is not drawn: the money on the rule already says what the prov
 and a second count that disagrees with the first by design would be a page arguing with itself.
 
 **A symbol per figure, and the words in the titles.** A rule is one line that must not wrap and it
-now carries six figures where it carried three. `↑` and `↓` are a count of tokens going up to the
+now carries seven figures where it carried three. `↑` and `↓` are a count of tokens going up to the
 model and coming back, `▣` is how much of the first came out of the provider's cache instead, and
 `Δ` against `Σ` is what this exchange added against the running total, which is that pair's own
 notation and reads as a pair rather than as two prices to tell apart by size. Five cells against the
