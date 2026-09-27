@@ -114,6 +114,7 @@ from mainplate.sessions import set_settings
 from mainplate.settings import DEFAULT_PATIENCE
 from mainplate.settings import DEFAULT_WATCHING
 from mainplate.settings import Settings
+from mainplate.snapshots import operator_identity
 
 # Every place a repository can come from. One entry today because one exists; a `GitHub` through an
 # App is another line here and nothing else, which is the whole point of the interface. Declared
@@ -269,6 +270,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         scratch=settings.workspace_root / "scratch",
         reaching=reaching,
         bwrap=bwrap,
+        identity=await operator_identity(),
     )
     # Read before ready like the other two, and unlike either of them it cannot refuse to start.
     # `refreshed` never raises: an unreachable database leaves the holder empty and every card

@@ -58,9 +58,16 @@ the browser tests point their browsers at the same zone, or the script asks for 
 
 Plants the gallery's `FIXTURES` into the demo database (`just seed`), so the console can be
 *driven* rather than looked at: the sidebar reordering between branches, a fork actually being made,
-the rail projecting onto a transcript that came out of SQLite. Idempotent and never destructive. It
-keeps no list of its own: which sessions exist and what each holds is the gallery's table, so the
-demo and the stills cannot drift apart.
+the rail projecting onto a transcript that came out of SQLite. It keeps no list of its own: which
+sessions exist and what each holds is the gallery's table, so the demo and the stills cannot drift
+apart.
+
+**Every run replaces the fixtures' sessions from scratch and touches no other.** Each fixture's id is
+taken out of the index and its records discarded before it is planted again, so a changed fixture
+reaches a running `just demo` on the next page load, with neither the database nor the server
+restarted. A session somebody made in the demo by hand is not a fixture's id and is left as it is,
+which is also why a change to what a record holds can still leave the demo unreadable: such a
+session keeps the old shape, and the way out is deleting the demo database by hand.
 
 **It is the one writer that is not `Service`, so an invariant the service enforces does not hold
 here unless it is repeated.** It supplies checkpoint keys directly, which is what lets it plant a
@@ -75,11 +82,10 @@ settles is settled there without an edit, and is the whole reason `settled` is a
 rather than a line in each of its callers. Both scripts read the settled choice, so the rail in a
 still and the rail in the demo say the same thing.
 
-**Rebuild the demo database after any change to a fixture or to what a record holds** (`just
-reseed`, which removes the demo database and seeds it again), or it keeps serving the old shape and
-`just seed` says `skipped` for every row. That is the whole checkpoint and not only the choice: the
-fixtures in `gallery.py` write every kind directly, so a shape change lands here as a database full
-of values nothing can parse.
+**Run `just seed` again after any change to a fixture or to what a record holds**, or the demo keeps
+serving the old shape. That is the whole checkpoint and not only the choice: the fixtures in
+`gallery.py` write every kind directly, so a shape change lands here as sessions full of values
+nothing can parse until they are planted again.
 
 ## `replay.py`
 

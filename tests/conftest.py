@@ -636,6 +636,11 @@ FIXTURE_NAME = "me/fixture"
 # ever hands out, so a test that also starts sessions never finds this one's checkout in its way.
 PLANTED: Final = "0f" * 16
 
+# Who every repository here commits as. Stated rather than read off the machine running the suite,
+# where a runner has no `user.name` and an empty passwd name to fall back on, so git refuses to
+# commit there while every laptop succeeds.
+IDENTITY: Final = (("user.name", "probe"), ("user.email", "probe@example.invalid"))
+
 
 @pytest.fixture
 async def origin(tmp_path: Path) -> Path:
@@ -650,8 +655,8 @@ async def origin(tmp_path: Path) -> Path:
     root = tmp_path / "origin"
     (root / "src").mkdir(parents=True)
     await run("git", "init", "-q", "-b", "main", cwd=root)
-    await run("git", "config", "user.email", "probe@example.invalid", cwd=root)
-    await run("git", "config", "user.name", "probe", cwd=root)
+    for key, value in IDENTITY:
+        await run("git", "config", key, value, cwd=root)
     (root / ".gitignore").write_text(".env\nbuilt/\n")
     (root / "src" / "kept.txt").write_text("original\n")
     await run("git", "add", "-A", cwd=root)
@@ -688,6 +693,7 @@ async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
         scratch=tmp_path / "scratch",
         reaching=reaching,
         bwrap=bwrap,
+        identity=IDENTITY,
     )
 
 
@@ -718,10 +724,6 @@ async def worktree(workspaces: Workspaces) -> Worktree:
     planted = await workspaces.plant(PLANTED, FIXTURE, branch=branch_named(PLANTED))
     if planted is None:
         raise RuntimeError("the fixture repository could not be planted")
-    # Stated rather than left to whatever the machine running the suite copied in, so a commit made
-    # in here works the same with or without an operator identity to copy.
-    await run("git", "config", "user.email", "probe@example.invalid", cwd=planted.root)
-    await run("git", "config", "user.name", "probe", cwd=planted.root)
     (planted.root / ".env").write_text("SECRET=shh\n")
     (planted.root / "built").mkdir()
     (planted.root / "built" / "artifact.bin").write_text("generated\n")

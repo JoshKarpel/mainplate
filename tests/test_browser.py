@@ -1331,6 +1331,257 @@ class TestDrawingAFence:
         assert await panel.get_attribute("data-fresh") is None
 
 
+class TestALineThatDoesNotFit:
+    """
+    A block of lines scrolls sideways rather than wrapping, and one whose lines do not fit takes a
+    button that opens it on its own, as wide as the window.
+
+    A browser because every answer here is a measurement: a wrapped diff and a scrolling one are both
+    correct markup, and whether a block overflows is a property of the layout and never of the page.
+    The gallery's batch diff carries a line too long for any window, so it overflows at every width.
+    """
+
+    async def batch(self, page: Page, gallery: str) -> Locator:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        return page.locator("#panel-1-4 .tool__batch")
+
+    async def test_a_block_of_lines_scrolls_inside_its_box_and_never_wraps_or_widens_the_page(
+        self, page: Page, gallery: str
+    ) -> None:
+        pre = await self.batch(page, gallery)
+        measured = await pre.evaluate(
+            """(pre) => {
+              const code = pre.querySelector(':scope > code');
+              const line = parseFloat(getComputedStyle(pre).lineHeight);
+              return {
+                scrolls: code.scrollWidth > code.clientWidth,
+                wrapped: [...code.querySelectorAll('.line')].filter((each) => each.getBoundingClientRect().height > line).length,
+                wider: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+              };
+            }"""
+        )
+        assert measured == {"scrolls": True, "wrapped": 0, "wider": False}
+
+    async def test_a_changed_line_is_washed_to_the_end_of_the_longest_line(self, page: Page, gallery: str) -> None:
+        """Scrolled to its end, a block whose rows stopped at the box's first edge is a wash cut off mid-line."""
+        pre = await self.batch(page, gallery)
+        widths = await pre.evaluate(
+            """(pre) => {
+              const code = pre.querySelector(':scope > code');
+              return [code.scrollWidth, ...[...code.querySelectorAll('.line[data-mark]')].map((line) => line.getBoundingClientRect().width)];
+            }"""
+        )
+        longest, *rows = widths
+        assert all(abs(row - longest) < 1 for row in rows), f"every row {longest}px wide, and they were {rows}"
+
+    async def test_a_block_takes_a_focus_button_exactly_where_its_lines_do_not_fit(
+        self, page: Page, gallery: str
+    ) -> None:
+        pre = await self.batch(page, gallery)
+        await expect(pre.locator("[data-focus]")).to_have_count(1)
+        mismatched = await page.evaluate(
+            """() => [...document.querySelectorAll('.transcript .panel pre')].filter((pre) => {
+              const code = pre.querySelector(':scope > code');
+              const overflows = Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
+              return overflows !== Boolean(pre.querySelector(':scope > [data-focus]'));
+            }).map((pre) => pre.closest('.panel').id)"""
+        )
+        fitting = await page.locator(".transcript .panel pre:not(:has(> [data-focus]))").count()
+        assert fitting > 0, "the gallery has blocks that fit, or the rule is unexercised"
+        assert mismatched == []
+
+    async def test_pressing_focus_opens_the_block_wider_than_its_column_and_escape_puts_it_away(
+        self, page: Page, gallery: str
+    ) -> None:
+        pre = await self.batch(page, gallery)
+        column = await pre.bounding_box()
+        assert column is not None
+        await pre.locator("[data-focus]").click()
+        dialog = page.locator("dialog#focused")
+        await expect(dialog).to_be_visible()
+        opened = await dialog.bounding_box()
+        assert opened is not None
+        assert opened["width"] > column["width"] + 200, f"{opened['width']}px against a {column['width']}px column"
+        shown = await dialog.locator("pre").text_content()
+        written = await pre.locator("code").text_content()
+        assert shown == written, "the block as it was, and none of the buttons seated in it"
+        await page.keyboard.press("Escape")
+        await expect(dialog).to_be_hidden()
+
+    async def test_a_press_on_the_backdrop_puts_it_away(self, page: Page, gallery: str) -> None:
+        pre = await self.batch(page, gallery)
+        await pre.locator("[data-focus]").click()
+        dialog = page.locator("dialog#focused")
+        await expect(dialog).to_be_visible()
+        await page.mouse.click(2, 2)
+        await expect(dialog).to_be_hidden()
+
+    async def test_copying_a_block_that_can_be_focused_hands_over_none_of_the_button(
+        self, page: Page, gallery: str
+    ) -> None:
+        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        pre = await self.batch(page, gallery)
+        await expect(pre.locator("[data-focus]")).to_have_count(1)
+        await pre.locator("[data-copy]").click()
+        taken = str(await page.evaluate("() => navigator.clipboard.readText()"))
+        assert taken == await pre.locator("code").text_content()
+
+    async def test_a_phone_is_offered_no_focus_button(self, phone: Page, gallery: str) -> None:
+        """A window a phone's width is barely wider than the block, so the button is not drawn there."""
+        pre = await self.batch(phone, gallery)
+        await expect(pre.locator("[data-focus]")).to_have_count(1)
+        await expect(pre.locator("[data-focus]")).to_be_hidden()
+
+
+SIDES = pytest.mark.parametrize(
+    ("column", "box"),
+    [("list", ".sessions"), ("rail", ".rail")],
+)
+
+
+async def width_of(page: Page, selector: str) -> float:
+    box = await page.locator(selector).first.bounding_box()
+    assert box is not None
+    return box["width"]
+
+
+class TestPuttingASideColumnAway:
+    """
+    Each side column on a wide window has a press that puts it away and brings it back, kept per
+    browser. A browser because what it changes is the layout, which every width of which is correct
+    markup, and because what keeps it is the page's own storage.
+    """
+
+    @SIDES
+    async def test_the_press_puts_the_column_away_and_the_conversation_takes_the_room(
+        self, page: Page, gallery: str, column: str, box: str
+    ) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        before = await width_of(page, "main")
+        fold = page.locator(f"{box} > .fold")
+        await expect(fold).to_have_attribute("aria-expanded", "true")
+        await fold.click()
+        await expect(fold).to_have_attribute("aria-expanded", "false")
+        await expect(page.locator(f"{box} > [class$='__sheet']")).to_be_hidden()
+        assert await width_of(page, box) < 40, "a strip the width of the button"
+        assert await width_of(page, "main") > before + 200
+
+    @SIDES
+    async def test_a_column_put_away_stays_away_across_a_load_and_comes_back_on_a_second_press(
+        self, page: Page, gallery: str, column: str, box: str
+    ) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.locator(f"{box} > .fold").click()
+        await page.reload(wait_until="load")
+        assert await page.evaluate(f"() => document.documentElement.dataset.{column}") == "shut"
+        await expect(page.locator(f"{box} > .fold")).to_have_attribute("aria-expanded", "false")
+        await page.locator(f"{box} > .fold").click()
+        await page.reload(wait_until="load")
+        await expect(page.locator(f"{box} > [class$='__sheet']")).to_be_visible()
+
+    async def test_the_list_put_away_on_a_session_is_away_on_the_dashboard(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.locator(".sessions > .fold").click()
+        await page.goto(f"{gallery}/dashboard.html", wait_until="load")
+        await expect(page.locator(".sessions__sheet")).to_be_hidden()
+        await expect(page.locator(".sessions > .fold")).to_have_attribute("aria-expanded", "false")
+
+    async def test_a_narrow_window_draws_no_fold_and_its_clasp_still_slides_the_list_out(
+        self, phone: Page, gallery: str
+    ) -> None:
+        """What a wide window put away is not the narrow shape's to act on: there the clasps put both away."""
+        await phone.add_init_script("localStorage.setItem('mainplate:list', 'shut')")
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(phone.locator(".sessions > .fold")).to_be_hidden()
+        await phone.locator(".sessions__clasp").click()
+        await expect(phone.locator(".sessions__sheet")).to_be_visible()
+        await expect(phone.locator(".sessions__sheet .home")).to_be_in_viewport()
+
+
+class TestTheWidthTheConversationIsReadAt:
+    """
+    The conversation's left edge is a grip that sets how wide it is read, kept per browser and held
+    to the room there is. A browser for the reasons above, and because a drag is pointer events.
+    """
+
+    async def drag(self, page: Page, by: float) -> None:
+        grip = await page.locator(".reading__grip").bounding_box()
+        assert grip is not None
+        x, y = grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2
+        await page.mouse.move(x, y)
+        await page.mouse.down()
+        await page.mouse.move(x + by, y, steps=5)
+        await page.mouse.up()
+
+    async def test_dragging_the_edge_out_widens_the_conversation_and_its_box_together(
+        self, page: Page, gallery: str
+    ) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.locator(".sessions > .fold").click()
+        before = await width_of(page, ".transcript")
+        await self.drag(page, -120)
+        after = await width_of(page, ".transcript")
+        assert after == pytest.approx(before + 240, abs=4), "twice the drag, since the column is centred"
+        assert await width_of(page, ".composer") == pytest.approx(after, abs=1)
+
+    async def test_the_width_dragged_to_is_kept_across_a_load(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.locator(".sessions > .fold").click()
+        await self.drag(page, -120)
+        dragged = await width_of(page, ".transcript")
+        await page.reload(wait_until="load")
+        assert await width_of(page, ".transcript") == pytest.approx(dragged, abs=6)
+
+    async def test_a_width_wider_than_the_window_is_as_wide_as_the_window_allows(
+        self, page: Page, gallery: str
+    ) -> None:
+        """Chosen on a screen wider than this one, it is simply the widest this one has room for."""
+        await page.add_init_script("localStorage.setItem('mainplate:reading', '400')")
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        # Both columns away, so the room is wider than the measure and the width is what decides.
+        await page.locator(".sessions > .fold").click()
+        await page.locator(".rail > .fold").click()
+        room = await page.evaluate(
+            """() => {
+              const main = document.querySelector('main');
+              const style = getComputedStyle(main);
+              return main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+            }"""
+        )
+        assert await width_of(page, ".transcript") == pytest.approx(room, abs=1)
+        assert not await page.evaluate(
+            "() => document.documentElement.scrollWidth > document.documentElement.clientWidth"
+        )
+
+    async def test_the_arrows_move_the_edge_and_home_puts_the_measure_back(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.locator(".sessions > .fold").click()
+        measure = await width_of(page, ".transcript")
+        await page.locator(".reading__grip").focus()
+        await page.keyboard.press("ArrowLeft")
+        await page.keyboard.press("ArrowLeft")
+        assert await width_of(page, ".transcript") > measure + 50
+        await page.keyboard.press("Home")
+        assert await width_of(page, ".transcript") == pytest.approx(measure, abs=1)
+        assert await page.evaluate("() => localStorage.getItem('mainplate:reading')") is None
+
+    async def test_a_double_press_puts_the_measure_back(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.locator(".sessions > .fold").click()
+        measure = await width_of(page, ".transcript")
+        await self.drag(page, -120)
+        await page.locator(".reading__grip").dblclick()
+        assert await width_of(page, ".transcript") == pytest.approx(measure, abs=1)
+
+    async def test_there_is_no_grip_where_there_is_no_conversation_or_no_room(
+        self, page: Page, phone: Page, gallery: str
+    ) -> None:
+        await page.goto(f"{gallery}/dashboard.html", wait_until="load")
+        await expect(page.locator(".reading__grip")).to_have_count(0)
+        await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(phone.locator(".reading__grip")).to_be_hidden()
+
+
 async def test_every_gallery_page_has_a_caption_and_nothing_else_does() -> None:
     """
     The documentation site lists the gallery from `CAPTIONS`, so a page without one would be listed
@@ -2211,7 +2462,7 @@ class TestTheLineAShutPanelStandsFor:
             "lines => lines.map(line => line.textContent)"
         )
 
-        assert named == ["read", "read", "edit, create, bash", "bash", "read, read"]
+        assert named == ["read", "read", "edit, create, bash", "bash", "bash", "read, read"]
 
 
 class TestFoldingADocumentTheConsoleHandedOver:
@@ -2653,6 +2904,25 @@ class TestWhereTheComposerSendsTo:
         await page.click(".composer textarea")
         await expect(page.locator(".sender__more")).not_to_have_attribute("open", "")
 
+    async def test_the_menu_is_there_on_arriving_at_a_session_and_after_its_first_message(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        A session past its settings step with nothing said in it, which is where the new-session page
+        lands a reader. A browser, because the first message is a swap of the transcript alone, and
+        whether the composer outlives it is what a reader sees and no single response shows.
+        """
+        url, service = console
+        session = await service.start(DEFAULT_CHOICE)
+        await registered(service, session.id)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await expect(page.locator(".sender__caret")).to_be_visible()
+        await page.fill(".composer textarea", "what is a mainplate")
+        await page.click(".sender__send")
+        await expect(page.locator("#transcript")).to_contain_text("what is a mainplate")
+        await page.click(".sender__caret")
+        await expect(page.locator('.sender__option[value="forget"]')).to_be_visible()
+
     async def test_sending_stays_in_this_conversation(self, page: Page, console: tuple[str, Service]) -> None:
         """
         The control beside it, on the same form, posting no disposition at all. Asserted here rather
@@ -3050,7 +3320,7 @@ class TestNamingAModeFromTheKeyboard:
         answer in full, and Enter takes whichever row the arrows have arrived at.
 
         A bare `/` is the one prefix every answer fits, so on a session with files and a turn being
-        answered it offers `next`, `forget`, `run`, `online`, `push` and `keep` at once, which is what
+        answered it offers `next`, `forget`, `run`, `online`, `commit`, `push` and `keep` at once, which is what
         makes this a test of the *position* rather than of there happening to be one row left. The arrow is
         what proves it: without it, taking the first row and taking the row the keyboard is on are
         the same thing and the key could be wrong in a way nothing here would see.
@@ -3058,7 +3328,7 @@ class TestNamingAModeFromTheKeyboard:
         await a_session_with_files(working, page)
         await page.click(".composer textarea")
         await page.keyboard.type("/")
-        await expect(page.locator(".sender__option:visible")).to_have_count(6)
+        await expect(page.locator(".sender__option:visible")).to_have_count(7)
         await page.keyboard.press("ArrowDown")
         await page.keyboard.press("Enter")
 

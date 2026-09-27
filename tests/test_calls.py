@@ -12,9 +12,10 @@ from mainplate.calls import call_body
 from mainplate.calls import changes_by_file
 from mainplate.calls import changes_of
 from mainplate.calls import rows_of
-from mainplate.calls import starts_open
 from mainplate.conversation import Returned
 from mainplate.conversation import ToolUse
+from mainplate.pages import LONGEST_OPEN_DIFF
+from mainplate.pages import batch_element
 from mainplate.pages import tool_block
 
 PYTHON_READ = "a.py, 3 lines\n\nqwrt│def f():\n----│\nmkpv│    return 1"
@@ -81,26 +82,20 @@ class TestReadingADiff:
             list(changes_of("@@ -1 +1 @@\nnot marked"))
 
 
-class TestWhichCallsStartOpen:
+class TestEveryCallStartsShut:
     """
-    Decided by the tool alone, never by whether the call has come back, because the fold script
-    takes every toggle as the reader's and a default that moved as a result landed would be recorded
-    as a decision nobody made.
+    Whatever the tool and whether or not the call has come back, because the fold script takes every
+    toggle as the reader's and a default that moved as a result landed would be recorded as a
+    decision nobody made. What the calls that write did is the batch's diff below the panel.
     """
 
-    @pytest.mark.parametrize("tool", ["create"])
-    def test_a_call_that_writes_something_is_drawn_open(self, tool: str) -> None:
-        assert starts_open(tool)
-
-    @pytest.mark.parametrize("tool", ["read", "list", "grep", "bash", "hand_off", "edit"])
-    def test_every_other_call_is_drawn_shut(self, tool: str) -> None:
-        assert not starts_open(tool)
-
-    def test_the_fold_says_so_in_both_attributes(self) -> None:
-        opened = render(tool_block(ToolUse(tool="create", arguments='{"path": "a.py"}', returned=None), "panel-0-1", 0))
-        shut = render(tool_block(ToolUse(tool="read", arguments='{"path": "a.py"}', returned=None), "panel-0-1", 0))
-        assert 'id="panel-0-1-tool-0" open data-opens="open"' in opened
-        assert 'id="panel-0-1-tool-0" data-opens="shut"' in shut
+    @pytest.mark.parametrize("tool", ["create", "edit", "read", "list", "grep", "bash", "hand_off"])
+    @pytest.mark.parametrize("returned", [None, Returned("success", "done")], ids=["out", "back"])
+    def test_a_call_is_drawn_shut_and_says_so(self, tool: str, returned: Returned | None) -> None:
+        drawn_shut = render(
+            tool_block(ToolUse(tool=tool, arguments='{"path": "a.py"}', returned=returned), "panel-0-1", 0)
+        )
+        assert 'id="panel-0-1-tool-0" data-opens="shut"' in drawn_shut
 
 
 class TestWhatAnOpenCallShows:
@@ -259,7 +254,7 @@ class TestABlocksBatch:
         ]
 
     def test_a_header_is_drawn_per_file_and_the_marks_are_kept(self) -> None:
-        body = render(block_diff_element(GIT_DIFF))
+        body = render(block_diff_element(changes_by_file(GIT_DIFF)))
 
         assert '<span class="line" data-said>a.py\n</span>' in body
         assert '<span class="line" data-said>new.txt\n</span>' in body
@@ -269,3 +264,23 @@ class TestABlocksBatch:
     def test_a_binary_change_has_no_lines_and_is_left_out(self) -> None:
         binary = "diff --git a/img.png b/img.png\nindex 111..222 100644\nBinary files a/img.png and b/img.png differ\n"
         assert changes_by_file(binary) == ()
+
+    def test_a_batch_that_changed_only_binary_files_draws_no_fold(self) -> None:
+        binary = "diff --git a/img.png b/img.png\nindex 111..222 100644\nBinary files a/img.png and b/img.png differ\n"
+        assert batch_element("panel-1-4", binary) is None
+
+    def test_the_summary_says_how_many_files_and_lines_went_in_and_out(self) -> None:
+        body = render(batch_element("panel-1-4", GIT_DIFF))
+        assert '<span class="batch__files">2 files</span>' in body
+        assert '<span class="batch__added">+2</span> <span class="batch__removed">\N{MINUS SIGN}1</span>' in body
+
+    def test_a_short_diff_is_drawn_open(self) -> None:
+        body = render(batch_element("panel-1-4", GIT_DIFF))
+        assert 'id="panel-1-4-diff" open data-opens="open"' in body
+
+    @pytest.mark.parametrize(("added", "starts"), [(LONGEST_OPEN_DIFF - 2, "open"), (LONGEST_OPEN_DIFF - 1, "shut")])
+    def test_a_diff_longer_than_the_knob_is_drawn_shut(self, added: int, starts: str) -> None:
+        """One file's header, its hunk header, and its lines: exactly the knob is still open."""
+        long = f"diff --git a/big b/big\n--- /dev/null\n+++ b/big\n@@ -0,0 +1,{added} @@\n" + "+x\n" * added
+        body = render(batch_element("panel-1-4", long))
+        assert f'id="panel-1-4-diff"{" open" if starts == "open" else ""} data-opens="{starts}"' in body

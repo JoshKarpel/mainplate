@@ -125,20 +125,11 @@ demo *args:
 # driven rather than looked at: the sidebar reordering between branches, a fork actually being
 # made, the rail projecting onto a transcript that came out of SQLite.
 #
-# Idempotent and never destructive, so running it against a database that already holds real
-# sessions adds to them and rewrites nothing.
-[doc('Put the gallery fixtures into the demo database')]
+# It replaces the fixtures' own sessions from scratch and touches no other, so a changed fixture
+# reaches a running `just demo` on the next page load, with nothing restarted.
+[doc('Put the gallery fixtures into the demo database, replacing any seeded before')]
 seed *args:
     uv run python -m scripts.seed {{ if args == "" { DEMO_DATABASE } else { args } }}
-
-# `seed` skips a session the index already has, so a demo database seeded before a fixture changed
-# keeps serving the old checkpoints and says `skipped` for every row. This is the rebuild: the demo
-# database and the two files WAL leaves beside it, gone, and the fixtures planted again. Only ever
-# the demo database, which by its name never holds a real conversation.
-[doc('Remove the demo database and seed it again, for after a fixture changes')]
-reseed:
-    rm -f {{ DEMO_DATABASE }} {{ DEMO_DATABASE }}-wal {{ DEMO_DATABASE }}-shm
-    just seed
 
 # `uv sync` first, and it is not a convenience: the unit names this checkout's interpreter, so an
 # install from a stale environment points systemd at a venv missing whatever was just added. Run

@@ -60,15 +60,6 @@ INDENT: Final = 2
 CALLED_WITH: Final = "called with"
 RETURNED: Final = "returned"
 
-# The tools whose calls are drawn open. A `create` is, because the new file is what a reader watching
-# a turn is watching for; every other call is drawn shut, since what a read brought back or a command
-# said is context a reader reaches for, and a turn of twenty reads drawn open is twenty screens of
-# file. An `edit` used to be open too, for the diff; that diff now stands at the block level below the
-# panel, covering the whole batch, so the per-edit diff is a press away. Per tool and never per state,
-# which is the one rule the fold script rests on: a fold whose default moved as its result landed
-# would be recorded as a decision nobody made; see `wireFolds` in `mainplate.js`.
-WRITING: Final = frozenset({"create"})
-
 # The tools whose returns carry lines of a file behind an anchor, which is what `rows_of` reads. The
 # console's own and nobody else's: a plugin's tool could print the same shape and would be shown it
 # verbatim, since nothing says its `path` names a file.
@@ -82,11 +73,6 @@ ANCHORED: Final = re.compile(rf"^(?P<anchor>[{ALPHABET}]{{{WIDTH}}}|{re.escape(U
 # A unified diff's hunk header, which is where the line numbers on either side come from. The count
 # after the comma is left off for a hunk of one line, which is the format and not a shortcut.
 HUNK: Final = re.compile(r"^@@ -(?P<old>\d+)(?:,\d+)? \+(?P<new>\d+)(?:,\d+)? @@")
-
-
-def starts_open(tool: str) -> bool:
-    """Whether a call to this tool is drawn with its fold open; see `WRITING`."""
-    return tool in WRITING
 
 
 def laid_out(said: str) -> str:
@@ -414,7 +400,7 @@ def changes_by_file(diff: str) -> tuple[tuple[str, tuple[Change, ...]], ...]:
     return tuple(files)
 
 
-def block_diff_element(diff: str) -> Element:
+def block_diff_element(files: Sequence[tuple[str, Sequence[Change]]]) -> Element:
     """
     The net change one batch of tool calls made, per file, with each file's path over its hunks.
 
@@ -422,10 +408,10 @@ def block_diff_element(diff: str) -> Element:
     `edit`, a `create` and a `bash` at once and a diff for one call would say part of the change. The
     path is a line the console writes, marked `said`, and the hunks under it are the same numbered
     lines `diff_element` draws, one gutter width across the whole block so the columns line up.
+
+    Handed the files `changes_by_file` read rather than the diff, because the fold around it counts
+    the same lines for its summary and one reading is enough.
     """
-    files = changes_by_file(diff)
-    if not files:
-        return span(cls="tool__silent", children="no change")
     width = gutter_width(change for _, changes in files for change in changes)
     lines: list[Element] = []
     for path, changes in files:

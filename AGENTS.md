@@ -38,8 +38,7 @@ $ just test tests/test_console.py::TestTheConsole  # extra args go straight to p
 $ just check            # pre-commit over all files, then mypy
 $ just serve            # foreground, on port 8101 so it never fights the installed service
 $ just demo             # the same, on a database of its own, for poking without touching real sessions
-$ just seed             # the gallery's fixtures into that database, so there is something to click
-$ just reseed           # the same from nothing, which is what a changed fixture needs: seed skips a session it already has
+$ just seed             # the gallery's fixtures into that database, replacing any seeded before, so there is something to click
 $ just gallery          # render every page to build/gallery, as files a browser can open
 $ just shots            # render every page and screenshot it, wide and phone, into build/shots
 $ just replay           # measure what replaying a turn costs, over a stand-in provider
@@ -69,6 +68,13 @@ points systemd at a venv missing whatever was just added.
 checkpoints into the demo database, which is a whole conversation to read, fold, search, fork and
 screenshot without a provider ever being asked anything. That is the right tool for a rendering, a
 stylesheet, a control, or anything downstream of a checkpoint, which is most of what changes here.
+
+**A new or changed feature gets a demo in the seed wherever one is reasonable to write.** Something
+a page draws is shown by putting what it draws into a fixture's checkpoint in `scripts/gallery.py`,
+so `just seed` plants it and the demo console has it to click, and the gallery and the shots draw it
+too. It is how the feature gets looked at without a real turn, both now and by whoever changes it
+next. The exception is a state only a worker produces on the way to settled, which is a variation in
+`pages()` rather than a fixture; see [`scripts/AGENTS.md`](scripts/AGENTS.md).
 
 When a change genuinely needs a live pass, the wires, the catalogue, durability, the worker, start
 the session on the cheapest model the endpoint lists and say the shortest thing that exercises it.

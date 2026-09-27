@@ -48,6 +48,7 @@ from mainplate.catalogue import retention_for
 from mainplate.console import LINKS
 from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import Result
+from mainplate.conversation import commit_command
 from mainplate.conversation import heard_key
 from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
@@ -385,7 +386,15 @@ def timing(seconds: float) -> dict[str, object]:
 # does. Two scales rather than one, because `elapsed` formats them differently and a shot is where
 # you find out whether both read well. A call still out is absent from here on purpose: its duration
 # is written after its return, so a call with a time and no result is a state nothing can record.
-TIMINGS = {"call-1": 0.184, "call-3": 0.041, "call-4": 4.9, "call-5": 0.052, "call-6": 0.019, "call-7": 12.65}
+TIMINGS = {
+    "call-1": 0.184,
+    "call-3": 0.041,
+    "call-4": 4.9,
+    "call-5": 0.052,
+    "call-6": 0.019,
+    "call-7": 12.65,
+    "call-9": 0.9,
+}
 
 # What a `read` of the stylesheet in the second turn brought back, ahead of the edit that addresses
 # the anchors it shows: a partial read, so the header says where it stopped, of a file whose grammar
@@ -470,6 +479,14 @@ EDIT_DIFF = "\n".join(
 # model was sent behind fresh anchors under a line saying it was written. A create that succeeded is
 # drawn as that reply alone, so the content is here as the argument because that is what a real
 # call carries, and a shot shows only the reply.
+#
+# Its last line is longer than any column the page can give it, widened or not, so the shots show
+# what a block of lines does with a line that does not fit: in the create's reply and again in the
+# batch's diff below the panel.
+WIDER = (
+    "a line wider than its block scrolled the whole document sideways, which moves every panel under the"
+    " reader rather than the one block that was too wide for the column it stands in"
+)
 CREATED_PATH = "tests/test_long_lines.py"
 CREATED_CONTENT = (
     "from playwright.async_api import Page\n"
@@ -478,7 +495,7 @@ CREATED_CONTENT = (
     "async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:\n"
     '    await page.goto(f"{gallery}/session.html", wait_until="load")\n'
     '    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")\n'
-    "    assert not wider\n"
+    f"    assert not wider, {WIDER!r}\n"
 )
 CREATED = (
     f"created {CREATED_PATH}, 7 lines\n"
@@ -489,7 +506,7 @@ CREATED = (
     "gdxn│async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:\n"
     'zhmv│    await page.goto(f"{gallery}/session.html", wait_until="load")\n'
     'kpwe│    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")\n'
-    "ntyc│    assert not wider"
+    f"ntyc│    assert not wider, {WIDER!r}"
 )
 
 # What a `bash` in the same batch ran and said, in the shape the tool hands back: the command echoed,
@@ -549,7 +566,7 @@ BLOCK_DIFF = "\n".join(
         "+async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:",
         '+    await page.goto(f"{gallery}/session.html", wait_until="load")',
         '+    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")',
-        "+    assert not wider",
+        f"+    assert not wider, {WIDER!r}",
     ]
 )
 
@@ -750,6 +767,178 @@ CONVERSATION: list[ModelMessage] = [
     ),
 ]
 
+# A formatter's pass over the stylesheet, which is the batch whose diff is too long to read in
+# passing: every declaration in a dozen rules reindented, a hundred lines out and a hundred in, and
+# nothing a reader asked for. It is what a batch's fold is shut for, so the demo has one to show shut.
+FORMATTED = "just fmt"
+FORMAT_SAID = (
+    f"$ {FORMATTED}\n\nprettier --write src/mainplate/assets/mainplate.css\n"
+    "src/mainplate/assets/mainplate.css 212ms\n\nexit 0"
+)
+REINDENTED_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        ".shell",
+        ("display: grid;", "grid-template-columns: var(--list-column) 1fr;", "height: var(--visible-height, 100dvh);"),
+    ),
+    (
+        ".sessions",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "min-height: 0;",
+            "padding: var(--gap);",
+            "border-right: 1px solid var(--edge);",
+        ),
+    ),
+    (
+        ".sessions__sheet",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "flex: 1;",
+            "gap: var(--gap);",
+            "min-height: 0;",
+            "overflow-y: auto;",
+        ),
+    ),
+    (
+        "main",
+        (
+            "display: grid;",
+            "grid-template-rows: 1fr auto;",
+            "min-height: 0;",
+            "min-width: 0;",
+            "padding: 0 var(--gap);",
+            "position: relative;",
+        ),
+    ),
+    (
+        ".transcript",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "gap: var(--space-5);",
+            "width: 100%;",
+            "max-width: var(--column);",
+            "margin: 0 auto;",
+            "padding-top: var(--space-5);",
+            "overflow-y: auto;",
+            "overscroll-behavior: contain;",
+        ),
+    ),
+    (
+        ".panel",
+        (
+            "position: relative;",
+            "padding: var(--space-1) var(--space-6);",
+            "border-left: 2px solid var(--edge);",
+            "scroll-margin-top: var(--space-5);",
+        ),
+    ),
+    (
+        ".panel__meta",
+        (
+            "display: flex;",
+            "align-items: center;",
+            "gap: var(--space-4);",
+            "min-height: 1.6rem;",
+            "font-family: var(--mono);",
+            "font-size: 0.66rem;",
+            "letter-spacing: 0.07em;",
+            "text-transform: uppercase;",
+        ),
+    ),
+    (".block", ("margin: 0.6rem 0;",)),
+    (
+        ".text pre",
+        (
+            "position: relative;",
+            "margin: var(--space-4) 0;",
+            "line-height: var(--mono-line);",
+            "padding: var(--space-4) var(--space-5);",
+            "border: 1px solid var(--edge-soft);",
+            "border-radius: var(--radius);",
+            "background: var(--sunk);",
+        ),
+    ),
+    (
+        ".tool",
+        (
+            "margin: 0;",
+            "border: 1px solid var(--edge-soft);",
+            "border-radius: var(--radius);",
+            "background: var(--raised);",
+            "font-family: var(--mono);",
+            "font-size: 0.78rem;",
+        ),
+    ),
+    (
+        ".tool > summary",
+        (
+            "display: flex;",
+            "flex-wrap: wrap;",
+            "align-items: baseline;",
+            "gap: var(--space-4);",
+            "padding: 0.35rem 0.6rem;",
+            "color: var(--ink-soft);",
+            "cursor: pointer;",
+            "list-style: none;",
+        ),
+    ),
+    (
+        ".tool__body pre",
+        (
+            "position: relative;",
+            "margin: 0;",
+            "cursor: auto;",
+            "font-family: var(--mono);",
+            "font-size: var(--mono-size);",
+            "line-height: var(--mono-line);",
+            "padding: var(--space-3) var(--space-4);",
+            "border-radius: calc(var(--radius) / 1.5);",
+            "background: var(--sunk);",
+            "overflow-x: auto;",
+        ),
+    ),
+    (
+        ".composer",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "gap: var(--space-3);",
+            "width: 100%;",
+            "max-width: var(--column);",
+            "margin: 0 auto;",
+        ),
+    ),
+)
+
+
+def reindented(rules: Sequence[tuple[str, Sequence[str]]]) -> str:
+    """The diff a formatter taking four-space indentation to two makes of these rules, as git prints it."""
+    hunks: list[str] = []
+    at = 1
+    for selector, declarations in rules:
+        span = len(declarations) + 2
+        hunks.append(f"@@ -{at},{span} +{at},{span} @@")
+        hunks.append(f" {selector} {{")
+        hunks.extend(f"-    {declaration}" for declaration in declarations)
+        hunks.extend(f"+  {declaration}" for declaration in declarations)
+        hunks.append(" }")
+        at += span + 1
+    return "\n".join(
+        [
+            f"diff --git a/{EDITED_PATH} b/{EDITED_PATH}",
+            "index 9d1e3b7..5a0c2e4 100644",
+            f"--- a/{EDITED_PATH}",
+            f"+++ b/{EDITED_PATH}",
+            *hunks,
+        ]
+    )
+
+
+REINDENT_DIFF = reindented(REINDENTED_RULES)
+
 TOOL_IN_FLIGHT: list[ModelMessage] = [
     ModelRequest(parts=[UserPromptPart(content="Now check the stylesheet handles a long line.")]),
     # Two settled batches ahead of the call still out, which between them are every rendering a
@@ -808,6 +997,18 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
             ToolReturnPart(tool_name="bash", content=CHECK_SAID, tool_call_id="call-4"),
         ]
     ),
+    # The formatter, whose batch changed far more than anybody wants to read, so its diff is drawn
+    # shut under its rule; see `REINDENT_DIFF`.
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(content="The checks pass. Running the formatter before I look again."),
+            ToolCallPart(tool_name="bash", args={"command": FORMATTED}, tool_call_id="call-9"),
+        ],
+        usage=spending(asked=97_700, answered=51, cached=96_900, cost="0.1729"),
+        metadata=timing(1.1),
+    ),
+    ModelRequest(parts=[ToolReturnPart(tool_name="bash", content=FORMAT_SAID, tool_call_id="call-9")]),
     ModelResponse(
         timestamp=WHEN,
         parts=[
@@ -984,15 +1185,26 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
     """
     The same checkpoint with a tree before each of a turn's model requests, and a batch's diff
     where its tools changed the tree.
+
+    Only for the turns the checkpoint holds, because a tree recorded before a request in a turn
+    nobody took is a record no pass could write, and the seeder plants these into a real store.
     """
+    turns = transcript(written).turns
     return {
         **written,
         **{
             tree_key(turn, at): records.Tree(tree=tree).recorded()
-            for turn, taken in enumerate(TREES)
+            for turn, taken in enumerate(TREES[:turns])
             for at, tree in enumerate(taken)
         },
-        wrote_key(1, 1): records.Wrote(diff=BLOCK_DIFF).recorded(),
+        **(
+            {
+                wrote_key(1, 1): records.Wrote(diff=BLOCK_DIFF).recorded(),
+                wrote_key(1, 2): records.Wrote(diff=REINDENT_DIFF).recorded(),
+            }
+            if turns > 1
+            else {}
+        ),
     }
 
 
@@ -1049,7 +1261,8 @@ ENROLLED: tuple[Enrolled, ...] = (
 
 def settled_checkpoint() -> dict[str, object]:
     """
-    The parent session's checkpoint: two turns, a boundary between them, and three commands.
+    The parent session's checkpoint: two turns, a boundary between them, three commands and a
+    `/commit`, which is drawn as the command it ran.
 
     The commands are ones the person ran themselves, which no model was told about and which the
     store holds beside what was said. Two exit states, because they are drawn differently and the
@@ -1089,6 +1302,18 @@ def settled_checkpoint() -> dict[str, object]:
             took=timedelta(minutes=2, seconds=1),
         )
     )
+    written[inbox_key(5)] = recorded_command(commit_command("Scroll a long line inside its block"))
+    written[result_key(inbox_key(5))] = recorded_result(
+        Result(
+            status=0,
+            output=(
+                "[mainplate/aaaaaaaa 4be1f0c] Scroll a long line inside its block\n"
+                " 2 files changed, 8 insertions(+), 1 deletion(-)\n"
+                " create mode 100644 tests/test_long_lines.py\n"
+            ),
+            took=timedelta(seconds=0.21),
+        )
+    )
     written[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
     written[instructions_key(1)] = recorded_instructions(INSTRUCTIONS)
     return written
@@ -1123,9 +1348,14 @@ class Fixture:
         are then the two rules the service applies to a posted choice, so a fixture cannot name a
         repository while recording that it reaches no files or that it is on no branch, which are
         contradictory pairs nothing else in this console can produce.
+
+        A session with a repository is snapshotted as a pass would snapshot it, which is what puts a
+        batch's diff below its tool panel in the demo: `showing` does the same for a page the gallery
+        draws, and a fixture that skipped it would be a demo missing what the stills show.
         """
         working = replace(chosen, repository=session.repository).settled().branching(session.id)
-        return cls(session=session, chosen=working, checkpoint=checkpoint)
+        taken = snapshotted(checkpoint) if session.repository is not None else checkpoint
+        return cls(session=session, chosen=working, checkpoint=taken)
 
 
 def fixtures() -> tuple[Fixture, ...]:
@@ -1258,8 +1488,8 @@ CAPTIONS: Final[dict[str, str]] = {
     "session.html": (
         "A settled conversation: reasoning, a read, a highlighted reply with a table, a diagram and an SVG to "
         "draw, commands the person ran, a boundary where the context started again, and under it a read of "
-        "the stylesheet, a batch drawn with its diff of an edit and a file created, and a shell command with what "
-        "it said."
+        "the stylesheet, a batch drawn with its diff of an edit and a file created, a formatter whose diff is "
+        "too long to draw open, and a shell command with what it said."
     ),
     "waiting.html": "A message waiting for its turn.",
     "answering.html": "A turn part way through: two reads out at once, a steer taken and one still to be, a command running.",
