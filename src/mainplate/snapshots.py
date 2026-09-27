@@ -37,6 +37,7 @@ from pathlib import Path
 from secrets import token_hex
 from typing import Final
 
+from mainplate.processes import reaped
 from mainplate.sandbox import Bind
 from mainplate.sandbox import Sandbox
 from mainplate.sandbox import Venue
@@ -218,7 +219,11 @@ async def git_at(at: Path, *arguments: str, environment: Mapping[str, str] | Non
         stderr=asyncio.subprocess.PIPE,
         env={**IDENTITY, "PATH": WHERE_GIT_IS, **(environment or {})},
     )
-    out, err = await process.communicate()
+    try:
+        out, err = await process.communicate()
+    except BaseException:
+        reaped(process)
+        raise
     return Ran(code=process.returncode or 0, stdout=out, stderr=err)
 
 
@@ -407,7 +412,11 @@ class Worktree:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await process.communicate()
+        try:
+            out, err = await process.communicate()
+        except BaseException:
+            reaped(process)
+            raise
         return Ran(code=process.returncode or 0, stdout=out, stderr=err)
 
     async def demand(

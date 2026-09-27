@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import signal
+from collections.abc import Awaitable
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -326,6 +329,52 @@ class TestCapturingAtOnce:
 
         assert await run("git", "for-each-ref", TRANSFER, cwd=worktree.root) == ""
         assert await worktree.store.demand("for-each-ref", f"{worktree.refs}/incoming") == ""
+
+
+HANGING = ("-c", "alias.hang=!sleep 5", "hang")
+
+
+class TestBeingStoppedPartWay:
+    @pytest.mark.parametrize(
+        "running",
+        [
+            pytest.param(lambda worktree: worktree.store.git(*HANGING), id="the store, which the fetch loop reaches"),
+            pytest.param(lambda worktree: worktree.git(*HANGING), id="the checkout, behind its sandbox"),
+        ],
+    )
+    async def test_a_git_cancelled_part_way_leaves_nothing_open_behind_it(
+        self,
+        worktree: Worktree,
+        running: Callable[[Worktree], Awaitable[object]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A pass is cancelled when the worker is and the fetch loop when the console stops, so a git
+        still running then has a `communicate` that never resumes. Left alone, the process runs on
+        and its pipes are collected at some later moment, as a `ResourceWarning` failing whichever
+        test happens to be running.
+
+        Asserted on the process and its pipes rather than by forcing a collection, because none can
+        find the leak here: asyncio holds a running child's transport, and a pipe whose write end a
+        grandchild still holds stays registered with the loop. Killing git does not kill what git
+        started, which is why the pipes are closed as well rather than left to reach end of file.
+        """
+        cancelled: list[asyncio.subprocess.Process] = []
+        communicate = asyncio.subprocess.Process.communicate
+
+        async def recorded(process: asyncio.subprocess.Process, sent: bytes | None = None) -> tuple[bytes, bytes]:
+            cancelled.append(process)
+            return await communicate(process, sent)
+
+        monkeypatch.setattr(asyncio.subprocess.Process, "communicate", recorded)
+
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(1):
+                await running(worktree)
+
+        [process] = cancelled
+        assert await process.wait() == -signal.SIGKILL
+        assert [reader is not None and reader.at_eof() for reader in (process.stdout, process.stderr)] == [True, True]
 
 
 class TestAWorktreePerSession:

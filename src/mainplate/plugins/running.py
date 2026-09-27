@@ -30,6 +30,7 @@ from mainplate.plugins.installed import Installed
 from mainplate.plugins.protocol import SETUP
 from mainplate.plugins.protocol import Event
 from mainplate.plugins.protocol import Payload
+from mainplate.processes import reaped
 from mainplate.roots import RootName
 from mainplate.roots import environment_named
 from mainplate.sandbox import InAWorktree
@@ -200,26 +201,6 @@ The worktree is passed beside the payload rather than reconstructed from the wir
 is untrusted data a plugin parses; this value carries the checkout together with the trusted snapshot
 store it belongs to and the confinement used for any Git it runs.
 """
-
-
-def reaped(process: asyncio.subprocess.Process) -> None:
-    """
-    End a plugin that is still running and close the pipes it was talking through.
-
-    **The transport rather than a drain**, because the one caller is a task that has just been
-    cancelled: an `await` there is cancelled again before it does anything, so the only thing that
-    can close a pipe is a synchronous call.
-
-    `_transport` is private and is reached for deliberately, guarded so that an asyncio which renames
-    it degrades to what this console did before - a warning at collection - rather than to an
-    `AttributeError` on every shutdown. It is the same bargain `Service.token` takes in reading the
-    store's own table: named here, so a rename is a change to make in one place.
-    """
-    if process.returncode is None:
-        process.kill()
-    transport = getattr(process, "_transport", None)
-    if transport is not None:
-        transport.close()
 
 
 async def planted_at(worktree: str | None) -> str | None:
