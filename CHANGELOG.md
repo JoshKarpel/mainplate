@@ -40,8 +40,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   script or keep a note across turns, reaching nothing else on the machine; `read`, `edit` and
   `create` reach it too. Where there is no sandbox to run a command in, such a session reaches
   nothing, as before.
-- **A new mark.** A watch movement's mainplate, in the console's blue, on the tab and the installed
-  app's icon.
+- **A new mark.** A watch movement's mainplate, on the tab, the dashboard and the installed app's
+  icon. On the tab and the dashboard its two holes are the person's blue and the assistant's orange,
+  and the dashboard's follows the theme; the installed app's is one colour on the dark ground.
 - **Every session is told what the page draws.** One sentence of the console's own, composed beside
   the note about what its tools reach, says that a `mermaid` or `svg` fence is drawn as a picture, so
   a model with a flow or a figure to show writes one. The operator's standing instructions are left

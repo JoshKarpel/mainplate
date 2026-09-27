@@ -14,6 +14,10 @@ is the failure worth designing out first.
 What it looks like is [the gallery](https://joshkarpel.github.io/mainplate/gallery/): every page of
 the console, rendered from fixtures, that can be opened and folded and searched without running one.
 
+The name is a watchmaker's word: the mainplate is the plate every other part of a movement is
+mounted on. It keeps no time itself; it holds the parts that do in place, which is the job the
+durable session does here.
+
 ## Running it
 
 Write `$XDG_CONFIG_HOME/mainplate/config.yaml` (usually `~/.config/mainplate/config.yaml`), then

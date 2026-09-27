@@ -20,11 +20,12 @@ step with something that *changes*. The session index, the model catalogue, `loc
 and a recorded cost all look like exceptions and are not, and the doc says why each one is not,
 because a sixth will be proposed and its argument has to look like one of theirs.
 
-It also carries the vocabulary this console names things with, and the cross-cutting rules the
-design notes cite rather than restate: when a component refuses at startup against when it promises
-not to raise, how configuration that changes under a reader is handled, what "a page is a pure
-function of already-answered questions" rules out, and what to do about one fact that has to be
-written in two places.
+It also carries who the console is for (a centaur: the person drives, the model carries), the
+vocabulary this console names things with, and the cross-cutting rules the design notes cite rather
+than restate: when a component refuses at startup against when it promises not to raise, how
+configuration that changes under a reader is handled, what "a page is a pure function of
+already-answered questions" rules out, and what to do about one fact that has to be written in two
+places.
 
 ## Commands
 

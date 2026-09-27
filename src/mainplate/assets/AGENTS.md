@@ -97,7 +97,17 @@ cached page would be an empty shell or a stale second copy. The `Service-Worker-
 `app.py` is what lets a script under `/assets/` take that root scope.
 
 The manifest's `192x192` and `512x512` PNGs and the `180x180` Apple touch icon are raster forms of
-`icon.svg`. Keep the mark inside the central safe circle so a platform's mask does not cut it.
+`icon-mono-on-dark.svg` on the console's dark ground. Keep the mark inside the central safe circle
+so a platform's mask does not cut it.
+
+## `icon.svg` takes its colours from whoever draws it
+
+The dashboard draws it as a `<use>` of `#plate`, and `.home__mark` sets `--plate`, `--person` and
+`--assistant` for it. **Keep the `#plate` id, keep every fill a `style` attribute reading one of
+those properties**, and keep the file's own `<style>` setting them on `svg` for when it is the
+favicon. A fill written as a colour ignores the theme toggle; one written in the file's stylesheet
+instead of on the element may not reach a `<use>` at all. The three icons share one geometry, so a
+change to the plate is a change to all three and to the PNGs.
 
 ## Two more that are easy to undo
 

@@ -259,15 +259,33 @@ leaving the horizontals flat.
 
 ## The mark
 
-`icon.svg` is a watch movement's mainplate, which is what the console is named for: the plate every
+The mark is a watch movement's mainplate, which is what the console is named for: the plate every
 other part is mounted on and the one that stays put while the rest is taken off and put back. The
-disc is the plate in the console's blue, with a bevel at the rim; the large cutout is the barrel,
-the cream dot is the centre hole the hands turn on, the orange stone in its countersink is a jewel,
-and the two small holes are for the screws. Circles and nothing else, because the mark has to read
-at sixteen pixels in a tab: a letterform does not, and at that size a plate with four holes in it
-is still a plate with four holes in it. The manifest's two PNGs and the Apple touch icon are
-rasterised from it by a browser, and the plate is exactly the safe circle a platform's mask keeps,
-so a masked icon is the plate with its corners gone and nothing cut.
+disc is the plate; the large cutout is the barrel's opening with its arbor standing in it, and the
+small one is a pivot hole. Circles and nothing else, and only two cuts, because the mark has to read
+at sixteen pixels in a tab: a letterform does not, and at that size a plate with two holes in it is
+still a plate with two holes in it. Every version has a transparent ground.
+
+**The monochrome mark is the shape, and colour is only ever put into its holes.**
+`icon-mono-on-dark.svg` and `icon-mono-on-light.svg` are the plate in one colour with the holes cut
+through, named for the ground each is drawn on. `icon.svg` fills the holes instead, the barrel in the
+person's blue and the pivot in the assistant's orange, the two speakers' hues from the stylesheet, so
+the colour says who is in it without changing its outline. A second colour anywhere else is where
+this mark goes wrong: a light arbor in a dark ring on a blue plate reads as the catchlight of an eye.
+
+`icon.svg` is the favicon and the dashboard's mark, and it takes its colours two ways, one per
+place. Every fill reads a custom property: drawn on its own, as the favicon, the file sets those
+itself from the OS's scheme, which is all a tab strip knows; drawn by the dashboard as a `<use>` of
+its `#plate`, it inherits them from `.home__mark`, which points them at `--ink` and the speakers'
+tokens, so the mark follows the reader's theme toggle as an `<img>` could not. That is one file
+rather than a second copy of the geometry in `pages.py`, at the cost of the dashboard's mark
+depending on the browser fetching and drawing an external `<use>`, which is checked in Chromium
+and nowhere else.
+
+The manifest's two PNGs and the Apple touch icon are `icon-mono-on-dark.svg` rasterised by a browser
+onto the console's dark ground, because an installed icon is opaque, and the plate is exactly the
+safe circle a platform's mask keeps, so a masked icon is the plate with its corners gone and nothing
+cut.
 
 ## What is vendored
 

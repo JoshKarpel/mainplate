@@ -292,6 +292,9 @@ body {
 }
 
 .home__mark {
+    --plate: var(--ink);
+    --person: var(--person-edge);
+    --assistant: var(--assistant-edge);
     width: 1.6rem;
     height: 1.6rem;
     flex: none;

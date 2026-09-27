@@ -54,6 +54,7 @@ from without_html import details
 from without_html import div
 from without_html import dl
 from without_html import dt
+from without_html import element
 from without_html import form
 from without_html import h1
 from without_html import h2
@@ -61,7 +62,6 @@ from without_html import h3
 from without_html import head
 from without_html import header
 from without_html import html
-from without_html import img
 from without_html import input_
 from without_html import label
 from without_html import li
@@ -76,6 +76,7 @@ from without_html import script
 from without_html import section
 from without_html import span
 from without_html import summary
+from without_html import svg
 from without_html import textarea
 from without_html import time
 from without_html import title
@@ -894,7 +895,13 @@ def sidebar(
                         cls="home",
                         attrs={"href": links.to_home()},
                         children=[
-                            img(cls="home__mark", attrs={"src": links.to_asset("icon.svg"), "alt": ""}),
+                            # Drawn by reference rather than as an `<img>`, so the stylesheet can
+                            # hand the plate the theme's colours: an image only ever sees the OS's.
+                            svg(
+                                cls="home__mark",
+                                attrs={"viewBox": "0 0 512 512", "aria-hidden": "true"},
+                                children=element("use", attrs={"href": f"{links.to_asset('icon.svg')}#plate"}),
+                            ),
                             span(cls="home__name", children=DASHBOARD),
                         ],
                     ),

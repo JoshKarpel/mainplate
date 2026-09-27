@@ -84,8 +84,9 @@ The prose in this repository is split four ways, and the split is worth keeping:
 
 - **`README.md`** is what the console does, for somebody deciding to run it. It is also the site's
   home page, so it describes the project and never itself.
-- **`PHILOSOPHY.md`** is the one idea and the rules the design notes cite rather than restate. It is
-  the standard new work is measured against, and not the authority on what the code currently does.
+- **`PHILOSOPHY.md`** is the one idea, who is driving, and the rules the design notes cite rather
+  than restate. It is the standard new work is measured against, and not the authority on what the
+  code currently does.
 - **`docs/`** is the design notes: what each mechanism is, what it costs, and which alternatives
   were tried and are not worth trying again.
 - **`AGENTS.md`**, at the root, is the map, and it carries the standard all four are written to
