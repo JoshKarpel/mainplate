@@ -345,7 +345,7 @@ class TestRunningOne:
         came = await ran(
             running,
             session,
-            "git -c user.email=probe@example.invalid -c user.name=probe commit -aqm 'from the console'",
+            "git commit -aqm 'from the console'",
         )
 
         assert came.status == 0
@@ -367,9 +367,7 @@ class TestRunningOne:
         hook.write_text(f"#!/bin/sh\necho the hook ran\ntouch {escaped}\n")
         hook.chmod(0o755)
 
-        came = await ran(
-            running, session, "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m x"
-        )
+        came = await ran(running, session, "git commit -q --allow-empty -m x")
 
         assert "the hook ran" in came.output, "the control: the hook is one git actually ran"
         assert not escaped.exists()
@@ -572,9 +570,7 @@ class TestPushingOne:
         self, running: Service, workspaces: Workspaces, on_fixture: Choice, origin: Path
     ) -> None:
         session = await planted(running, workspaces, replace(on_fixture, branch="try-it-this-way"))
-        await ran(
-            running, session, "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m x"
-        )
+        await ran(running, session, "git commit -q --allow-empty -m x")
         made = await run("git", "rev-parse", "HEAD", cwd=workspaces.at(session))
 
         entry = await running.push(session)
@@ -593,9 +589,7 @@ class TestPushingOne:
         session = await planted(running, workspaces, replace(on_fixture, branch="main"))
         (origin / "src" / "kept.txt").write_text("moved on at the remote\n")
         await run("git", "commit", "-aqm", "elsewhere", cwd=origin)
-        await ran(
-            running, session, "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m x"
-        )
+        await ran(running, session, "git commit -q --allow-empty -m x")
 
         entry = await running.push(session)
 
