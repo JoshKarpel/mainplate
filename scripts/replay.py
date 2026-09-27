@@ -65,8 +65,8 @@ from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import recorded_registration
+from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
-from mainplate.snapshots import Worktree
 
 INSTRUCTIONS: Final = "Answer as a fixture would."
 
@@ -194,7 +194,7 @@ async def git(*arguments: str, cwd: Path) -> None:
         raise RuntimeError(f"git {arguments} failed: {out.decode()}")
 
 
-async def planted(root: Path) -> Worktree:
+async def planted(root: Path) -> Path:
     """
     A real repository, because what a snapshot costs is what git actually does.
 
@@ -208,7 +208,7 @@ async def planted(root: Path) -> Worktree:
     (root / READ).write_text("".join(f"line {at} of a file worth reading\n" for at in range(LINES)))
     await git("add", "-A", cwd=root)
     await git("commit", "-qm", "first", cwd=root)
-    return Worktree(root=root)
+    return root
 
 
 async def drive(root: Path, requests: int, allowance: int | None) -> Timed:
@@ -225,8 +225,11 @@ async def drive(root: Path, requests: int, allowance: int | None) -> Timed:
         root=root / "worktrees",
         scratch=root / "scratch",
         reaching=Reaching(
-            current=Reachable(repositories=(Repository(forge=FORGE, key=KEY, name="me/fixture", url=str(origin.root)),))
+            current=Reachable(repositories=(Repository(forge=FORGE, key=KEY, name="me/fixture", url=str(origin)),))
         ),
+        # The real one, because a snapshot runs git in the session's sandbox and that is part of what
+        # a pass costs.
+        bwrap=sandbox_command(),
     )
     async with open_store(root / "mainplate.db", LEASE, CATALOGUES) as opened:
         service = Service(

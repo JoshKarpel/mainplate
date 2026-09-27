@@ -35,7 +35,9 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import retention_for
+from mainplate.commands import PUSHED
 from mainplate.commands import Commands
+from mainplate.commands import Running
 from mainplate.commands import Slot
 from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
@@ -44,6 +46,7 @@ from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import declared_in
 from mainplate.conversation import deferred_in
+from mainplate.conversation import environment_in
 from mainplate.conversation import failure_in
 from mainplate.conversation import latest_tree
 from mainplate.conversation import opening_tree_key
@@ -60,6 +63,7 @@ from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
 from mainplate.footprint import Footprints
+from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
@@ -76,6 +80,8 @@ from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
 from mainplate.reference import resending
+from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Venue
 from mainplate.sessions import LISTING
 from mainplate.sessions import Attention
 from mainplate.sessions import Claimed
@@ -556,6 +562,11 @@ class Service:
         """What the picker offers, which is nothing at all where there are no workspaces."""
         return self.workspaces.reaching.current if self.workspaces is not None else Reachable(repositories=())
 
+    @property
+    def fetches(self) -> Mapping[str, Fetched]:
+        """What each repository's last clone or fetch came to, and nothing at all where there are no workspaces."""
+        return self.workspaces.fetches.current if self.workspaces is not None else {}
+
     def footprinted(self, session: Session) -> Session:
         """The row with what the last sweep measured for it, which is a lookup and never a walk."""
         return replace(session, footprint=self.footprints.current.get(session.id))
@@ -831,9 +842,8 @@ class Service:
         chosen = chosen.settled()
         session = Session(id=mint_session_id(), created_at=self.now(), title=named)
         # A branch of its own where nobody named one, which is what stops a session working in a
-        # repository landing on a detached `HEAD`. That was the default until `Run` put `git commit`
-        # in the box under the conversation, and a commit on a detached `HEAD` is reachable only
-        # through the reflog. Filled *here* rather than in `settled`, because it takes the session's
+        # repository landing on a detached `HEAD`, where a commit is reachable only through the reflog
+        # and has no name to push under. Filled *here* rather than in `settled`, because it takes the session's
         # own id and `settled` is a rule about a choice rather than about a session.
         chosen = chosen.branching(session.id)
         await enrol(self.database, session)
@@ -909,8 +919,7 @@ class Service:
         #
         # `forked` is what drops the base and the branch the parent was started with. A fork plants
         # at the tree of the turn it re-asks, so a base beside that would be a second answer to where
-        # its files come from; and `git worktree add -b` refuses a branch already in use, so an
-        # inherited one is a worktree that cannot be planted at all.
+        # its files come from; and an inherited branch would be two sessions pushing one history.
         chosen = chosen.settled(forked=True)
         forked = Session(
             id=mint_session_id(),
@@ -1000,7 +1009,7 @@ class Service:
         await self.checkpointer.supply(session, ARCHIVED_KEY, records.Archived(at=self.now()).recorded())
         return await read_session(self.database, session)
 
-    async def run(self, session: str, said: str) -> str | None:
+    async def run(self, session: str, said: str, *, online: bool = False) -> str | None:
         """
         Run `said` in this session's own worktree, and say which entry recorded it, or nothing at all
         where this session has nowhere to run one.
@@ -1020,17 +1029,61 @@ class Service:
         saying it had, and a record with nothing running would be a panel that never resolves.
 
         Nowhere to run one is `None` and not a raise: it is a state the page can explain, not a fault.
+
+        **In the session's sandbox**, under its own network answer and the environment its setup
+        recorded, for the reason `commands.py` opens with: the checkout's git configuration is the
+        model's to write. `online` turns the network on for this one command whatever the session
+        chose, which is `Disposition.ONLINE`, and is recorded on the command so the page says so.
         """
-        if self.commands is None or self.workspaces is None:
+        if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
             return None
         found = await self.read(session)
         if found is None or found.chosen is None or found.chosen.repository is None:
             return None
-        where = self.workspaces.at(session)
+        running = Running(
+            confinement=InAWorktree(
+                worktree=self.workspaces.worktree(session, found.chosen.repository),
+                scratch=self.workspaces.scratch_at(session),
+            ),
+            venue=Venue.CONNECTED if online else found.chosen.isolation.venue,
+            environment=environment_in(await self.checkpointer.load(session)),
+        )
         # Appended rather than delivered, because there is nothing for a worker to do about it: a
         # command reaches no model, so waking a pass to look at one would be a pass with no work.
-        entry = await self.checkpointer.append(session, recorded_command(said))
-        self.commands.start(Slot(session=session, entry=entry.key), said, where)
+        entry = await self.checkpointer.append(
+            session, recorded_command(said, online=online and not found.chosen.isolation.network)
+        )
+        self.commands.start(Slot(session=session, entry=entry.key), said, running)
+        return entry.key
+
+    async def push(self, session: str) -> str | None:
+        """
+        Push this session's branch to its repository, and say which entry recorded it, or nothing
+        where there is no branch here to push or nowhere to push it.
+
+        **The branch is the recorded one**, `Choice.branch`, and never whatever the checkout's `HEAD`
+        is on: the page names that branch beside the button, so it is the only thing the button may
+        move. A session with none recorded has nothing to push under and is `None`.
+
+        Recorded as a command whose text is what was done, so the page draws it where it happened and
+        a reload finds it, like any `Run`. Nowhere to push is a repository no forge currently reaches,
+        which is `None` for the reason `run`'s is.
+        """
+        if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
+            return None
+        found = await self.read(session)
+        if found is None or found.chosen is None or found.chosen.repository is None or found.chosen.branch is None:
+            return None
+        repository = self.workspaces.named(found.chosen.repository)
+        if repository is None:
+            return None
+        entry = await self.checkpointer.append(session, recorded_command(PUSHED))
+        self.commands.push(
+            Slot(session=session, entry=entry.key),
+            self.workspaces.worktree(session, found.chosen.repository),
+            repository.url,
+            found.chosen.branch,
+        )
         return entry.key
 
     async def live(self, session: str, found: Conversation) -> Live | None:

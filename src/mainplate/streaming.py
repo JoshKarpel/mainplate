@@ -35,13 +35,16 @@ from mainplate.pages import LOADED
 from mainplate.pages import SETUP_ID
 from mainplate.pages import SWAP
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.pages import WANTING_ID
 from mainplate.pages import Links
 from mainplate.pages import Reader
+from mainplate.pages import Shape
 from mainplate.pages import cache_note
 from mainplate.pages import listed_region
 from mainplate.pages import settling
 from mainplate.pages import setup_step
 from mainplate.pages import transcript_region
+from mainplate.pages import wanting_region
 from mainplate.service import Service
 
 
@@ -75,7 +78,7 @@ async def watching(
     reader: Reader,
     session: str | None,
     every: timedelta,
-    on_step: bool = False,
+    shape: Shape | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
     """
     What one page is showing, sent whenever any of it has recorded anything new.
@@ -88,8 +91,10 @@ async def watching(
     function the page was, so a stream that used the console's own clock would morph UTC moments into
     a transcript whose rules are in Chicago, one turn at a time.
 
-    `on_step` is the shape the page was drawn in, which the page states when it connects: whether it
-    is the settings step or the conversation. The regions sent are that shape's, and the moment the
+    `shape` is the shape the page was drawn in, which the page states when it connects. On a session
+    it says whether the page is the settings step or the conversation; with no session it says
+    whether the page is the dashboard, whose sessions wanting attention are a region of their own
+    that moves when the list does. The regions sent are that shape's, and the moment the
     checkpoint's shape stops being the page's the stream says `LOADED` once and ends, because
     nothing it could send would land anywhere on the page it is talking to. A page on the step whose
     session has loaded is the case; the other direction cannot happen, since a registration is
@@ -127,6 +132,7 @@ async def watching(
         now = await token(service, session)
         if now != seen:
             regions: list[Element] = []
+            on_step = shape is Shape.SETTLING
             if session is not None:
                 showing = await service.read(session)
                 if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
@@ -166,12 +172,13 @@ async def watching(
                     ]
                 )
             seen = now
+            listed = await service.listed()
+            # What wants attention on the dashboard is read off the same rows the list is, so it
+            # moves exactly when the list's token does and needs no token of its own.
+            if shape is Shape.DASHBOARD:
+                regions.append(partial(WANTING_ID, SWAP, wanting_region(links, reader, listed, service.reachable)))
             # The list on every page, morphed like the transcript because a row's archive disclosure
             # may be open under somebody's pointer when another session moves the list.
-            regions.append(
-                partial(
-                    LISTED_ID, SWAP, listed_region(links, reader, await service.listed(), session, service.reachable)
-                )
-            )
+            regions.append(partial(LISTED_ID, SWAP, listed_region(links, reader, listed, session, service.reachable)))
             yield Event(data=render(regions), id=now)
         await asyncio.sleep(every.total_seconds())

@@ -20,11 +20,12 @@ step with something that *changes*. The session index, the model catalogue, `loc
 and a recorded cost all look like exceptions and are not, and the doc says why each one is not,
 because a sixth will be proposed and its argument has to look like one of theirs.
 
-It also carries the vocabulary this console names things with, and the cross-cutting rules the
-design notes cite rather than restate: when a component refuses at startup against when it promises
-not to raise, how configuration that changes under a reader is handled, what "a page is a pure
-function of already-answered questions" rules out, and what to do about one fact that has to be
-written in two places.
+It also carries who the console is for (a centaur: the person drives, the model carries), the
+vocabulary this console names things with, and the cross-cutting rules the design notes cite rather
+than restate: when a component refuses at startup against when it promises not to raise, how
+configuration that changes under a reader is handled, what "a page is a pure function of
+already-answered questions" rules out, and what to do about one fact that has to be written in two
+places.
 
 ## Commands
 
@@ -74,7 +75,7 @@ the session on the cheapest model the endpoint lists and say the shortest thing 
 Reach for a frontier model only when the change is about what a frontier model does differently, and
 say so.
 
-## A worktree is a session's to write, so the parent must not read anything out of it
+## A worktree is a session's to write, so the parent must not run git against it
 
 The console process holds the credential, the store and the service user's whole filesystem; the
 sandbox holds a session's worktree, bound read-write because a session has to work in it. **Anything
@@ -82,22 +83,29 @@ the parent runs against that worktree is running with one side's authority over 
 input**, and the mistake is never a missing check, it is a program that goes and *finds* something
 rather than being handed it.
 
-Git is the standing example and the reason this has a section. Its configuration names programs it
-runs (`core.fsmonitor` fires inside `git add`, and the list is open-ended), a session's worktree is a
-linked one whose `.git` is a pointer file the session can replace, and a failing monitor makes git
-scan normally, so the capture succeeds and nothing reports it. So `Worktree.gitdir` names git's
-directory and `Worktree.git` passes `--git-dir` with `--work-tree`, which reads the configuration out
-of the read-only clone and consults the tree's not at all.
+Git is the standing example and the reason this has a section. A session's worktree is a complete
+checkout with a `.git` of its own, so its configuration and hooks are the session's to write, and
+several configuration keys name programs git runs (`core.fsmonitor` fires inside `git add`, and the
+list is open-ended). A failing monitor makes git scan normally, so a capture run in the parent would
+succeed and nothing would report that a program ran. So the parent runs no git against a worktree at
+all: `Worktree.git` runs it behind `bwrap`, and what comes back is a listing or a bundle.
 
 What must hold when adding to the parent:
 
-- **Never run git in a session's worktree without naming its directory.** A bare `git -C <worktree>`
-  in `snapshots.py`, in a tool, in a page or in a script is the whole vulnerability restored.
-- **Never take a path out of a worktree and act on it in the parent.** Derive it, the way
-  `Worktrees.gitdir` does, or receive it from the console's own state.
-- **Never carry a session's worktree as a path and rebuild a `Worktree` from it.** The rebuilt one
-  names no git directory, which is the discovery mode, and nothing about the call site changes to
-  say so. Pass the value.
+- **Never run git against a session's worktree in the parent.** Not `git -C <worktree>`, not
+  `--git-dir <worktree>/.git`, not in `snapshots.py`, a tool, a page, a plugin or a script. Reach a
+  worktree through `Worktree.git`, which confines it.
+- **Git in the parent is for the `Store` and nothing else.** `Store.git` names the bare clone with
+  `--git-dir`; `git_at` is for the directory clones are made under and for a checkout still being
+  built, before any session has written to it.
+- **What crosses from a sandbox is data.** A bundle is fetched by the store, refused if it is a link
+  or not a regular file, and the tree it carries is read back out of the store rather than taken on
+  the worktree's word. Never take a path out of a worktree and act on it in the parent.
+- **Never carry a session's worktree as a path and rebuild a `Worktree` from it** somewhere that then
+  runs git with it the ordinary way. Pass the value, which knows its store and its sandbox.
+- **A console-tier plugin runs unconfined**, and is handed the worktree's path. The bundled guidance
+  plugin reads the index through `GIT_INDEX_FILE` against an empty repository of its own; anything
+  else there that runs git has to do the same.
 - **Prefer the sandbox** where the parent has no reason to be the one running it at all. That is the
   [plugins-as-scripts](docs/design/plugins.md) argument, and it is the same argument.
 
@@ -120,7 +128,7 @@ change:
 - [`docs/design/forking.md`](docs/design/forking.md): how a session changes its mind, and why there
   is no rewind.
 - [`docs/design/composer.md`](docs/design/composer.md): dispositions, leaders, the shelf, `forget`,
-  handoff, steering, and running a command.
+  handoff, steering, running a command, and pushing.
 - [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's worktree,
   where in it and on what branch, snapshots, where everything a session keeps on disk is and what it
   takes, and archiving, which takes it away while keeping the conversation.
@@ -182,8 +190,9 @@ events and **prints nothing**, so nothing asks it anything again.
 Three things follow for anybody changing it:
 
 - **`just dependencies` and never `just setup`**, because the other half of `setup` installs a git
-  hook into the clone's common directory, which is shared by every worktree of it and bound read-only
-  in a session. A step that has to write git belongs in the composer's `Run`, as the person.
+  hook, and whether a session's commits run pre-commit is for that session to decide with `pre-commit
+  install` in its own checkout, from `bash` or the composer's `Run`, rather than something a setup
+  plugin does to every session.
 - **The `PATH` it writes is the session's whole `PATH`.** Leave the system directories on the end,
   or the session's commands lose `sh`.
 - **It installs into `$MAINPLATE_SCRATCH` and never `$HOME`.** `$HOME` inside it is the plugin's own

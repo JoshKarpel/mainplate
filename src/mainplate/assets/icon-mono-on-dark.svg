@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <path fill="#f4f2ee" fill-rule="evenodd" d="M256 52a204 204 0 1 0 0 408a204 204 0 1 0 0-408ZM208 120a92 92 0 1 0 0 184a92 92 0 1 0 0-184ZM344 296a36 36 0 1 0 0 72a36 36 0 1 0 0-72Z"/>
+  <circle cx="208" cy="212" r="40" fill="#f4f2ee"/>
+</svg>

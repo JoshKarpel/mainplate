@@ -1,16 +1,16 @@
 # What a person runs themselves, beside the conversation rather than inside it.
 #
-# Every other effect in this console is the model's, and every one of them runs behind
-# `sandbox.py`: a mount namespace with the clone bound read-only, no network, and the parent's
-# environment cleared. A command here runs behind none of that, and that is the whole point rather
-# than a gap. A session's `isolation` bounds what a *model* asked for, and the read-only clone is
-# what stops a tool writing a history no panel shows and no fork inherits. `git commit` and
-# `git push` are the person's to run, and confining them is what would make this pointless.
+# **Behind the same sandbox as the model's own `bash`**, and that is forced rather than chosen. A
+# session's checkout owns its `.git`, so its configuration is the model's to write, and several of
+# its keys name a program git runs: a hook, `core.fsmonitor`, a filter. A person's `git commit` run
+# here unconfined would run whatever the model last put there, as the service user, with everything
+# that user holds. So a command here reaches the checkout, its store read-only and the scratch, under
+# the session's own network answer and the environment its setup recorded, exactly as the model's
+# would; what differs is who typed it and that no model is told.
 #
-# The authority that adds is nothing new. A session on `Filesystem.EVERYTHING` already hands a model
-# the store, every other conversation, and `config.yaml` with the credentials in it. What it does
-# mean is that whoever can reach this console can run anything the service can, so reachability is
-# the whole of what guards it - which was already true and is now worth saying out loud.
+# What that takes away is the person's credentials, so `git push` in here has nothing to push with.
+# Pushing is `Commands.push`'s instead: the branch crosses into the store as a bundle and the store
+# pushes it, as this console, reading no configuration the session wrote.
 #
 # Nothing here is ever told to a model. The record exists so the page can draw a run and a reload
 # can find it again; putting it in the history is a message somebody writes. See the key scheme in
@@ -22,17 +22,26 @@ import asyncio
 import logging
 import os
 import signal
+from collections.abc import Awaitable
+from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import timedelta
 from pathlib import Path
+from typing import Final
 
 from without_durability.interfaces import Checkpointer
 
 from mainplate.conversation import Result
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
+from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Venue
+from mainplate.sandbox import confined_by
 from mainplate.settings import DEFAULT_PATIENCE
+from mainplate.snapshots import SnapshotFailed
+from mainplate.snapshots import Worktree
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +54,10 @@ MOST_OUTPUT = 200_000
 BLOCK = 64 * 1024
 
 CUT = "[…output above this point was dropped]\n"
+
+# What a push is recorded as, where a command records what was typed: the word the composer answers
+# to, so the panel says what somebody asked for.
+PUSHED: Final = "push"
 
 # What a command that was killed before it could exit is recorded as. Outside the range a process
 # can exit with (0-255) and outside the negatives a signal produces, so it is not mistakable for
@@ -104,12 +117,30 @@ def kill(process: asyncio.subprocess.Process) -> None:
         return
 
 
-async def ran(said: str, where: Path, patience: timedelta, into: bytearray) -> Result:
+@dataclass(frozen=True, slots=True)
+class Running:
     """
-    One command, run in `where` as this process's own user, and what came of it.
+    Where a person's command runs: the session's own sandbox, as its `bash` would get it.
+
+    `environment` is what the session's setup recorded, so `just test` finds the toolchain the
+    repository's plugin installed, as it would for the model.
+    """
+
+    confinement: InAWorktree
+    venue: Venue
+    environment: Mapping[str, str]
+
+    @property
+    def where(self) -> Path:
+        return self.confinement.worktree.root
+
+
+async def ran(said: str, running: Running, patience: timedelta, into: bytearray) -> Result:
+    """
+    One command, run in the session's sandbox, and what came of it.
 
     A **shell** and not an argument vector, because what is in the box is what somebody would type:
-    `git commit -m 'x' && git push` is one thought and two processes, and splitting it here would
+    `git add -A && git commit -m 'x'` is one thought and two processes, and splitting it here would
     turn the obvious thing to type into a refusal. The shell is the reason this cannot be an
     allowlist of commands either, which is the same argument `sandbox.py` makes one level up.
 
@@ -117,16 +148,31 @@ async def ran(said: str, where: Path, patience: timedelta, into: bytearray) -> R
     they interleave wrongly or not at all, and nobody has ever wanted a build's errors in a second
     column.
 
+    `cwd` is the checkout even though `--chdir` is what puts the command there, so a checkout that
+    does not exist yet is a `FileNotFoundError` naming it rather than bwrap's own complaint.
+
     A timeout kills the group and records what the command managed to say, rather than raising: a
     run that hit the bound is a result to read, not an error to explain.
     """
     began = asyncio.get_running_loop().time()
-    process = await asyncio.create_subprocess_shell(
+    confinement = running.confinement
+    await asyncio.to_thread(confinement.scratch.mkdir, parents=True, exist_ok=True)
+    process = await asyncio.create_subprocess_exec(
+        confinement.worktree.bwrap,
+        *confined_by(confinement).argv(
+            at=str(running.where),
+            venue=running.venue,
+            home=str(confinement.scratch),
+            environment=running.environment,
+        ),
+        "/bin/sh",
+        "-c",
         said,
-        cwd=where,
+        cwd=running.where,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        # Its own process group, so `kill` can reach whatever the shell started. See `kill`.
+        # Its own process group, so `kill` can reach bwrap and, through its pid namespace, whatever
+        # the shell started. See `kill`.
         start_new_session=True,
     )
     reading = process.stdout
@@ -147,6 +193,18 @@ async def ran(said: str, where: Path, patience: timedelta, into: bytearray) -> R
         raise
     return Result(
         status=status,
+        output=trimmed(bytes(into)),
+        took=timedelta(seconds=asyncio.get_running_loop().time() - began),
+    )
+
+
+async def pushing(worktree: Worktree, url: str, branch: str, into: bytearray) -> Result:
+    """One push of the session's branch, as a result the page draws the way it draws a command's."""
+    began = asyncio.get_running_loop().time()
+    came = await worktree.push(url, branch)
+    into.extend(came.stdout + came.stderr)
+    return Result(
+        status=came.code,
         output=trimmed(bytes(into)),
         took=timedelta(seconds=asyncio.get_running_loop().time() - began),
     )
@@ -198,9 +256,9 @@ class Commands:
     patience: timedelta = DEFAULT_PATIENCE
     running: dict[asyncio.Task[None], Slot] = field(default_factory=dict)
 
-    def start(self, slot: Slot, said: str, where: Path) -> None:
+    def start(self, slot: Slot, said: str, running: Running) -> None:
         """
-        Run `said` in `where`, and record what came of it under the slot already claimed for it.
+        Run `said` in the session's sandbox, and record what came of it under the slot already claimed.
 
         Returns as soon as the command is scheduled, because somebody is waiting on the request that
         posted it and a build is minutes. What the page shows meanwhile is the command with no result
@@ -210,11 +268,25 @@ class Commands:
         This is the control-plane argument the worker already answers for cloning, one step along: a
         POST records an intention and something else does the slow part.
         """
-        task = asyncio.create_task(self.record(slot, said, where), name=f"command {slot.session} {slot.entry}")
+        self.scheduled(slot, lambda holding: ran(said, running, self.patience, holding))
+
+    def push(self, slot: Slot, worktree: Worktree, url: str, branch: str) -> None:
+        """
+        Push the session's branch to the repository, and record what came of it like a command.
+
+        Its own arm rather than a command somebody types, because the one thing a command in the
+        sandbox cannot do is the one thing this is: reach the repository as the person. The branch
+        crosses into the store and the store pushes it, so no configuration the session wrote is read
+        by anything holding a credential. See `Worktree.push`.
+        """
+        self.scheduled(slot, lambda holding: pushing(worktree, url, branch, holding))
+
+    def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
+        task = asyncio.create_task(self.record(slot, work), name=f"command {slot.session} {slot.entry}")
         self.running[task] = slot
         task.add_done_callback(lambda done: self.running.pop(done, None))
 
-    async def record(self, slot: Slot, said: str, where: Path) -> None:
+    async def record(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
         """
         The whole of one run: do it, then say what happened, whichever way it ended.
 
@@ -232,7 +304,7 @@ class Commands:
         """
         holding = bytearray()
         try:
-            came = await ran(said, where, self.patience, holding)
+            came = await work(holding)
         except asyncio.CancelledError:
             await asyncio.shield(self.result(slot, self.stopped(holding)))
             raise
@@ -248,9 +320,11 @@ class Commands:
         except FileNotFoundError as missing:
             came = self.stopped(
                 holding,
-                f"there is nothing at {where} to run in: a session's worktree is made on its first"
-                f" turn, so a command sent before that has nowhere to go ({missing.strerror})",
+                f"there is nothing at {missing.filename} to run in: a session's worktree is made on its"
+                f" first turn, so a command sent before that has nowhere to go ({missing.strerror})",
             )
+        except SnapshotFailed as failed:
+            came = self.stopped(holding, f"this could not be pushed: {failed}")
         except OSError as failed:
             came = self.stopped(holding, f"this could not be run: {failed!r}")
         await self.result(slot, came)

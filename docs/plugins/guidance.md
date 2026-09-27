@@ -196,6 +196,13 @@ boundary: an ignored virtual environment or other untracked directory may carry 
 that file belongs to the environment rather than the repository and never becomes instructions.
 The cost is that a directory that is not a Git checkout contributes no repository guidance.
 
+**It reads the index without reading the checkout's configuration.** This plugin is console tier,
+so it runs as the operator outside every sandbox, and the checkout's `.git/config` is the session's
+to write and may name a program git runs. So it points `GIT_INDEX_FILE` at `<worktree>/.git/index`
+and runs `ls-files --cached` with `--git-dir` naming an empty bare repository it makes in a
+temporary directory: git reads the index as data and finds only a configuration nothing wrote. See
+[what runs, and as whom](../design/security.md#the-parent-never-runs-git-against-a-checkout).
+
 **And the file itself, handed over on approach.** The plugin reads which paths the model has named to
 a file tool and asks for the guidance covering them to be injected, from the root down. Six things
 there are decided:

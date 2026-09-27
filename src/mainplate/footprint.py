@@ -54,10 +54,8 @@ class Places:
     `$HOME` can never sit under a directory the model writes, and what decides that is which root
     each namespace is *bound*; this binds nothing. It reads what the others made, and it says so.
 
-    Derived rather than listed, for the reason `Worktrees.gitdir` gives: a session's worktree is the
-    one directory the session can write, so anything that went looking in it for where the rest is
-    would be acting on the session's word. Every path here comes from the session id and the roots
-    this console was started with.
+    Derived rather than listed: every path here comes from the session id and the roots this console
+    was started with, and none from reading anything a session wrote.
     """
 
     workspaces: Workspaces
@@ -72,25 +70,11 @@ class Places:
         """
         Every directory that is this session's and nothing else's, whether or not it exists yet.
 
-        The worktree and git's own directory for it inside the clone, where the session works in a
-        repository; the scratch and the plugins' scratches either way. Not the clone, which every
-        session on that repository shares, and not the snapshots, which live in the clone's object
-        store under a ref of their own and are what keeps the checkpoint forkable once the rest is
-        gone.
-
-        Git's directory is named because it is the session's: `git worktree remove` takes it with
-        the tree, and it is where the session's index lives, which on a large repository is real
-        space. Named through the same derivation the sandbox trusts rather than by reading the
-        worktree's `.git` file, for the reason in the class note.
+        The checkout, `.git` and all, where the session works in a repository; the scratch and the
+        plugins' scratches either way. Not the store, which every session on that repository shares
+        and which holds the snapshots that keep a checkpoint forkable once the rest is gone.
         """
-        worked_in = (
-            (
-                self.workspaces.at(session),
-                self.workspaces.clones.worktrees(repository, self.workspaces.root).gitdir(session),
-            )
-            if repository is not None
-            else ()
-        )
+        worked_in = (self.workspaces.at(session),) if repository is not None else ()
         return (*worked_in, self.workspaces.scratch_at(session), self.plugins / session)
 
 

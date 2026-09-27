@@ -96,7 +96,7 @@ async def ran(
     scratch = scratch_of(confinement)
     if scratch is not None:
         await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
-    sandbox = await confined_by(confinement)
+    sandbox = confined_by(confinement)
     home = home_in(confinement)
     process = await asyncio.create_subprocess_exec(
         bwrap,

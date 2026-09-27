@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import checkout_in
 
-from mainplate.snapshots import Worktree
 from mainplate.tools.files.anchors import GUTTER
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import Substitute
@@ -20,7 +20,7 @@ from mainplate.tools.grep.tools import searched
 
 
 @pytest.fixture
-def repository(tmp_path: Path) -> Files:
+def repository(tmp_path: Path, bwrap: str) -> Files:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "build").mkdir()
     (tmp_path / ".gitignore").write_text("build/\n")
@@ -30,7 +30,7 @@ def repository(tmp_path: Path) -> Files:
     (tmp_path / "build" / "ignored.py").write_text("needle in ignored output\n")
     (tmp_path / "blob.bin").write_bytes(b"\xff\xfe needle")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)),))
+    return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)),))
 
 
 def anchor_of(files: Files, path: str, at: int) -> str:

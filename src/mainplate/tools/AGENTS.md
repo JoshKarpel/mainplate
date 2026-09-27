@@ -58,18 +58,21 @@ plugin reaches is decided by its own tier rather than by what the *model* may to
 at `describe` and never added mid-conversation, because a tool definition sits above the cached
 prefix and introducing one late invalidates the whole conversation beneath it.
 
-## `list` runs a program in the parent
+**There is no git tool.** A worktree owns its `.git`, so git in `bash` does everything a session
+needs, confined like every other command; a tool wrapping a subset of it would be a second git
+surface to keep safe for nothing the shell does not already do.
 
-`GitTracked.entries` runs `git ls-files` in this process, over the worktree, which is the one
-directory a session may write. `ls-files` refreshes the index, so a call that let git find its own
-directory would run whatever the tree's configuration named. See
-[`docs/design/security.md`](../../../docs/design/security.md).
+## `list` runs git, and only in the sandbox
 
-**So it holds a `Worktree` and goes through `Worktree.git`**, which is the only place that knows how
-to run git safely: named git directory, built environment. Do not build a git subprocess here out of
-`addressed` and `environment`, which is a second copy of that answer and drifts silently. What
-`entries` needs beyond the default is `at=` and `Ran.stdout`, and anything else should be one more
-argument there rather than a subprocess of its own.
+`GitTracked.entries` runs `git ls-files` over the worktree, which is the one directory a session may
+write, `.git` included. `ls-files` refreshes the index, so a call in this process would run whatever
+the worktree's configuration named. See [`docs/design/security.md`](../../../docs/design/security.md).
+
+**So it holds a `Worktree` and goes through `Worktree.git`**, which runs git behind `bwrap`. Do not
+build a git subprocess here, or anywhere in the parent, against a worktree path: it would read the
+session's configuration with this process's authority, and nothing at the call site would say so.
+What `entries` needs beyond the default is `at=` and `Ran.stdout`, and anything else should be one
+more argument there rather than a subprocess of its own.
 
 ## `grep` reads what `edit` can address
 
@@ -90,10 +93,10 @@ question the shell already answers.
 ## These tools do not pass through the sandbox
 
 `read`, `grep`, `edit` and `create` access files from the parent, so **no bind protects anything
-from them**. The sandbox binds the worktree's `.git` read-only and that stops `bash` replacing the
-pointer; it does nothing here, which is why `GitTracked.sealed` names `.git` and `Files.resolved`
-refuses it. The two are one decision in two places because the two paths are genuinely different,
-not a check written twice: remove either and the vector is open again through the other.
+from them**. `GitTracked.sealed` names `.git` and `Files.resolved` refuses it and everything under
+it, so an `edit` never rewrites a ref or a config line underneath git's own locking. That is about
+correctness rather than reach: `bash` runs git against the same directory, so the same bytes are one
+`git config` away, and nothing here relies on the refusal to keep a program from running.
 
 `sealed` is a property on each root arm, beside `name`, so a new kind of place brings its own answer
 rather than needing an entry in `resolved`. Keep the refusal to a root's *top level*: a `.gitignore`,

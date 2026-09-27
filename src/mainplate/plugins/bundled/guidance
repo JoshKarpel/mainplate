@@ -29,6 +29,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -139,24 +140,28 @@ def tracked_guidance(root: Path) -> frozenset[Path]:
     knows and does not add files the session has created since.
 
     Nothing on a failed command, because a directory that is not a checkout has no repository-owned
-    guidance to contribute. `core.fsmonitor` is disabled so asking which paths are tracked cannot run
-    a program named by repository configuration.
+    guidance to contribute.
+
+    **The checkout's index is read through a repository this plugin made**, an empty bare one in a
+    temporary directory, and never through the checkout's own `.git`. This plugin runs as the
+    operator, outside every sandbox, and a session's checkout owns its `.git`: its configuration is
+    the model's to write, and several of its keys name a program git runs. Git reads the
+    configuration of whichever repository it is told is its own, so telling it this one means the
+    checkout's is never read at all, whatever keys it holds. The index is only data, and one that is
+    not an index is a failed command and so no guidance.
     """
+    index = root / ".git" / "index"
     try:
-        listed = subprocess.run(
-            (
-                "git",
-                "-c",
-                "core.fsmonitor=false",
-                "-C",
-                str(root),
-                "ls-files",
-                "--cached",
-                "-z",
-            ),
-            check=False,
-            capture_output=True,
-        )
+        with tempfile.TemporaryDirectory() as empty:
+            made = subprocess.run(("git", "init", "--quiet", "--bare", empty), check=False, capture_output=True)
+            if made.returncode != 0:
+                return frozenset()
+            listed = subprocess.run(
+                ("git", "--git-dir", empty, "--work-tree", str(root), "ls-files", "--cached", "-z"),
+                check=False,
+                capture_output=True,
+                env={**os.environ, "GIT_INDEX_FILE": str(index)},
+            )
     except OSError:
         return frozenset()
     if listed.returncode != 0:

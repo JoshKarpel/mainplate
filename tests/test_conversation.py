@@ -1515,7 +1515,7 @@ class TestWhatOnePassDoes:
         recorded = await planting.checkpointer.load(session.id)
         told = system_prompt_in(parse_messages(recorded[messages_key(0)]))
         assert told is not None, "the control: nothing carried means nothing to differ over"
-        assert "You are working in a git worktree" in told, (
+        assert "You are working in a git checkout" in told, (
             "the other control: the note about this session's places is the part that used to be "
             "composed after the record was written, so without it the two agree by having no "
             "chance to disagree"

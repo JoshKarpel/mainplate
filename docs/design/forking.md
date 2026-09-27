@@ -64,8 +64,9 @@ something did was two behaviours behind one word, which is what took the compose
 ## What a fork does not inherit
 
 - **The base and the branch**, which is `settled(forked=True)`. A fork plants at the tree of the
-  turn it re-asks, so a base beside that is a second answer to where its files come from, and `git
-  worktree add -b` refuses a branch already in use. See [the workspace](workspace.md#where-in-it-and-on-what-branch).
+  turn it re-asks, so a base beside that is a second answer to where its files come from, and an
+  inherited branch is one a push from the fork would land on the parent's work. See [the
+  workspace](workspace.md#where-in-it-and-on-what-branch).
 - **What its plugins are set to**, which start on their own declared defaults. A reserve is a
   decision about how much room one conversation's context has left, and a branch's context is not
   that conversation's. See [handing off without being

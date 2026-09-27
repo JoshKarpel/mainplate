@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -41,7 +42,6 @@ from mainplate.pages import CACHE_ID
 from mainplate.service import Service
 from mainplate.sessions import Footprint
 from mainplate.sessions import read_session
-from mainplate.snapshots import Worktree
 
 
 class TestArchivingASession:
@@ -150,7 +150,7 @@ class TestTheNewestTree:
         assert forked is not None
         ending = parse_tree((await planting.checkpointer.load(forked.id))[opening_tree_key(1)])
         assert ending is not None
-        assert "src/after.txt" in await Worktree(root=workspaces.clones.at(FIXTURE)).paths(ending)
+        assert "src/after.txt" in await workspaces.clones.store(FIXTURE).paths(ending)
 
     async def test_a_fork_of_a_turn_still_plants_at_that_turns_own_opening(self, service: Service) -> None:
         """The control: re-asking turn 0 sees the files turn 0 saw, not the newest ones."""
@@ -186,9 +186,7 @@ async def working(service: Service, workspaces: Workspaces, places: Places) -> t
 
 
 class TestTakingAnArchivedSessionOffTheDisk:
-    async def test_every_directory_goes_and_git_stops_naming_the_worktree(
-        self, service: Service, workspaces: Workspaces, places: Places
-    ) -> None:
+    async def test_every_directory_goes(self, service: Service, workspaces: Workspaces, places: Places) -> None:
         planting, session = await working(service, workspaces, places)
         await planting.archive(session)
         holder = Footprints(current={session: Footprint(allocated=30_000, measured_at=WHEN)})
@@ -196,8 +194,7 @@ class TestTakingAnArchivedSessionOffTheDisk:
         await reconciled(planting, places, holder, now=lambda: WHEN)
 
         assert not any(place.exists() for place in places.of(session, FIXTURE))
-        worktrees = workspaces.clones.worktrees(FIXTURE, workspaces.root)
-        assert workspaces.at(session) not in await worktrees.planted()
+        assert not workspaces.worktrees(FIXTURE).planted(session)
         assert holder.current[session] == Footprint(allocated=0, measured_at=WHEN)
 
     async def test_the_files_it_ended_with_are_captured_before_the_worktree_goes(
@@ -212,8 +209,20 @@ class TestTakingAnArchivedSessionOffTheDisk:
         recorded = await planting.checkpointer.load(session)
         ending = parse_tree(recorded[ARCHIVED_TREE_KEY])
         assert ending is not None
-        clone = Worktree(root=workspaces.clones.at(FIXTURE))
-        assert "src/made.txt" in await clone.paths(ending)
+        assert "src/made.txt" in await workspaces.clones.store(FIXTURE).paths(ending)
+
+    async def test_a_session_that_broke_its_own_git_still_comes_off_without_a_last_tree(
+        self, service: Service, workspaces: Workspaces, places: Places
+    ) -> None:
+        """No later round would capture it either, so waiting would keep its files for ever."""
+        planting, session = await working(service, workspaces, places)
+        shutil.rmtree(workspaces.at(session) / ".git")
+        await planting.archive(session)
+
+        await reconciled(planting, places, Footprints())
+
+        assert not any(place.exists() for place in places.of(session, FIXTURE))
+        assert ARCHIVED_TREE_KEY not in await planting.checkpointer.load(session)
 
     async def test_a_session_a_pass_holds_keeps_its_files_until_the_claim_ends(
         self, service: Service, workspaces: Workspaces, places: Places

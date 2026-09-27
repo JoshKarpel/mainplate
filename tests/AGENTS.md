@@ -107,9 +107,9 @@ carries every session's title, so an assertion that a message does not contain s
 the list's escaped copy of it. `watched` in `test_console.py` hands back the message with the list
 taken out, and `region_in` picks one partial out by its target for a test about the list itself.
 
-**A session nobody has opened is `new`**, because it recorded its choice and nobody looked. A test
+**A session nobody has opened is `unread`**, because it recorded its choice and nobody looked. A test
 about the word has to look first, with a `GET` of the session's page, or every row it asserts on is
-new for a reason the test did not set up.
+unread for a reason the test did not set up.
 
 **A hidden tab is driven by the event, not by hiding anything.** Playwright cannot background a tab,
 so `shown` in `test_browser.py` sets what `document.hidden` answers and fires `visibilitychange`,
@@ -198,17 +198,23 @@ claim that matters. Its repository-tier tests need `bwrap` and fail loudly witho
 **`TestWhatASetupActuallyReaches` runs setup plugins of its own through the real sandbox, and never
 this repository's.** What `.mainplate/setup` here does is fetch a toolchain; what the suite asserts
 is the mechanism - what it installs lands in the *session's* scratch, only the environment file
-crosses back, a malformed line is loud, and the clone is still read-only in there.
-`TestAPluginThatSetsTheRepositoryUp` is the switch and the record, driven through a real pass, and it
-needs `tendings` for the reason above. Both write their plugin **into the worktree**, which is not
-incidental: the namespace binds the tree, its clone and two scratches, so a script anywhere else is
-one `bwrap` cannot find.
+crosses back, and a malformed line is loud. `TestAPluginThatSetsTheRepositoryUp` is the switch and
+the record, driven through a real pass, and it needs `tendings` for the reason above. Both put their
+plugin **into the repository a session plants from**, which is not incidental: the namespace binds
+the worktree, its store and two scratches, so a script anywhere else is one `bwrap` cannot find.
 
 **What that stub cannot cover is asserted against arguments instead.**
 `TestWhereARepositorysPluginRuns` reads the `bwrap` argv this console builds - the network on `setup`
 and shut everywhere else, the session's scratch and the environment file on `setup` and nowhere else,
 `$HOME` in the plugin's own scratch at every event including that one, a scratch per plugin per
 session - because running it to find out would be the same assertions made slowly and over a network.
+
+**`origin` and `worktree` in `conftest.py` are two different repositories.** `origin` is the plain
+repository a stand-in forge reaches, and a test that wants the remote to move commits there;
+`worktree` is a session's checkout planted from it through `Workspaces`, with its own `.git`, its
+store, and an ignored `.env` and `built/` written in. A test that commits into `worktree` and expects
+a new session to see it is committing to the wrong one. `checkout_in` is for a test that set a
+directory up itself and wants the file tools or `list` over it, with an empty store beside it.
 
 `test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
 fixtures there hand an absolute workspace root and so would never notice a path resolved against the

@@ -53,7 +53,10 @@ from without_durability_sqlite import Database
 
 from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import FILESYSTEM_FIELD
+from mainplate.conversation import ISOLATION_FIELD
 from mainplate.conversation import REPOSITORY_FIELD
+from mainplate.sandbox import Filesystem
 from mainplate.tending import Tending
 from mainplate.tending import parse_tending
 from mainplate.tending import written
@@ -208,6 +211,13 @@ class Session:
     `owner/repo` a person recognises.
     """
 
+    filesystem: Filesystem | None = None
+    """
+    How much of the filesystem this session's tools reach, reached for exactly as `repository` is, or
+    nothing before its choice is written. It is what tells the two kinds of session with no
+    repository apart on the dashboard.
+    """
+
     tending: Tending = field(default_factory=Tending)
     """
     What this session's plugins are set to, which is the one field here that moves.
@@ -285,7 +295,7 @@ class Session:
     Filled by `Service.listed` from one reading of the claim and the queue for every session, and
     left empty by `parse_session`, for the footprint's reason: it is live control-plane state and
     not a fact about the session, true at the instant it was read and at no other, so it is not a
-    column and not in the checkpoint. The list draws it as the word beside `new`, because a row that
+    column and not in the checkpoint. The list draws it as the word beside `unread`, because a row that
     says something arrived and a row that says something is still coming are two different reasons
     to open a session.
     """
@@ -413,6 +423,7 @@ SELECT sessions.id,
        sessions.enabled,
        sessions.settings,
        json_extract(choice.value, :repository_path),
+       json_extract(choice.value, :filesystem_path),
        json_extract(archived.value, :archived_path),
        (SELECT max(said.written_at)
           FROM workflow_checkpoint AS said
@@ -434,6 +445,7 @@ SELECT sessions.id,
 SCHEME: Final = {
     "choice_key": CHOICE_KEY,
     "repository_path": f"$.{REPOSITORY_FIELD}",
+    "filesystem_path": f"$.{ISOLATION_FIELD}.{FILESYSTEM_FIELD}",
     "archived_key": ARCHIVED_KEY,
     "archived_path": "$.at",
     "inbox_glob": f"{INBOX}*",
@@ -644,6 +656,7 @@ type Row = tuple[
     str | None,
     str | None,
     str | None,
+    str | None,
     float | None,
     int | None,
     int | None,
@@ -670,6 +683,7 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 None if enabled is None else str(enabled),
                 None if settings is None else str(settings),
                 None if repository is None else str(repository),
+                None if filesystem is None else str(filesystem),
                 None if archived is None else str(archived),
                 None if said is None else float(said),
                 None if told is None else int(told),
@@ -685,6 +699,7 @@ async def selecting(database: Database, statement: str, parameters: Mapping[str,
                 enabled,
                 settings,
                 repository,
+                filesystem,
                 archived,
                 said,
                 told,
@@ -706,6 +721,7 @@ def parse_session(row: Row) -> Session:
         enabled,
         settings,
         repository,
+        filesystem,
         archived,
         said,
         told,
@@ -720,6 +736,7 @@ def parse_session(row: Row) -> Session:
         # quieter wrong answer; this says so instead.
         forked=parse_origin(identifier, forked_from, forked_at, forked_aside),
         repository=repository,
+        filesystem=None if filesystem is None else Filesystem(filesystem),
         tending=parse_tending(enabled, settings),
         archived=None if archived is None else datetime.fromisoformat(archived),
         # The store's stamp is seconds since the epoch, in UTC by definition, where every other

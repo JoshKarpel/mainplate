@@ -91,8 +91,9 @@ was a number.
 
 **It is the odd one out here, because it is not downstream of a checkpoint: it writes one.** So it
 drives a real `Service` over a real store and a real git worktree, with only the provider standing
-in - the per-request snapshot leaves the process, and a stand-in for git would leave the one thing a
-pass does outside Python out of the measurement.
+in - the per-request snapshot leaves the process, behind the real `bwrap`, and a stand-in for either
+would leave the one thing a pass does outside Python out of the measurement. So it needs `bwrap` to
+run at all.
 
 **The stand-in states its own usage, which is the control rather than a detail.** `FunctionModel`
 estimates usage for a response that carries none by splitting every message in the history with a

@@ -110,18 +110,16 @@ def places(tmp_path: Path) -> Places:
             root=tmp_path / "worktrees",
             scratch=tmp_path / "scratch",
             reaching=Reaching(current=Reachable(repositories=())),
+            bwrap=None,
         ),
         plugins=tmp_path / "plugins",
     )
 
 
 class TestWhereASessionsDirectoriesAre:
-    def test_a_session_in_a_repository_has_its_worktree_gits_directory_for_it_its_scratch_and_its_plugins(
-        self, places: Places, tmp_path: Path
-    ) -> None:
+    def test_a_session_in_a_repository_has_its_checkout_and_scratches(self, places: Places, tmp_path: Path) -> None:
         assert places.of("ab" * 16, "test:fixture") == (
             tmp_path / "worktrees" / ("ab" * 16),
-            tmp_path / "clones" / "test:fixture.git" / "worktrees" / ("ab" * 16),
             tmp_path / "scratch" / ("ab" * 16),
             tmp_path / "plugins" / ("ab" * 16),
         )

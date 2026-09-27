@@ -11,13 +11,19 @@ from mainplate.sandbox import InAScratch
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
+from mainplate.snapshots import Store
 from mainplate.snapshots import Worktree
 from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
 from mainplate.tools import System
 
 BWRAP = "/usr/bin/bwrap"
-WORKTREE = Worktree(root=Path("/var/lib/mainplate/worktrees/aaaa"), gitdir=Path("/var/lib/mainplate/clones/x.git"))
+WORKTREE = Worktree(
+    root=Path("/var/lib/mainplate/worktrees/aaaa"),
+    store=Store(path=Path("/var/lib/mainplate/clones/x.git")),
+    session="aaaa",
+    bwrap=BWRAP,
+)
 SCRATCH = Path("/var/lib/mainplate/scratch/aaaa")
 
 
@@ -57,7 +63,8 @@ class TestWhatASessionReaches:
         reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=False), WORKTREE, SCRATCH, BWRAP)
         assert reach.roots == (GitTracked(worktree=WORKTREE), Scratch(path=SCRATCH))
         assert reach.confinement == InAWorktree(worktree=WORKTREE, scratch=SCRATCH)
-        assert "git worktree" in reach.note
+        assert "git checkout" in reach.note
+        assert "nothing you run can push" in reach.note
 
     def test_a_worktree_session_without_a_sandbox_keeps_its_file_tools_and_gets_no_bash(self) -> None:
         reach = reaching(Isolation(filesystem=Filesystem.WORKTREE), WORKTREE, SCRATCH, None)

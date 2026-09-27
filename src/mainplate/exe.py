@@ -47,6 +47,10 @@ GITHUB: Final = "github"
 # same question and a session has to say which one it was started on.
 FORGE: Final = "exe-github"
 
+# Where the repositories behind a GitHub integration are read in a browser. Deduced rather than asked:
+# the integration proxies GitHub, so `owner/repo` on its host is `owner/repo` here.
+GITHUB_WEB: Final = "https://github.com"
+
 # The clone URL inside an integration's help text, which is where exe.dev publishes it. Anchored on
 # the scheme and the `.git` suffix rather than on the surrounding words, so a help string that
 # rephrases itself still parses and one that carries no URL at all is skipped.
@@ -157,7 +161,13 @@ def parse_repositories(document: bytes) -> tuple[Repository, ...]:
     own edge, so the URL is the whole of what reaching the repository takes.
     """
     return tuple(
-        Repository(forge=FORGE, key=name, name=repository, url=f"{integration_url(name)}/{repository}.git")
+        Repository(
+            forge=FORGE,
+            key=name,
+            name=repository,
+            url=f"{integration_url(name)}/{repository}.git",
+            web=f"{GITHUB_WEB}/{repository}",
+        )
         for entry in integrations_in(document)
         if entry.get("type") == GITHUB
         and isinstance(name := entry.get("name"), str)

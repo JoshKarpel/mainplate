@@ -25,12 +25,17 @@ from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Final
 from typing import assert_never
 
 from mainplate.roots import RootName
 from mainplate.roots import environment_named
-from mainplate.snapshots import Worktree
+
+if TYPE_CHECKING:
+    # Only as a type: `snapshots.py` runs git against a checkout through a `Sandbox`, so the runtime
+    # import goes that way round.
+    from mainplate.snapshots import Worktree
 
 BWRAP: Final = "bwrap"
 
@@ -140,9 +145,9 @@ class Bind:
     What a command calls this place, where it is one a model has any business naming.
 
     A bind rather than a field on the sandbox, so the two shapes still differ only in what is in
-    `places`. Absent on the clone, which is bound so that git works and is not somewhere anybody
-    should be writing paths into, and absent on `/`, where an environment variable saying `/` would
-    be a name for the thing every path already starts with.
+    `places`. Absent on the store, which is bound so that a checkout's borrowed objects resolve and
+    is not somewhere anybody should be writing paths into, and absent on `/`, where an environment
+    variable saying `/` would be a name for the thing every path already starts with.
 
     Every path here is bound at *its own* path, so this is not a shorter route to the directory: it
     is the same absolute path under a name, which is what stops a model reproducing 32 hex characters
@@ -152,7 +157,7 @@ class Bind:
 
 @dataclass(frozen=True, slots=True)
 class InAWorktree:
-    """A session's commands inside its own worktree, its clone, and its scratch directory."""
+    """A session's commands inside its own checkout, the store it borrows from, and its scratch directory."""
 
     worktree: Worktree
     scratch: Path
@@ -188,7 +193,7 @@ class InAScratch:
     A session's commands inside its scratch directory and nothing else of the machine.
 
     What a session with no repository gets: somewhere to run things and keep what they made from
-    one turn to the next, with no worktree for a relative path to mean and no clone to bind. It is
+    one turn to the next, with no worktree for a relative path to mean and no store to bind. It is
     `Filesystem.NOTHING`'s arm, and "nothing" still means nothing *of this machine*: the scratch is
     the session's own, made for it and taken off the disk with it.
     """
@@ -212,11 +217,11 @@ command, which is the one place that knows a command is about to run.
 """
 
 
-async def confined_by(confinement: Confinement) -> Sandbox:
-    """The sandbox one confinement means, asked of git where that is what decides the paths."""
+def confined_by(confinement: Confinement) -> Sandbox:
+    """The sandbox one confinement means."""
     match confinement:
         case InAWorktree(worktree=worktree, scratch=scratch, scratch_named=named, session_scratch=session):
-            return await Sandbox.around(worktree, scratch, named, session)
+            return Sandbox.around(worktree, scratch, named, session)
         case InAScratch(scratch=scratch):
             return Sandbox.within(scratch)
         case OverEverything():
@@ -296,21 +301,20 @@ class Sandbox:
     """
     What one command can see, as the paths bound into its namespace.
 
-    A list rather than named fields, so the two shapes a session can have - a worktree with its clone
-    and scratch, or the whole machine - differ only in what is in it and share every other argument.
-    That is what keeps the network answer, the cleared environment and the pid namespace from being
-    things the filesystem answer can change by accident.
+    A list rather than named fields, so the shapes a session can have - a checkout with its store
+    and scratch, a scratch alone, or the whole machine - differ only in what is in it and share every
+    other argument. That is what keeps the network answer, the cleared environment and the pid
+    namespace from being things the filesystem answer can change by accident.
 
     Every path is absolute and every one is bound at *its own* path inside the namespace rather than
-    at a tidy `/worktree`. That is forced rather than chosen: a linked worktree's `.git` is a file
-    holding an *absolute* pointer into the clone, so a remapped worktree is one whose git is broken
-    unless every consumer also carries a `GIT_COMMON_DIR` that any subprocess is free to unset.
+    at a tidy `/worktree`. A checkout's `alternates` file names the store by its absolute path, so a
+    remapped store is one whose borrowed objects every git in here fails to find.
     """
 
     places: tuple[Bind, ...]
 
     @classmethod
-    async def around(
+    def around(
         cls,
         worktree: Worktree,
         scratch: Path,
@@ -318,41 +322,33 @@ class Sandbox:
         session_scratch: Path | None = None,
     ) -> Sandbox:
         """
-        A worktree, its clone read-only, and a scratch directory: what a `WORKTREE` session reaches.
+        A checkout, its store read-only, and a scratch directory: what a `WORKTREE` session reaches.
+
+        **The checkout is bound read-write whole, `.git` included**, so git works in here the way it
+        works anywhere: `add`, `commit`, `merge`, `rebase` and `fetch` all do what they say, against
+        this session's refs and nobody else's. What that costs is that the checkout's configuration
+        is the session's to write, and several of its keys name a program git runs. So nothing in the
+        parent runs git against it; `Worktree.git` runs it in here too. See [what runs, and as
+        whom](../../docs/design/security.md).
+
+        **The store is bound read-only**, because the checkout borrows its objects through
+        `alternates` and `origin` is the store. Every session on the repository can therefore read
+        every tree any of them snapshotted, which a shared clone always allowed; none of them can
+        write it, which is what keeps one session's git from reaching another's.
 
         `session_scratch` adds a second writable directory under the name a command finds the
         session's own under, which is what a plugin getting the repository ready is given at `setup`.
         Absent everywhere else, including for the session's own commands, whose `scratch` is already
         that directory: naming one path twice would put two binds of it in one namespace.
 
-        The clone and not the per-worktree directory: the latter sits *inside* the former and its
-        `commondir` points back out at it for objects and refs, so binding the common one covers both
-        and binding the other covers neither. Taken from `Worktree.common` where the tree's directory
-        was named, which is every session's, and asked of git only for a tree that named none - so
-        the ordinary path runs no subprocess and reads nothing out of the tree to decide what to bind.
-
-        **The pointer goes back over the worktree read-only, and the order is what makes that work.**
-        `.git` in a linked worktree is a one-line file naming the git directory, and it sits in the
-        one place a session may write, so without this a command replaces it with a repository of its
-        own and every later git in that directory reads *that* repository's configuration - which
-        names programs git runs. Bound over itself after the tree, the file cannot be written,
-        removed, moved, or unmounted from in here, and reading it and everything around it still
-        works. See [what runs, and as whom](../../docs/design/security.md).
-
-        All three are **absolute as a precondition**, which is the same one `Clones` and `Worktrees`
-        take: `Settings.workspace_root` resolves once where a configured path enters the process, so
-        everything derived from it is already absolute and nothing here re-establishes it. A relative
-        path would be resolved against whatever directory bwrap happened to start in, which is not a
-        thing to guess at per call.
+        All of them are **absolute as a precondition**: `Settings.workspace_root` resolves once
+        where a configured path enters the process, so everything derived from it is already
+        absolute and nothing here re-establishes it.
         """
-        common = worktree.common or Path(
-            await worktree.demand("rev-parse", "--path-format=absolute", "--git-common-dir")
-        )
         return cls(
             places=(
                 Bind(path=worktree.root, writable=True, name="worktree"),
-                Bind(path=worktree.pointer, writable=False),
-                Bind(path=common, writable=False),
+                Bind(path=worktree.store.path, writable=False),
                 Bind(path=scratch, writable=True, name=scratch_named),
                 *(() if session_scratch is None else (Bind(path=session_scratch, writable=True, name="scratch"),)),
             )
@@ -406,15 +402,11 @@ class Sandbox:
         repository's script setting `PATH` for every plugin would redirect what the repository's
         other plugins execute at every turn boundary.
 
-        A `WORKTREE` sandbox binds the worktree read-write, its clone **read-only**, and the scratch
-        read-write; a `NOTHING` sandbox binds the scratch alone. The read-only clone is the
-        load-bearing part of the first: it leaves every read working -
-        `ls-files`, `status`, `diff`, `log`, `blame` - while `add`, `commit`, and `stash` fail loudly
-        on a read-only `index.lock`. What that buys is not tidiness: a git write from in here would
-        be a second history that no panel shows, no fork inherits and no rewind restores, which is
-        the second copy of state this whole console is built to refuse. Snapshots keep working
-        because they run in the parent, where the clone is writable, so the agent physically cannot
-        rewrite the history `refs/mainplate/snapshots` is chained onto.
+        A `WORKTREE` sandbox binds the complete checkout read-write, including its private Git
+        metadata, and the scratch read-write; a `NOTHING` sandbox binds the scratch alone. Git may
+        therefore add, commit, merge, rebase and continue conflicts normally. Any repository
+        configuration or hook Git executes still runs inside this same namespace, with the parent's
+        environment cleared and only this session's directories writable.
 
         A `EVERYTHING` sandbox binds `/` read-write instead, which subsumes all of that and is the point
         of choosing it. Everything below the binds is identical either way, which is why there is one

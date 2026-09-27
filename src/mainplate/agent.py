@@ -158,18 +158,17 @@ class Choice:
     session's id wherever a repository was picked, so every session working in one is on a branch.
     `None` here therefore means a session with no repository, or a checkpoint written before this
     existed. What it buys is somewhere for a commit to go, since a commit on a detached `HEAD` is
-    reachable only through the reflog and `Run` is what made committing easy.
+    reachable only through the reflog and has no name to push under.
 
-    **Naming a base does not put the worktree on that branch, and cannot.** Git refuses to check out
-    a branch that another worktree already holds, so two sessions started at `main` would mean the
-    second one failing to plant at all - and a session's whole shape here is that it gets a worktree
-    of its own. So a base names *where to begin* and this names *what to begin*, which is why they
-    are two fields rather than one that sometimes means both.
+    **Naming a base does not put the checkout on that branch.** Two sessions started at `main` and
+    both committing on a branch called `main` would be two histories under one name, and the second
+    push would be refused against the first. So a base names *where to begin* and this names *what to
+    begin*, which is why they are two fields rather than one that sometimes means both.
 
-    Not carried by a fork, and that is a refusal rather than an oversight: `git worktree add -b`
-    takes a branch name that is not already in use, so a fork inheriting one could not be planted at
-    all. Two sessions on one branch would be two writers in one history besides, which is the thing a
-    worktree apiece exists to prevent. A fork is given one of its **own** instead, by the same call.
+    Not carried by a fork, and that is a refusal rather than an oversight: a fork on its parent's
+    branch would be two writers in one history, which is the thing a checkout apiece exists to
+    prevent, and they would meet at the first push. A fork is given one of its **own** instead, by
+    the same call.
     """
 
     isolation: Isolation = field(default_factory=Isolation)
@@ -262,8 +261,8 @@ class Choice:
         The same choice with a branch of its own, where a repository was picked and nobody named one.
 
         Every session working in a repository gets one, because the alternative is a detached `HEAD`
-        and committing is something somebody does here now: `Run` puts `git commit` in the box under
-        the conversation, and a commit on a detached `HEAD` is reachable only through the reflog.
+        and committing is something that happens here, by the model or through `Run`, and a commit on
+        a detached `HEAD` is reachable only through the reflog and cannot be pushed by name.
 
         Taken rather than derived, so a name somebody typed always wins. It is the session's id that
         makes the generated one usable at all - see `branch_named` - which is why this takes one and
@@ -291,7 +290,7 @@ class Choice:
 
         `forked` drops the base and the branch whatever the repository is. A fork plants at the tree
         of the turn it re-asks, so a base would be a second answer to where its files come from, and
-        a branch would be a name `git worktree add -b` refuses because the parent already holds it.
+        a branch would be the parent's history under a second writer.
 
         Trust survives a fork and the base does not, and the two are different questions. A fork
         reads its repository's declaration again, out of the tree it is planted at, so this is what
@@ -823,10 +822,9 @@ def working_note(scratch: bool) -> str:
     reads its parent's prefix from cache instead of paying for the whole conversation again.
     """
     said = (
-        "You are working in a git worktree, which is called `worktree`. The file tools take paths "
+        "You are working in a git checkout, which is called `worktree`. The file tools take paths "
         "relative to it and reach nothing outside it. Changes you make there are snapshotted "
-        "automatically; you never need to commit, and you should not run git commands to record "
-        "your work."
+        "automatically, so you never need to commit to keep your work."
     )
     if not scratch:
         return said
@@ -837,6 +835,9 @@ def working_note(scratch: bool) -> str:
     # Where a command *starts* is said for a different reason: the tool's own description says a
     # `cd` does not survive to the next call, which on its own reads as an instruction to put one at
     # the front of every command. `--chdir` has already done it.
+    #
+    # Git is said because what it can do here is not what a model assumes of a sandbox: it can do
+    # everything but push, and `fetch` works with no network because `origin` is the store.
     return (
         f"{said} You also have a scratch directory called `scratch`, outside the worktree and "
         f"outside every snapshot, which is where anything that is not the repository's belongs. "
@@ -845,9 +846,9 @@ def working_note(scratch: bool) -> str:
         f"Commands you run start in the worktree, so a relative path means the same thing there as "
         f"it does to the file tools and you never need to `cd` into it. They reach those two "
         f"directories and a read-only system, and nothing else: no home directory, no other "
-        f"session's files, and no configuration of the console itself. Git can be read but not "
-        f"written there, so `status`, `diff`, `log` and `blame` answer while `add`, `commit` and "
-        f"`stash` fail."
+        f"session's files, and no configuration of the console itself. The checkout's git is yours: "
+        f"`add`, `commit`, `merge` and `rebase` work as they would anywhere, and `git fetch` brings "
+        f"the repository's current branches, but nothing you run can push."
     )
 
 

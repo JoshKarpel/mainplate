@@ -10,8 +10,8 @@ each one writes, which is also the order of how much they can break:
 - **A steer** is not a disposition and not a thing anybody asks for: it is what happens to an
   ordinary message that a pass finds while it is working. Nothing about the write differs.
 - **A command** is the one that is not a message at all. It goes in the same queue, is read out of
-  it by nobody, runs a process outside the sandbox everything else here runs behind, and is never
-  told to a model.
+  it by nobody, runs a process in the session's sandbox, and is never told to a model. A push is
+  recorded the same way.
 
 Sorting them this way is what keeps the cheap ones cheap. Three of the four need no new mechanism.
 
@@ -66,6 +66,12 @@ drawn as the step-outs they were, because a recorded value is not the console's 
   the session has a worktree to run a command in, and posting it to one that has none is a `422`
   rather than a silence, since a command that vanished is indistinguishable from one that did
   nothing. See [Run](#run).
+- `online` is `Service.run` with the network on for that one command, offered where `run` is and
+  the session's network is off. See [Online](#online).
+- `push` is `Service.push`, which sends the session's recorded branch to its repository. It is
+  offered where `run` is, and it is the one console answer that takes **nothing** from the box: its
+  button carries `formnovalidate`, the boundary allows an empty message for it, and text typed
+  beside it is a `422`. See [Push](#push).
 - A **steer** is [below](#steer). It is not one of these and never was a choice a form makes: it is
   what becomes of a `here` message that a pass finds while it is working.
 
@@ -444,17 +450,16 @@ turn ended from being drawn as a steer of a turn whose settled reading does not 
 
 ## Run
 
-The one answer in the menu that is not a message, and the only thing this console does that runs
-outside the sandbox everything else runs behind. `! ` typed into an empty box is the shortcut to it.
+The one answer in the menu that is not a message: the text runs as a shell command in the session's
+worktree. `! ` typed into an empty box is the shortcut to it.
 
-**As the person and not as the agent, and that is the whole point rather than a gap.** A session's
-`isolation` bounds what a *model* asked for, and [`sandbox.py`](sandbox.md) binds the clone
-read-only precisely so no tool can write a history no panel shows and no fork inherits. `git commit`
-and `git push` are the person's to run, and confining them is what would make this pointless. What
-it adds to the blast radius is nothing new: a session on `Filesystem.EVERYTHING` already hands a
-model the store, every other conversation, and `config.yaml` with the credentials in it. What it
-does mean is that who can reach this console is the whole of what guards it, which was already true
-and is now worth saying.
+**Typed by the person and confined like the agent.** It runs behind [the same
+sandbox](sandbox.md) as the model's `bash`, under the session's network answer and the environment
+its setup recorded, so `just test` finds the toolchain the repository's plugin installed. That is
+forced rather than chosen: the worktree's `.git` is the model's to write, hooks included, and a
+person's `git commit` run as the service user would run whatever the model last put there with
+everything that user holds. What it costs is the person's own `$HOME` and credentials, which nothing
+typed here can reach; `git commit`, `rebase` and the rest work, and pushing is [`/push`](#push).
 
 **Recorded and not told**, which is the split [the key scheme](checkpoints.md#the-key-scheme) rests
 on: what a command exited with is settled the moment it exits, and nothing will ever rewrite it.
@@ -579,11 +584,59 @@ the markup either way.
 
 `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the box
 takes the terminal's monospace and a heavier edge on top of the button and the sentence every mode
-gets. That sentence names the repository and the branch the command runs in, because a `git push`
-typed there lands on that branch and a generated branch name is not one anybody can work out from
-the repository's; it is the one fact about the session the box still has to carry now that [what
-the session is stands in the rail](console.md#the-message-box).
+gets. That sentence names the repository and the branch the command runs in, because a commit typed
+there lands on that branch, `/push` sends it, and a generated branch name is not one anybody can work
+out from the repository's; it is the one fact about the session the box still has to carry now that
+[what the session is stands in the rail](console.md#the-message-box).
 
 The mode is entered from the box and left from the box, both by a key pressed while it has the
 focus, and it is deliberately *not* stored: it is a mode within a visit, like following the end,
 rather than a decision about a conversation.
+
+## Online
+
+`/online` is `Run` with the network on, for one command, in a session whose commands otherwise have
+it off. Same sandbox, same checkout, same environment; only the network axis flips. It is offered
+only where the network is off, since with it on `Run` already has it.
+
+**Why it exists: the network switch is a decision about the model, and the person is not the
+model.** A session kept offline so the agent cannot reach past the machine still needs `npm
+install`, a `git fetch` from somewhere other than the store, or a look at a URL now and then, and
+starting a second session with the network on to type one command is the workaround this replaces.
+
+**What it gives up is the push gateway, for that command.** On exe.dev [the network is the
+credential](security.md#on-exedev-the-network-is-the-credential), so a command run online can push
+to the repository, force included, without going through `/push`, and it runs whatever hooks and
+configuration the checkout holds while it can. Typing it is the person's call, and the record carries
+`online` so the panel says so beside the line for as long as it is there. The cost, stated: a
+`git commit` run online runs the model's hooks with a network, which is exactly what the session's
+own network answer was keeping them from having.
+
+It shares the command box's monospace and heavier edge, and stays in its mode once a command has
+gone, for `Run`'s reasons.
+
+## Push
+
+`/push` sends the branch the session *recorded* to its repository, under the same name. That is
+`Choice.branch`, the one the sentence over the box names, and never whatever the checkout's `HEAD`
+is on: a session that checked out `main` and committed there cannot move `main` from this button.
+The cost, stated, is that commits on any other branch stay in the checkout without a word; the
+result says which commit went where. A session with no recorded branch is refused.
+
+It is the one thing `Run` cannot do with the network off, because a push needs the console's
+credential and nothing that holds one may read the worktree's configuration: the branch's commit
+crosses into the store as a bundle unless the store already has it, and the store pushes it with its
+own configuration. [What runs, and as whom](security.md#a-persons-command-and-a-push) is why.
+
+**It takes nothing from the box.** There is one branch to push and one place to push it, so the
+answer does not demand a message, and text typed beside it is refused rather than quietly dropped: a
+message sent under the wrong answer should come back to the person who typed it.
+
+**Never forced.** A remote branch that moved on is git's own refusal, recorded as the result, rather
+than something to override from a button. A person who means to force it has a checkout of their own
+to do that from.
+
+**Recorded like a command**, with `push` as its text and the result beside it, so the panel sits
+where it was pressed and reads exactly like a `Run`: what git said, the time it took, and the status
+as a number. Offered where `Run` is, since both need a worktree, and a session on a repository no
+forge currently reaches is refused, since there is nowhere to push to.

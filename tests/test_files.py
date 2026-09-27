@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from conftest import checkout_in
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 
-from mainplate.snapshots import Worktree
 from mainplate.tools.files.anchors import GUTTER
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import Splice
@@ -33,9 +33,9 @@ SOURCE = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
 
 
 @pytest.fixture
-def files(tmp_path: Path) -> Files:
+def files(tmp_path: Path, bwrap: str) -> Files:
     (tmp_path / "app.py").write_text(SOURCE)
-    return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)),))
+    return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)),))
 
 
 def naming(files: Files, at: int) -> str:
@@ -45,34 +45,35 @@ def naming(files: Files, at: int) -> str:
     return found
 
 
-class TestTheWorktreesPointerIsOutOfReach:
+class TestGitsOwnDirectoryIsOutOfReach:
     """
-    That `.git` is refused by name, which the sandbox cannot do for these tools.
+    That `.git` and everything under it is refused by name.
 
-    They write from the parent and never pass through a sandbox, so the read-only bind that stops
-    `bash` replacing the pointer does not reach `edit`. Without this, closing the sandbox path just
-    moves the vector one tool over.
+    These tools write from the parent and never pass through a sandbox, so git's locking is the only
+    thing between an `edit` and a half-written ref. `bash` runs git itself, which is where changing
+    git's state belongs.
     """
 
-    async def test_the_pointer_is_refused(self, files: Files) -> None:
-        (files.roots[0].path / ".git").write_text("gitdir: /somewhere/real\n")
+    async def test_the_directory_is_refused(self, files: Files) -> None:
+        (files.roots[0].path / ".git").mkdir()
 
-        with pytest.raises(Refused, match="pointer"):
+        with pytest.raises(Refused, match="git's own directory"):
             files.resolved(".git")
 
-    async def test_editing_the_pointer_is_refused(self, files: Files) -> None:
+    async def test_editing_its_configuration_is_refused(self, files: Files) -> None:
         """Through the tool rather than through `resolved`, since that is what a model reaches."""
-        pointer = files.roots[0].path / ".git"
-        pointer.write_text("gitdir: /somewhere/real\n")
+        configured = files.roots[0].path / ".git" / "config"
+        configured.parent.mkdir()
+        configured.write_text("[core]\n\tbare = false\n")
 
-        with pytest.raises(Refused, match="pointer"):
-            await files.read(".git", offset=1, limit=10)
+        with pytest.raises(Refused, match="git's own directory"):
+            await files.read(".git/config", offset=1, limit=10)
 
-        assert pointer.read_text() == "gitdir: /somewhere/real\n"
+        assert configured.read_text() == "[core]\n\tbare = false\n"
 
     async def test_a_file_merely_named_like_it_is_not_refused(self, files: Files) -> None:
         """
-        The refusal is the pointer at a root's top level and nothing else. A repository with a
+        The refusal is `.git` at a root's top level and nothing else. A repository with a
         `.github/`, a `.gitignore`, or a fixture carrying a nested `.git` is ordinary, and refusing
         those would be a tool that cannot read most of what it is pointed at.
         """
@@ -84,7 +85,7 @@ class TestTheWorktreesPointerIsOutOfReach:
         assert files.resolved("fixture/.git").path == files.roots[0].path / "fixture" / ".git"
 
     async def test_a_scratch_seals_nothing(self, tmp_path: Path) -> None:
-        """A scratch is not a worktree, so it has no pointer and a `.git` in it is just a file."""
+        """A scratch is not a checkout, so a `.git` in it is just a file."""
         scratch = tmp_path / "scratch"
         scratch.mkdir()
         (scratch / ".git").write_text("not a pointer\n")
@@ -152,11 +153,11 @@ class TestReachingTheScratchDirectory:
     """
 
     @pytest.fixture
-    def reaching(self, tmp_path: Path) -> Files:
+    def reaching(self, tmp_path: Path, bwrap: str) -> Files:
         scratch = tmp_path.parent / "scratch-for-session"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)), Scratch(path=scratch)))
 
     async def test_a_file_there_can_be_created_read_and_edited(self, reaching: Files) -> None:
         where = str(reaching.roots[1].path / "plan.md")
@@ -204,13 +205,13 @@ class TestNamingTheRootInsteadOfSpellingItOut:
     """
 
     @pytest.fixture
-    def reaching(self, tmp_path: Path) -> Files:
+    def reaching(self, tmp_path: Path, bwrap: str) -> Files:
         # Named from `tmp_path` rather than a constant, because `tmp_path.parent` is shared by every
         # test in a class: a fixed name is one scratch directory holding the last test's files.
         scratch = tmp_path.parent / f"scratch-{tmp_path.name}"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(worktree=Worktree(root=tmp_path)), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)), Scratch(path=scratch)))
 
     async def test_a_named_root_is_what_a_relative_path_joins(self, reaching: Files) -> None:
         await reaching.create("plan.md", "one\ntwo\n", root="scratch")

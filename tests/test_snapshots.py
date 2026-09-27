@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from calling import calling
 from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
 from conftest import INSTRUCTIONS
+from conftest import PLANTED
 from conftest import Provider
 from conftest import Scripted
 from conftest import already
@@ -34,14 +34,18 @@ from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
+from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Venue
 from mainplate.service import Service
 from mainplate.settings import Settings
-from mainplate.snapshots import SNAPSHOT_REF
+from mainplate.snapshots import TRANSFER
 from mainplate.snapshots import NotAWorktree
+from mainplate.snapshots import SnapshotFailed
+from mainplate.snapshots import Store
 from mainplate.snapshots import Worktree
-from mainplate.snapshots import Worktrees
 from mainplate.snapshots import branch_named
 from mainplate.tools import GitTracked
+from mainplate.tools.bash.tools import ran
 
 
 class TestWorkingFromARelativeDatabase:
@@ -55,12 +59,12 @@ class TestWorkingFromARelativeDatabase:
     """
 
     async def test_a_clone_lands_where_it_was_asked_for_and_is_made_once(
-        self, worktree: Worktree, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
         root = Settings(database=Path("mainplate.db")).workspace_root
         clones = Clones(root=root / "clones")
-        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root))
+        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(origin))
 
         assert await clones.ensure(repository) == clones.at(repository.id)
         assert clones.cloned(repository.id), "the clone is where `at` says it is, not one level deeper"
@@ -70,161 +74,89 @@ class TestWorkingFromARelativeDatabase:
         # rather than merely written to look it.
         assert await clones.ensure(repository) == clones.at(repository.id)
 
-    async def test_a_worktree_is_planted_outside_the_repository_and_only_once(
-        self, worktree: Worktree, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_a_checkout_is_planted_outside_the_repository_and_only_once(
+        self, origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bwrap: str
     ) -> None:
         monkeypatch.chdir(tmp_path)
         root = Settings(database=Path("mainplate.db")).workspace_root
         clones = Clones(root=root / "clones")
-        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root))
+        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(origin))
         await clones.ensure(repository)
-        worktrees = clones.worktrees(repository.id, root / "worktrees")
+        worktrees = clones.worktrees(repository.id, root / "worktrees", bwrap)
 
         planted = await worktrees.plant("a" * 32)
         assert planted.root == worktrees.at("a" * 32)
-        assert planted.root.is_dir()
-        # Outside the clone, which is the property the doubling breaks: a worktree resolved against
+        assert (planted.root / "src" / "kept.txt").is_file()
+        # Outside the clone, which is the property the doubling breaks: a checkout resolved against
         # the repository's own directory would be captured by the snapshots it exists to take.
         assert not planted.root.is_relative_to(clones.at(repository.id))
-        # `git worktree list` names the bare repository itself alongside its linked worktrees, so
-        # this asks whether the planted one is in that answer rather than what the whole answer is.
-        # It is the same question `plant` asks to decide whether it has anything to do.
-        assert planted.root in await worktrees.planted()
+        assert worktrees.planted("a" * 32)
+        (planted.root / "src" / "in-progress.txt").write_text("half done\n")
         assert (await worktrees.plant("a" * 32)).root == planted.root
+        assert (planted.root / "src" / "in-progress.txt").read_text() == "half done\n"
+        assert [each.name for each in worktrees.root.iterdir()] == ["a" * 32], "and nothing half-built beside it"
 
 
-class TestNamingGitsOwnDirectory:
+class TestWhatAPoisonedCheckoutCanRun:
     """
-    That a snapshot reads its configuration from the clone and never from the tree it is capturing.
+    Git configuration in a checkout runs a program only inside its sandbox.
 
-    A session's worktree is the one directory its `bash` may write, and the `.git` at the root of a
-    linked worktree is a pointer file. So a session can put a repository of its own there, and git
-    configuration names programs git runs. What these assert is that the parent never reads it: the
-    control fires the same payload through a `Worktree` that looks for its git directory, which is
-    what makes the other two assertions mean anything.
+    `core.fsmonitor` is the payload because it is the one that fires inside `add` and exits 0
+    regardless, so the capture succeeds and nothing reports it. It writes a file where the test can
+    see it and the sandbox cannot, so the file existing afterwards is the payload having escaped.
     """
-
-    SESSION = "b" * 32
 
     @pytest.fixture
-    async def worktrees(self, worktree: Worktree, tmp_path: Path) -> Worktrees:
-        """A clone of the fixture repository, ready to plant linked worktrees of."""
-        clones = Clones(root=tmp_path / "clones")
-        repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root))
-        await clones.ensure(repository)
-        return clones.worktrees(repository.id, tmp_path / "worktrees")
+    async def poisoned(self, worktree: Worktree, tmp_path: Path) -> Path:
+        outside = tmp_path / "escaped"
+        await run("git", "config", "core.fsmonitor", f"touch {outside}; false", cwd=worktree.root)
+        return outside
 
-    def poison(self, planted: Worktree, ran: Path) -> None:
-        """
-        What a session's own `bash` could do to its worktree: replace the pointer with a repository
-        whose configuration names a command, which `git add`'s index refresh then runs.
-
-        `; false` so the command fails as a file-system monitor, which is the case worth pinning:
-        git treats that as a reason to scan normally, so a capture through the poisoned directory
-        succeeds and reports nothing. The payload has already run by then.
-        """
-        (planted.root / ".git").unlink()
-        subprocess.run(("git", "init", "-q", str(planted.root)), check=True)
-        subprocess.run(("git", "-C", str(planted.root), "config", "core.fsmonitor", f"touch {ran}; false"), check=True)
-
-    async def test_the_derived_git_directory_is_the_one_git_made(self, worktrees: Worktrees) -> None:
-        """
-        The derivation, against git rather than against a reading of its documentation. `git
-        worktree add` names the directory after the last component of the path, and the `gitdir`
-        file inside it points back at the worktree, so this asks git which tree it thinks that
-        directory belongs to.
-        """
-        planted = await worktrees.plant(self.SESSION)
-
-        assert planted.gitdir == worktrees.gitdir(self.SESSION)
-        assert planted.gitdir is not None
-        assert planted.gitdir.is_dir()
-        assert (planted.gitdir / "gitdir").read_text().strip() == str(planted.root / ".git")
-
-    async def test_a_worktree_that_looks_for_its_git_directory_runs_what_the_tree_says(
-        self, worktrees: Worktrees, tmp_path: Path
+    async def test_the_control_runs_the_payload_when_git_is_not_confined(
+        self, worktree: Worktree, poisoned: Path
     ) -> None:
-        """
-        The control, and the reason the two assertions below are not vacuous: the payload is live,
-        and the only thing standing between it and the service user is which directory git is told
-        to read.
-        """
-        planted = await worktrees.plant(self.SESSION)
-        ran = tmp_path / "ran"
-        self.poison(planted, ran)
+        """The control, run first, so a pass below is the confinement working and not a dud payload."""
+        await run("git", "status", "--short", cwd=worktree.root)
 
-        await Worktree(root=planted.root).capture("through a discovered directory")
+        assert poisoned.exists()
 
-        assert ran.exists()
+    async def test_capturing_runs_it_only_where_it_cannot_reach(self, worktree: Worktree, poisoned: Path) -> None:
+        (worktree.root / "src" / "written.txt").write_text("by the session\n")
 
-    async def test_naming_the_git_directory_runs_nothing_the_tree_asked_for(
-        self, worktrees: Worktrees, tmp_path: Path
-    ) -> None:
-        planted = await worktrees.plant(self.SESSION)
-        ran = tmp_path / "ran"
-        self.poison(planted, ran)
+        held = await worktree.paths(await worktree.capture("after"))
 
-        await planted.capture("through the clone")
-
-        assert not ran.exists()
-
-    async def test_listing_runs_nothing_the_tree_asked_for_either(self, worktrees: Worktrees, tmp_path: Path) -> None:
-        """
-        `list` is the other thing that runs git in the parent, and `ls-files` refreshes the index, so
-        it reaches the same setting from a call site the model triggers directly. Here rather than in
-        `test_files.py` because what it needs is this rig: a real linked worktree of a real clone,
-        which is the shape the vector depends on.
-        """
-        planted = await worktrees.plant(self.SESSION)
-        ran = tmp_path / "ran"
-        self.poison(planted, ran)
-
-        listed = await GitTracked(worktree=planted).entries(planted.root)
-
-        assert not ran.exists()
-        assert "src/kept.txt" in listed
-
-    async def test_a_listing_that_looks_for_its_git_directory_runs_what_the_tree_says(
-        self, worktrees: Worktrees, tmp_path: Path
-    ) -> None:
-        """The control for the pair above."""
-        planted = await worktrees.plant(self.SESSION)
-        ran = tmp_path / "ran"
-        self.poison(planted, ran)
-
-        await GitTracked(worktree=Worktree(root=planted.root)).entries(planted.root)
-
-        assert ran.exists()
-
-    async def test_a_poisoned_worktree_is_still_captured_correctly(self, worktrees: Worktrees, tmp_path: Path) -> None:
-        """
-        Refusing the tree's git directory is not refusing the tree. The files are still the session's
-        work and still belong in the snapshot, so what the repository the session planted holds is
-        beside the point rather than a reason to capture nothing.
-        """
-        planted = await worktrees.plant(self.SESSION)
-        (planted.root / "src" / "written.txt").write_text("by the session\n")
-        self.poison(planted, tmp_path / "ran")
-
-        held = await planted.paths(await planted.capture("after"))
-
-        assert "src/kept.txt" in held
+        assert not poisoned.exists()
         assert "src/written.txt" in held
 
-    async def test_the_shadow_index_is_written_in_the_clone(self, worktrees: Worktrees, tmp_path: Path) -> None:
-        """
-        The other thing discovery decided. A capture writes its index into the git directory, so a
-        parent that read one out of the tree would write into whatever the tree pointed at.
+    async def test_listing_runs_it_only_where_it_cannot_reach(self, worktree: Worktree, poisoned: Path) -> None:
+        listed = await GitTracked(worktree=worktree).entries(worktree.root)
 
-        Asked of a *poisoned* worktree deliberately: on a clean one the discovered directory and the
-        derived one are the same path, so this would hold however it was arrived at.
-        """
-        planted = await worktrees.plant(self.SESSION)
-        self.poison(planted, tmp_path / "ran")
+        assert not poisoned.exists()
+        assert "src/kept.txt" in listed
 
-        async with planted.staging() as index:
-            assert index.parent == planted.gitdir
-            assert not index.is_relative_to(planted.root)
+    async def test_a_diff_runs_nothing_the_checkout_configured(self, worktree: Worktree, tmp_path: Path) -> None:
+        """
+        A diff is asked of the store, so a diff driver the session named for every file is never read.
+
+        The attribute and the driver are both the checkout's, which is where a session can put them.
+        """
+        outside = tmp_path / "differ-ran"
+        await run("git", "config", "diff.evil.command", f"touch {outside}; false", cwd=worktree.root)
+        (worktree.root / ".gitattributes").write_text("* diff=evil\n")
+        before = await worktree.capture("before")
+        (worktree.root / "src" / "kept.txt").write_text("changed\n")
+        after = await worktree.capture("after")
+
+        said = await worktree.diff(before, after)
+
+        assert not outside.exists()
+        assert "+changed" in said
+
+
+async def objects_in(store: Store) -> int:
+    """How many objects a store holds, loose and packed, which is what a capture adds to."""
+    counted = dict(line.split(": ") for line in (await store.demand("count-objects", "-v")).splitlines())
+    return int(counted["count"]) + int(counted["in-pack"])
 
 
 @pytest.fixture
@@ -264,12 +196,38 @@ class TestCapturing:
     async def test_an_unchanged_worktree_writes_no_new_commit(self, worktree: Worktree) -> None:
         """The dedupe: cost tracks what changed rather than how often this is called."""
         await worktree.capture("first")
-        was = await worktree.tip()
+        was = await worktree.store.commit_at(worktree.snapshots_ref)
 
         again = await worktree.capture("second")
 
-        assert await worktree.tip() == was
-        assert again == await worktree.demand("rev-parse", f"{was}^{{tree}}")
+        assert await worktree.store.commit_at(worktree.snapshots_ref) == was
+        assert again == await worktree.store.demand("rev-parse", f"{was}^{{tree}}")
+
+    async def test_a_capture_the_store_already_holds_sends_nothing(self, worktree: Worktree) -> None:
+        """
+        An untouched checkout is its base's tree, which the store has, so no bundle crosses.
+
+        Asserted by what the store is left holding, which is the one commit that chains the tree.
+        """
+        was = await objects_in(worktree.store)
+
+        await worktree.capture("untouched")
+
+        assert await objects_in(worktree.store) - was == 1
+
+    async def test_a_capture_sends_only_what_changed_since_the_base(self, worktree: Worktree) -> None:
+        """
+        What the bundle is thin against, which is the difference between a snapshot costing a file
+        and one costing the repository. The one changed blob is the only blob in the pack it left,
+        and `.gitignore`, unchanged beside it, did not cross.
+        """
+        was = await objects_in(worktree.store)
+        (worktree.root / "src" / "kept.txt").write_text("the one change\n")
+
+        await worktree.capture("changed")
+
+        # The carried commit, the two trees above the file, the file, and the link in the chain.
+        assert await objects_in(worktree.store) - was == 5
 
     async def test_an_untracked_file_is_captured(self, worktree: Worktree) -> None:
         """`-A` rather than `-u`: a file the agent has just written is not yet tracked."""
@@ -292,7 +250,7 @@ class TestLeavingTheReaderAlone:
         await worktree.capture("a snapshot")
 
         assert await run("git", "rev-parse", "HEAD", cwd=worktree.root) == was
-        assert await run("git", "branch", "--format=%(refname:short)", cwd=worktree.root) == "main"
+        assert await run("git", "branch", "--format=%(refname:short)", cwd=worktree.root) == branch_named(PLANTED)
 
     async def test_snapshots_do_not_show_up_in_the_log(self, worktree: Worktree) -> None:
         await worktree.capture("a snapshot")
@@ -309,21 +267,32 @@ class TestSurvivingCollection:
         hash nothing refers to, and the next `gc` prunes it: the checkpoint would hold a tree that
         no longer resolves, which is a rewind that fails long after the change that broke it.
         """
+        (worktree.root / "src" / "kept.txt").write_text("first\n")
         first = await worktree.capture("first")
         (worktree.root / "src" / "kept.txt").write_text("second\n")
         await worktree.capture("second")
 
-        await run("git", "reflog", "expire", "--expire=now", "--all", cwd=worktree.root)
-        await run("git", "gc", "--prune=now", "-q", cwd=worktree.root)
+        await worktree.store.demand("reflog", "expire", "--expire=now", "--all")
+        await worktree.store.demand("gc", "--prune=now", "-q")
 
         assert await worktree.paths(first) == (".gitignore", "src/kept.txt")
+
+    async def test_a_tree_outlives_the_checkout_it_came_from(self, worktree: Worktree, workspaces: Workspaces) -> None:
+        """What the store is for: a fork from the end of an archived session still has files to plant."""
+        (worktree.root / "src" / "kept.txt").write_text("the session's own\n")
+        tree = await worktree.capture("last")
+
+        await workspaces.worktrees(FIXTURE).uproot(PLANTED)
+
+        assert not worktree.root.exists()
+        assert await worktree.store.demand("show", f"{tree}:src/kept.txt") == "the session's own"
 
     async def test_every_snapshot_is_reachable_through_the_one_ref(self, worktree: Worktree) -> None:
         await worktree.capture("first")
         (worktree.root / "src" / "kept.txt").write_text("second\n")
         await worktree.capture("second")
 
-        chain = await run("git", "rev-list", SNAPSHOT_REF, cwd=worktree.root)
+        chain = await worktree.store.demand("rev-list", worktree.snapshots_ref)
 
         assert len(chain.splitlines()) == 2
 
@@ -337,22 +306,26 @@ class TestCapturingAtOnce:
         other, and the loser's `write-tree` then describes a tree that never existed. It is not a
         hypothetical: a worker answering several sessions over one worktree does exactly this.
         """
+        (worktree.root / "src" / "kept.txt").write_text("sent by every one of them\n")
+
         trees = await asyncio.gather(*(worktree.capture(f"at once {n}") for n in range(6)))
 
         assert len(set(trees)) == 1, "nothing changed between them, so every capture is the same tree"
         for tree in trees:
             assert await worktree.paths(tree) == (".gitignore", "src/kept.txt")
 
-    async def test_concurrent_captures_leave_no_staging_files_behind(self, worktree: Worktree) -> None:
+    async def test_concurrent_captures_leave_nothing_in_flight_behind(self, worktree: Worktree) -> None:
         """
-        The shadow index is a temporary file per operation, so every one of them has to be cleaned
-        up. Asserted over a batch rather than a single capture, because what leaks one file leaks
-        six, and a worker answering several sessions over one worktree is the case that produces it.
+        Every capture names its own transfer ref in the checkout and its own incoming ref in the
+        store, so every one of them has to be cleaned up. Asserted over a batch rather than a single
+        capture, because what leaks one leaks six.
         """
+        (worktree.root / "src" / "kept.txt").write_text("sent by every one of them\n")
+
         await asyncio.gather(*(worktree.capture(f"at once {n}") for n in range(6)))
 
-        left = sorted(path.name for path in (worktree.root / ".git").glob("mainplate-index-*"))
-        assert left == []
+        assert await run("git", "for-each-ref", TRANSFER, cwd=worktree.root) == ""
+        assert await worktree.store.demand("for-each-ref", f"{worktree.refs}/incoming") == ""
 
 
 class TestAWorktreePerSession:
@@ -395,6 +368,47 @@ class TestAWorktreePerSession:
         (workspaces.at(one.id) / "src" / "only-mine.txt").write_text("mine\n")
 
         assert not (workspaces.at(two.id) / "src" / "only-mine.txt").exists()
+
+    async def test_a_session_can_commit_and_rebase_without_moving_another_session(
+        self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
+        one = await started(planting, "first", on_fixture)
+        two = await started(planting, "second", on_fixture)
+        await pass_at(planting, body, one.id)
+        await pass_at(planting, body, two.id)
+        first = workspaces.at(one.id)
+        second = workspaces.at(two.id)
+        second_head = await run("git", "rev-parse", "HEAD", cwd=second)
+        second_branch = await run("git", "branch", "--show-current", cwd=second)
+
+        (first / "src" / "only-mine.txt").write_text("mine\n")
+        await run(
+            "git",
+            "-c",
+            "user.email=probe@example.invalid",
+            "-c",
+            "user.name=probe",
+            "add",
+            "-A",
+            cwd=first,
+        )
+        await run(
+            "git",
+            "-c",
+            "user.email=probe@example.invalid",
+            "-c",
+            "user.name=probe",
+            "commit",
+            "-qm",
+            "mine",
+            cwd=first,
+        )
+        await run("git", "rebase", "HEAD~1", cwd=first)
+
+        assert await run("git", "rev-parse", "HEAD", cwd=second) == second_head
+        assert await run("git", "branch", "--show-current", cwd=second) == second_branch
+        assert not (second / "src" / "only-mine.txt").exists()
 
     async def test_a_second_session_reuses_the_clone_rather_than_making_another(
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
@@ -454,17 +468,17 @@ class TestStartingSomewhereInParticular:
         assert (workspaces.at(session.id) / "src" / "kept.txt").read_text() == "original\n"
 
     async def test_a_session_started_at_a_tag_holds_the_files_that_tag_names(
-        self, planting: Service, provider: Provider, workspaces: Workspaces, worktree: Worktree
+        self, planting: Service, provider: Provider, workspaces: Workspaces, origin: Path
     ) -> None:
         """
-        The point of naming one: the worktree holds what was there *then*, not what is there now.
+        The point of naming one: the checkout holds what was there *then*, not what is there now.
 
         A tag rather than a branch, so that what is asserted is a resolution git had to perform
         rather than a name that happens to be `HEAD` anyway.
         """
-        await run("git", "tag", "before-the-rewrite", cwd=worktree.root)
-        (worktree.root / "src" / "kept.txt").write_text("rewritten\n")
-        await run("git", "commit", "-aqm", "second", cwd=worktree.root)
+        await run("git", "tag", "before-the-rewrite", cwd=origin)
+        (origin / "src" / "kept.txt").write_text("rewritten\n")
+        await run("git", "commit", "-aqm", "second", cwd=origin)
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
         session = await started(
             planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE, base="before-the-rewrite")
@@ -486,7 +500,7 @@ class TestStartingSomewhereInParticular:
         planting: Service,
         provider: Provider,
         workspaces: Workspaces,
-        worktree: Worktree,
+        origin: Path,
         on_fixture: Choice,
         base: str | None,
     ) -> None:
@@ -507,8 +521,8 @@ class TestStartingSomewhereInParticular:
         first = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, first.id)
         assert workspaces.clones.cloned(FIXTURE), "the clone is what goes stale, so it has to exist first"
-        (worktree.root / "src" / "kept.txt").write_text("moved on\n")
-        await run("git", "commit", "-aqm", "second", cwd=worktree.root)
+        (origin / "src" / "kept.txt").write_text("moved on\n")
+        await run("git", "commit", "-aqm", "second", cwd=origin)
 
         second = await started(planting, "hello", replace(on_fixture, base=base))
         await pass_at(planting, body, second.id)
@@ -516,7 +530,7 @@ class TestStartingSomewhereInParticular:
         assert (workspaces.at(second.id) / "src" / "kept.txt").read_text() == "moved on\n"
 
     async def test_a_fork_is_the_files_its_turn_saw_however_far_the_repository_has_moved(
-        self, planting: Service, provider: Provider, workspaces: Workspaces, worktree: Worktree, on_fixture: Choice
+        self, planting: Service, provider: Provider, workspaces: Workspaces, origin: Path, on_fixture: Choice
     ) -> None:
         """
         The one plant that must *not* pick up whatever the remote now says.
@@ -529,8 +543,8 @@ class TestStartingSomewhereInParticular:
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
         session = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, session.id)
-        (worktree.root / "src" / "kept.txt").write_text("moved on\n")
-        await run("git", "commit", "-aqm", "second", cwd=worktree.root)
+        (origin / "src" / "kept.txt").write_text("moved on\n")
+        await run("git", "commit", "-aqm", "second", cwd=origin)
 
         forked = await planting.fork(session.id, at=0, chosen=on_fixture, said="try it again")
         assert forked is not None
@@ -657,15 +671,13 @@ class TestReadingARepositorysBranches:
     is pinned in `test_commands.py`; these three are the three questions, kept apart.
     """
 
-    async def test_the_branches_are_read_without_cloning_anything(
-        self, workspaces: Workspaces, worktree: Worktree
-    ) -> None:
+    async def test_the_branches_are_read_without_cloning_anything(self, workspaces: Workspaces, origin: Path) -> None:
         """
         The whole reason it asks the remote. There is no clone before a session's first pass, so
         reading one would leave the very first session on a repository - the case where you most want
         to say where to start - as the one with nothing to offer.
         """
-        await run("git", "branch", "release/2.1", cwd=worktree.root)
+        await run("git", "branch", "release/2.1", cwd=origin)
 
         found = await workspaces.branches(FIXTURE)
 
@@ -673,13 +685,13 @@ class TestReadingARepositorysBranches:
         assert not workspaces.clones.cloned(FIXTURE), "asking cost no clone"
 
     async def test_a_branch_pushed_since_the_clone_is_offered(
-        self, planting: Service, provider: Provider, workspaces: Workspaces, worktree: Worktree, on_fixture: Choice
+        self, planting: Service, provider: Provider, workspaces: Workspaces, origin: Path, on_fixture: Choice
     ) -> None:
         """The other half of asking the remote: the answer cannot be as old as the local copy."""
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
         session = await started(planting, "hello", on_fixture)
         await pass_at(planting, body, session.id)
-        await run("git", "branch", "landed-later", cwd=worktree.root)
+        await run("git", "branch", "landed-later", cwd=origin)
 
         assert "landed-later" in await workspaces.branches(FIXTURE)
 
@@ -810,12 +822,33 @@ class TestPickingOneThroughTheConsole:
     def app(self, planting: Service) -> ASGIApp:
         return build_app(already(planting))
 
-    async def test_the_picker_offers_what_the_forges_reach(self, app: ASGIApp) -> None:
+    async def test_the_dashboard_offers_a_session_in_what_the_forges_reach(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
             answered = await caller.get("/")
 
-        assert 'value="test:fixture"' in answered.text
-        assert ">me/fixture<" in answered.text
+        assert 'href="/sessions/new?workspace=test%3Afixture"' in answered.text
+        assert 'data-name="me/fixture"' in answered.text
+
+    async def test_the_new_session_page_is_about_the_repository_and_asks_for_its_branches(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/sessions/new?workspace=test%3Afixture")
+
+        assert answered.status == 200
+        assert "New session in me/fixture" in answered.text
+        assert 'name="workspace" value="test:fixture"' in answered.text
+        assert 'hx-get="/fragments/branches?workspace=test%3Afixture"' in answered.text
+        assert 'hx-trigger="load"' in answered.text
+
+    async def test_the_fetch_the_first_pass_makes_is_what_the_dashboard_says(
+        self, app: ASGIApp, planting: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await started(planting, "hello", on_fixture)
+        await workspaces.plant(session.id, FIXTURE)
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+
+        assert "not fetched since the console started" not in answered.text
+        assert 'class="fetch"' in answered.text
 
     async def test_a_posted_repository_is_recorded_on_the_session(self, app: ASGIApp, planting: Service) -> None:
         async with calling(app) as caller:
@@ -1104,13 +1137,164 @@ class TestWhatATurnRecords:
         assert parse_tree(recorded[opening_tree_key(0)]) != parse_tree(recorded[opening_tree_key(1)])
 
 
-class TestRefusingWhatIsNotAWorkspace:
+class TestRefusingWhatIsNotAStore:
     async def test_a_directory_that_is_not_a_repository_is_refused_by_name(self, tmp_path: Path) -> None:
         bare = tmp_path / "not-a-repo"
         bare.mkdir()
 
         with pytest.raises(NotAWorktree, match=str(bare)):
-            await Worktree(root=bare).confirm()
+            await Store(path=bare).confirm()
 
-    async def test_a_real_worktree_is_accepted(self, worktree: Worktree) -> None:
-        await worktree.confirm()
+    async def test_a_real_store_is_accepted(self, worktree: Worktree) -> None:
+        await worktree.store.confirm()
+
+
+class TestWhatTheStoreBelieves:
+    """
+    What crosses from a checkout is checked by the store, not taken on the checkout's word.
+
+    The checkout's git is the session's, so what it prints is something the session chose. These
+    replace the one step a session could lie in with a stand-in that lies, and ask what the store
+    records.
+    """
+
+    async def test_a_checkout_whose_git_names_a_tree_it_did_not_send_is_refused(
+        self, worktree: Worktree, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (worktree.root / "src" / "kept.txt").write_text("what was really there\n")
+        honest = Worktree.demand
+
+        async def lying(self: Worktree, *arguments: str, **named: object) -> str:
+            said = await honest(self, *arguments, **named)  # type: ignore[arg-type]
+            if arguments[0] == "commit-tree":
+                # A commit of a different tree than the one `write-tree` reported.
+                empty = await honest(self, "hash-object", "-t", "tree", "-w", "/dev/null")
+                return await honest(self, "commit-tree", empty, "-p", arguments[3], "-m", "lie")
+            return said
+
+        monkeypatch.setattr(Worktree, "demand", lying)
+
+        with pytest.raises(SnapshotFailed, match="said"):
+            await worktree.capture("lying")
+
+        assert await worktree.store.commit_at(worktree.snapshots_ref) is None, "and nothing was chained"
+
+    async def test_a_bundle_that_is_a_link_is_not_read(self, worktree: Worktree, tmp_path: Path) -> None:
+        """A sandbox can leave a link where its bundle should be; the store reads no file through one."""
+        secret = tmp_path / "secret"
+        secret.write_text("the parent's, not the session's\n")
+        link = tmp_path / "carried.bundle"
+        link.symlink_to(secret)
+
+        with pytest.raises(SnapshotFailed, match="regular file"):
+            await worktree.store.fetched(link, "refs/heads/main", f"{worktree.refs}/incoming/linked")
+
+
+class TestASessionThatBreaksItsOwnGit:
+    """
+    A checkout whose `.git` the session deleted or replaced, from inside its own sandbox.
+
+    Whether a checkout is planted is read from the directory and not from `.git`, so planting again
+    is still a no-op and never a rebuild over the session's files. What fails is the capture, which
+    is git inside the sandbox finding no repository, and that failure is the pass's.
+    """
+
+    async def in_the_sandbox(self, worktree: Worktree, tmp_path: Path, bwrap: str, command: str) -> None:
+        scratch = tmp_path / "breaking-scratch"
+        scratch.mkdir(exist_ok=True)
+        await ran(InAWorktree(worktree=worktree, scratch=scratch), bwrap, Venue.CONFINED, command, seconds=20)
+
+    @pytest.mark.parametrize("breaking", ["rm -rf .git", "rm -rf .git && echo 'gitdir: /nowhere' > .git"])
+    async def test_it_is_still_planted_and_planting_leaves_its_files_alone(
+        self, workspaces: Workspaces, worktree: Worktree, tmp_path: Path, bwrap: str, breaking: str
+    ) -> None:
+        (worktree.root / "src" / "in-progress.txt").write_text("half done\n")
+        await self.in_the_sandbox(worktree, tmp_path, bwrap, breaking)
+
+        again = await workspaces.plant(worktree.session, FIXTURE)
+
+        assert again == worktree
+        assert (worktree.root / "src" / "in-progress.txt").read_text() == "half done\n"
+
+    async def test_the_next_capture_fails_naming_git(self, worktree: Worktree, tmp_path: Path, bwrap: str) -> None:
+        await self.in_the_sandbox(worktree, tmp_path, bwrap, "rm -rf .git")
+
+        with pytest.raises(SnapshotFailed, match="git add"):
+            await worktree.capture("after the session broke it")
+
+    async def test_the_sandbox_cannot_take_the_directory_itself_away(
+        self, workspaces: Workspaces, worktree: Worktree, tmp_path: Path, bwrap: str
+    ) -> None:
+        """What `planted` rests on: the checkout is the mount point, so its contents go and it stays."""
+        await self.in_the_sandbox(worktree, tmp_path, bwrap, f"rm -rf {worktree.root}; true")
+
+        assert workspaces.worktrees(FIXTURE).planted(worktree.session)
+
+
+class TestPushing:
+    """
+    A session's branch reaching the repository, which is the one thing its sandbox cannot do.
+
+    Into the fixture's own origin, which is a path and so takes a push the way a forge would.
+    """
+
+    async def test_a_commit_made_in_the_checkout_arrives_on_the_origin(
+        self, worktree: Worktree, origin: Path, tmp_path: Path, bwrap: str
+    ) -> None:
+        scratch = tmp_path / "pushing-scratch"
+        scratch.mkdir()
+        await ran(
+            InAWorktree(worktree=worktree, scratch=scratch),
+            bwrap,
+            Venue.CONFINED,
+            "git -c user.email=probe@example.invalid -c user.name=probe commit -qam 'the session made this' "
+            "--allow-empty",
+            seconds=20,
+        )
+        made = await run("git", "rev-parse", "HEAD", cwd=worktree.root)
+
+        came = await worktree.push(str(origin), branch_named(PLANTED))
+
+        assert came.ok, came.err
+        assert await run("git", "rev-parse", f"refs/heads/{branch_named(PLANTED)}", cwd=origin) == made
+
+    async def test_the_branch_pushed_is_the_one_named_whatever_head_is_on(
+        self, worktree: Worktree, origin: Path, tmp_path: Path, bwrap: str
+    ) -> None:
+        """A session that moved its `HEAD` to `main` and committed there cannot move `main` through a push."""
+        main_before = await run("git", "rev-parse", "refs/heads/main", cwd=origin)
+        scratch = tmp_path / "pushing-scratch"
+        scratch.mkdir()
+        await ran(
+            InAWorktree(worktree=worktree, scratch=scratch),
+            bwrap,
+            Venue.CONFINED,
+            "git checkout -qB main origin/main && "
+            "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m 'onto main'",
+            seconds=20,
+        )
+        recorded = await run("git", "rev-parse", f"refs/heads/{branch_named(PLANTED)}", cwd=worktree.root)
+
+        came = await worktree.push(str(origin), branch_named(PLANTED))
+
+        assert came.ok, came.err
+        assert await run("git", "rev-parse", "refs/heads/main", cwd=origin) == main_before
+        assert await run("git", "rev-parse", f"refs/heads/{branch_named(PLANTED)}", cwd=origin) == recorded
+
+    async def test_a_branch_the_checkout_does_not_have_is_refused(self, worktree: Worktree, origin: Path) -> None:
+        with pytest.raises(SnapshotFailed, match="nowhere-at-all"):
+            await worktree.push(str(origin), "nowhere-at-all")
+
+    async def test_pushing_runs_nothing_the_checkout_configured(
+        self, worktree: Worktree, origin: Path, tmp_path: Path
+    ) -> None:
+        """The checkout's hooks are the session's; the push is the store's, and it has none."""
+        escaped = tmp_path / "hooked"
+        hook = worktree.root / ".git" / "hooks" / "pre-push"
+        hook.write_text(f"#!/bin/sh\ntouch {escaped}\n")
+        hook.chmod(0o755)
+
+        came = await worktree.push(str(origin), branch_named(PLANTED))
+
+        assert came.ok, came.err
+        assert not escaped.exists()

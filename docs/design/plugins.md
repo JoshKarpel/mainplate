@@ -1050,17 +1050,19 @@ Without it the whole stage is one that can only fail. A plugin that needs a prog
 and the two things a plugin most obviously wants - its own dependencies and the tooling a repository
 runs its checks with - are both downloads.
 
-**What makes it safe to offer is when it happens rather than a check on what is fetched.** `setup`
-runs before the first message: the worktree holds the commit the repository supplied and nothing
-else, no credential of this console's is inside the namespace, and nothing the model has written
-exists yet. So what a connected run there can carry out is the repository's own code, to its own
-author, which is not an exfiltration in any useful sense. Every later event is shut again, and that
-is the half that matters - a turn boundary is where a plugin has read whatever the model has been
-writing.
+**What makes it safe to offer is when it happens and who said yes, rather than a check on what is
+fetched.** `setup` runs only after somebody pressed the button on the settings step, and before the
+first message: the worktree holds the commit the repository supplied and nothing else, and nothing
+the model has written exists yet. So what a connected run there can carry out is the repository's
+own code, run because a person chose to run it. Every later event is shut again, and that is the
+half that matters - a turn boundary is where a plugin has read whatever the model has been writing.
 
 The cost, stated: **a repository plugin can reach the network once per session, and a session that
-chose no network still gives it that.** The trust switch in the picker is what says no, and it says
-no to the whole plugin rather than to the fetch.
+chose no network still gives it that.** On exe.dev that includes [this console's
+credential](security.md#on-exedev-the-network-is-the-credential): a `setup` can push to the
+repository, force included, and nothing between it and the forge is `/push`. The trust switch in the
+picker and the press on the settings step are what say no, and they say no to the whole plugin
+rather than to the fetch.
 
 ### A scratch of its own, which is not the session's
 
@@ -1371,9 +1373,10 @@ told.
 `$MAINPLATE_ENV` putting mise's shims first, then mise's own directory, then the system's, and
 **prints nothing**. So it declares no events and is never asked anything again, and nothing in the
 console knows what a shim is, where mise keeps them, or that Python has an interpreter directory.
-`just dependencies` and not `just setup`, because the other half of that recipe installs a git hook
-into the clone's common directory, which is shared by every worktree of it and bound read-only in a
-session: that step is a person's to run once per clone, from [the composer's `Run`](composer.md#run).
+`just dependencies` and not `just setup`, because the other half of that recipe installs a git hook,
+and whether a session's commits run pre-commit is that session's to decide, with `pre-commit install`
+in its own worktree from `bash` or [the composer's `Run`](composer.md#run), rather than something a
+setup plugin does to every session.
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
 ours and turns ours off with one switch on the settings step. The two are separate plugins with

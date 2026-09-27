@@ -11,6 +11,7 @@ from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from re import sub
+from typing import Final
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -74,6 +75,8 @@ from mainplate.pages import CACHE_ID
 from mainplate.pages import LISTED_ID
 from mainplate.pages import SETUP_ID
 from mainplate.pages import TRANSCRIPT_ID
+from mainplate.pages import WANTING_ID
+from mainplate.pages import WORKSPACE_FIELD
 from mainplate.pages import sending_answers
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import recorded_declaration
@@ -206,6 +209,13 @@ def partial_of(target: str) -> re.Pattern[str]:
 def region_in(message: str, target: str) -> str:
     found = partial_of(target).search(message)
     assert found is not None, f"no partial for #{target} in {message[:200]!r}"
+    return found.group(1)
+
+
+def region_in_page(page: str, identified: str) -> str:
+    """One `<section>` of a whole page, by its id, for a region that is a section with none inside it."""
+    found = re.search(rf'<section[^>]*id="{identified}"[^>]*>(.*?)</section>', page, re.DOTALL)
+    assert found is not None, f"no section #{identified} on the page"
     return found.group(1)
 
 
@@ -353,8 +363,15 @@ class TestReadingWhereAMessageIsGoing:
             parse_form_send(b"disposition=forget")
 
 
+# The new-session page for a session on only scratch, which is the one every console can draw: the
+# `app` fixture reaches no repository, and the picker's questions are the same either way.
+NEW_PAGE: Final = "/sessions/new?workspace=nothing"
+
+
 class TestTheConsole:
-    async def test_the_start_page_offers_the_choices_and_creates_nothing(self, app: ASGIApp, service: Service) -> None:
+    async def test_the_new_session_page_offers_the_choices_and_creates_nothing(
+        self, app: ASGIApp, service: Service
+    ) -> None:
         """
         **No message box here**, which is the visible half of the two-step creation.
 
@@ -363,12 +380,74 @@ class TestTheConsole:
         this page decides what a session *is* and the box is on the session's own page.
         """
         async with calling(app) as caller:
-            answered = await caller.get("/")
+            answered = await caller.get(NEW_PAGE)
         assert answered.status == 200
         assert 'class="picker"' in answered.text
         assert 'class="composer"' not in answered.text
         assert ">Create session</button>" in answered.text
+        assert f'name="{WORKSPACE_FIELD}" value="nothing"' in answered.text, "the workspace rides back on the form"
         assert await service.listed() == ()
+
+    async def test_the_dashboard_is_titled_after_the_console_and_offers_somewhere_to_start(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert answered.status == 200
+        assert "<title>Mainplate</title>" in answered.text
+        assert 'href="/sessions/new?workspace=nothing"' in answered.text
+        assert 'href="/sessions/new?workspace=everything"' in answered.text
+        assert 'class="picker"' not in answered.text, "the questions are the next page's"
+
+    async def test_new_session_with_no_workspace_goes_to_the_dashboard(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/sessions/new")
+        assert answered.status == 303
+        assert answered.location == "/"
+
+    @pytest.mark.parametrize(("workspace", "status"), [("somewhere", 422), ("worktree", 422), ("test:gone", 404)])
+    async def test_new_session_in_a_workspace_nothing_offers_is_refused(
+        self, app: ASGIApp, workspace: str, status: int
+    ) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get(f"/sessions/new?workspace={workspace}")
+        assert answered.status == status
+
+    async def test_the_dashboard_says_what_is_new_and_what_is_working(self, app: ASGIApp, service: Service) -> None:
+        """A session nobody has looked at is new, which is every session a test starts without opening it."""
+        session = await a_session(app, service, "look at this")
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        wanting = region_in_page(answered.text, WANTING_ID)
+        assert ">unread<" in wanting
+        assert f'href="/sessions/{session}"' in wanting
+
+    async def test_a_session_somebody_has_looked_at_that_is_still_queued_is_working_rather_than_new(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, "look at this")
+        async with calling(app) as caller:
+            await caller.get(f"/sessions/{session}")
+            answered = await caller.get("/")
+        wanting = region_in_page(answered.text, WANTING_ID)
+        assert ">unread<" not in wanting
+        assert ">working<" in wanting
+        assert f'href="/sessions/{session}"' in wanting
+
+    async def test_a_console_with_nothing_on_says_so(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        assert "Nothing unread, and nothing working." in region_in_page(answered.text, WANTING_ID)
+
+    async def test_the_dashboard_s_connection_is_sent_what_wants_attention_beside_the_list(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, "look at this")
+        async with calling(app) as caller:
+            page = await caller.get("/")
+            async with caller.watching("/fragments/stream?shape=dashboard") as events:
+                first = await anext(events)
+        assert 'hx-sse:connect="/fragments/stream?shape=dashboard"' in page.text
+        assert f'href="/sessions/{session}"' in region_in(first.data, WANTING_ID)
+        assert f'hx-target="#{LISTED_ID}"' in first.data
 
     async def test_the_first_message_creates_a_session_and_redirects_to_it(
         self, app: ASGIApp, service: Service
@@ -592,7 +671,7 @@ class TestTheConsole:
         assert f'id="listed-{session}"' in region_in(first.data, LISTED_ID)
         assert f'hx-target="#{TRANSCRIPT_ID}"' in first.data, "beside the transcript, not instead of it"
 
-    async def test_the_start_page_holds_a_connection_that_is_sent_the_list_alone(
+    async def test_the_new_session_page_holds_a_connection_that_is_sent_the_list_alone(
         self, app: ASGIApp, service: Service
     ) -> None:
         """
@@ -601,12 +680,13 @@ class TestTheConsole:
         """
         await a_session(app, service)
         async with calling(app) as caller:
-            page = await caller.get("/")
+            page = await caller.get(NEW_PAGE)
             async with caller.watching("/fragments/stream") as events:
                 first = await anext(events)
         assert 'hx-sse:connect="/fragments/stream"' in page.text
         assert f'hx-target="#{LISTED_ID}"' in first.data
         assert f'hx-target="#{TRANSCRIPT_ID}"' not in first.data, "there is no transcript on that page to land in"
+        assert f'hx-target="#{WANTING_ID}"' not in first.data, "nor the dashboard's region"
 
     async def test_a_refusal_holds_no_connection(self, app: ASGIApp) -> None:
         """A page with no list on it has nothing for a connection to report, so it holds none."""
@@ -723,7 +803,7 @@ class TestWhatIsNewInTheList:
             for row in re.finditer(r'<li id="listed-([0-9a-f]+)"(.*?)</li>', page.text, re.DOTALL)
         }
         assert set(rows) == {other, reading}
-        assert '<span class="unseen" title="Something new since you last looked">new</span>' in rows[other]
+        assert '<span class="unseen" title="Something new since you last looked">unread</span>' in rows[other]
         assert "unseen" not in rows[reading]
 
     async def test_the_row_says_working_while_a_pass_is_coming_for_it_and_not_otherwise(
@@ -982,9 +1062,9 @@ class TestWhatIsNewInTheList:
             for asset in ("/assets/mainplate.css", "/assets/mainplate.js", "/assets/htmax.min.js"):
                 assert (await caller.get(asset)).status == 200
 
-    async def test_the_start_page_offers_every_profile_and_the_defaults_models(self, app: ASGIApp) -> None:
+    async def test_the_new_session_page_offers_every_profile_and_the_defaults_models(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            answered = await caller.get("/")
+            answered = await caller.get(NEW_PAGE)
         for name in CONFIG.endpoints:
             assert f'value="{name}"' in answered.text
         assert 'value="ripe/careful"' in answered.text, "the default endpoint's second model"
@@ -1030,15 +1110,15 @@ class TestWhatIsNewInTheList:
         assert found is not None
         assert len(found.session.title) <= TITLE_LENGTH
 
-    async def test_the_start_page_offers_a_box_to_name_a_session(self, app: ASGIApp) -> None:
+    async def test_the_new_session_page_offers_a_box_to_name_a_session(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            answered = await caller.get("/")
+            answered = await caller.get(NEW_PAGE)
         assert f'name="{TITLE_FIELD}"' in answered.text
 
     async def test_a_models_own_name_is_what_the_picker_shows(self, app: ASGIApp) -> None:
         """An endpoint that writes a name for a person is why the id is a value and not the text."""
         async with calling(app) as caller:
-            answered = await caller.get("/")
+            answered = await caller.get(NEW_PAGE)
         assert ">Careful<" in answered.text
 
     async def test_models_are_grouped_by_the_family_they_come_from(self, app: ASGIApp) -> None:
@@ -1049,13 +1129,13 @@ class TestWhatIsNewInTheList:
         would satisfy a check for either alone while grouping nothing.
         """
         async with calling(app) as caller:
-            answered = await caller.get("/")
+            answered = await caller.get(NEW_PAGE)
         assert '<h2 class="models__heading">ripe</h2>' in answered.text
         assert '<h2 class="models__heading">wide</h2>' in answered.text
 
     async def test_changing_the_profile_asks_for_that_profiles_models(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            answered = await caller.get("/")
+            answered = await caller.get(NEW_PAGE)
         assert 'hx-get="/fragments/models"' in answered.text
         assert 'hx-target="#model"' in answered.text
 
@@ -1106,7 +1186,7 @@ class TestWhatIsNewInTheList:
 
     async def test_the_picker_offers_the_override_box_under_the_thinking_level(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
-            page = await caller.get("/")
+            page = await caller.get(NEW_PAGE)
         assert f'name="{OUTPUT_OVERRIDE_FIELD}"' in page.text
         assert page.text.index('id="thinking"') < page.text.index(f'name="{OUTPUT_OVERRIDE_FIELD}"')
 

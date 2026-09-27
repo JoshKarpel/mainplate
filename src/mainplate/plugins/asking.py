@@ -187,11 +187,10 @@ class Live:
     speaking: Speaking | None = None
     worktree: Worktree | None = None
     """
-    This session's tree as this console knows it, git directory and all, rather than as a path.
+    This session's checkout as this console knows it, store and all, rather than as a path.
 
-    The value and not `root`, because what runs a confined plugin builds a sandbox around it and a
-    tree whose directory was never named is one git discovers from a pointer file the session can
-    write. See `Speaking`.
+    The value and not `root`, because what runs a confined plugin builds a sandbox around it, and
+    that sandbox binds the store the checkout borrows its objects from. See `Speaking`.
     """
 
     delivering: Delivering = nowhere

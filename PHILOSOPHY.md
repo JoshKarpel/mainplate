@@ -2,8 +2,8 @@
 
 mainplate is a chat console over its own durable model-and-tool loop, using Pydantic AI for provider
 requests and normalized messages. This is the standard new work here is measured against: one idea
-about where a conversation lives, a vocabulary for naming things, and the handful of rules that keep
-being the answer in a design argument.
+about where a conversation lives, one picture of who is driving it, a vocabulary for naming things,
+and the handful of rules that keep being the answer in a design argument.
 
 It is not the authority on what the code currently does. The [design
 notes](https://joshkarpel.github.io/mainplate/design/) are, and where one of them says this console
@@ -113,6 +113,41 @@ Neither is authoritative. No wire reports what it actually charged, so a recorde
 estimate made immutable rather than a bill, and the page says so. Neither is ever overwritten, which
 is how Pydantic AI's own filling is written too: the day a provider reports what it took, its answer
 wins over any estimate of it.
+
+## The person is driving
+
+The one idea is about where a conversation lives; this is about who it is for. The picture is a
+centaur: a person's head on a body faster and stronger than their own. The model reads and writes
+far faster than anybody, with a great deal already known, and the person decides where it goes.
+[Advanced chess](https://en.wikipedia.org/wiki/Advanced_chess) is the original, a player at the
+board with an engine beside them and every move still the player's.
+
+Cory Doctorow's [reverse centaur](https://pluralistic.net/2025/09/11/vulgar-thatcherism/) is the
+failure to design against: the machine's head on a person's body, where the person keeps pace with
+the machine and becomes the one accountable for what it got wrong. A console builds one without
+meaning to by making the person the thing that keeps the machine moving: a queue of output to
+approve faster than it can be read, a prompt interrupting to ask about what could have been settled
+beforehand, work arriving at the rate it can be produced rather than the rate it can be understood.
+
+What this console already does follows from that, and new work is measured against it:
+
+- **The person can take the reins at any point.** A message sent to a session that is working
+  reaches the turn in progress as a steer, and a fork changes the conversation's mind at any turn,
+  without either waiting for the model to finish.
+- **What runs is decided before it runs.** A session's workspace, network and endpoint are chosen
+  when it is created, nothing executes a plugin before somebody presses the button, and a handoff
+  switched on fires at a reserve somebody set. A trigger is a decision made in advance, which is
+  what makes it the person's, and it is why the words below say to name the trigger rather than an
+  actor.
+- **What it costs is on the page before it is spent.** The line above the message box says what
+  re-sending the conversation will cost now the cache has gone cold, and stops there rather than
+  saying what to do about it, so sending is a decision somebody made knowing the price.
+
+Work started by a timer or by something outside the console, such as an issue being opened, is
+tested the same way. The schedule and the standing instructions are the person's, written down
+where they can be read and changed, and what comes back arrives at a pace somebody can review. A
+design that makes the person the bottleneck the work queues up behind has built the reverse
+centaur, however the work was started.
 
 ## The words
 

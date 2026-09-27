@@ -63,10 +63,13 @@ from mainplate.forge import Workspaces
 from mainplate.loop import Agent
 from mainplate.plugins.asking import recorded_registration
 from mainplate.plugins.installed import Enrolled
+from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_session
+from mainplate.snapshots import Store
 from mainplate.snapshots import Worktree
+from mainplate.snapshots import branch_named
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
 # it chose rather than on the wall clock. Not midnight and not the epoch, so a formatting bug that
@@ -629,54 +632,100 @@ FIXTURE = "test:fixture"
 FIXTURE_NAME = "me/fixture"
 
 
+# The session the `worktree` fixture is planted for. Shaped like a real id, and not one `started`
+# ever hands out, so a test that also starts sessions never finds this one's checkout in its way.
+PLANTED: Final = "0f" * 16
+
+
 @pytest.fixture
-async def worktree(tmp_path: Path) -> Worktree:
+async def origin(tmp_path: Path) -> Path:
     """
-    A real repository, because everything worth checking against one is what git actually does.
+    The repository a stand-in forge reaches, which is where every checkout here comes from.
 
-    A stand-in for git would be a second implementation of the thing under test, and the questions
-    asked of this - does a gitignored file come across, does the reader's index move, does a tree
-    survive `gc`, does a branch name resolve to today's commit - are exactly the ones only git can
-    answer.
-
-    Here rather than beside the snapshot tests because two suites need it now: what a command a
-    person runs does to a worktree is the same kind of question, asked from the other end.
+    A real one, because everything worth checking against one is what git actually does. A stand-in
+    for git would be a second implementation of the thing under test, and the questions asked of
+    this - does a gitignored file come across, does the reader's index move, does a tree survive
+    `gc`, does a branch name resolve to today's commit - are exactly the ones only git can answer.
     """
-    root = tmp_path / "repo"
+    root = tmp_path / "origin"
     (root / "src").mkdir(parents=True)
     await run("git", "init", "-q", "-b", "main", cwd=root)
     await run("git", "config", "user.email", "probe@example.invalid", cwd=root)
     await run("git", "config", "user.name", "probe", cwd=root)
     (root / ".gitignore").write_text(".env\nbuilt/\n")
     (root / "src" / "kept.txt").write_text("original\n")
-    (root / ".env").write_text("SECRET=shh\n")
-    (root / "built").mkdir()
-    (root / "built" / "artifact.bin").write_text("generated\n")
     await run("git", "add", "-A", cwd=root)
     await run("git", "commit", "-qm", "first", cwd=root)
-    return Worktree(root=root)
+    return root
 
 
 @pytest.fixture
-async def workspaces(worktree: Worktree, tmp_path: Path) -> Workspaces:
+def bwrap() -> str:
     """
-    Somewhere to clone the repository above and to plant each session's worktree of it.
+    Where the sandbox binary is, and a loud failure if it is not anywhere.
+
+    Not skipped when it is missing, for the same reason the browser tests are not: a check nobody
+    runs is a check that catches nothing, and git against a checkout only ever runs behind it.
+    """
+    return sandbox_command()
+
+
+@pytest.fixture
+async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
+    """
+    Somewhere to clone the repository above and to plant each session's checkout of it.
 
     Both outside the repository deliberately, and these tests would not notice if they were not: a
-    worktree planted *inside* it would be captured by the snapshots it exists to take, so every
+    checkout planted *inside* it would be captured by the snapshots it exists to take, so every
     session would hold a copy of every other session's files.
     """
     reaching = Reaching(
-        current=Reachable(
-            repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(worktree.root)),)
-        )
+        current=Reachable(repositories=(Repository(forge="test", key="fixture", name="me/fixture", url=str(origin)),))
     )
     return Workspaces(
         clones=Clones(root=tmp_path / "clones"),
         root=tmp_path / "worktrees",
         scratch=tmp_path / "scratch",
         reaching=reaching,
+        bwrap=bwrap,
     )
+
+
+def checkout_in(root: Path, bwrap: str) -> Worktree:
+    """
+    A directory a test set up itself, as the checkout the file tools and `list` are handed.
+
+    Its store is an empty directory beside it, which is enough for the sandbox to bind and holds
+    nothing, so what git answers about the checkout comes from the checkout alone. For a test about
+    listing or editing files; a test about snapshots wants the planted `worktree`.
+    """
+    store = root.parent / f"{root.name}-store"
+    store.mkdir(exist_ok=True)
+    return Worktree(root=root, store=Store(path=store), session=PLANTED, bwrap=bwrap)
+
+
+@pytest.fixture
+async def worktree(workspaces: Workspaces) -> Worktree:
+    """
+    A session's checkout, planted the way a session's first pass plants one.
+
+    With an ignored `.env` and `built/` in it, which a clone never carries, because what a snapshot
+    leaves out is half of what these tests ask.
+
+    Here rather than beside the snapshot tests because several suites need it: what a command a
+    person runs does to a checkout is the same kind of question, asked from the other end.
+    """
+    planted = await workspaces.plant(PLANTED, FIXTURE, branch=branch_named(PLANTED))
+    if planted is None:
+        raise RuntimeError("the fixture repository could not be planted")
+    # Stated rather than left to whatever the machine running the suite copied in, so a commit made
+    # in here works the same with or without an operator identity to copy.
+    await run("git", "config", "user.email", "probe@example.invalid", cwd=planted.root)
+    await run("git", "config", "user.name", "probe", cwd=planted.root)
+    (planted.root / ".env").write_text("SECRET=shh\n")
+    (planted.root / "built").mkdir()
+    (planted.root / "built" / "artifact.bin").write_text("generated\n")
+    return planted
 
 
 def already(service: Service) -> Callable[[], AbstractAsyncContextManager[Service]]:

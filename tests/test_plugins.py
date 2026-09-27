@@ -986,19 +986,26 @@ class TestWhatASetupActuallyReaches:
                 spawned, worktree, tmp_path, '#!/bin/sh\necho "this is not a variable" >> "$MAINPLATE_ENV"\n'
             )
 
-    async def test_the_clone_is_still_read_only_in_there(
+    async def test_the_store_is_still_read_only_in_there(
         self, spawned: Spawned, worktree: Worktree, tmp_path: Path
     ) -> None:
-        """The same namespace every other event gets, so a setup cannot write a history either."""
+        """
+        The same namespace every other event gets, so a setup cannot write what every session on the
+        repository borrows its objects from. Asked by trying, with the control that the store is
+        bound at all.
+        """
+        store = worktree.store.path
         spoke = await self.setting_up(
             spawned,
             worktree,
             tmp_path,
-            "#!/bin/sh\nif git commit -qam nothing >/dev/null 2>&1; then echo COMMIT=DID; else echo COMMIT=DENIED; fi "
+            f'#!/bin/sh\nif [ -f "{store}/HEAD" ]; then echo SEEN=YES; else echo SEEN=NO; fi >> "$MAINPLATE_ENV"\n'
+            f'if touch "{store}/planted" 2>/dev/null; then echo WROTE=YES; else echo WROTE=NO; fi '
             '>> "$MAINPLATE_ENV"\n',
         )
 
-        assert spoke.environment == {"COMMIT": "DENIED"}
+        assert spoke.environment == {"SEEN": "YES", "WROTE": "NO"}
+        assert not (store / "planted").exists()
 
 
 class TestTheBundledHandoff:
@@ -1310,6 +1317,28 @@ class TestTheBundledGuidance:
         assert "This project is a console." in described.instructions
         assert "`apps/web/AGENTS.md`: How the web app is laid out" in described.instructions
         assert "Use the design tokens." not in described.instructions, "the index names it rather than quoting it"
+
+    async def test_asking_what_is_tracked_runs_nothing_the_checkout_configured(
+        self, guidance: Path, repository: Path, tmp_path: Path
+    ) -> None:
+        """
+        The plugin runs as the operator, outside every sandbox, over a checkout whose `.git` the model
+        writes. The control runs the same payload through git the ordinary way first, so a pass here
+        is the plugin not reading the configuration rather than a payload that never fires.
+        """
+        escaped = tmp_path / "escaped"
+        await run("git", "config", "core.fsmonitor", f"touch {escaped}; false", cwd=repository)
+        await run("git", "status", "--short", cwd=repository)
+        assert escaped.exists(), "the control: git run the ordinary way runs the payload"
+        escaped.unlink()
+
+        described = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+        )
+
+        assert not escaped.exists()
+        assert described.instructions is not None
+        assert "This project is a console." in described.instructions
 
     async def test_untracked_guidance_is_not_read(self, guidance: Path, repository: Path) -> None:
         """
@@ -2051,11 +2080,9 @@ class TestARepositorysOwnPlugin:
         return sandbox_command()
 
     @pytest.fixture
-    async def declaring_repository(
-        self, worktree: Any, workspaces: Workspaces, tmp_path: Path, bwrap: str
-    ) -> Declaring:
+    async def declaring_repository(self, origin: Path, workspaces: Workspaces, tmp_path: Path, bwrap: str) -> Declaring:
         """The fixture repository, carrying a declaration and the script it names, both committed."""
-        root = worktree.root
+        root = origin
         (root / ".mainplate").mkdir()
         (root / ".mainplate" / "mainplate.yaml").write_text("plugins:\n  git-status: .mainplate/git-status\n")
         script = root / ".mainplate" / "git-status"
@@ -2146,7 +2173,7 @@ class TestAPluginThatSetsTheRepositoryUp:
         return sandbox_command()
 
     @pytest.fixture
-    async def declaring_setup(self, worktree: Any, workspaces: Workspaces, tmp_path: Path, bwrap: str) -> Declaring:
+    async def declaring_setup(self, origin: Path, workspaces: Workspaces, tmp_path: Path, bwrap: str) -> Declaring:
         """
         The fixture repository declaring a setup plugin, which installs a marker and sets one
         variable.
@@ -2154,7 +2181,7 @@ class TestAPluginThatSetsTheRepositoryUp:
         Into `$MAINPLATE_SCRATCH` and never into its own `$HOME`, which is the distinction the grant
         rests on: the session's commands read the first and cannot see the second.
         """
-        root = worktree.root
+        root = origin
         (root / ".mainplate").mkdir()
         (root / ".mainplate" / "mainplate.yaml").write_text("plugins:\n  setup: .mainplate/setup\n")
         script = root / ".mainplate" / "setup"
@@ -2275,7 +2302,7 @@ class TestAPluginThatSetsTheRepositoryUp:
         assert declared_in(await planting.checkpointer.load(session.id)) == ()
 
     async def test_one_that_fails_puts_the_session_back_on_the_step(
-        self, service: Service, workspaces: Workspaces, worktree: Any, tmp_path: Path, bwrap: str
+        self, service: Service, workspaces: Workspaces, origin: Path, tmp_path: Path, bwrap: str
     ) -> None:
         """
         With the reason above the switches, where the thing to do about it is a line away.
@@ -2283,7 +2310,7 @@ class TestAPluginThatSetsTheRepositoryUp:
         Loudly, because there is no quiet version: a session that opened over a repository whose
         dependencies never arrived would find out one command at a time.
         """
-        root = worktree.root
+        root = origin
         (root / ".mainplate").mkdir()
         (root / ".mainplate" / "mainplate.yaml").write_text("plugins:\n  setup: .mainplate/setup\n")
         script = root / ".mainplate" / "setup"

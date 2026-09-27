@@ -9,9 +9,10 @@ downstream of that question and are decided on the pages that own them.
 
 There is a **parent** and there is a **sandbox**. The parent is the console process: it holds the
 provider credential, the store with every conversation in it, `config.yaml`, and the service user's
-whole filesystem. The sandbox is a mount namespace with no network, a cleared environment, and a
-session's worktree bound read-write beside its clone bound read-only. [Where a command
-runs](sandbox.md) is what builds it.
+whole filesystem. The sandbox is a mount namespace with no network unless the session chose one, a
+cleared environment, a session's checkout bound read-write, and the repository's bare clone bound
+read-only beside it.
+[Where a command runs](sandbox.md) is what builds it.
 
 Three things are untrusted, and they are untrusted equally:
 
@@ -40,115 +41,84 @@ git makes the failure look like nothing at all.
 Git reads configuration out of the repository it is working in, and several settings there name a
 program git then runs. `core.fsmonitor` runs on the index refresh inside `git add`. `core.hooksPath`,
 `core.sshCommand`, `core.alternateRefsCommand`, `diff.external`, a `textconv`, a `filter` driver's
-`clean`, `remote.<name>.uploadpack` and `include.path` each do the same on some other command. That
-list is not closed and never will be: the vendors who patched
+`clean`, `remote.<name>.uploadpack` and `include.path` each do the same on some other command, and
+a hook is a program by definition. That list is not closed and never will be: the vendors who patched
 [GitSpawn](https://www.manifold.security/blog/ai-coding-agents-git-hijack) patched a key, and the
 disclosure names a second one they were not naming yet.
 
-The reported delivery is a repository that arrives as a directory with `.git` already in it, from a
-zip or a shared drive. **That is not a shape this console has.** Repositories only ever arrive
-through `Clones.ensure` as `git clone --bare <url>`, and clone builds a fresh local configuration
-rather than copying the remote's, so there is no path where the parent is handed somebody's
-`.git/config` at all.
+A session's checkout is a complete repository of its own, `.git` and all, and it sits in the one
+directory that session's `bash` writes. So its configuration and its hooks are the session's to
+write, on purpose: that is what lets `commit`, `rebase` and `stash` work in there. **Any git that
+reads that configuration runs whatever the session last put in it.** Run in the parent, that is a
+program running as the service user, with the store and `config.yaml` in reach, and it is silent:
+git treats a file-system monitor that exits non-zero as a reason to scan normally, so a capture
+would succeed, the tree would be correct, and nothing anywhere would report that a program ran.
 
-The primitive is available a different way, which is worse, and the difference is worth stating
-plainly. A session's worktree is a **linked** one, so the `.git` at its root is a one-line pointer
-file, and it sits in the one directory that session's `bash` is given write access to. So a session
-can put a repository of its own there, either by replacing the file with a directory or by
-repointing it at a repository it made, and git validates neither: it does not check the back-link,
-and a forged one behaves exactly like a real one. Whatever the parent then ran in that directory ran
-as the service user, outside the sandbox, with the store and `config.yaml` in reach. It needed no
-malicious repository, only a model that could be talked into four shell commands.
+## The parent never runs git against a checkout
 
-And it was silent. Git treats a file-system monitor that exits non-zero as a reason to scan
-normally, so the capture succeeds, the tree is correct, and nothing anywhere reports that a program
-ran.
+**Once a checkout is planted, every git that touches it runs in its sandbox, and only bundles come
+back.** That is the whole rule, and it replaces any attempt to decide which settings are dangerous.
 
-## The fix is to name the directory, not to filter the settings
-
-`Worktree.gitdir` holds git's own directory for a tree, and `Worktree.addressed` renders it as
-`--git-dir` with `--work-tree` beside it. Git then reads its configuration from there and never
-looks down from the working tree, so the planted repository is not consulted, is not parsed, and
-cannot name a program. `staging` writes the shadow index there for the same reason.
-
-**`Worktree.git` is the only way git is run here**, and that is what keeps the fix from decaying.
-Snapshots go through it and so does `list`, which is why `GitTracked` holds a `Worktree` rather than
-a path. The tempting alternative is to publish the pieces, `addressed` and `environment`, and let
-each caller assemble a subprocess out of them; it reads as flexibility and is a second definition of
-how to run git safely. The first time the two drift, what gets dropped is the git directory, and the
-symptom is a program running rather than an error. So a caller needing something the method does not
-do gets an argument on it: `at` for where git runs, `index` for a shadow index, `Ran.stdout` for
-output that is not text to strip.
-
-`--work-tree` names the tree's root and never the directory git is run *in*. A listing of a
-subdirectory still comes back relative to that subdirectory, exactly as an unpinned call's would;
-naming the subdirectory instead is what changes the answer.
+- **`Worktree.git` is the only way git reaches a checkout.** It runs `bwrap` with the checkout
+  read-write, the store read-only and, for a capture or a push, one directory this console made for
+  the purpose. Snapshots go through it and so does `list`, which is why `GitTracked` holds a
+  `Worktree` rather than a path. A poisoned configuration there can do exactly what the session's
+  own `bash` could already do, and no more.
+- **The parent runs git only against the `Store`**, the bare clone this console made and nothing in
+  a sandbox can write, and it names the directory with `--git-dir` rather than letting git look for
+  one. `git_at` is the one other entry point, for the directory clones are made under and for a
+  checkout still being built, before any session has had a moment to write it.
+- **What crosses is a bundle, read as data.** A capture or a push packs a commit into a file in that
+  per-operation directory, and the store fetches it with `transfer.fsckObjects`. The store refuses a
+  path that is a link or anything but a regular file, since a sandbox could leave a link to a file
+  only the parent can see. The store's own configuration is the only one read.
+- **The store believes the store.** The tree a capture records is read back out of the store after
+  the fetch, and a checkout whose git reported one tree and sent another is refused rather than
+  recorded. A diff between two trees is asked of the store as well, so a diff driver a session named
+  in its own configuration is never consulted.
 
 Two properties make this the right shape rather than a patch:
 
 - **It is not a list.** Nothing enumerates which settings can run a program, so nothing goes stale
   when git adds the next one. That is [the mount-namespace argument](sandbox.md) about commands, one
   layer in: say what a process may reach, not which of its features are dangerous.
-- **It costs nothing to know.** A linked worktree's git directory is `<clone>/worktrees/<session>`,
-  so `Worktrees.gitdir` derives it from two paths it already holds and reads nothing out of the tree
-  to do it. The trusted half of a session's git state is a directory the sandbox already binds
-  read-only, and the untrusted half is a different directory. **That separation is what makes the
-  fix possible**, and it is a property of planting linked worktrees rather than something anybody
-  designed for this: in an ordinary checkout the configuration lives inside the writable tree and
-  there would be no uncorrupted copy to name.
+- **It is where the session already is.** The sandbox exists for the session's commands; running its
+  git in there adds no second boundary to keep in step with the first.
 
-The cost, stated: a `Worktree` naming a session's tree now needs to know which clone it is of, so
-`Workspaces.worktree` takes a repository. That is one more argument at three call sites, all of
-which had it.
+The costs, stated. **A machine with no `bwrap` offers no repository at all**, because it has nowhere
+safe to snapshot one; such a console is a place to talk and to use a scratch, and nothing else. **A
+changed capture is a bundle and a fetch** rather than a `write-tree` in place, which is a few more
+processes per model request on a checkout that changed. And **`list` spawns a namespace per call**,
+which it did not need while git ran in the parent.
 
-**A tree flattened to a path is the way this decays**, and it is worth naming because it does not
-look like a git question at all. Anything that carries a session's worktree as a `Path` or a string
-and rebuilds a `Worktree` at the far end has rebuilt it without a git directory, and the default is
-the discovery mode: the value looks the same, the calls still work, and what changed is which
-repository's configuration git reads. So the plugin runner is handed the session's own `Worktree`
-rather than the path on the payload it is about to send, and `Live.worktree` holds the value for the
-same reason. The payload still carries a string, because that is what a plugin parses; the two are
-not the same thing and the wire format is not the place to learn what to bind from.
+`test_snapshots.py::TestWhatAPoisonedCheckoutCanRun` pins capturing, listing and diffing against a
+checkout whose `core.fsmonitor` writes outside the sandbox, and `TestWhatTheStoreBelieves` pins the
+two checks on what crosses. The control runs the same payload through an unconfined `git status`,
+because an assertion that nothing ran is worth nothing unless something *would* have.
 
-`Sandbox.around` is where that mattered most, since building a confinement was the last thing out
-here still *asking* git anything about a session's tree. `Worktree.common` derives the clone from
-the git directory, two components up, so the ordinary path binds what it binds with no subprocess
-and no reading of the tree at all. Git is asked only for a `Worktree` that named no directory, which
-is a bare clone, where `root` *is* the git directory and there is nothing in between to poison.
+**A console-tier plugin runs as the operator, outside every sandbox**, and is handed the worktree's
+path, so it is the one other place git can meet a checkout in the parent. The bundled [guidance
+plugin](../plugins/guidance.md) lists the files it reads out of the checkout's index without reading
+the checkout's configuration at all: it points `GIT_INDEX_FILE` at `<worktree>/.git/index` and runs
+`ls-files --cached` with `--git-dir` naming an empty bare repository it makes in a temporary
+directory, so the only configuration git finds is one nothing wrote.
 
-`test_snapshots.py::TestNamingGitsOwnDirectory` pins both callers, and pins each from both ends. The
-control fires the same payload through a `Worktree` that looks for its git directory, because an
-assertion that nothing ran is worth nothing unless something *would* have.
+**A checkout flattened to a path is the way this decays**, and it is worth naming because it does
+not look like a git question at all. Anything that carries a session's checkout as a `Path` and runs
+git against it at the far end has left the sandbox without anything at the call site saying so. So
+the plugin runner is handed the session's own `Worktree` rather than the path on the payload it is
+about to send, and `Live.worktree` holds the value for the same reason. The payload still carries a
+string, because that is what a plugin parses; the two are not the same thing.
 
-**What is left is the parent running a program at all.** Naming the directory makes git safe to run
-out here; it does not make out here a good place to run things, and running `list` behind the
-sandbox instead is the open question. It is cheap now, since pinning removed the reason the parent
-had to read the tree to work out what to bind. What it costs is a console with no `bwrap`: that
-console keeps its file tools and is offered no `bash`, so a sandboxed `list` would leave it able to
-read and edit files and unable to find out which ones exist.
+## The file tools and `.git`
 
-## The pointer cannot be replaced at all
-
-Pinning stops the parent from *reading* a planted repository. What stops one being planted is that
-`.git` is out of reach, and this is the part worth getting right, because it removes the attack
-rather than defending against it.
-
-A session has exactly three ways to write its worktree, and closing them is a matter of enumerating
-them:
-
-- **`bash`.** `Sandbox.around` binds the pointer file read-only *over* the writable tree. bwrap
-  applies binds in order, so it goes after the tree; put it before and the tree covers it. From
-  inside, `rm` and `mv` get `Device or resource busy`, a redirect gets `Read-only file system`, and
-  `umount` needs a superuser the namespace does not have. Reading it, and everything else in the
-  tree, is untouched.
-- **`edit`.** The file tools write from the parent and never pass through a sandbox, so the bind
-  does not reach them and closing only `bash` would move the vector one tool over. `GitTracked.sealed`
-  names `.git` and `Files.resolved` refuses it, which also refuses `read` and `create` there. It is
-  the pointer at a root's *top level* and nothing else: a `.gitignore`, a `.github/`, and a fixture
-  carrying a nested `.git` are all ordinary files, and a `Scratch` seals nothing because it is not a
-  worktree.
-- **A repository's plugin.** It runs in the same `InAWorktree` confinement, so the first bullet
-  covers it.
+`read`, `edit` and `create` write from the parent and pass through no sandbox, so they are the other
+way a session reaches its checkout. `GitTracked.sealed` names `.git` and `Files.resolved` refuses it
+and everything under it. That is not a security boundary any more, since the same bytes are one
+`git config` away in `bash`; it keeps an `edit` from rewriting a ref or a config line underneath
+git's own locking. It is `.git` at a root's *top level* and nothing else: a `.gitignore`, a
+`.github/`, and a fixture carrying a nested `.git` are all ordinary files, and a `Scratch` seals
+nothing because it is not a checkout.
 
 ## What a plugin gets that a command does not, and why each is safe
 
@@ -158,10 +128,13 @@ alone**: they are gone at every event that runs during the conversation.
 
 - **A network, at `setup` and never again.** A plugin that needs a program has to fetch one, so the
   event that runs before the first message is connected and every event during the conversation is
-  not. What makes it safe is *when*: at that moment the worktree holds the commit the repository
-  supplied, nothing the model has written exists, and no credential of this console's is inside the
-  namespace, so what a connected run can carry out is the repository's own code to its own author.
-  A turn boundary is the opposite of that in every respect, which is why it is shut.
+  not. On exe.dev a connected process holds [this console's credential](#on-exedev-the-network-is-the-credential),
+  so a `setup` can push to the repository, force included. What makes that acceptable is *when* and
+  *who said so*: the plugin runs only after somebody pressed the button on the [settings
+  step](plugins.md#starting-a-session-takes-four-steps), and at that moment the checkout holds the commit the
+  repository supplied and nothing the model has written exists. So what can act with the network is
+  the repository's own code, run because a person said yes to it. A turn boundary is the opposite
+  of that in every respect, which is why it is shut.
 - **A scratch directory of its own**, rather than the session's. The model writes the session's, so a
   plugin that installed a program there would be running whatever the model last left at that path.
   Confinement is no answer, because both are confined the same way: what a shared directory would
@@ -203,35 +176,82 @@ that the staging happens over the commit the repository supplied rather than ove
 wrote. [Getting the repository ready is a plugin
 too](plugins.md#getting-the-repository-ready-is-a-plugin-too) is the whole of it.
 
-**This is why `Run` needs no defence.** It stays a shell, unsandboxed, in the worktree, with the
-console's environment, and that is what it is for. The problem was never that `Run` is trusted; it
-was that something untrusted could stage a trap in advance and wait for a person to walk into it
-with `git commit`. With the staging closed, whatever a person's command does to their own worktree,
-the model did not arrange it, and the trust boundary is only as wide as the person's own intent.
+## On exe.dev, the network is the credential
 
-Two mitigations were considered and are not here, which is worth recording because both read well:
+exe.dev's GitHub integration answers at a hostname that resolves only inside the VM and adds the
+credential at exe.dev's own edge, so `env -i git ls-remote https://<integration>.int.exe.xyz/...`
+answers with an empty environment, and a push there needs no token either: that is how the store's
+own push works. **Any process on this machine that can reach the network holds this console's
+authority over the repository**, force-push included, and the same host serves the API.
+
+So on exe.dev what keeps a session from moving the remote is not a missing credential. It is the
+network being off: a confined sandbox cannot resolve the host at all, and the store, which can, is
+driven by the parent and pushes only what `/push` names. Three things have the network, and each is
+somebody's choice rather than an accident:
+
+- **A session started with the network on.** Its `bash` and every `Run` can push. The picker offers
+  it because some work needs it, and choosing it gives up the push gateway for that session.
+- **[`Online`](composer.md#online)**, one command with the network on in a session that otherwise
+  has it off. A person typed it, and the panel says it ran online for as long as it is there.
+- **A repository plugin at `setup`**, after the press on the settings step; see [what a plugin
+  gets](#what-a-plugin-gets-that-a-command-does-not-and-why-each-is-safe).
+
+A forge that hands out a credential rather than being one would change this section and nothing
+else here: the store would hold the token, and a connected sandbox would reach the network without
+reaching the repository.
+
+## A person's command, and a push
+
+**[`Run`](composer.md#run) is confined like the model's `bash`**, and that is forced rather than
+chosen. A person's `git commit` in the checkout runs the checkout's hooks, which the model can
+write; run as the service user it would run them with everything that user holds. So a command a
+person types gets the session's sandbox, its network answer and the environment its setup recorded,
+exactly as the model's would. What that costs is the person's own `$HOME` and credentials: nothing
+typed there can reach them, and with the network off `git push` in there reaches nothing.
+[`Online`](composer.md#online) is the same sandbox with the network on for one command, which on
+exe.dev means `git push` in there does reach the repository.
+
+**Pushing is a control of its own.** [`/push`](composer.md#push) takes the branch the session
+*recorded*, never whatever the checkout's `HEAD` is on, carries that branch's commit into the store
+as a bundle, and has the store push it, never forced, with the store's configuration. So what moves
+on the remote is the branch the page names beside the button, and the git that pushes reads no
+configuration a session wrote.
+
+Two mitigations were considered for running a person's git outside the sandbox and are not here,
+which is worth recording because both read well:
 
 - **`GIT_CONFIG_COUNT`** puts configuration in the environment, where it is inherited by arbitrarily
   nested git, and it does override a repository's own config. It is defeated by `git -c`, by any
   script that clears the environment, and by every setting nobody has thought to name yet. A
   denylist bought with a version floor.
-- **Checking the pointer before running a person's command.** Exact, since the correct content is
-  one derived line, and useless once nothing can change it: it would be handling a state that can no
-  longer occur, and it never closed the race against a turn running concurrently anyway.
-
-`GIT_DIR` in the environment is a third and is worse than either, because it works. A nested git in
-a *different* repository silently reports the session's worktree as its top level, so a command that
-steps into a vendored checkout and commits would commit into the wrong place, with no error.
+- **Checking the configuration before running a person's command.** There is no correct content to
+  check against once the session owns its `.git`: a hook the session wrote on purpose and one it was
+  talked into are the same file.
 
 ## What is deliberately not defended
 
 Naming these is the point of the page. Each is a decision, and each is somewhere the argument above
 does not reach.
 
-**A command the person runs.** [`Run`](composer.md#run) is a shell, in the session's worktree, as
-the service user, with the console's environment, outside the sandbox. That is what it is for, and
-what a shell discovers is not ours to pin: a person whose own command replaces `.git` has done that
-to their own worktree. What is not left open is a model arranging it for them.
+**Every session on a repository can read every other session's snapshots.** The store is bound
+read-only into each sandbox, because a checkout borrows its objects and `origin` is the store, so a
+session can walk another session's snapshot chain under `refs/mainplate/sessions/`. None of them can
+write it. Separating them would mean a store per session, and a fork from one session into another
+would then be a copy rather than a checkout of an object that already exists.
+
+**An operator's own console-tier plugin.** It runs unconfined and is handed the worktree's path, so
+a plugin that runs `git -C <worktree>` the ordinary way reads the configuration the session wrote and
+runs whatever it names, as the service user. Nothing here can stop that, since the plugin is a
+program the operator installed; what the bundled one does is the pattern to copy.
+
+**What a session pushes.** `/push` sends the session's recorded branch as the session left it, and
+the content of every commit on it is the session's. A person pressing it is the review; nothing here
+inspects what a commit holds.
+
+**A connected sandbox and the repository.** On exe.dev, a session with the network on, an `Online`
+command and a `setup` can each push to the repository without `/push`, [for the reason
+above](#on-exedev-the-network-is-the-credential). Nothing filters the network by host, so the
+network switch is the whole of the control.
 
 **A session on `EVERYTHING`.** It binds `/` read-write and can read `config.yaml` and the store. That
 is what choosing it means and the card says so.

@@ -1,7 +1,7 @@
 # How a model reaches a file
 
-What a session's agent is given to work with: which tools it gets, how a line is addressed, and why
-`edit` takes a batch rather than a search and a replacement.
+What a session's agent is given to work with: which tools it gets, how a line is
+addressed, and why `edit` takes a batch rather than a search and a replacement.
 
 Where those tools may reach, and the mount namespace `bash` runs behind, is [where a command
 runs](sandbox.md). This is what the tools themselves are.
@@ -83,11 +83,11 @@ the three with a ceiling, which is `MAX_ROWS` rather than a habit. Against that,
 costs around 400 tokens on every request, so it pays for itself if it heads off roughly one runaway
 enumeration in several thousand requests.
 
-**It runs a program in the parent, so it runs it through `Worktree.git`** rather than a subprocess
-of its own: that is the one place that names git's directory instead of letting `ls-files` find one
-in a tree the session writes, and builds an environment instead of inheriting this process's. It is
-why `GitTracked` holds a `Worktree` instead of a path. See [what runs, and as
-whom](security.md).
+**It runs git inside the same sandbox as `bash`.** The `ls-files` argv is this console's, but the
+worktree's configuration is the session's to write and may name a program git runs, so
+`Worktree.git` runs it behind `bwrap` with no network, no parent environment and nothing outside
+the session's checkout and its store. The cost, stated: a namespace per call, which a `list` run in
+the parent did not pay. See [what runs, and as whom](security.md).
 
 ## `grep`
 

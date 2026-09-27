@@ -76,6 +76,12 @@ the console learns about it through `setup` like any other. The price is stated:
 carries a `description:` line reader rather than a YAML parser, because a plugin with no dependencies
 is worth more here than the general case of a field nothing else reads.
 
+**A console-tier plugin must not run git against the worktree the ordinary way.** It runs as the
+operator, unconfined, and the worktree's `.git/config` is the session's to write, so `git -C
+<worktree>` runs whatever that configuration names. `bundled/guidance` reads the index through
+`GIT_INDEX_FILE` against an empty bare repository of its own; copy that rather than disabling one
+setting at a time. See [what runs, and as whom](../../../docs/design/security.md).
+
 Both are run for real in `tests/test_plugins.py`, over a real pipe, and both are exercised end to end
 by `tests/test_app.py`, which is the one place `open_console` installs them.
 

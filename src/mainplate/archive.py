@@ -46,22 +46,30 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
     """
     Every directory that is this session's, off the disk, with the worktree's last tree recorded first.
 
-    The worktree goes through git rather than `rmtree`, because git keeps its own directory for a
-    linked worktree inside the clone and its own list of them: a tree deleted behind its back is one
-    `git worktree list` names for ever and `Worktrees.plant` refuses to reuse. `uproot` is that call,
-    and it copes with a directory already gone. The tree is captured just before, under
-    `archived:tree`, so a fork from the end of this session plants at the files it actually ended
-    with; the snapshots themselves live in the clone's object store and outlive the worktree.
+    The checkout's last tree is captured first, under `archived:tree`, so a fork from the end of this
+    session plants at the files it actually ended with; the capture puts that tree in the store, and
+    the store is not the session's, so it outlives the checkout.
 
-    Then everything `Places.of` names that is still there, which is the scratch, the plugins' scratches
-    and, on a console whose clone has gone, the worktree itself.
+    **A capture that fails is logged and the files go anyway.** The usual reason is a session that
+    broke its own `.git`, which no later round would fix, so retrying would keep its files for ever.
+    Without the key, a fork from the end plants at the newest tree a turn recorded, and what changed
+    after that is lost with the checkout.
+
+    Then everything `Places.of` names that is still there, which is the checkout, the scratch and
+    the plugins' scratches.
     """
     workspaces = places.workspaces
     if session.repository is not None and workspaces.clones.cloned(session.repository):
-        worktrees = workspaces.clones.worktrees(session.repository, workspaces.root)
-        if worktrees.at(session.id) in await worktrees.planted():
-            ending = await worktrees.worktree(session.id).capture(f"archived {session.id}")
-            await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, records.Tree(tree=ending).recorded())
+        worktrees = workspaces.worktrees(session.repository)
+        if worktrees.planted(session.id):
+            try:
+                ending = await worktrees.worktree(session.id).capture(f"archived {session.id}")
+            except SnapshotFailed as uncaptured:
+                logger.warning(
+                    f"archiving {session.id} without its last tree, which could not be captured: {uncaptured}"
+                )
+            else:
+                await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, records.Tree(tree=ending).recorded())
             await worktrees.uproot(session.id)
     for place in places.of(session.id, session.repository):
         if place.is_symlink():

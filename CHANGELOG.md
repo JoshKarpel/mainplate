@@ -8,6 +8,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **The front page is a dashboard.** It lists the sessions that are unread and the ones still
+  working, both redrawn live, then a card for only scratch, the whole machine and each
+  repository, with its sessions, a **New session** press, a link to the repository on GitHub, and
+  when this console last fetched it or that the fetch failed. The press opens the questions about a
+  new session with that workspace already answered, where to start in a repository first.
+- **`/push` sends a session's branch to its repository.** It takes nothing from the box, pushes the
+  session's own branch, the one named above the box, under the same name with this console's
+  credentials, never forced, and draws what git said the way a command's result is drawn. What the
+  worktree has checked out does not change which branch moves. It reads nothing the session
+  configured: the commit crosses into the console's own clone of the repository and is pushed from
+  there.
+- **`/online` runs one command with the network on** in a session whose commands otherwise have it
+  off, for the `npm install` or the fetch a confined session still needs now and then. Its panel
+  says `online`. On exe.dev a command with the network can push to the repository without `/push`,
+  and so can a session started with the network on; the security notes say so.
 - **A batch of tool calls is drawn with its diff below the panel.** The net change the whole batch
   made, as a `git diff` between the snapshots around it, so an `edit`, a `create` and a `bash` that
   ran at once read as one change rather than three or none; an `edit`'s own diff is still a press
@@ -19,14 +34,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so nothing a model wrote runs on the page, and the library is fetched only for a page with a
   diagram on it.
 - **The session list says `working`** on a row while a pass is answering its session or one is
-  scheduled to, beside `new` where both are true, so a row that says something arrived and a row
+  scheduled to, beside `unread` where both are true, so a row that says something arrived and a row
   that says something is still coming can be told apart without opening either.
 - **A session with no repository gets a scratch directory and `bash` inside it.** Somewhere to run a
   script or keep a note across turns, reaching nothing else on the machine; `read`, `edit` and
   `create` reach it too. Where there is no sandbox to run a command in, such a session reaches
   nothing, as before.
-- **A new mark.** A watch movement's mainplate, in the console's blue, on the tab and the installed
-  app's icon.
+- **A new mark.** A watch movement's mainplate, on the tab, the dashboard and the installed app's
+  icon. On the tab and the dashboard its two holes are the person's blue and the assistant's orange,
+  and the dashboard's follows the theme; the installed app's is one colour on the dark ground.
 - **Every session is told what the page draws.** One sentence of the console's own, composed beside
   the note about what its tools reach, says that a `mermaid` or `svg` fence is drawn as a picture, so
   a model with a flow or a figure to show writes one. The operator's standing instructions are left
@@ -55,6 +71,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after a send.
 
 ### Changed
+- **A session's worktree is a checkout of its own, and git works in it.** It has its own `.git`, so
+  `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
+  nobody else's, and `git fetch` brings the repository's current branches with no network, since
+  `origin` is the console's own clone, which is fetched every five minutes (`MAINPLATE_FETCH_EVERY`)
+  while any session not archived works in it. Its objects are borrowed from that clone, read-only,
+  rather than copied. Snapshots move into the clone under refs of the session's own, so a rebase in
+  the session rewrites nothing a fork plants from. Every git against a worktree, the console's own
+  snapshots and `list` included, now runs behind the same sandbox as `bash`, because a worktree's git
+  configuration is the session's to write; a command typed into the composer runs there too. A
+  session that deletes its own `.git` keeps its files and stops at its next turn, saying why. A
+  console without `bubblewrap` offers no repository at all. Sessions working in a repository from
+  before this release are not carried over.
 - **A command's status reads `exit 0` rather than `ok`**, one shape down the column with the colour
   alone picking out the statuses that are not zero, and a command with no output says `no output`
   where it said `said nothing`, folded, since its line, its time and its status are all there is.
@@ -105,14 +133,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the questions under it stayed put; now nothing in the picker shrinks, and the fold is what keeps
   that cheap, since the list is only long while it is open and a pick shuts it.
 
-- **A row in the session list says `new`** when its session has recorded something since anybody
+- **A row in the session list says `unread`** when its session has recorded something since anybody
   looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
   message of your own. Opening the session clears it, and so does watching the answer arrive on a
   page already open, which the page reports itself once it has drawn it. The mark is the console's
   rather than any one browser's, so reading an answer on a phone clears it on the laptop too. A
   console upgraded onto this starts with nothing marked.
 - **The session list is live.** It rides the same connection the transcript does, on every page
-  including the start page, so a session answered while you were reading another one shows `new` in
+  including the dashboard, so a session answered while you were reading another one shows `unread` in
   the list at once and a session written to moves up it without a reload. A tab in the background
   lets the connection go and picks it up again when shown, so a hidden page costs nothing and is
   current the moment you come back to it.
@@ -130,7 +158,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the date, where it was a paragraph. Nothing sits under the message box any more, and what
   sits above it is only what the next press depends on: whether the cache is warm and what
   re-sending costs, and the sentence saying what the press will do. The sentence over a command box
-  names the repository and branch a command runs in, which is where somebody about to `git push`
+  names the repository and branch a command runs in, which is where somebody about to commit or push
   reads it. The session's total is no longer drawn beside the box, since the running total on the
   last rule is the same figure and moves with the transcript.
 - **The message box is one card**, the text with a row of tools along its bottom and Send at the
@@ -148,7 +176,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   archived session is the worktree as the reconciler found it; it used to plant at the repository's
   head, which is files the conversation never saw.
 - What a session takes on disk, on its row in the sidebar and on its card in the rail:
-  its worktree, git's directory for it, its scratch and its plugins' scratches, counted as `du`
+  its worktree, `.git` included, its scratch and its plugins' scratches, counted as `du`
   counts them. Measured by a sweep on a timer (`measure_every`, five minutes by default) rather than
   when a page is drawn, since a session that fetched a toolchain holds tens of thousands of files;
   the figure's title says when it was measured. `Places.of` is the one list of which directories are
@@ -215,8 +243,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   respect, with a switch on the settings step, so a session reading a repository rather than working
   in it can leave it off and open exactly as it would over a repository carrying no such plugin. This
   repository carries one, which installs mise, the tools `mise.toml` pins, and `just dependencies` -
-  the half of `just setup` a session can run, split out because the other half installs a git hook
-  into a clone bound read-only.
+  the half of `just setup` that belongs to every session, split out because the other half installs
+  a git hook, which is a session's own choice to make.
 - **A plugin may stand in front of a turn ending.** A plugin that asks for `before_turn_end` is told each
   time the model has answered and would stop, and an `inject` from it keeps the turn going: what it
   said is put to the model in the console's voice and the model is asked again inside the same turn,
