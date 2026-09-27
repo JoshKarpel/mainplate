@@ -50,6 +50,11 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
     session plants at the files it actually ended with; the capture puts that tree in the store, and
     the store is not the session's, so it outlives the checkout.
 
+    **A capture that fails is logged and the files go anyway.** The usual reason is a session that
+    broke its own `.git`, which no later round would fix, so retrying would keep its files for ever.
+    Without the key, a fork from the end plants at the newest tree a turn recorded, and what changed
+    after that is lost with the checkout.
+
     Then everything `Places.of` names that is still there, which is the checkout, the scratch and
     the plugins' scratches.
     """
@@ -57,8 +62,14 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
     if session.repository is not None and workspaces.clones.cloned(session.repository):
         worktrees = workspaces.worktrees(session.repository)
         if worktrees.planted(session.id):
-            ending = await worktrees.worktree(session.id).capture(f"archived {session.id}")
-            await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, records.Tree(tree=ending).recorded())
+            try:
+                ending = await worktrees.worktree(session.id).capture(f"archived {session.id}")
+            except SnapshotFailed as uncaptured:
+                logger.warning(
+                    f"archiving {session.id} without its last tree, which could not be captured: {uncaptured}"
+                )
+            else:
+                await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, records.Tree(tree=ending).recorded())
             await worktrees.uproot(session.id)
     for place in places.of(session.id, session.repository):
         if place.is_symlink():

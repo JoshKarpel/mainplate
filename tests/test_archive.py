@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -209,6 +210,19 @@ class TestTakingAnArchivedSessionOffTheDisk:
         ending = parse_tree(recorded[ARCHIVED_TREE_KEY])
         assert ending is not None
         assert "src/made.txt" in await workspaces.clones.store(FIXTURE).paths(ending)
+
+    async def test_a_session_that_broke_its_own_git_still_comes_off_without_a_last_tree(
+        self, service: Service, workspaces: Workspaces, places: Places
+    ) -> None:
+        """No later round would capture it either, so waiting would keep its files for ever."""
+        planting, session = await working(service, workspaces, places)
+        shutil.rmtree(workspaces.at(session) / ".git")
+        await planting.archive(session)
+
+        await reconciled(planting, places, Footprints())
+
+        assert not any(place.exists() for place in places.of(session, FIXTURE))
+        assert ARCHIVED_TREE_KEY not in await planting.checkpointer.load(session)
 
     async def test_a_session_a_pass_holds_keeps_its_files_until_the_claim_ends(
         self, service: Service, workspaces: Workspaces, places: Places

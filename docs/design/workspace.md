@@ -386,9 +386,10 @@ cannot know it: files may still be being written when the button goes down, and 
 until nothing holds the session. It is what a fork from the end of an archived session plants at, so
 the branch carries on with the files the conversation actually ended with, snapshots the worktree
 never captured included - what a person ran in it after the last request, and what a plugin fixed
-at the turn's end. A worktree whose session broke its own `.git` fails that capture, and the round
-leaves its files where they are and tries again next time, so such a session keeps its files until
-its git is put back. Then the worktree is a directory like any other and is removed as one; the
+at the turn's end. A worktree whose session broke its own `.git` fails that capture, and its files go
+anyway, since no later round would capture it either: the failure is logged, no `archived:tree` is
+recorded, and a fork from the end plants at the newest tree a turn recorded instead. The cost,
+stated: whatever changed after that turn is lost with the worktree. Then the worktree is a directory like any other and is removed as one; the
 snapshots are in the store under the session's refs and outlive it, which is what keeps
 every earlier fork point reachable too.
 
