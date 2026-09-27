@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,10 @@ from conftest import started
 
 from mainplate.fetching import fetched
 from mainplate.fetching import working_in
+from mainplate.forge import Fetched
+from mainplate.forge import Reachable
+from mainplate.forge import Reaching
+from mainplate.forge import Repository
 from mainplate.forge import Workspaces
 from mainplate.service import Service
 from mainplate.sessions import Session
@@ -74,6 +79,35 @@ class TestARound:
 
         await checkout.demand("fetch", "--quiet", "origin")
         assert await checkout.demand("rev-parse", "refs/remotes/origin/main") == now
+
+    async def test_a_fetch_that_worked_is_held_as_when_it_happened(
+        self, service: Service, workspaces: Workspaces, working: str
+    ) -> None:
+        later = CREATED + timedelta(minutes=7)
+        timed = replace(workspaces, clock=lambda: later)
+
+        await fetched(timed, service.database)
+
+        assert timed.fetches.current[FIXTURE] == Fetched(at=later)
+
+    async def test_a_fetch_that_failed_is_held_with_what_git_said(
+        self, service: Service, workspaces: Workspaces, working: str
+    ) -> None:
+        """The store keeps the refs it last fetched, so this is a note on a card and not a stopped session."""
+        gone = replace(
+            workspaces,
+            reaching=Reaching(
+                current=Reachable(
+                    repositories=(Repository(forge="test", key="fixture", name="me/fixture", url="/nowhere/at/all"),)
+                )
+            ),
+        )
+
+        await fetched(gone, service.database)
+
+        held = gone.fetches.current[FIXTURE]
+        assert held.failed is not None
+        assert "/nowhere/at/all" in held.failed
 
     async def test_a_repository_only_archived_sessions_work_in_is_left_alone(
         self, service: Service, workspaces: Workspaces, origin: Path, working: str

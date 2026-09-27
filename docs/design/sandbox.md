@@ -212,8 +212,9 @@ with it and make "the whole machine with no network" unrepresentable. `Sandbox.e
 read-write instead of a worktree and changes nothing else, which is why there is one `argv` rather
 than two.
 
-**The repository and the filesystem level are one question, asked once.** `workspace_cards` is the
-group: every repository a forge reaches, plus `no files` and `this whole machine`. Picking one
+**The repository and the filesystem level are one question, asked once.** On the dashboard it is
+the card you press **New session** on; on the fork page `workspace_cards` is the group: every
+repository a forge reaches, plus `only scratch` and `whole machine`. Picking one
 settles `Choice.repository` and `isolation.filesystem` together, so they cannot disagree at the
 source. `posted_workspace` is where one posted value becomes the two recorded ones, told apart
 without a prefix because a repository's id is `forge:key` and so always holds a colon.
@@ -239,7 +240,7 @@ already had.
 
 `Isolation.settled` survives the merge and is still applied by `Service.start` and `Service.fork`,
 because a fork's repository is *inherited* rather than posted and a form is not the only way in.
-What it no longer has to do is correct the start page, which can no longer express a contradiction.
+What it no longer has to do is correct the new-session page, which can no longer express a contradiction.
 
 Whether the workspace can be chosen at all is the caller's answer, given to `picker` as `None`
 rather than as an empty `Reachable`. The difference is load-bearing now that the group holds more

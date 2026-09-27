@@ -16,15 +16,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field
+from datetime import UTC
+from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Final
 from typing import Protocol
 
 from mainplate.sandbox import NoSandbox
+from mainplate.snapshots import Ran
 from mainplate.snapshots import Store
 from mainplate.snapshots import Worktree
 from mainplate.snapshots import Worktrees
@@ -58,6 +63,14 @@ class Repository:
     key: str
     name: str
     url: str
+
+    web: str | None = None
+    """
+    Where a person reads the repository in a browser, or nothing where the forge cannot say.
+
+    The forge's to fill because only it knows what is on the other side: exe.dev's integration is
+    GitHub behind a proxy, so the page is GitHub's for the same `owner/repo`, and nothing asks.
+    """
 
     @property
     def id(self) -> str:
@@ -173,6 +186,36 @@ class Reaching:
     current: Reachable
 
 
+@dataclass(frozen=True, slots=True)
+class Fetched:
+    """
+    The last time this console's copy of a repository asked the forge for its branches, and how it went.
+
+    `failed` is what git said where it did not work, and nothing where it did. A clone counts, since
+    a clone just made is as current as a fetch would have left it.
+    """
+
+    at: datetime
+    failed: str | None = None
+
+
+@dataclass(slots=True)
+class Fetches:
+    """
+    What the last fetch of each repository came to, by repository id, held for the page to read.
+
+    Rebound and never edited, as `Footprints` is, and in memory only: a restart forgets it, and the
+    page says a repository has not been fetched since the console started until the first round,
+    which starts at once. It is a reading of the control plane, not anything anybody said.
+    """
+
+    current: Mapping[str, Fetched] = field(default_factory=dict)
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 # What `git ls-remote --heads` puts in front of every branch it names.
 HEADS: Final = "refs/heads/"
 
@@ -228,7 +271,7 @@ class Clones:
         """Whether this repository is already on disk, which is a question with no I/O in it."""
         return (self.at(repository) / "HEAD").exists()
 
-    async def refresh(self, repository: Repository) -> None:
+    async def refresh(self, repository: Repository) -> Ran:
         """
         Bring this clone's idea of the remote up to date, so a branch name means today's commit.
 
@@ -242,13 +285,15 @@ class Clones:
         a precondition for planting: a machine that is offline, or a repository whose integration was
         detached this morning, still gets the worktree it would have got before this existed. The
         store keeps the last refs it fetched, so a failed round leaves sessions exactly as current
-        as the one before it and the next round tries again.
+        as the one before it and the next round tries again. What git said comes back, so the caller
+        can hold it where a page can say so; see `Workspaces.refresh`.
         """
         fetched = await self.store(repository.id).git(
             "fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*"
         )
         if not fetched.ok:
             logger.warning(f"could not refresh {repository.name}, so a branch name may be stale: {fetched.err}")
+        return fetched
 
     async def branches(self, repository: Repository) -> tuple[str, ...]:
         """
@@ -334,6 +379,24 @@ class Workspaces:
     `app.py` offers no repository on such a machine, and anything that reaches for a checkout
     regardless is refused with `NoSandbox`.
     """
+
+    fetches: Fetches = field(default_factory=Fetches)
+    """What each store's last clone or fetch came to, which the dashboard draws. See `refresh`."""
+
+    clock: Callable[[], datetime] = utc_now
+
+    async def refresh(self, repository: Repository) -> None:
+        """
+        Fetch one store and hold what came of it, which is the one way anything here fetches.
+
+        One method for planting and for the background loop both, so the page's "fetched at" is the
+        last fetch of either kind rather than the last one the loop happened to make.
+        """
+        came = await self.clones.refresh(repository)
+        self.fetched(repository.id, None if came.ok else came.err or came.out or f"git exited {came.code}")
+
+    def fetched(self, repository: str, failed: str | None) -> None:
+        self.fetches.current = {**self.fetches.current, repository: Fetched(at=self.clock(), failed=failed)}
 
     def at(self, session: str) -> Path:
         """Where a session's files are, which is a question a page asks and never a call that fails."""
@@ -429,8 +492,9 @@ class Workspaces:
             if found is None:
                 return None
             await self.clones.ensure(found)
+            self.fetched(repository, None)
         if not cloning and tree is None and not worktrees.planted(session):
             reached = self.named(repository)
             if reached is not None:
-                await self.clones.refresh(reached)
+                await self.refresh(reached)
         return await worktrees.plant(session, tree=tree, base=base, branch=branch)

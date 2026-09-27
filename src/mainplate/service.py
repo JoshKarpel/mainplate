@@ -63,6 +63,7 @@ from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
 from mainplate.footprint import Footprints
+from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
@@ -560,6 +561,11 @@ class Service:
     def reachable(self) -> Reachable:
         """What the picker offers, which is nothing at all where there are no workspaces."""
         return self.workspaces.reaching.current if self.workspaces is not None else Reachable(repositories=())
+
+    @property
+    def fetches(self) -> Mapping[str, Fetched]:
+        """What each repository's last clone or fetch came to, and nothing at all where there are no workspaces."""
+        return self.workspaces.fetches.current if self.workspaces is not None else {}
 
     def footprinted(self, session: Session) -> Session:
         """The row with what the last sweep measured for it, which is a lookup and never a walk."""

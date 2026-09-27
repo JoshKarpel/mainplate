@@ -107,9 +107,9 @@ carries every session's title, so an assertion that a message does not contain s
 the list's escaped copy of it. `watched` in `test_console.py` hands back the message with the list
 taken out, and `region_in` picks one partial out by its target for a test about the list itself.
 
-**A session nobody has opened is `new`**, because it recorded its choice and nobody looked. A test
+**A session nobody has opened is `unread`**, because it recorded its choice and nobody looked. A test
 about the word has to look first, with a `GET` of the session's page, or every row it asserts on is
-new for a reason the test did not set up.
+unread for a reason the test did not set up.
 
 **A hidden tab is driven by the event, not by hiding anything.** Playwright cannot background a tab,
 so `shown` in `test_browser.py` sets what `document.hidden` answers and fires `visibilitychange`,

@@ -47,12 +47,15 @@ the composer; a session still on that step is the step, which has neither of tho
 `settling`, decides both which shape the page is drawn in and which partials the stream sends, so the
 two cannot disagree - and they must not, because a partial naming a target that is not there is
 dropped in silence, which is a spinner that never resolves. **The session list rides every message
-on every page**, the start page included, because it is a region of every page and it moves when any
-session does: the token the stream polls has a half for the list, three aggregates over the store,
-beside the session's own. So the start page holds a connection too, sent the list alone, where it
-used to hold none. What is redrawn is the `<ul>` and not the sidebar around it, because what holds
-the list slid out on a phone is an attribute the script put on the sidebar, and a morph of the
-sidebar would take it off and snap the sheet shut under a thumb every time any session moved.
+on every page**, the dashboard and the new-session page included, because it is a region of every
+page and it moves when any session does: the token the stream polls has a half for the list, three
+aggregates over the store, beside the session's own. The dashboard's sessions that want attention
+are read off the same rows, so they ride the same half and need no token of their own; the dashboard
+says so by connecting with `shape=dashboard`, the other page with no session sends nothing, and each
+is sent only the regions it has. What is redrawn is the `<ul>` and not the sidebar around it,
+because what holds the list slid out on a phone is an attribute the script put on the sidebar, and a
+morph of the sidebar would take it off and snap the sheet shut under a thumb every time any session
+moved.
 
 **The page states its shape when it connects, and the stream says once when that shape is over.** A
 page drawn as the step whose session has since loaded is exactly the case above: the checkpoint's
@@ -192,7 +195,7 @@ compared and never subtracted, and why a test about the order writes the stamps 
 them. An answer arriving moves no row, since nobody said anything; what says an answer arrived is the
 word below.
 
-**A row says `new` when its session has recorded something since anybody looked at it.** "Recorded
+**A row says `unread` when its session has recorded something since anybody looked at it.** "Recorded
 something" is the newest row in the session's checkpoint that is not in its inbox - an answer, a
 refusal, a command's result, a plugin setting itself up - because a person's own message is not news
 to them. "Looked at" is `seen_seq` on the session's row in the index, the highest row the store had
@@ -207,15 +210,15 @@ the console's bookkeeping and not about who spoke. Never on an archived row, sin
 said in one, and never on the row being read, because serving that page is what marks it.
 
 **A row says `working` while the worker has something to do about its session**, which is the other
-reason to open one: `new` says something arrived, and this says something is still coming. It is
+reason to open one: `unread` says something arrived, and this says something is still coming. It is
 [what the worker is doing](durability.md) read for every session in one statement rather than one
 per row, since the list is redrawn whenever any session moves, and it is the reason the list's token
 carries the claim and the queue beside the index's three numbers: the row says which, so the list
 has to be drawn again when the answer changes. One word for three arms, with the title saying which
 of a pass answering now, a delivery the next pass will take, or one held back after a pass fell
 over; `Idle` draws nothing, because a settled session is the ordinary row. In the same face and hue
-as `new` and the regular weight beside its bold, since what has already arrived is the one to go
-and read. Never on an archived row, for `new`'s reason. A console
+as `unread` and the regular weight beside its bold, since what has already arrived is the one to go
+and read. Never on an archived row, for `unread`'s reason. A console
 upgraded onto the column has it filled to where every session stood, since `NULL` reads as never
 looked at and lighting every session at once would tell the reader nothing.
 
@@ -362,7 +365,51 @@ that category,
 which is the whole argument for the cookie: nothing about `2031-03-18 04:02` stops being true while
 somebody reads it, so there is no reason for a second implementation of it to exist.
 
+## The dashboard
+
+`/` is the console's front page, titled `Mainplate`. It answers two questions, in the order a
+returning reader asks them: what wants me, and where can I start something.
+
+**First the sessions that want attention**: those with something recorded since anybody looked, and
+those a pass is on or will be. Both are the list's own marks, `unread` and `working`, and the rows are
+the list's own row, so a session is here for exactly the reason the list marks it and there is one
+drawing of a row. They redraw live, beside the list. The list keeps every session in the order they
+were last written to; this picks out the rows worth opening now.
+
+**Then the places a session can work, one card to a row**, which is where starting a session begins.
+The two places with no repository come first, as a section of their own, since they are always
+there; then a card per repository a forge reaches, then one per repository a live session is still
+on that no forge reaches any more, which lists its sessions and has no press. A card names its
+sessions not yet archived (the first few, then how many more), carries **New session** in its top
+corner so the press is in the same place on every card however long the list under it is, and a
+repository's name links to its page on the forge, which the forge says where it can: exe.dev's
+integration is GitHub behind a proxy, so the page is GitHub's for the same `owner/repo`.
+
+**A repository's card says when this console's copy was last fetched**, in its bottom corner, and a
+failure is drawn to be spotted with what git said in its title. A session's own `git fetch` reads
+that copy and not the forge, so the line is how far behind the remote every session on the repository
+can be. It comes from `Fetches`, which [the fetch loop and planting](workspace.md) rebind in memory and
+the page reads; nothing on the page asks the forge anything. The cost, stated: it is not persisted, so
+a restarted console says `not fetched since the console started` until its first round, which
+starts at once, and it is not in the stream's token, so an open dashboard shows a fetch on its next
+redraw rather than when it lands.
+
+**The press goes to `/sessions/new?workspace=…`**, the picker with the workspace already answered.
+A bare `/sessions/new` is sent back here rather than refused, since the page it wants is one press
+away; a workspace this console does not recognise, or a repository no forge reaches, is refused on
+the terms the form would be when it posted.
+
 ## The picker
+
+**The workspace is the new-session page's heading rather than a question on it**, because the press
+on the dashboard answered it. It rides back on the form as a hidden field, so the post names a whole
+choice and is parsed as it always was, and `change` goes back to the dashboard. On a repository,
+**where to start in it comes first**, above everything else, since it is the question most likely to
+differ from one session to the next; its branches are asked for once the page has arrived, with the
+same fragment a workspace card asks for on the fork page, so the page never waits on the forge.
+
+**The fork page still asks the workspace as a question**, where a session with no repository may
+attach one. There it is the first group, which is where the rest of this ordering starts.
 
 **Ordered widest-first: workspace, network, repository code, endpoint, model, thinking, output
 override**, and then the name. What files a session has is the broadest thing about it and is one

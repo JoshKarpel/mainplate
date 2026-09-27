@@ -115,7 +115,7 @@ hidden box keeps its layout and still scrolls.
 Two more things change on a phone, and both follow from it having one column of room. **Nested
 same-axis scrollers go away**: the fork page bounds its model list on a wide window so the transcript
 under the picker stays in reach, and on a phone that bound bought a list thirty pixels tall, so it
-comes off and the choosing scrolls as one box, which is what the start page does at every width
+comes off and the choosing scrolls as one box, which is what the new-session page does at every width
 ([the picker](console.md#the-picker)). **And nothing on the transcript is revealed by
 hover any more**, which is the same lesson taken one step further than a `@media (hover: none)`
 override: the branch link used to appear on a person's panel under the pointer, so on a touch screen
@@ -131,12 +131,12 @@ second query would reintroduce, and it reports that rather than one of the ways 
 ## The document never scrolls, and every box between has to say so
 
 `.shell` is `100dvh` and nothing above it moves, so a page is a window with one thing scrolling
-inside it: the transcript on a session page, `.setup` on the start page, and the model list inside
+inside it: the transcript on a session page, `.setup` on the new-session page, and the model list inside
 that. **What makes it work is a chain, and every box in the chain has to pass the bound down.** A
 grid or flex item's minimum is its own min-content unless it says `min-height: 0`, so one box that
 does not say it is floored at its content and the bound stops there: `main`'s growing row sizes to
 the whole picker, the page overflows the window, and the model list, which is sized by the room left,
-is left at its full height. Wrapping the start page's picker in a `<form>` did exactly that, which is
+is left at its full height. Wrapping the new-session page's picker in a `<form>` did exactly that, which is
 why `.choosing` is a grid that says `min-height: 0` rather than the plain block a form otherwise is.
 
 **The symptom a reader meets is not the page having grown.** It is that a wheel anywhere over the

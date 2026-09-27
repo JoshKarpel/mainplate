@@ -23,13 +23,16 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
+from enum import Enum
 from itertools import groupby
 from pathlib import Path
 from typing import Final
 from typing import assert_never
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from pydantic_ai.settings import ThinkingLevel
@@ -40,6 +43,7 @@ from without_html import Element
 from without_html import Node
 from without_html import VoidElement
 from without_html import a
+from without_html import article
 from without_html import aside
 from without_html import body
 from without_html import button
@@ -53,9 +57,11 @@ from without_html import dt
 from without_html import form
 from without_html import h1
 from without_html import h2
+from without_html import h3
 from without_html import head
 from without_html import header
 from without_html import html
+from without_html import img
 from without_html import input_
 from without_html import label
 from without_html import li
@@ -74,6 +80,7 @@ from without_html import textarea
 from without_html import time
 from without_html import title
 from without_html import ul
+from without_html import wbr
 from without_web import Reversible
 from without_web import url_for
 
@@ -108,6 +115,7 @@ from mainplate.conversation import Spent
 from mainplate.conversation import Steering
 from mainplate.conversation import ToolUse
 from mainplate.conversation import Transcript
+from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.markup import as_document
 from mainplate.markup import as_message
@@ -175,11 +183,21 @@ STREAM_ID: Final = "stream"
 # the word `settling`'s other half already uses for the shape past the step.
 LOADED: Final = "loaded"
 
-# The query parameter a page states its shape on when it opens the stream, and the one value it
-# takes. Only the step names itself; a page showing the conversation sends nothing, since that is
-# the shape a page has unless it says otherwise.
+# The query parameter a page states its shape on when it opens the stream. A page showing the
+# conversation, and the new-session page, send nothing, since they have no region of their own the
+# stream has to know about.
 SHAPE_FIELD: Final = "shape"
-SETTLING: Final = "settling"
+
+
+class Shape(Enum):
+    """Which page a stream is talking to, where that decides what the stream sends."""
+
+    SETTLING = "settling"
+    """A session's settings step, which has the step and no transcript."""
+
+    DASHBOARD = "dashboard"
+    """The dashboard, which has the sessions that want attention as a region of its own."""
+
 
 # What a send does, which is the same merge plus a scroll: a message just typed is the one thing a
 # reader definitely wants to be looking at, and unlike an update arriving on its own this cannot
@@ -193,6 +211,22 @@ TRANSCRIPT_ID: Final = "transcript"
 # whole sidebar, so a list slid out on a phone is not snapped shut by its own redraw, since what holds
 # it open is an attribute the script put on the sidebar and a morph of the sidebar would take it off.
 LISTED_ID: Final = "listed"
+
+# The sessions the dashboard says want attention, which the live connection redraws beside the list
+# because both are read off the same rows. See `Shape.DASHBOARD`.
+WANTING_ID: Final = "wanting"
+
+# What the dashboard is called, in the tab and nowhere else: it is the console's own front page.
+DASHBOARD: Final = "Mainplate"
+
+# The word a session with something recorded since anybody looked is marked with, on a row in the
+# list, on a row on a dashboard card, and as the heading over the dashboard's group of them. One
+# word in all three, because they are one fact; `Session.unseen` is the same fact in the code.
+UNREAD: Final = "unread"
+
+# How many of a repository's sessions its card on the dashboard names before saying how many more.
+# The list beside it has all of them; the card is for seeing where work is, not for finding one.
+SHOWN_PER_REPOSITORY: Final = 5
 
 MODEL_ID: Final = "model"
 
@@ -432,6 +466,7 @@ class Links:
     """
 
     home: Reversible
+    new_session: Reversible
     start: Reversible
     session: Reversible
     say: Reversible
@@ -453,6 +488,17 @@ class Links:
     def to_home(self) -> str:
         return url_for(self.home)
 
+    def to_new_session(self, workspace: str) -> str:
+        """
+        The page that asks what a session in this workspace runs on, before anything is created.
+
+        The workspace in the query string rather than the path, because it is the one answer this
+        page's form already carries under that name: the page is the rest of the questions about a
+        session in it, and posts the workspace back as it was given. A repository's id holds a colon,
+        which is quoted so the value arrives as it was.
+        """
+        return f"{url_for(self.new_session)}?{urlencode({WORKSPACE_FIELD: workspace})}"
+
     def to_start(self) -> str:
         return url_for(self.start)
 
@@ -462,7 +508,7 @@ class Links:
     def to_say(self, session: str) -> str:
         return url_for(self.say, {"session": session})
 
-    def to_stream(self, session: str | None, settling: bool = False) -> str:
+    def to_stream(self, session: str | None, shape: Shape | None = None) -> str:
         """
         The connection a page holds open, told which conversation it is showing and in which shape.
 
@@ -476,12 +522,13 @@ class Links:
         transcript for a message to land in: the moment the checkpoint's shape stops matching the
         page's, the stream says so once and the page reloads, which is `LOADED`. Sent by the page
         rather than remembered by the stream, so a connection re-opened after the change is told the
-        page is still on the step and answers it the same way. Only the step names itself, since the
-        conversation is the shape a page has unless it says otherwise.
+        page is still on the step and answers it the same way. The dashboard names itself for the
+        same reason from the other side: it is the one page with a region beside the list that the
+        stream must send, and a partial for a region a page does not have is dropped on the floor.
         """
         asked = [
             *(() if session is None else (f"session={session}",)),
-            *((f"{SHAPE_FIELD}={SETTLING}",) if settling else ()),
+            *((f"{SHAPE_FIELD}={shape.value}",) if shape is not None else ()),
         ]
         return url_for(self.stream) + (f"?{'&'.join(asked)}" if asked else "")
 
@@ -514,7 +561,7 @@ class Links:
 
         The same shape as `to_endpoint_models` and for the same reason: the workspace is *the value
         of the card that asks*, so htmx sends it and this URL needs no interpolation. One route for
-        every card rather than one per repository, which is also what lets `no files` ask it and get
+        every card rather than one per repository, which is also what lets `only scratch` ask it and get
         a block with nothing to complete.
         """
         return url_for(self.workspace_branches)
@@ -568,7 +615,7 @@ class Links:
 EXTENSIONS: Final = "sse"
 
 
-def stream_element(links: Links, session: str | None, settling: bool = False) -> Element:
+def stream_element(links: Links, session: str | None, shape: Shape | None = None) -> Element:
     """
     The page's one live connection, and the sink a message that named no region would land in.
 
@@ -606,7 +653,7 @@ def stream_element(links: Links, session: str | None, settling: bool = False) ->
         attrs={
             "id": STREAM_ID,
             "hidden": True,
-            "hx-sse:connect": links.to_stream(session, settling),
+            "hx-sse:connect": links.to_stream(session, shape),
             "data-seen": None if session is None else links.to_seen(session),
             "hx-sse:close": LOADED,
             "hx-target": "this",
@@ -622,7 +669,7 @@ def document(
     reader: Reader | None = None,
     session: str | None = None,
     forked_from: str | None = None,
-    settling: bool = False,
+    shape: Shape | None = None,
     live: bool = True,
 ) -> str:
     """
@@ -642,8 +689,8 @@ def document(
     `<html>` has been parsed by the time that block runs, so the check happens there and the page
     that gets thrown away was never painted. Same reason as the theme, one attribute along.
 
-    `settling` is which shape the session page was drawn in, and it goes on the stream element so
-    the connection can say when that shape is over; see `Links.to_stream`. `live` is whether the page
+    `shape` is which shape the page was drawn in where the stream has to know it, and it goes on the
+    stream element; see `Links.to_stream`. `live` is whether the page
     holds that connection at all, which every page with the session list on it does and a refusal
     does not; see `stream_element`.
 
@@ -748,7 +795,7 @@ def document(
                             "data-session": session,
                             "data-forked-from": forked_from,
                         },
-                        children=[*((stream_element(links, session, settling),) if live else ()), children],
+                        children=[*((stream_element(links, session, shape),) if live else ()), children],
                     ),
                 ],
             ),
@@ -840,7 +887,17 @@ def sidebar(
             div(
                 cls="sessions__sheet",
                 children=[
-                    a(cls="start", attrs={"href": links.to_home()}, children=NEW_SESSION),
+                    # The console's mark and name, as the way back to the dashboard: a link that reads
+                    # as where you are rather than a button that reads as something to do, since the
+                    # presses that start something are on the dashboard's cards.
+                    a(
+                        cls="home",
+                        attrs={"href": links.to_home()},
+                        children=[
+                            img(cls="home__mark", attrs={"src": links.to_asset("icon.svg"), "alt": ""}),
+                            span(cls="home__name", children=DASHBOARD),
+                        ],
+                    ),
                     listed_region(links, reader, listed, showing, reachable),
                 ],
             ),
@@ -901,16 +958,16 @@ def session_row(
                             span(
                                 cls="unseen",
                                 attrs={"title": "Something new since you last looked"},
-                                children="new",
+                                children=UNREAD,
                             ),
                         )
                         if session.unseen and session.archived is None
                         else ()
                     ),
                     # Whether something is still coming, which is the other reason to open a
-                    # row: `new` says the session has answered since anybody looked, and this says
-                    # a pass is answering it or is going to. Never on an archived row, for the
-                    # reason `new` is not.
+                    # row: `unread` says the session has answered since anybody looked, and this
+                    # says a pass is answering it or is going to. Never on an archived row, for the
+                    # reason `unread` is not.
                     *(working_mark(session.attention) if session.archived is None else ()),
                     when_element(
                         session.latest,
@@ -1756,11 +1813,11 @@ def output_override_field(chosen: int | None, cap: int | None) -> Element:
 # The two answers to "what files does this session have" that are not a repository. Their values are
 # the `Filesystem` members they mean, and that is unambiguous rather than lucky: a repository's id is
 # `forge:key`, so it always holds a colon and can never be either of these.
-NO_FILES: Final = "no files"
-WHOLE_MACHINE: Final = "this whole machine"
+ONLY_SCRATCH: Final = "only scratch"
+WHOLE_MACHINE: Final = "whole machine"
 
 WITHOUT_A_REPOSITORY: Final[tuple[tuple[str, Filesystem, str], ...]] = (
-    (NO_FILES, Filesystem.NOTHING, "a scratch directory of its own, and nothing else on this machine"),
+    (ONLY_SCRATCH, Filesystem.NOTHING, "a scratch directory of its own, and nothing else on this machine"),
     (WHOLE_MACHINE, Filesystem.EVERYTHING, "every file this console can reach, including its own"),
 )
 
@@ -1837,7 +1894,7 @@ picking a repository already means: a session with a shell runs its build, its t
 whatever those shell out to, every one of them unread. A plugin is one more caller of that.
 
 What the second answer is for is the session where that reading does not hold - a stranger's pull
-request being read rather than worked in, or a session on `no files` that picked a repository and
+request being read rather than worked in, or a session on `only scratch` that picked a repository and
 hands the model no shell at all. That is why it is drawn here rather than inferred from the
 isolation: the two are near enough to look like one question and are not.
 """
@@ -1987,7 +2044,7 @@ def starting_at(repository: str | None, base: str | None, branch: str | None, br
     makes the first one work.
 
     **With no repository there are no fields, and the block is an empty anchor.** A base and a branch
-    are answers *about* a repository, so with `no files` or `this whole machine` picked they are two
+    are answers *about* a repository, so with `only scratch` or `whole machine` picked they are two
     boxes asking a question the session does not have - and `Choice.settled` drops whatever they hold
     anyway, which is a form saying one thing and a record keeping another. That is not the greying
     `workspace_cards` was written to undo, because nothing here is kept in step with anything: which
@@ -2134,7 +2191,7 @@ def workspace_cards(
     Values are the repository's id or the `Filesystem` member's own name, and that is unambiguous
     rather than lucky: an id is `forge:key`, so it always holds a colon and can never be either name.
 
-    `this whole machine` is worth reading twice before picking. A session on it can read this
+    `whole machine` is worth reading twice before picking. A session on it can read this
     console's own configuration, which holds the credentials, and its store, which holds every other
     conversation. It is still inside a sandbox, so the network answer below still means what it says,
     but nothing about the filesystem is held back.
@@ -2189,9 +2246,14 @@ def picker(
     chosen: Choice | None = None,
     naming: Placed = None,
     acting: Placed = None,
+    leading: Placed = None,
 ) -> Element:
     """
     Everything a session is decided by, laid out as the question it actually is.
+
+    `leading` is what the page puts above every question, which on the new-session page is the
+    workspace already answered and where in it to start. Handed in for the reason `naming` is: the
+    fork page asks the same questions and has none of that to say.
 
     One block rather than a row of selects, because choosing a model is the one real decision on
     this page and a row of selects made it look like a footnote to the message box.
@@ -2229,6 +2291,7 @@ def picker(
     return div(
         cls="picker",
         children=[
+            leading,
             *(
                 ()
                 if reachable is None
@@ -4915,34 +4978,333 @@ def shell(
     )
 
 
-def start_page(
+def wanting(listed: Sequence[Session]) -> tuple[tuple[Session, ...], tuple[Session, ...]]:
+    """
+    The sessions the dashboard says want attention: what is unread, then what is still working and
+    is not unread.
+
+    Read off the same two facts the list's own marks are, so a row is on the dashboard for exactly
+    the reason the list marks it. A session both unread and working is unread, because what arrived
+    is worth reading now and what is coming will make it unread again.
+    """
+    live = [session for session in listed if session.archived is None]
+    unread = tuple(session for session in live if session.unseen)
+    working = tuple(session for session in live if not session.unseen and working_mark(session.attention))
+    return unread, working
+
+
+def wanting_region(links: Links, reader: Reader, listed: Sequence[Session], reachable: Reachable) -> Element:
+    """
+    What on this console wants you, which is the region the live connection redraws on the dashboard.
+
+    The same rows the list draws, through `session_row`, so a session reads the same here as in the
+    column beside it and there is one drawing of a row to keep right. Nothing where there is nothing:
+    a dashboard with an empty heading is one that looks as if it failed to load.
+    """
+    unread, working = wanting(listed)
+    groups = [(heading, sessions) for heading, sessions in ((UNREAD, unread), ("working", working)) if sessions]
+    return section(
+        cls="dashboard__attention",
+        attrs={"id": WANTING_ID, "aria-label": "Sessions wanting attention"},
+        children=[
+            *(
+                div(
+                    cls="dashboard__group",
+                    children=[
+                        h2(cls="picker__legend", children=heading),
+                        ul(
+                            cls="dashboard__rows",
+                            children=[
+                                li(children=session_row(links, reader, session, None, 0, reachable))
+                                for session in sessions
+                            ],
+                        ),
+                    ],
+                )
+                for heading, sessions in groups
+            ),
+            *(() if groups else (p(cls="dashboard__quiet", children="Nothing unread, and nothing working."),)),
+        ],
+    )
+
+
+def fetch_note(fetched: Fetched | None, reader: Reader) -> Element:
+    """
+    When this console's copy of a repository last asked the forge for its branches, and whether it worked.
+
+    Said because a session's own `git fetch` reads that copy and not the forge, so this is how far
+    behind the remote every session on the repository can be. A failure is drawn to be spotted and
+    carries what git said in its title; the copy keeps the refs it last fetched, so the sessions go on
+    working against those.
+    """
+    if fetched is None:
+        return span(cls="fetch", children="not fetched since the console started")
+    if fetched.failed is not None:
+        return when_element(
+            fetched.at,
+            cls="fetch fetch--failed",
+            title=f"The fetch at {stamped(fetched.at, reader)} failed: {fetched.failed}",
+            said=f"fetch failed {dated(fetched.at, reader)}",
+        )
+    return when_element(
+        fetched.at,
+        cls="fetch",
+        title=f"Fetched {stamped(fetched.at, reader)}",
+        said=f"fetched {dated(fetched.at, reader)}",
+    )
+
+
+def dashboard_card(
+    links: Links,
+    reader: Reader,
+    naming: str,
+    sessions: Sequence[Session],
+    starting: str | None,
+    saying: Placed = None,
+    footing: Placed = None,
+    web: str | None = None,
+) -> Element:
+    """
+    One place sessions work, with the sessions working there and the press that starts another.
+
+    **The press is beside the name**, in the card's top corner, so it is in the same place on every
+    card however many sessions are listed under it, and a reader scanning down for a repository finds
+    the button on the line they found it on. `starting` is the workspace it starts a session in, or
+    nothing for a repository no forge reaches any more, which has no press at all.
+
+    `saying` is a line under the name, which is what the two places with no repository say they are;
+    `footing` is the corner under everything, which is where a repository says when it was last
+    fetched: a fact about the card rather than the thing a reader came to it for. `web` is where the
+    repository is read in a browser, which the name links to where the forge said.
+    """
+    shown = sessions[:SHOWN_PER_REPOSITORY]
+    # Somewhere the name may break that is not mid-word: after each `/`, so a narrow card puts `owner/`
+    # on one line and the repository on the next rather than cutting either.
+    parts = naming.split("/")
+    broken: tuple[Child, ...] = (*(piece for part in parts[:-1] for piece in (f"{part}/", wbr())), parts[-1])
+    return article(
+        cls="dashboard__card",
+        attrs={"data-name": naming},
+        children=[
+            div(
+                cls="dashboard__head",
+                children=[
+                    h3(
+                        cls="dashboard__name",
+                        children=broken
+                        if web is None
+                        else a(attrs={"href": web, "referrerpolicy": "no-referrer"}, children=broken),
+                    ),
+                    *(
+                        (
+                            a(
+                                cls="dashboard__start",
+                                attrs={"href": links.to_new_session(starting)},
+                                children=NEW_SESSION,
+                            ),
+                        )
+                        if starting is not None
+                        else ()
+                    ),
+                ],
+            ),
+            saying,
+            *(
+                (
+                    ul(
+                        cls="dashboard__sessions",
+                        children=[
+                            li(
+                                children=a(
+                                    attrs={"href": links.to_session(session.id)},
+                                    children=[
+                                        span(cls="name", children=session.title or UNTITLED),
+                                        *((span(cls="unseen", children=UNREAD),) if session.unseen else ()),
+                                        *working_mark(session.attention),
+                                        when_element(
+                                            session.latest,
+                                            cls="when",
+                                            title=moments(session, reader),
+                                            said=dated(session.latest, reader),
+                                        ),
+                                    ],
+                                )
+                            )
+                            for session in shown
+                        ],
+                    ),
+                )
+                if shown
+                else (p(cls="dashboard__none", children="No sessions yet."),)
+            ),
+            *(
+                (p(cls="dashboard__more", children=f"and {len(sessions) - len(shown)} more in the list"),)
+                if len(sessions) > len(shown)
+                else ()
+            ),
+            *((div(cls="dashboard__foot", children=footing),) if footing is not None else ()),
+        ],
+    )
+
+
+def dashboard_page(
+    links: Links,
+    reader: Reader,
+    listed: tuple[Session, ...],
+    reachable: Reachable,
+    fetches: Mapping[str, Fetched],
+) -> str:
+    """
+    The console's front page: what wants attention, and every place a session can work.
+
+    **Attention first**, because it is what changes: sessions with something new since anybody looked,
+    and sessions a pass is on. The list beside it already has every session in the order they were
+    last written to, so this does not repeat it; it picks out the rows the list marks.
+
+    **Then a card per repository**, each with its sessions not yet archived, when this console's copy
+    of it was last fetched, and the press that starts a session there. A repository is the thing a
+    person comes here to work *in*, so starting a session is a press on its card rather than a card
+    picked out of a form. A repository sessions still work in that no forge reaches any more gets a
+    card too, with no press on it, since its sessions are still there and a new one could not be
+    planted. The two answers that are not a repository come first, as a section of their own: they
+    are always there, where the repositories are whatever the forges reach. One card to a row in both
+    sections, since a card is as tall as the sessions under it and two side by side would not match.
+
+    Nothing here asks the forge anything: the fetch state is what the background loop last left in
+    memory, and the repositories are the catalogue a forge answered at startup.
+    """
+    live = [session for session in listed if session.archived is None]
+    reached = {repository.id for repository in reachable.repositories}
+    stranded = sorted(
+        {session.repository for session in live if session.repository is not None and session.repository not in reached}
+    )
+    return document(
+        links,
+        DASHBOARD,
+        shell(
+            links,
+            reader,
+            listed,
+            showing=None,
+            reachable=reachable,
+            pane=[
+                div(
+                    cls="dashboard",
+                    children=[
+                        wanting_region(links, reader, listed, reachable),
+                        section(
+                            cls="dashboard__places",
+                            attrs={"aria-label": "Sessions with no repository"},
+                            children=[
+                                h2(cls="picker__legend", children="No repository"),
+                                div(
+                                    cls="dashboard__grid",
+                                    children=[
+                                        dashboard_card(
+                                            links,
+                                            reader,
+                                            named,
+                                            [
+                                                session
+                                                for session in live
+                                                if session.repository is None
+                                                and (session.filesystem or Filesystem.NOTHING) is level
+                                            ],
+                                            level.value,
+                                            saying=p(cls="dashboard__note", children=saying),
+                                        )
+                                        for named, level, saying in WITHOUT_A_REPOSITORY
+                                    ],
+                                ),
+                            ],
+                        ),
+                        section(
+                            cls="dashboard__places",
+                            attrs={"aria-label": "Repositories"},
+                            children=[
+                                h2(cls="picker__legend", children="Repositories"),
+                                div(
+                                    cls="dashboard__grid",
+                                    children=[
+                                        *(
+                                            dashboard_card(
+                                                links,
+                                                reader,
+                                                naming,
+                                                [session for session in live if session.repository == reached.id],
+                                                reached.id,
+                                                footing=fetch_note(fetches.get(reached.id), reader),
+                                                web=reached.web,
+                                            )
+                                            for reached, naming in reachable.labelled()
+                                        ),
+                                        *(
+                                            dashboard_card(
+                                                links,
+                                                reader,
+                                                repository,
+                                                [session for session in live if session.repository == repository],
+                                                None,
+                                                footing=span(cls="fetch fetch--failed", children="no forge reaches it"),
+                                            )
+                                            for repository in stranded
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                )
+            ],
+        ),
+        reader=reader,
+        shape=Shape.DASHBOARD,
+    )
+
+
+def new_session_page(
     links: Links,
     reader: Reader,
     listed: tuple[Session, ...],
     catalogue: Catalogue,
     reachable: Reachable,
-    reference: Reference | None = None,
+    reference: Reference | None,
+    repository: str | None,
+    filesystem: Filesystem,
+    fetched: Fetched | None = None,
 ) -> str:
     """
-    Where a session begins: everything it is decided by, and the button that creates it.
+    Where a session begins, in a workspace already chosen: the rest of what it is decided by, and the
+    button that creates it.
 
-    **There is no message box here any more**, and that is the visible half of a change with two
-    mechanical causes. A repository's plugins cannot be named until its worktree is planted, which the
-    worker does on a pass; and none of them may be run until somebody has seen the list, because
-    running one is executing a program. So this page records the choices, the settings step on the
-    session's own page decides what it loads, and the message box is there once both are settled.
+    **The workspace is the page's heading rather than a question on it**, because it was answered by
+    the press that got here, on the dashboard. It rides back on the form as a hidden field, so the
+    post names a whole choice and is parsed exactly as it always was. Changing it is going back.
 
-    The cost, stated: **creating stops being fire-and-forget.** Time to a first answer is unchanged,
-    since the clone happens either way, but you now create, wait, confirm, and come back to type.
-    That is bigger than an extra click, and it is taken because a boundary in front of executing
-    somebody else's program is worth more here than the convenience.
+    **Where to start in the repository comes first**, above the network and the model, because on a
+    repository it is the question most likely to differ from one session to the next. The branches
+    that complete it are asked for once the page has arrived rather than before it is drawn, so the
+    page never waits on the forge; see `starting_at`.
 
-    There is no transcript element on this page at all, for the reason there never was: what somebody
-    is doing here is deciding what they are about to talk to.
+    **There is no message box here**, and that is the visible half of a change with two mechanical
+    causes. A repository's plugins cannot be named until its worktree is planted, which the worker
+    does on a pass; and none of them may be run until somebody has seen the list, because running one
+    is executing a program. So this page records the choices, the settings step on the session's own
+    page decides what it loads, and the message box is there once both are settled. The cost, stated:
+    **creating is not fire-and-forget.** You create, wait, confirm, and come back to type.
     """
+    workspace = repository if repository is not None else filesystem.value
+    if repository is not None:
+        heading = f"{NEW_SESSION} in {reachable.readable(repository)}"
+    elif filesystem is Filesystem.EVERYTHING:
+        heading = f"{NEW_SESSION}: {WHOLE_MACHINE}"
+    else:
+        heading = f"{NEW_SESSION}: {ONLY_SCRATCH}"
+    default = catalogue.default
+    chosen = replace(default, repository=repository, isolation=replace(default.isolation, filesystem=filesystem))
     return document(
         links,
-        NEW_SESSION,
+        heading,
         shell(
             links,
             reader,
@@ -4958,14 +5320,50 @@ def start_page(
                         children=picker(
                             links,
                             catalogue,
-                            reachable,
+                            None,
                             reference,
+                            chosen=chosen,
                             naming=naming(),
                             # Named for what it makes rather than for what it begins, because the
                             # page after this one is the settings step and not a conversation: a
                             # button saying `Start` promised a session you could type into.
                             acting=div(
                                 cls="starting", children=button(attrs={"type": "submit"}, children="Create session")
+                            ),
+                            leading=div(
+                                cls="arriving",
+                                children=[
+                                    div(
+                                        cls="arriving__head",
+                                        children=[
+                                            h1(cls="arriving__name", children=heading),
+                                            *((fetch_note(fetched, reader),) if repository is not None else ()),
+                                            a(cls="arriving__back", attrs={"href": links.to_home()}, children="change"),
+                                        ],
+                                    ),
+                                    input_(attrs={"type": "hidden", "name": WORKSPACE_FIELD, "value": workspace}),
+                                    *(
+                                        (
+                                            # The block that asks for its own completions once it is on
+                                            # the page, which is the same swap a workspace card makes
+                                            # on the fork page, fired by arriving rather than by a pick.
+                                            div(
+                                                attrs={
+                                                    "hx-get": f"{links.to_workspace_branches()}?{urlencode({WORKSPACE_FIELD: repository})}",
+                                                    "hx-trigger": "load",
+                                                    "hx-target": f"#{BASIS_ID}",
+                                                    "hx-swap": "outerHTML",
+                                                    "hx-indicator": f"#{BASIS_LOADING_ID}",
+                                                    "hx-status:4xx": "swap:none",
+                                                    "hx-status:5xx": "swap:none",
+                                                },
+                                                children=starting_at(repository, None, None),
+                                            ),
+                                        )
+                                        if repository is not None
+                                        else ()
+                                    ),
+                                ],
                             ),
                         ),
                     ),
@@ -5363,7 +5761,7 @@ def session_page(
             reader=reader,
             session=showing.session.id,
             forked_from=showing.session.forked.session if showing.session.forked is not None else None,
-            settling=True,
+            shape=Shape.SETTLING,
         )
     stalled = stalled_by(showing, reader)
     # Once for both readers, so the composer's menu and the rail's cards cannot be built from two
@@ -5395,7 +5793,7 @@ def session_page(
                             refusing=stalled is not None,
                             # Only where there is something to act on. Forking an empty conversation
                             # makes a session identical to starting one, so the offer would be a
-                            # second way to do what the sidebar's own button already does.
+                            # second way to do what the dashboard's cards already do.
                             continuing=showing.said.turns > 0,
                             # Any fork can send back to what it came out of; an aside is the case it
                             # is for.

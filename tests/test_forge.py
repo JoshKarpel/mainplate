@@ -41,6 +41,8 @@ class TestReadingWhatAVmReaches:
                 name="your-org/your-repo",
                 # The integration's *own* host, not the aggregate one its help prints.
                 url="https://github-example.int.exe.xyz/your-org/your-repo.git",
+                # Deduced, since the integration proxies GitHub: the same `owner/repo` on its host.
+                web="https://github.com/your-org/your-repo",
             ),
         )
 
@@ -143,7 +145,13 @@ class TestReadingWhatAVmReaches:
         )
 
         assert parse_repositories(raw) == (
-            Repository(forge="exe-github", key="reworded", name="o/r", url="https://reworded.int.exe.xyz/o/r.git"),
+            Repository(
+                forge="exe-github",
+                key="reworded",
+                name="o/r",
+                url="https://reworded.int.exe.xyz/o/r.git",
+                web="https://github.com/o/r",
+            ),
         )
 
 

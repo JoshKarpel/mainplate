@@ -48,23 +48,24 @@ from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
 from mainplate.conversation import parse_disposition
 from mainplate.pages import PLUGIN_LEADER
-from mainplate.pages import SETTLING
 from mainplate.pages import SHAPE_FIELD
 from mainplate.pages import WORKSPACE_FIELD
 from mainplate.pages import ZONE_COOKIE
 from mainplate.pages import Links
 from mainplate.pages import Reader
+from mainplate.pages import Shape
+from mainplate.pages import dashboard_page
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
 from mainplate.pages import missing_record
 from mainplate.pages import model_cards
+from mainplate.pages import new_session_page
 from mainplate.pages import plugin_card
 from mainplate.pages import record_json
 from mainplate.pages import refusal_page
 from mainplate.pages import session_page
 from mainplate.pages import settling
 from mainplate.pages import stalled_by
-from mainplate.pages import start_page
 from mainplate.pages import starting_at
 from mainplate.pages import transcript_region
 from mainplate.plugins.protocol import settings_of
@@ -100,6 +101,9 @@ of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # parameter for the reason the endpoint is one: htmx sends a triggering input's own value, so the
 # card needs no interpolation and no script to build a URL.
 of_workspace = query_param(WORKSPACE_FIELD, once(str), schema={"type": "string"})
+# Which workspace a new session is being set up in, which the dashboard's press names. Optional so a
+# bare `/sessions/new` can be sent to the dashboard rather than refused.
+of_new_workspace = query_param(WORKSPACE_FIELD, optional(str), schema={"type": "string"})
 # Which conversation a watching page is showing, if any. A query parameter rather than a path segment
 # because the stream belongs to the page: this narrows what one connection reports on, where a path
 # segment would say the connection is a thing *of* that session. It is what let a second region join
@@ -207,17 +211,21 @@ def cookie_value(name: str, values: tuple[bytes, ...]) -> str | None:
 reading = header_param("cookie", reader_in, schema={"type": "string"})
 
 
-def parse_shape(value: str) -> bool:
-    """Whether a page said it is on the settings step, refusing any other word for a shape."""
-    if value != SETTLING:
-        raise ValueError(f"a page's shape is {SETTLING!r} or unstated, not {value!r}")
-    return True
+def parse_shape(value: str) -> Shape:
+    """Which shape a page said it was drawn in, refusing any word that is not one."""
+    try:
+        return Shape(value)
+    except ValueError:
+        raise ValueError(
+            f"a page's shape is one of {[each.value for each in Shape]} or unstated, not {value!r}"
+        ) from None
 
 
-# Which shape the watching page was drawn in, which only the settings step states: a page showing
-# the conversation says nothing, so absent is that shape. Parsed at the boundary into the boolean
-# the stream reads, rather than carried as the word.
-shaped = query_param(SHAPE_FIELD, optional(parse_shape), schema={"type": "string", "enum": [SETTLING]})
+# Which shape the watching page was drawn in, which only the settings step and the dashboard state: a
+# page showing the conversation says nothing, so absent is that shape.
+shaped = query_param(
+    SHAPE_FIELD, optional(parse_shape), schema={"type": "string", "enum": [each.value for each in Shape]}
+)
 # Which turn a fork would start at, which is the first turn the branch does not inherit.
 at_turn = query_param("at", once(int), schema={"type": "integer"})
 # The two halves of a panel's identity, in the path because that is what they are: a panel is named
@@ -719,17 +727,43 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
     return page_response(200, fragment(transcript_region(LINKS, reader, asked)))
 
 
-@get("/", reading, summary="Start a session")
+@get("/", reading, summary="The dashboard: what wants attention, and where a session can work")
 async def start_here(service: Service, reader: Reader) -> Response:
+    return page_response(200, dashboard_page(LINKS, reader, await service.listed(), service.reachable, service.fetches))
+
+
+@get("/sessions/new", of_new_workspace, reading, summary="What a new session in one workspace runs on")
+async def new_session(service: Service, workspace: str | None, reader: Reader) -> Response:
+    """
+    The rest of the questions about a session whose workspace the dashboard already answered.
+
+    No workspace is the dashboard's to answer, so a request without one is sent there rather than
+    refused: it is the address somebody types, and the page it wants is one press away. A workspace
+    this console does not recognise, or a repository no forge reaches, is refused, since the form
+    would be refused on the same terms when it posted.
+    """
+    if workspace is None:
+        return seeing(LINKS.to_home())
+    try:
+        repository, filesystem = posted_workspace({WORKSPACE_FIELD: [workspace]})
+    except NotAMessage as unknown:
+        return page_response(422, refusal_page(LINKS, 422, str(unknown)))
+    if repository is None and filesystem is Filesystem.WORKTREE:
+        return page_response(422, refusal_page(LINKS, 422, "a worktree is a repository's, so name the repository"))
+    if repository is not None and not service.reaches(repository):
+        return page_response(404, refusal_page(LINKS, 404, f"no forge reaches {repository}"))
     return page_response(
         200,
-        start_page(
+        new_session_page(
             LINKS,
             reader,
             await service.listed(),
             service.catalogues.current,
             service.reachable,
             service.references.current,
+            repository,
+            filesystem,
+            service.fetches.get(repository) if repository is not None else None,
         ),
     )
 
@@ -862,7 +896,7 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     environment, and the card's own `hx-status:4xx` leaves the block standing.
 
     A workspace that is not a repository is answered with the empty block, which takes the fields
-    themselves off the page: a base and a branch are answers *about* a repository, and `no files` has
+    themselves off the page: a base and a branch are answers *about* a repository, and `only scratch` has
     none for them to be about. Answered rather than left alone, because the previous repository's
     fields and completions are on the page until this swap replaces them.
 
@@ -892,7 +926,7 @@ async def show_session(service: Service, session: str, reader: Reader) -> Respon
 
 
 @get("/fragments/stream", watched, shaped, reading, summary="What a page is watching, sent as it changes")
-async def stream(service: Service, session: str | None, on_step: bool | None, reader: Reader) -> Reply:
+async def stream(service: Service, session: str | None, shape: Shape | None, reader: Reader) -> Reply:
     """
     The live connection a page holds open, carrying whatever it is watching as that changes.
 
@@ -917,9 +951,7 @@ async def stream(service: Service, session: str | None, on_step: bool | None, re
     """
     if session is not None and await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return event_stream(
-        with_heartbeat(watching(service, LINKS, reader, session, service.watching, on_step=bool(on_step)))
-    )
+    return event_stream(with_heartbeat(watching(service, LINKS, reader, session, service.watching, shape=shape)))
 
 
 @post("/fragments/seen", acknowledged, summary="A page has shown what its connection just sent")
@@ -1167,6 +1199,7 @@ async def archive(service: Service, session: str) -> Response:
 
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
+    new_session,
     start,
     show_session,
     stream,
@@ -1184,6 +1217,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
 
 LINKS = Links(
     home=start_here,
+    new_session=new_session,
     start=start,
     session=show_session,
     say=say,

@@ -69,8 +69,14 @@ level, and defaults to saying nothing about thinking at all.
 
 ## Starting a session
 
+The front page is a **dashboard**: the sessions with something new since you looked and the ones
+still working, then a card for each place a session can work - only scratch, the whole machine, and
+every repository this console can reach, each with its sessions, a **New session** press, and for a
+repository when this console last fetched it. Pressing one opens the rest of the questions with that
+workspace already answered.
+
 You pick what a session is answered on when you create it, ordered widest first: its **workspace**,
-which is a repository this console can reach, or no files, or this whole machine; whether its
+which is a repository this console can reach, or only scratch, or the whole machine; whether its
 commands may reach the **network**; whether the repository's own **plugins** run; the **endpoint**
 and **model**; a **thinking level**; and, for a model the console has no output limit for, a **max
 output tokens override**. All of it is fixed for the session's life, and **forking is how it
@@ -86,15 +92,15 @@ from there, because a tool definition leaving the cached prefix invalidates the 
 beneath it, and **forking is how it changes**. What each plugin is *set to* stays changeable, on its
 own card in the rail.
 
-Pick a repository and two more fields appear: **where in it to start** and **what branch to start
+On a repository the first two fields are **where in it to start** and **what branch to start
 there**, both optional. Left blank the worktree is checked out at the repository's default branch as
 it stands now, on a branch named after the session (`mainplate/349e2f1e`), so a `git commit` from
 the box under the conversation has somewhere to live and `/push` sends it under that name. The starting point is a search over the branches the repository actually has, read from the
 repository rather than from this console's copy, so it works on the very first session you start on
 one.
 
-Starting a session is also when this console's copy of a repository catches up: it clones once and
-nothing else refreshes that, so planting a worktree fetches first.
+This console's copy of a repository is fetched when a session is started on it and every few
+minutes while any session works in it, since a session's own `git fetch` reads that copy.
 
 **Forking keeps the original readable.** Every turn opens with a rule carrying a `fork` link:
 following it makes a new session that inherits the turns before that one, on whatever endpoint,

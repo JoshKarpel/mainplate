@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **The front page is a dashboard.** It lists the sessions that are unread and the ones still
+  working, both redrawn live, then a card for only scratch, the whole machine and each
+  repository, with its sessions, a **New session** press, a link to the repository on GitHub, and
+  when this console last fetched it or that the fetch failed. The press opens the questions about a
+  new session with that workspace already answered, where to start in a repository first.
 - **`/push` sends a session's branch to its repository.** It takes nothing from the box, pushes the
   session's own branch, the one named above the box, under the same name with this console's
   credentials, never forced, and draws what git said the way a command's result is drawn. What the
@@ -29,7 +34,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so nothing a model wrote runs on the page, and the library is fetched only for a page with a
   diagram on it.
 - **The session list says `working`** on a row while a pass is answering its session or one is
-  scheduled to, beside `new` where both are true, so a row that says something arrived and a row
+  scheduled to, beside `unread` where both are true, so a row that says something arrived and a row
   that says something is still coming can be told apart without opening either.
 - **A session with no repository gets a scratch directory and `bash` inside it.** Somewhere to run a
   script or keep a note across turns, reaching nothing else on the machine; `read`, `edit` and
@@ -127,14 +132,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the questions under it stayed put; now nothing in the picker shrinks, and the fold is what keeps
   that cheap, since the list is only long while it is open and a pick shuts it.
 
-- **A row in the session list says `new`** when its session has recorded something since anybody
+- **A row in the session list says `unread`** when its session has recorded something since anybody
   looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
   message of your own. Opening the session clears it, and so does watching the answer arrive on a
   page already open, which the page reports itself once it has drawn it. The mark is the console's
   rather than any one browser's, so reading an answer on a phone clears it on the laptop too. A
   console upgraded onto this starts with nothing marked.
 - **The session list is live.** It rides the same connection the transcript does, on every page
-  including the start page, so a session answered while you were reading another one shows `new` in
+  including the dashboard, so a session answered while you were reading another one shows `unread` in
   the list at once and a session written to moves up it without a reload. A tab in the background
   lets the connection go and picks it up again when shown, so a hidden page costs nothing and is
   current the moment you come back to it.

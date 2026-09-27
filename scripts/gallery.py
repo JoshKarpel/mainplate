@@ -66,13 +66,15 @@ from mainplate.conversation import tree_key
 from mainplate.conversation import wrote_key
 from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
+from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
 from mainplate.pages import Links
 from mainplate.pages import Reader
+from mainplate.pages import dashboard_page
 from mainplate.pages import fork_page
+from mainplate.pages import new_session_page
 from mainplate.pages import session_page
-from mainplate.pages import start_page
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
@@ -939,12 +941,34 @@ WORKSPACE = Path("/home/you/.local/share/mainplate/workspaces/worktrees")
 # you find out whether they read well.
 REACHABLE = Reachable(
     repositories=(
-        Repository(forge="exe-github", key="mainplate", name="JoshKarpel/mainplate", url="https://x.invalid/a.git"),
-        Repository(forge="exe-github", key="without", name="JoshKarpel/without", url="https://x.invalid/b.git"),
+        Repository(
+            forge="exe-github",
+            key="mainplate",
+            name="JoshKarpel/mainplate",
+            url="https://x.invalid/a.git",
+            web="https://github.com/JoshKarpel/mainplate",
+        ),
+        Repository(
+            forge="exe-github",
+            key="without",
+            name="JoshKarpel/without",
+            url="https://x.invalid/b.git",
+            web="https://github.com/JoshKarpel/without",
+        ),
         Repository(forge="exe-github", key="dotfiles-rw", name="JoshKarpel/dotfiles", url="https://x.invalid/c.git"),
         Repository(forge="exe-github", key="dotfiles-ro", name="JoshKarpel/dotfiles", url="https://x.invalid/d.git"),
     )
 )
+
+# What the dashboard says about each repository's last fetch: one current, one whose last fetch
+# failed, and the rest not fetched since the console started, which are the three things a card says.
+FETCHES: Final[dict[str, Fetched]] = {
+    WORKING_IN: Fetched(at=WHEN + timedelta(minutes=12)),
+    "exe-github:without": Fetched(
+        at=WHEN + timedelta(minutes=11),
+        failed="fatal: unable to access 'https://x.invalid/b.git/': Could not resolve host: x.invalid",
+    ),
+}
 
 # A tree per model request rather than per turn, which is what a console with a worktree writes: a
 # snapshot is taken before every request, so the second request of a turn stands on whatever the
@@ -1222,8 +1246,10 @@ def showing(
 # and nothing else does, which `test_browser.py` holds: a page added below without a caption here
 # is a page the site would list with nothing beside it.
 CAPTIONS: Final[dict[str, str]] = {
-    "start.html": "The start page: an endpoint, a model, a thinking level, a repository and how confined the session is.",
-    "start-unreferenced.html": "The same with no reference configured, so no card carries a price or a window.",
+    "dashboard.html": "The dashboard: what is unread and what is working, then a card per place to start a session in.",
+    "new-session.html": "A new session in a repository: where to start in it, then the network, the endpoint and the model.",
+    "new-session-unreferenced.html": "The same with no reference configured, so no card carries a price or a window.",
+    "new-session-nothing.html": "A new session with no repository, which has no branch to start from.",
     "setting-up.html": "A session whose worktree is still being planted, with nothing yet to switch.",
     "settings.html": "The settings step: a switch per plugin under a heading per tier, before anything runs.",
     "settings-installing.html": "The step after the press, with a pass out installing what the plugins need.",
@@ -1410,10 +1436,18 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     )
 
     return {
-        "start.html": start_page(links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE),
+        "dashboard.html": dashboard_page(links, READER, LISTED, REACHABLE, FETCHES),
+        "new-session.html": new_session_page(
+            links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, WORKING_IN, Filesystem.WORKTREE, FETCHES[WORKING_IN]
+        ),
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
-        "start-unreferenced.html": start_page(links, READER, LISTED, CATALOGUE, REACHABLE, None),
+        "new-session-unreferenced.html": new_session_page(
+            links, READER, LISTED, CATALOGUE, REACHABLE, None, WORKING_IN, Filesystem.WORKTREE, FETCHES[WORKING_IN]
+        ),
+        "new-session-nothing.html": new_session_page(
+            links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, None, Filesystem.NOTHING
+        ),
         "setting-up.html": session_page(links, READER, LISTED, planting, REACHABLE),
         "settings.html": session_page(links, READER, LISTED, choosing_plugins, REACHABLE),
         "settings-installing.html": session_page(links, READER, LISTED, installing, REACHABLE),

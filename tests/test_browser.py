@@ -14,6 +14,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from urllib.parse import quote
+from urllib.parse import urlencode
 
 import pytest
 import pytest_asyncio
@@ -66,6 +67,7 @@ from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.protocol import Described
 from mainplate.plugins.running import Spawned
+from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import read_tending
 from scripts.gallery import CAPTIONS
@@ -491,7 +493,7 @@ class TestWhereTheReaderIs:
 CHOOSING = (
     # No `prompt` on the start page: creating a session and saying the first thing in it are two
     # steps, so this form decides what a session *is* and the box is on the session's own page.
-    ("start.html", frozenset({"endpoint", "model", "thinking"})),
+    ("new-session.html", frozenset({"workspace", "endpoint", "model", "thinking"})),
     ("forking.html", frozenset({"at", "prompt", "endpoint", "model", "thinking"})),
 )
 
@@ -673,7 +675,7 @@ class TestFoldingAGroupOfCards:
     form would post no model at all - a page refusing itself with a 422, from a stylesheet edit.
     """
 
-    @pytest.mark.parametrize("name", ["start.html", "forking.html"])
+    @pytest.mark.parametrize("name", ["new-session.html", "forking.html"])
     async def test_a_group_shows_only_what_is_picked_until_it_is_opened(
         self, page: Page, gallery: str, name: str
     ) -> None:
@@ -695,7 +697,7 @@ class TestFoldingAGroupOfCards:
         # `names` feeds the count, the `<datalist>` completions and the filter from one list, so the
         # three cannot disagree - which is the invariant, and which a group given a model's label
         # *and* its routed id broke by announcing 54 options over 27 cards.
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         groups = await page.evaluate(
             "() => [...document.querySelectorAll('.picker__part')].map((part) => ({"
             " legend: part.querySelector('.picker__legend').textContent,"
@@ -708,7 +710,7 @@ class TestFoldingAGroupOfCards:
             assert group["said"] == group["cards"] == group["listed"], group
 
     async def test_picking_folds_the_group_back_to_what_was_just_picked(self, page: Page, gallery: str) -> None:
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         await page.click('label[for="open-model"]')
         await page.locator(".model").nth(1).click()
         # Shut again without anybody pressing the control, which is the script's one contribution
@@ -721,7 +723,7 @@ class TestFoldingAGroupOfCards:
         # in step. With no script the group cannot fold itself on a pick, so it stays open - but the
         # card it collapses to is read off the radio, so shutting it by hand shows what was picked
         # rather than what the server rendered. A summary would name the wrong model here.
-        await unscripted.goto(f"{gallery}/start.html", wait_until="load")
+        await unscripted.goto(f"{gallery}/new-session.html", wait_until="load")
         assert await unscripted.evaluate(SHOWING, ".model") == 1
 
         await unscripted.click('label[for="open-model"]')
@@ -736,7 +738,7 @@ class TestFoldingAGroupOfCards:
         # Taking an entry from the browser's completion menu puts the whole name in the box, and
         # that is the reader having chosen: leaving them to reach for the one card still showing is
         # a step they already took.
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         await page.click('label[for="open-thinking"]')
         await page.locator(THINKING_FILTER).fill("xhigh")
         assert await posted(page, THINKING_FIELD) == "xhigh"
@@ -747,7 +749,7 @@ class TestFoldingAGroupOfCards:
         # at `high` - and a partial name narrows the group rather than choosing from it. Compared
         # against what the page loaded with rather than a named level, because what is posted is
         # the level's *name* and the fixture's default is the level itself.
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         before = await posted(page, THINKING_FIELD)
         await page.click('label[for="open-thinking"]')
         for typed in ("h", "hi", "hig"):
@@ -761,7 +763,7 @@ class TestFoldingAGroupOfCards:
         own. Checked against the card's own sentence rather than a number, since which model is
         second is the fixture's business.
         """
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         await page.click('label[for="open-model"]')
         await page.locator(".model").nth(1).click()
 
@@ -771,7 +773,7 @@ class TestFoldingAGroupOfCards:
         assert said.startswith("max (")
         assert await page.get_attribute("#output-override", "placeholder") == said
 
-    @pytest.mark.parametrize("name", ["start.html", "forking.html"])
+    @pytest.mark.parametrize("name", ["new-session.html", "forking.html"])
     async def test_a_shut_group_still_posts_its_choice(self, page: Page, gallery: str, name: str) -> None:
         await page.goto(f"{gallery}/{name}", wait_until="load")
         posted = await page.evaluate("() => [...new FormData(document.querySelector('form#choosing')).keys()]")
@@ -834,7 +836,7 @@ class TestTheShapeOfANarrowWindow:
         assert await page.evaluate(tracks) == 1
         await expect(page.locator(".sessions__clasp")).to_be_visible()
         await expect(page.locator(".rail__clasp")).to_be_visible()
-        await expect(page.locator(".sessions .start")).to_be_hidden()
+        await expect(page.locator(".sessions .home")).to_be_hidden()
         await expect(page.locator(".search")).to_be_hidden()
 
     async def test_the_fold_does_not_bring_a_phones_lines_with_it(self, page: Page, phone: Page, gallery: str) -> None:
@@ -864,7 +866,7 @@ class TestTheSessionListOnAPhone:
 
     async def test_the_list_is_shut_until_its_clasp_is_pressed(self, phone: Page, gallery: str) -> None:
         await phone.goto(f"{gallery}/session.html", wait_until="load")
-        start = phone.locator(".sessions .start")
+        start = phone.locator(".sessions .home")
         await expect(start).to_be_hidden()
         await phone.locator(".sessions__clasp").click()
         # In the viewport rather than merely visible, because visibility flips at the start of the
@@ -876,16 +878,16 @@ class TestTheSessionListOnAPhone:
         await phone.locator(".rail__clasp").click()
         await expect(phone.locator(".search")).to_be_visible()
         await phone.locator(".sessions__clasp").click()
-        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await expect(phone.locator(".sessions .home")).to_be_visible()
         await expect(phone.locator(".search")).to_be_hidden()
         assert await phone.get_attribute(".rail__clasp", "aria-expanded") == "false"
 
     async def test_escape_shuts_the_list(self, phone: Page, gallery: str) -> None:
         await phone.goto(f"{gallery}/session.html", wait_until="load")
         await phone.locator(".sessions__clasp").click()
-        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await expect(phone.locator(".sessions .home")).to_be_visible()
         await phone.keyboard.press("Escape")
-        await expect(phone.locator(".sessions .start")).to_be_hidden()
+        await expect(phone.locator(".sessions .home")).to_be_hidden()
 
     async def test_the_rail_scrolls_itself_while_out(self, phone: Page, gallery: str) -> None:
         # The rail is fixed to the viewport, so nothing else can scroll it, and on a phone it is
@@ -900,7 +902,7 @@ class TestTheSessionListOnAPhone:
 
     @pytest.mark.parametrize(
         ("clasp", "above", "below"),
-        [(".sessions__clasp", ".sessions .start", ".sessions ul"), (".rail__clasp", ".navigate", ".shelf")],
+        [(".sessions__clasp", ".sessions .home", ".sessions ul"), (".rail__clasp", ".navigate", ".shelf")],
         ids=["sessions", "rail"],
     )
     async def test_a_scroll_over_the_gap_between_two_cards_leaves_the_conversation_put(
@@ -980,7 +982,7 @@ class TestTheSessionListOnAPhone:
         await page.goto(f"{gallery}/session.html", wait_until="load")
         await expect(page.locator(".sessions__clasp")).to_be_hidden()
         await expect(page.locator(".brand")).to_be_hidden()
-        await expect(page.locator(".sessions .start")).to_be_visible()
+        await expect(page.locator(".sessions .home")).to_be_visible()
 
 
 # Short enough that the choosing with a group open is longer than the window, which is the whole
@@ -1001,7 +1003,7 @@ class TestWhatScrollsOnTheStartPage:
 
     async def test_the_choosing_takes_the_window_rather_than_growing_past_it(self, page: Page, gallery: str) -> None:
         await page.set_viewport_size(SHORT)
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         await page.click('label[for="open-model"]')
 
         room = await page.evaluate(
@@ -1017,7 +1019,7 @@ class TestWhatScrollsOnTheStartPage:
         behind a scrollbar; now it is as tall as its cards and `.setup` carries the lot.
         """
         await page.set_viewport_size(SHORT)
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         await page.click('label[for="open-model"]')
 
         held = await page.evaluate(
@@ -1031,7 +1033,7 @@ class TestWhatScrollsOnTheStartPage:
     async def test_a_wheel_over_the_model_list_moves_the_choosing(self, page: Page, gallery: str) -> None:
         """What a reader actually does: a wheel anywhere over the picker scrolls the one box there is."""
         await page.set_viewport_size(SHORT)
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         await page.click('label[for="open-model"]')
         over = await page.locator(".models").bounding_box()
         assert over is not None
@@ -1053,7 +1055,7 @@ class TestWhatScrollsOnTheStartPage:
         model group ends before the question after it begins, open and shut alike.
         """
         await page.set_viewport_size(SHORT)
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         if opened:
             await page.click('label[for="open-model"]')
 
@@ -1249,7 +1251,7 @@ class TestDrawingAFence:
         """Three and a half megabytes a page with no diagram on it must not pay for."""
         fetched: list[str] = []
         page.on("request", lambda request: fetched.append(request.url))
-        await page.goto(f"{gallery}/start.html", wait_until="load")
+        await page.goto(f"{gallery}/new-session.html", wait_until="load")
         await expect(page.locator(".panel pre")).to_have_count(0)
         assert not any("mermaid" in url for url in fetched), "nothing on a page with no diagram"
         pre = await self.drawable(page, gallery, "mermaid")
@@ -1845,7 +1847,7 @@ class TestTheListMovingUnderAPage:
         await expect(row).to_be_visible()
         await expect(row.locator(".unseen")).to_have_count(0)
         await service.checkpointer.supply(other.id, messages_key(0), recorded_turn("an answer nobody has read"))
-        await expect(row.locator(".unseen")).to_have_text("new")
+        await expect(row.locator(".unseen")).to_have_text("unread")
         await expect(page.locator(f"#listed-{reading.id} .unseen")).to_have_count(0)
 
     async def test_a_list_slid_out_on_a_phone_stays_out_while_it_is_redrawn(
@@ -1863,10 +1865,10 @@ class TestTheListMovingUnderAPage:
         await service.saw(other.id)
         await phone.goto(f"{url}/sessions/{reading.id}", wait_until="load")
         await phone.locator(".sessions__clasp").click()
-        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await expect(phone.locator(".sessions .home")).to_be_visible()
         await service.checkpointer.supply(other.id, messages_key(0), recorded_turn("an answer nobody has read"))
-        await expect(phone.locator(f"#listed-{other.id} .unseen")).to_have_text("new")
-        await expect(phone.locator(".sessions .start")).to_be_visible()
+        await expect(phone.locator(f"#listed-{other.id} .unseen")).to_have_text("unread")
+        await expect(phone.locator(".sessions .home")).to_be_visible()
         assert await phone.get_attribute(".sessions__clasp", "aria-expanded") == "true"
 
 
@@ -3226,19 +3228,17 @@ class TestNamingAModeFromTheKeyboard:
 
 async def a_start_page(working: tuple[str, Service], page: Page, workspace: str = FIXTURE_NAME) -> None:
     """
-    The new-session page with the `workspace` card picked, which is what puts branches on the field.
+    The new-session page for `workspace`, arrived at the way a reader arrives: the press on its card
+    on the dashboard, and then the branches the page asks for once it is there.
 
-    Two things a browser makes true that a markup test would not, and both of them look like a hang
-    rather than a missing step. The group folds down to the card that is picked, so it has to be
-    *opened* before any other card is on the page to press. And a card is a `<label>`: the radio in
-    it is a pixel at zero opacity with no pointer events, so pressing the input is pressing something
-    a reader could never reach.
+    Waited on the count rather than the field, because the field is drawn with the page and the
+    count only arrives with the completions: a test that pressed into the field before then would be
+    driving a list the page had not been handed yet.
     """
     url, _ = working
     await page.goto(f"{url}/", wait_until="load")
-    await page.click('label[for="open-repository"]')
-    await page.click(f'.repo[data-name="{workspace}"]')
-    await expect(page.locator(".basis__box")).to_be_attached()
+    await page.click(f'.dashboard__card[data-name="{workspace}"] .dashboard__start')
+    await expect(page.locator(".basis__count")).to_be_attached()
 
 
 async def showing_branches(page: Page) -> list[str]:
@@ -3348,22 +3348,15 @@ class TestNarrowingTheBranches:
     async def test_a_workspace_that_is_not_a_repository_has_no_fields_at_all(
         self, page: Page, working: tuple[str, Service]
     ) -> None:
-        """
-        A base and a branch are answers *about* a repository, so `no files` has none for them to be
-        about. Driven through a repository first, because the assertion worth making is that the
-        fields somebody was already offered are taken back off.
-        """
-        await a_start_page(working, page)
-        await expect(page.locator(".basis__box")).to_be_attached()
+        """A base and a branch are answers *about* a repository, so `only scratch` has none for them to be about."""
+        url, _ = working
+        await page.goto(f"{url}/", wait_until="load")
 
-        # Opened again, because picking a card shuts the group down to what was picked.
-        await page.click('label[for="open-repository"]')
-        await page.click('.repo[data-name="no files"]')
+        await page.click(f'.dashboard__start[href$="workspace={Filesystem.NOTHING.value}"]')
 
+        await expect(page.locator(".arriving__name")).to_have_text("New session: only scratch")
         await expect(page.locator(".basis__box")).to_have_count(0)
         await expect(page.locator('[name="branch"]')).to_have_count(0)
-        # The block itself stays, since it is what the next pick swaps over.
-        await expect(page.locator("#basis")).to_be_attached()
 
     async def test_the_dots_stand_in_for_the_fields_while_the_forge_is_being_asked(
         self, page: Page, working: tuple[str, Service]
@@ -3375,13 +3368,6 @@ class TestNarrowingTheBranches:
         on whichever side of it the scheduler landed.
         """
         url, _ = working
-        await page.goto(f"{url}/", wait_until="load")
-
-        # Hidden by `display` and not by `opacity`, so the block carries no row for it at rest. The
-        # difference is invisible to `to_be_hidden`, which is why the height is asked for too.
-        await expect(page.locator("#basis-loading")).to_be_hidden()
-        assert await page.evaluate("() => document.querySelector('#basis-loading').getBoundingClientRect().height") == 0
-
         answering = asyncio.Event()
 
         async def hold(route: Route) -> None:
@@ -3389,14 +3375,16 @@ class TestNarrowingTheBranches:
             await route.continue_()
 
         await page.route("**/fragments/branches*", hold)
-        await page.click('label[for="open-repository"]')
-        await page.click(f'.repo[data-name="{FIXTURE_NAME}"]')
+        await page.goto(f"{url}/sessions/new?{urlencode({'workspace': FIXTURE})}", wait_until="load")
 
         await expect(page.locator("#basis-loading")).to_be_visible()
 
         answering.set()
-        await expect(page.locator(".basis__box")).to_be_attached()
+        await expect(page.locator(".basis__count")).to_be_attached()
+        # Hidden by `display` and not by `opacity`, so the block carries no row for it at rest. The
+        # difference is invisible to `to_be_hidden`, which is why the height is asked for too.
         await expect(page.locator("#basis-loading")).to_be_hidden()
+        assert await page.evaluate("() => document.querySelector('#basis-loading').getBoundingClientRect().height") == 0
 
 
 class TestWhereTheCursorIsOnArrival:

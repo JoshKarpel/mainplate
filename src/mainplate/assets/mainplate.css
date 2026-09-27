@@ -277,19 +277,31 @@ body {
     gap: var(--space-2);
 }
 
-.sessions .start {
-    display: block;
-    padding: 0.5rem 0.7rem;
-    border: 1px solid var(--edge);
-    border-radius: var(--radius);
-    background: var(--raised);
+/* The mark and the name at the head of the list, which is the way back to the dashboard. Drawn as
+   the console's name rather than as a button: it is where you are, and the presses that start
+   something are on the dashboard. */
+.sessions .home {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0.35rem 0.6rem;
     color: var(--ink);
-    font-weight: 600;
-    text-align: center;
+    font-weight: 700;
+    font-size: 1.05rem;
     text-decoration: none;
 }
 
-.sessions .start:hover,
+.home__mark {
+    width: 1.6rem;
+    height: 1.6rem;
+    flex: none;
+}
+
+.sessions .home:hover .home__name,
+.sessions .home:focus-visible .home__name {
+    text-decoration: underline;
+}
+
 .session:hover {
     border-color: var(--person-edge);
 }
@@ -2076,6 +2088,209 @@ pre .gs {
     color: var(--mark);
 }
 
+/* --- The dashboard ------------------------------------------------------ */
+
+/* In `main`'s growing row and the scroller there, as `.setup` is on the page it replaced: the
+   repositories are a grid of cards that can outgrow any window, and the list beside it scrolls on
+   its own. Wide like the picker, because these are cards in a grid rather than prose. */
+.dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+    padding-block: var(--gap);
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.dashboard__attention,
+.dashboard__places,
+.dashboard__group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.dashboard__attention {
+    gap: var(--space-5);
+}
+
+.dashboard__rows,
+.dashboard__sessions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+/* A row here is the list's own row, so it takes the list's shape; the frame is what sets it apart
+   from the column beside it, which has one of its own. */
+.dashboard__rows .session {
+    border-color: var(--edge);
+    background: var(--raised);
+}
+
+.dashboard__quiet,
+.dashboard__none,
+.dashboard__more {
+    margin: 0;
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+}
+
+/* One card to a row at every width, so the repositories read down the page as a list does rather
+   than across it, and a card's sessions have the whole width to be named in. */
+.dashboard__grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.dashboard__note {
+    margin: 0;
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+}
+
+/* The name is the link to the repository's own page, drawn as the name until it is pointed at. */
+.dashboard__name a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.dashboard__name a:hover,
+.dashboard__name a:focus-visible {
+    text-decoration: underline;
+}
+
+.dashboard__card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+}
+
+/* The name and the press that starts a session there, the press pushed to the corner so it is in
+   the same place on every card. */
+.dashboard__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+}
+
+.dashboard__head .dashboard__start {
+    margin-left: auto;
+    flex: none;
+}
+
+.dashboard__foot {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* `break-word` rather than `anywhere`, so the `<wbr>` after each `/` is where a long name breaks and a
+   word is cut only when it cannot fit on a line of its own. */
+.dashboard__name {
+    margin: 0;
+    min-width: 0;
+    font-size: 1rem;
+    overflow-wrap: break-word;
+}
+
+.fetch {
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+/* Drawn to be spotted, for the non-zero status's reason: usually it wants looking at. What git said
+   is in the title, since it is often several lines. */
+.fetch--failed {
+    color: var(--error-edge);
+}
+
+.dashboard__sessions a {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.dashboard__sessions a:hover .name {
+    text-decoration: underline;
+}
+
+.dashboard__sessions .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.dashboard__sessions .when {
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+    flex: none;
+    white-space: nowrap;
+}
+
+/* The picker's own press, because it is the same act one page earlier: starting a session. */
+.dashboard__start {
+    padding: var(--space-2) var(--space-5);
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    text-decoration: none;
+}
+
+.dashboard__start:hover,
+.dashboard__start:focus-visible {
+    border-color: var(--mark);
+    color: var(--mark);
+}
+
+/* --- The workspace a new session is in --------------------------------- */
+
+.arriving {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.arriving__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+}
+
+.arriving__name {
+    margin: 0;
+    font-size: 1.15rem;
+    overflow-wrap: anywhere;
+}
+
+.arriving__back {
+    margin-left: auto;
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+}
+
 /* --- Choosing what a session runs on ----------------------------------- */
 
 /* The form the start page posts, and the only thing in `main` on it. It passes `main`'s growing row
@@ -2278,7 +2493,7 @@ pre .gs {
     display: inline-flex;
 }
 
-/* Alone, it is standing in a block that has no fields yet - picking a repository from `no files` -
+/* Alone, it is standing in a block that has no fields yet - picking a repository from `only scratch` -
    so it carries the space the arriving block will have rather than sitting flush under the cards. */
 .basis__loading:only-child {
     margin-top: var(--space-3);
@@ -3865,7 +4080,8 @@ main:has(> .forking) {
    reader scanning the left edge of the dates finds it, and in the archived word's face so the two
    read as the same kind of fact about the row. The mark's hue and not a speaker's, because what it
    says is about the console's bookkeeping and not about who said what. */
-.session .unseen {
+.session .unseen,
+.dashboard__sessions .unseen {
     flex: none;
     color: var(--mark);
     font-size: 0.68rem;
@@ -3876,9 +4092,10 @@ main:has(> .forking) {
 }
 
 /* Something still coming: a pass answering the session now, or one that will. The same face and
-   the same ink as `new`, since both are the console's bookkeeping about the row, and the regular
-   weight beside `new`'s bold because what has already arrived is the one to go and read. */
-.session .working {
+   the same ink as `unread`, since both are the console's bookkeeping about the row, and the regular
+   weight beside `unread`'s bold because what has already arrived is the one to go and read. */
+.session .working,
+.dashboard__sessions .working {
     flex: none;
     color: var(--mark);
     font-size: 0.68rem;
@@ -4228,7 +4445,7 @@ main:has(> .forking) {
             display: none;
         }
 
-        .sessions .start {
+        .sessions .home {
             padding: var(--space-3) var(--space-5);
         }
 

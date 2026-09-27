@@ -51,7 +51,7 @@ async def fetched(workspaces: Workspaces, database: Database) -> None:
         for identifier in sorted(working_in(await read_sessions(database)))
         if workspaces.clones.cloned(identifier) and (repository := workspaces.named(identifier)) is not None
     ]
-    await asyncio.gather(*(workspaces.clones.refresh(repository) for repository in reached))
+    await asyncio.gather(*(workspaces.refresh(repository) for repository in reached))
 
 
 async def fetching(workspaces: Workspaces, database: Database, every: timedelta) -> None:

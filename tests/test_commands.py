@@ -812,7 +812,7 @@ class TestOfferingWhereToStart:
 
     async def test_a_workspace_that_is_not_a_repository_has_no_fields_to_offer_for(self, app: ASGIApp) -> None:
         """
-        A base and a branch are answers about a repository, so `no files` takes the fields themselves
+        A base and a branch are answers about a repository, so `only scratch` takes the fields themselves
         off rather than leaving two boxes asking a question the session does not have. Answered with
         the block all the same, since the previous repository's fields are on the page until this
         swap replaces them.

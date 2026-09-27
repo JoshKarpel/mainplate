@@ -822,12 +822,33 @@ class TestPickingOneThroughTheConsole:
     def app(self, planting: Service) -> ASGIApp:
         return build_app(already(planting))
 
-    async def test_the_picker_offers_what_the_forges_reach(self, app: ASGIApp) -> None:
+    async def test_the_dashboard_offers_a_session_in_what_the_forges_reach(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
             answered = await caller.get("/")
 
-        assert 'value="test:fixture"' in answered.text
-        assert ">me/fixture<" in answered.text
+        assert 'href="/sessions/new?workspace=test%3Afixture"' in answered.text
+        assert 'data-name="me/fixture"' in answered.text
+
+    async def test_the_new_session_page_is_about_the_repository_and_asks_for_its_branches(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            answered = await caller.get("/sessions/new?workspace=test%3Afixture")
+
+        assert answered.status == 200
+        assert "New session in me/fixture" in answered.text
+        assert 'name="workspace" value="test:fixture"' in answered.text
+        assert 'hx-get="/fragments/branches?workspace=test%3Afixture"' in answered.text
+        assert 'hx-trigger="load"' in answered.text
+
+    async def test_the_fetch_the_first_pass_makes_is_what_the_dashboard_says(
+        self, app: ASGIApp, planting: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await started(planting, "hello", on_fixture)
+        await workspaces.plant(session.id, FIXTURE)
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+
+        assert "not fetched since the console started" not in answered.text
+        assert 'class="fetch"' in answered.text
 
     async def test_a_posted_repository_is_recorded_on_the_session(self, app: ASGIApp, planting: Service) -> None:
         async with calling(app) as caller:
