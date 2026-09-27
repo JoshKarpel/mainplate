@@ -48,9 +48,7 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
 
     The checkout's last tree is captured first, under `archived:tree`, so a fork from the end of this
     session plants at the files it actually ended with; the capture puts that tree in the store, and
-    the store is not the session's, so it outlives the checkout. A checkout still planted as a
-    linked worktree is adopted before it is captured, which is what gives it a `.git` a capture can
-    run in.
+    the store is not the session's, so it outlives the checkout.
 
     Then everything `Places.of` names that is still there, which is the checkout, the scratch and
     the plugins' scratches.
@@ -58,8 +56,6 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
     workspaces = places.workspaces
     if session.repository is not None and workspaces.clones.cloned(session.repository):
         worktrees = workspaces.worktrees(session.repository)
-        if worktrees.linked(session.id) is not None:
-            await worktrees.adopt(session.id)
         if worktrees.planted(session.id):
             ending = await worktrees.worktree(session.id).capture(f"archived {session.id}")
             await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, records.Tree(tree=ending).recorded())

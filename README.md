@@ -256,14 +256,17 @@ needs to run its tests, once, before the first message.
 
 The checkout's git is the session's own: `add`, `commit`, `rebase`, `stash` and the rest work as
 they would anywhere, and `git fetch` brings the repository's current branches with no network,
-because `origin` is this console's own clone. Nothing in there can push. Every snapshot the
+because `origin` is this console's own clone, which the console fetches every few minutes while a
+session works in it. With the network off nothing in there can push; on exe.dev a sandbox with the
+network on can, since there the network is the credential. Every snapshot the
 conversation keeps is taken out of the checkout into that clone, so a rebase in the session rewrites
 nothing a fork plants from. Without `bubblewrap` no repository is offered at all, since git in a
 checkout reads configuration the session can write and has to be confined as surely as a command.
 
 **Run** in the composer runs a command you type in the same sandbox, under the same network answer,
 so a hook the model left in `.git` can reach no more from your `git commit` than from its own.
-**Push** sends the checkout's branch to the repository with this console's credentials, never
+**Online** is the same with the network on for one command, in a session that otherwise has it off.
+**Push** sends the session's own branch to the repository with this console's credentials, never
 forced, without reading anything the session configured.
 
 `list` asks git what is there rather than walking the directory, so a `.gitignore` is obeyed and an
@@ -398,8 +401,11 @@ inferred from what you typed, so what you are about to press always says what it
   costs it no context and reaches no provider. It is still recorded, so it draws as a `command`
   panel with what it exited with, survives a reload, and a fork carries it. `! ` into an empty box is
   its own shorter key, and the box stays a command box after each run.
-- **Push** takes nothing from the box. It sends the branch the worktree is on to the repository,
-  under the same name and never forced, and draws what git said the way a command's result is drawn.
+- **Online** is Run with the network on, offered where the session's network is off, for the one
+  command that needs it. Its panel says `online`, because on exe.dev such a command can push.
+- **Push** takes nothing from the box. It sends the session's own branch, the one named above the
+  box, to the repository under the same name and never forced, and draws what git said the way a
+  command's result is drawn.
 
 Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
 often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box

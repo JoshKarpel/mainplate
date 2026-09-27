@@ -9,10 +9,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - **`/push` sends a session's branch to its repository.** It takes nothing from the box, pushes the
-  branch the session's worktree is on under the same name with this console's credentials, never
-  forced, and draws what git said the way a command's result is drawn. It reads nothing the session
+  session's own branch, the one named above the box, under the same name with this console's
+  credentials, never forced, and draws what git said the way a command's result is drawn. What the
+  worktree has checked out does not change which branch moves. It reads nothing the session
   configured: the commit crosses into the console's own clone of the repository and is pushed from
   there.
+- **`/online` runs one command with the network on** in a session whose commands otherwise have it
+  off, for the `npm install` or the fetch a confined session still needs now and then. Its panel
+  says `online`. On exe.dev a command with the network can push to the repository without `/push`,
+  and so can a session started with the network on; the security notes say so.
 - **A batch of tool calls is drawn with its diff below the panel.** The net change the whole batch
   made, as a `git diff` between the snapshots around it, so an `edit`, a `create` and a `bash` that
   ran at once read as one change rather than three or none; an `edit`'s own diff is still a press
@@ -63,14 +68,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A session's worktree is a checkout of its own, and git works in it.** It has its own `.git`, so
   `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
   nobody else's, and `git fetch` brings the repository's current branches with no network, since
-  `origin` is the console's own clone. Its objects are borrowed from that clone, read-only, rather
-  than copied. Snapshots move into the clone under refs of the session's own, so a rebase in the
-  session rewrites nothing a fork plants from. Every git against a worktree, the console's own
+  `origin` is the console's own clone, which is fetched every five minutes (`MAINPLATE_FETCH_EVERY`)
+  while any session not archived works in it. Its objects are borrowed from that clone, read-only,
+  rather than copied. Snapshots move into the clone under refs of the session's own, so a rebase in
+  the session rewrites nothing a fork plants from. Every git against a worktree, the console's own
   snapshots and `list` included, now runs behind the same sandbox as `bash`, because a worktree's git
   configuration is the session's to write; a command typed into the composer runs there too. A
-  session planted before this is adopted in place the first time it is next answered or archived,
-  keeping its files, its branch and what it had staged. A console without `bubblewrap` offers no
-  repository at all.
+  session that deletes its own `.git` keeps its files and stops at its next turn, saying why. A
+  console without `bubblewrap` offers no repository at all. Sessions working in a repository from
+  before this release are not carried over.
 - **A command's status reads `exit 0` rather than `ok`**, one shape down the column with the colour
   alone picking out the statuses that are not zero, and a command with no output says `no output`
   where it said `said nothing`, folded, since its line, its time and its status are all there is.

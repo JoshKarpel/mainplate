@@ -293,6 +293,14 @@ class Command(Record):
 
     kind: Literal["command"] = "command"
     said: str
+    online: bool = False
+    """
+    Whether it ran with the network on in a session whose commands otherwise have it off.
+
+    Recorded because it is the one fact about a run that changes what it could have reached: on a
+    forge where the network is the credential, a command run online could push to the repository
+    without going through `push`. So the page says so beside the line, for as long as it is there.
+    """
 
 
 class Result(Record):

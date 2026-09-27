@@ -82,11 +82,20 @@ a session merged from a branch the remote has since deleted is one only that wor
 `Clones.ensure` sets `gc.pruneExpire` to `never` on every call so no `gc` can break it. The cost,
 stated: a store only grows.
 
-**A session planted as a linked worktree is adopted in place.** Its `.git` is a pointer file and its
-`HEAD`, index and branch live in the store under `worktrees/<session>`; `Worktrees.adopt` copies
-`HEAD` and the index out of there, recreates the branch at the commit the store has for it, records
-that commit as the session's base, and replaces the pointer with a `.git` of its own. Its files never
-move. Planting and archiving both adopt first, so nothing else has to know the old shape existed.
+**Whether a worktree is planted is read from its directory, never from its `.git`.** Everything
+under the directory is the session's to delete or replace, `.git` included, so an answer read from
+there is one the session chose, and a session that ran `rm -rf .git` would make every later pass
+try to plant over its files. The directory itself is not the session's: planting puts it in place
+with one rename, and a sandbox cannot remove it because it is the mount point the worktree is bound
+at. So planting stays a no-op for a session that has broken its own git.
+
+**What fails instead is the next capture, and the pass with it.** A capture is `git add -A` inside
+the sandbox, which finds no repository and raises `SnapshotFailed` naming the command, so the pass
+falls over and [the page says why](durability.md). Nothing repairs it: the files are still there, and
+the session's own `bash` can `git init` or re-clone into place, but the base a capture is thin
+against is a ref in the store, so what comes back has to hold that commit for a capture to succeed.
+The cost, stated: a model "reinitialising" its repository stops its own session until somebody
+puts the history back or forks from the last turn that recorded a tree.
 
 `Settings.workspace_root` **resolves that path**, and it is not tidying. Everything under it runs
 `git` with a `cwd` of its own: a clone is made from the clones root, a worktree is initialised from
@@ -163,14 +172,19 @@ Five things there are decided rather than incidental:
   parent's work. `Worktrees.plant` ranks its three
   answers, a tree first, then a base, then the default branch, and `settled` is what makes sure it
   is never handed two.
-- **Planting a worktree fetches, whether or not a base was named**, and that is where a person says
-  when this console's copy of a repository catches up. Nothing else ever refreshes a clone: it is
-  made once and would otherwise answer out of whatever the repository looked like the first time
-  anybody used it, for as long as the machine lives. Starting a session is both the moment that is
-  affordable and the moment somebody wants current code. `Clones.refresh` fetches into
-  `refs/remotes/origin/` and never over `refs/heads/`, which keeps the store's own branches as old
-  as the clone and one namespace apart from the fresh ones; a clone just made copies its heads
-  there itself, with no network, so a worktree's `git fetch` finds them from the start.
+- **The store is fetched on a timer while any session works in it, and again when one is
+  planted.** A session's own `git fetch` reads the store and not the forge, since its sandbox has no
+  network, so the store is the whole of how current `origin/main` is in there. `fetching.py` fetches
+  every repository an unarchived session works in, every `fetch_every` (five minutes), off the
+  request path; that is what lets a session an hour in rebase onto the `main` of now, and see a
+  commit somebody else pushed to its branch. Planting fetches as well, because a new session is the
+  moment somebody is waiting on current code and a fast-moving repository can move a lot in five
+  minutes. A failed round is logged and changes nothing, since the store keeps the refs it last
+  fetched. The cost, stated: a round trip per repository per interval whether or not anything moved.
+  `Clones.refresh` fetches into `refs/remotes/origin/` and never over `refs/heads/`, which keeps the
+  store's own branches as old as the clone and one namespace apart from the fresh ones; a clone just
+  made copies its heads there itself, with no network, so a worktree's `git fetch` finds them from
+  the start.
 
     **The no-base arm is the one that is easy to get wrong**, and it was wrong first: a fetch writes
     `refs/remotes/origin/` and leaves the clone's own `HEAD` pointing at the stale `refs/heads/`, so
@@ -260,9 +274,7 @@ plants from. Five things there are easy to undo:
   unreferenced tree is unreachable and `gc` prunes it, so a bare `write-tree` would be a hash that
   stops resolving later. The chain is extended with the tip it read as the old value, so two captures
   racing each other both land. The session's base is `refs/mainplate/sessions/<id>/base` beside it,
-  which keeps that commit reachable and is what every bundle is thin against. `refs/mainplate/snapshots`
-  is the one chain sessions shared while they were linked worktrees; nothing writes it and nothing
-  deletes it, because it keeps every tree recorded then forkable.
+  which keeps that commit reachable and is what every bundle is thin against.
 - **A diff is asked of the store.** Both trees are objects there, and the store's configuration is
   this console's, so no diff driver a session named runs to draw a batch's change.
 - **Capture only where the agent is quiescent**, which means at a model-request boundary and not
@@ -374,9 +386,10 @@ cannot know it: files may still be being written when the button goes down, and 
 until nothing holds the session. It is what a fork from the end of an archived session plants at, so
 the branch carries on with the files the conversation actually ended with, snapshots the worktree
 never captured included - what a person ran in it after the last request, and what a plugin fixed
-at the turn's end. A worktree still planted as a linked one is adopted first, which is what gives
-the capture a `.git` to run in. Then the worktree is a directory like any other and is removed as
-one; the snapshots are in the store under the session's refs and outlive it, which is what keeps
+at the turn's end. A worktree whose session broke its own `.git` fails that capture, and the round
+leaves its files where they are and tries again next time, so such a session keeps its files until
+its git is put back. Then the worktree is a directory like any other and is removed as one; the
+snapshots are in the store under the session's refs and outlive it, which is what keeps
 every earlier fork point reachable too.
 
 **Nothing un-archives a session, and that is the design rather than a gap.** The key is write-once,

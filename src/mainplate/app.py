@@ -85,6 +85,7 @@ from mainplate.conversation import parse_failed
 from mainplate.conversation import progress_in
 from mainplate.durability import as_recorded
 from mainplate.exe import ExeDevGitHub
+from mainplate.fetching import fetching
 from mainplate.footprint import Footprints
 from mainplate.footprint import Places
 from mainplate.footprint import measuring
@@ -376,6 +377,9 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
             )
             await running.enter_async_context(
                 background_task(reconciling(service, places, footprints, settings.archive_every))
+            )
+            await running.enter_async_context(
+                background_task(fetching(workspaces, service.database, settings.fetch_every))
             )
             if config.model_reference is not None:
                 await running.enter_async_context(

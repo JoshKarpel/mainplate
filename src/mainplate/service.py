@@ -80,6 +80,7 @@ from mainplate.reference import Resending
 from mainplate.reference import facts_of
 from mainplate.reference import resending
 from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Venue
 from mainplate.sessions import LISTING
 from mainplate.sessions import Attention
 from mainplate.sessions import Claimed
@@ -1002,7 +1003,7 @@ class Service:
         await self.checkpointer.supply(session, ARCHIVED_KEY, records.Archived(at=self.now()).recorded())
         return await read_session(self.database, session)
 
-    async def run(self, session: str, said: str) -> str | None:
+    async def run(self, session: str, said: str, *, online: bool = False) -> str | None:
         """
         Run `said` in this session's own worktree, and say which entry recorded it, or nothing at all
         where this session has nowhere to run one.
@@ -1025,7 +1026,8 @@ class Service:
 
         **In the session's sandbox**, under its own network answer and the environment its setup
         recorded, for the reason `commands.py` opens with: the checkout's git configuration is the
-        model's to write.
+        model's to write. `online` turns the network on for this one command whatever the session
+        chose, which is `Disposition.ONLINE`, and is recorded on the command so the page says so.
         """
         if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
             return None
@@ -1037,12 +1039,14 @@ class Service:
                 worktree=self.workspaces.worktree(session, found.chosen.repository),
                 scratch=self.workspaces.scratch_at(session),
             ),
-            venue=found.chosen.isolation.venue,
+            venue=Venue.CONNECTED if online else found.chosen.isolation.venue,
             environment=environment_in(await self.checkpointer.load(session)),
         )
         # Appended rather than delivered, because there is nothing for a worker to do about it: a
         # command reaches no model, so waking a pass to look at one would be a pass with no work.
-        entry = await self.checkpointer.append(session, recorded_command(said))
+        entry = await self.checkpointer.append(
+            session, recorded_command(said, online=online and not found.chosen.isolation.network)
+        )
         self.commands.start(Slot(session=session, entry=entry.key), said, running)
         return entry.key
 
@@ -1051,6 +1055,10 @@ class Service:
         Push this session's branch to its repository, and say which entry recorded it, or nothing
         where there is no branch here to push or nowhere to push it.
 
+        **The branch is the recorded one**, `Choice.branch`, and never whatever the checkout's `HEAD`
+        is on: the page names that branch beside the button, so it is the only thing the button may
+        move. A session with none recorded has nothing to push under and is `None`.
+
         Recorded as a command whose text is what was done, so the page draws it where it happened and
         a reload finds it, like any `Run`. Nowhere to push is a repository no forge currently reaches,
         which is `None` for the reason `run`'s is.
@@ -1058,7 +1066,7 @@ class Service:
         if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
             return None
         found = await self.read(session)
-        if found is None or found.chosen is None or found.chosen.repository is None:
+        if found is None or found.chosen is None or found.chosen.repository is None or found.chosen.branch is None:
             return None
         repository = self.workspaces.named(found.chosen.repository)
         if repository is None:
@@ -1068,6 +1076,7 @@ class Service:
             Slot(session=session, entry=entry.key),
             self.workspaces.worktree(session, found.chosen.repository),
             repository.url,
+            found.chosen.branch,
         )
         return entry.key
 

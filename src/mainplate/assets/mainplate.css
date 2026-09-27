@@ -1321,6 +1321,15 @@ pre .gs {
     font-size: 0.68rem;
 }
 
+/* A command that had the network in a session that otherwise does not, marked in the status's own
+   shape so it reads as a fact about the run rather than as part of what was typed. */
+.ran__online {
+    color: var(--error-edge);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
 /* The status as words, out at the edge where a reader scans down a turn. `exit 0` and `exit 2`
    rather than a colour alone, because a status nobody can name is one a screen reader cannot read
    out; one shape for every status, so the colour is the whole of what sets the non-zero ones apart. */
@@ -1850,12 +1859,13 @@ pre .gs {
 
 /* `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the
    box takes the terminal's monospace and a heavier edge. A command is a shell line, so setting it in
-   the face the output will come back in is the box telling the truth about what it holds. */
-.composer[data-leading="run"] .composer__box {
+   the face the output will come back in is the box telling the truth about what it holds. `Online`
+   is the same shell line with the network on. */
+.composer:is([data-leading="run"], [data-leading="online"]) .composer__box {
     border-width: 2px;
 }
 
-.composer[data-leading="run"] textarea {
+.composer:is([data-leading="run"], [data-leading="online"]) textarea {
     font-family: var(--mono);
     font-size: var(--mono-size);
     line-height: var(--mono-line);

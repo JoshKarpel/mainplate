@@ -240,7 +240,9 @@ class Clones:
 
         Logged rather than raised, because this is an improvement on what a name resolves to and not
         a precondition for planting: a machine that is offline, or a repository whose integration was
-        detached this morning, still gets the worktree it would have got before this existed.
+        detached this morning, still gets the worktree it would have got before this existed. The
+        store keeps the last refs it fetched, so a failed round leaves sessions exactly as current
+        as the one before it and the next round tries again.
         """
         fetched = await self.store(repository.id).git(
             "fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*"
@@ -257,9 +259,9 @@ class Clones:
         out what to check out is minutes of network inside a request somebody is waiting on.
         `ls-remote` transfers no objects, so it is one round trip and no disk.
 
-        It also cannot go stale in the way reading the clone would. A clone is refreshed when a
-        session plants a worktree in it, so a list read from one would be as old as the last session
-        on that repository - which is exactly the trap a named base already had.
+        It also cannot go stale in the way reading the clone would. A clone is refreshed only while
+        some session works in it, so a list read from one would be as old as the last such session -
+        which is exactly the trap a named base already had.
 
         **It promises not to raise**, which is `forge.offers`'s promise one level down: this describes
         an environment rather than deciding anything, and what it produces is a list of suggestions
@@ -406,12 +408,11 @@ class Workspaces:
         session on one that was never cloned, and that is the honest failure because there is
         nowhere to get it from.
 
-        **Planting a worktree fetches first**, whether or not a base was named, and that is where a
-        person gets to say when this console's copy of a repository catches up. Nothing else here
-        ever refreshes a clone: it is made once and would otherwise answer out of whatever the
-        repository looked like the first time anybody used it, for as long as the machine lives. So
-        starting a session is the refresh, which is both the moment it is affordable and the moment
-        somebody actually wants current code.
+        **Planting a worktree fetches first**, whether or not a base was named, because starting a
+        session is the moment somebody wants current code and is waiting on it. The background
+        loop in `fetching.py` keeps the clone current after that, while the session works; this
+        fetch is what makes a fast-moving repository's new session start on the `main` of now rather
+        than of up to one round ago.
 
         Two cases skip it and both would be round trips that cannot change an answer. A clone that
         has just been *made* is current by construction. And a **fork** plants at a recorded tree,
@@ -428,7 +429,7 @@ class Workspaces:
             if found is None:
                 return None
             await self.clones.ensure(found)
-        if not cloning and tree is None and not worktrees.planted(session) and worktrees.linked(session) is None:
+        if not cloning and tree is None and not worktrees.planted(session):
             reached = self.named(repository)
             if reached is not None:
                 await self.clones.refresh(reached)

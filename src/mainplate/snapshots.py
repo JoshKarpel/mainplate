@@ -47,11 +47,6 @@ from mainplate.sandbox import Venue
 # appear in `git branch`, are not walked by a bare `git log`, and cannot be checked out by accident.
 SESSIONS: Final = "refs/mainplate/sessions"
 
-# The one chain every session's snapshots hung from while sessions shared a linked worktree's object
-# store. Nothing writes it now; it is named so nothing deletes it, since it is what keeps every tree
-# recorded before then reachable, and a fork from one of those plants at it.
-SNAPSHOT_REF: Final = "refs/mainplate/snapshots"
-
 # Where a bundle's one head sits inside a checkout while it is being made. Its own name per capture,
 # so two captures of one checkout never write the same ref.
 TRANSFER: Final = "refs/mainplate/transfer"
@@ -513,20 +508,21 @@ class Worktree:
                 return tree
         raise SnapshotFailed(f"{self.snapshots_ref} kept moving under {CHAINING} captures")
 
-    async def push(self, url: str) -> Ran:
+    async def push(self, url: str, branch: str) -> Ran:
         """
-        The checkout's branch, pushed to `url` under the same name, from the store.
+        The checkout's `branch`, pushed to `url` under the same name, from the store.
 
-        The branch is read in the sandbox and parsed before it is anybody's argument; a checkout on
-        no branch has nothing to push it as, and says so. Its commit crosses into the store the way a
-        snapshot's does, unless the store already has it, and the store pushes from there with its
-        own configuration and this console's credentials. A push is never forced: a remote branch
-        that moved on is a refusal to read in the result, not one to override.
+        **The branch is the caller's, never the checkout's.** It is the one the session recorded, so
+        what moves on the remote is what the page names, whatever the checkout's `HEAD` is on: a
+        session that checked out `main` and committed there pushes nothing to `main` from here. The
+        cost, stated, is that commits on any other branch stay in the checkout without a word, and
+        the result says which commit went where.
+
+        Its commit crosses into the store the way a snapshot's does, unless the store already has it,
+        and the store pushes from there with its own configuration and this console's credentials. A
+        push is never forced: a remote branch that moved on is a refusal to read in the result, not
+        one to override.
         """
-        named = await self.git("symbolic-ref", "--short", "--quiet", "HEAD")
-        branch = parse_branch(named.out) if named.ok else None
-        if branch is None:
-            raise SnapshotFailed("the checkout is not on a branch, so there is no name to push it under")
         head = f"refs/heads/{branch}"
         commit = object_id(await self.demand("rev-parse", "--verify", f"{head}^{{commit}}"), head)
         held = await self.store.git("cat-file", "-t", commit)
@@ -578,20 +574,16 @@ class Worktrees:
         return Worktree(root=self.at(session), store=self.store, session=session, bwrap=self.bwrap)
 
     def planted(self, session: str) -> bool:
-        """Whether this session has a checkout of its own, which is a question with no git in it."""
-        return (self.at(session) / POINTER).is_dir()
-
-    def linked(self, session: str) -> Path | None:
         """
-        Where git kept this session's checkout while it was a *linked* worktree of the store, if it was.
+        Whether this session has a checkout of its own, which is a question with no git in it.
 
-        A session planted before checkouts had a `.git` of their own has a one-line pointer file there
-        instead, and its index, `HEAD` and the rest live in the store under `worktrees/<session>`.
-        Derived rather than read out of the pointer, which is a file in the session's directory.
+        **The directory, and nothing inside it.** Everything under it is the session's to delete or
+        replace, `.git` included, so an answer read from there is one the session chose. The
+        directory itself is not: `plant` puts it in place with one rename, and a sandbox cannot
+        remove it because it is the mount point the checkout is bound at. So a session that deletes
+        its own `.git` is still planted, and what fails is the next capture, which names the cause.
         """
-        if not (self.at(session) / POINTER).is_file():
-            return None
-        return self.store.path / "worktrees" / self.at(session).name
+        return self.at(session).is_dir()
 
     async def default_branch(self) -> str | None:
         """
@@ -651,12 +643,10 @@ class Worktrees:
 
         Idempotent, because the alternative is worse than the check. A checkout already planted is
         one a session has been working in, and re-planting would either fail the request or throw
-        that work away. A checkout planted as a linked worktree is `adopt`ed instead.
+        that work away.
         """
         if self.planted(session):
             return self.worktree(session)
-        if self.linked(session) is not None:
-            return await self.adopt(session)
         if tree is not None:
             commit = await self.store.demand("commit-tree", tree, "-m", f"session {session}")
         elif (named := base if base is not None else await self.default_branch()) is not None:
@@ -704,48 +694,6 @@ class Worktrees:
         return demanded(
             await git_at(building, "--git-dir", str(gitdir), "--work-tree", str(building), *arguments), arguments
         )
-
-    async def adopt(self, session: str) -> Worktree:
-        """
-        A checkout that was a linked worktree of the store, given a `.git` of its own in place.
-
-        Every session planted before checkouts owned their git is one of these: a pointer file where
-        `.git` should be, with `HEAD`, the index and the branch in the store. Its files are the
-        session's and stay exactly where they are; what changes is the directory git keeps beside
-        them. `HEAD` and the index are copied out of the store, the branch is recreated at the commit
-        the store has for it, and that commit becomes the session's base. Then the pointer is
-        replaced and the store forgets the worktree.
-
-        No git runs against the old pointer or the files around it: `HEAD` and the index are read
-        from the store, which the session could only ever read, and the new directory is built
-        beside the checkout before it takes the pointer's place.
-        """
-        linked = self.linked(session)
-        here = self.at(session)
-        if linked is None:
-            return self.worktree(session)
-        head = (linked / "HEAD").read_text().strip()
-        building = Path(tempfile.mkdtemp(prefix=f".adopting-{session}-", dir=self.root))
-        try:
-            gitdir = await self.initialised(building)
-            if head.startswith("ref: "):
-                ref = head.removeprefix("ref: ")
-                commit = object_id(await self.store.demand("rev-parse", "--verify", f"{ref}^{{commit}}"), ref)
-                await self.fresh(gitdir, building, "update-ref", ref, commit)
-                await self.fresh(gitdir, building, "symbolic-ref", "HEAD", ref)
-            else:
-                commit = object_id(head, "HEAD")
-                await self.fresh(gitdir, building, "update-ref", "--no-deref", "HEAD", commit)
-            if (linked / "index").is_file():
-                await asyncio.to_thread(shutil.copyfile, linked / "index", gitdir / "index")
-            await self.store.demand("update-ref", self.worktree(session).base_ref, commit)
-            await asyncio.to_thread((here / POINTER).unlink)
-            await asyncio.to_thread(gitdir.rename, here / POINTER)
-        finally:
-            await asyncio.to_thread(shutil.rmtree, building, ignore_errors=True)
-        await asyncio.to_thread(shutil.rmtree, linked, ignore_errors=True)
-        await self.store.git("worktree", "prune")
-        return self.worktree(session)
 
     async def uproot(self, session: str) -> None:
         """

@@ -129,6 +129,16 @@ class Settings(BaseSettings):
     be, and the row says when it was measured.
     """
 
+    fetch_every: timedelta = Field(default=timedelta(minutes=5), gt=timedelta())
+    """
+    How often every repository a live session works in is fetched into this console's copy of it.
+
+    What the interval decides is how far behind the remote a session's own `git fetch` can be, since
+    that reads this console's copy rather than the forge. Five minutes, because the things worth
+    seeing are somebody merging to `main` or pushing a commit to the session's branch, which a person
+    does at the pace of a review; and a fetch that finds nothing new is one round trip per repository.
+    """
+
     watching: timedelta = Field(default=DEFAULT_WATCHING, gt=timedelta())
     """
     How often a page's live connection asks whether its session has recorded anything new.

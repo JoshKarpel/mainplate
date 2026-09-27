@@ -1050,17 +1050,19 @@ Without it the whole stage is one that can only fail. A plugin that needs a prog
 and the two things a plugin most obviously wants - its own dependencies and the tooling a repository
 runs its checks with - are both downloads.
 
-**What makes it safe to offer is when it happens rather than a check on what is fetched.** `setup`
-runs before the first message: the worktree holds the commit the repository supplied and nothing
-else, no credential of this console's is inside the namespace, and nothing the model has written
-exists yet. So what a connected run there can carry out is the repository's own code, to its own
-author, which is not an exfiltration in any useful sense. Every later event is shut again, and that
-is the half that matters - a turn boundary is where a plugin has read whatever the model has been
-writing.
+**What makes it safe to offer is when it happens and who said yes, rather than a check on what is
+fetched.** `setup` runs only after somebody pressed the button on the settings step, and before the
+first message: the worktree holds the commit the repository supplied and nothing else, and nothing
+the model has written exists yet. So what a connected run there can carry out is the repository's
+own code, run because a person chose to run it. Every later event is shut again, and that is the
+half that matters - a turn boundary is where a plugin has read whatever the model has been writing.
 
 The cost, stated: **a repository plugin can reach the network once per session, and a session that
-chose no network still gives it that.** The trust switch in the picker is what says no, and it says
-no to the whole plugin rather than to the fetch.
+chose no network still gives it that.** On exe.dev that includes [this console's
+credential](security.md#on-exedev-the-network-is-the-credential): a `setup` can push to the
+repository, force included, and nothing between it and the forge is `/push`. The trust switch in the
+picker and the press on the settings step are what say no, and they say no to the whole plugin
+rather than to the fetch.
 
 ### A scratch of its own, which is not the session's
 

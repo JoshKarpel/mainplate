@@ -198,10 +198,10 @@ async def ran(said: str, running: Running, patience: timedelta, into: bytearray)
     )
 
 
-async def pushing(worktree: Worktree, url: str, into: bytearray) -> Result:
-    """One push of the checkout's branch, as a result the page draws the way it draws a command's."""
+async def pushing(worktree: Worktree, url: str, branch: str, into: bytearray) -> Result:
+    """One push of the session's branch, as a result the page draws the way it draws a command's."""
     began = asyncio.get_running_loop().time()
-    came = await worktree.push(url)
+    came = await worktree.push(url, branch)
     into.extend(came.stdout + came.stderr)
     return Result(
         status=came.code,
@@ -270,16 +270,16 @@ class Commands:
         """
         self.scheduled(slot, lambda holding: ran(said, running, self.patience, holding))
 
-    def push(self, slot: Slot, worktree: Worktree, url: str) -> None:
+    def push(self, slot: Slot, worktree: Worktree, url: str, branch: str) -> None:
         """
-        Push the checkout's branch to the repository, and record what came of it like a command.
+        Push the session's branch to the repository, and record what came of it like a command.
 
         Its own arm rather than a command somebody types, because the one thing a command in the
         sandbox cannot do is the one thing this is: reach the repository as the person. The branch
         crosses into the store and the store pushes it, so no configuration the session wrote is read
         by anything holding a credential. See `Worktree.push`.
         """
-        self.scheduled(slot, lambda holding: pushing(worktree, url, holding))
+        self.scheduled(slot, lambda holding: pushing(worktree, url, branch, holding))
 
     def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
         task = asyncio.create_task(self.record(slot, work), name=f"command {slot.session} {slot.entry}")

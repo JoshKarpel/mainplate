@@ -495,6 +495,70 @@ class TestRunningOne:
         assert "the console stopped" in came.output
 
 
+# How many IPv4 routes a command can see: none in a network namespace of its own, and the machine's
+# where it shares the host's. Routes rather than interfaces, because tunnel devices like `gre0` are
+# created in every new namespace on a machine with the module loaded.
+ROUTES = "tail -n +2 /proc/net/route | wc -l"
+
+
+class TestRunningOneOnline:
+    """
+    `Run` with the network on for one command, in a session whose commands otherwise have it off.
+
+    The person's call to make, so what these pin is that it does what it says and that the record,
+    and so the page, keeps saying it happened.
+    """
+
+    async def test_it_reaches_the_network_the_session_s_own_commands_do_not(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+        confined = await ran(running, session, ROUTES)
+        assert confined.output.strip() == "0", "the control: a session's own command has no route anywhere"
+
+        entry = await running.run(session, ROUTES, online=True)
+
+        assert entry is not None
+        assert int((await settled(running, session, entry)).output) > 0
+
+    async def test_it_is_recorded_as_having_run_online(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+
+        entry = await running.run(session, "true", online=True)
+
+        assert entry is not None
+        assert (await running.checkpointer.load(session))[entry] == recorded_command("true", online=True)
+
+    async def test_in_a_session_whose_network_is_already_on_it_is_an_ordinary_run(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """Nothing was turned on that the session had not already chosen, so there is nothing to mark."""
+        connected = replace(on_fixture, isolation=replace(on_fixture.isolation, network=True))
+        session = await planted(running, workspaces, connected)
+
+        entry = await running.run(session, "true", online=True)
+
+        assert entry is not None
+        assert (await running.checkpointer.load(session))[entry] == recorded_command("true")
+
+    async def test_the_panel_says_it_ran_online(self, app: ASGIApp, service: Service) -> None:
+        session = await started(service, "have a look", DEFAULT_CHOICE)
+        online = await service.checkpointer.append(session.id, recorded_command("npm install", online=True))
+        offline = await service.checkpointer.append(session.id, recorded_command("just test"))
+
+        async with calling(app) as caller:
+            drawn = await caller.get(f"/sessions/{session.id}")
+
+        panels = {
+            entry.key: drawn.text.split(f'id="ran-{entry.key}"', 1)[1].split("</summary>", 1)[0]
+            for entry in (online, offline)
+        }
+        assert 'class="ran__online"' in panels[online.key]
+        assert 'class="ran__online"' not in panels[offline.key]
+
+
 class TestPushingOne:
     """
     The session's branch reaching its repository, recorded where a command's result would be.
@@ -617,6 +681,33 @@ class TestThroughTheConsole:
         # The sentence over a command box is where the branch a commit lands on is read, now that
         # nothing under the box names it.
         assert f"Run it in {running.repository_of(on_fixture)} @ {branch_named(with_files)}," in offered.text
+
+    async def test_the_menu_offers_online_only_where_the_network_is_off(
+        self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        offline = await planted(running, workspaces, on_fixture)
+        connected = await planted(
+            running, workspaces, replace(on_fixture, isolation=replace(on_fixture.isolation, network=True))
+        )
+
+        async with calling(app) as caller:
+            offered = await caller.get(f"/sessions/{offline}")
+            plain = await caller.get(f"/sessions/{connected}")
+
+        assert 'value="online"' in offered.text
+        assert 'value="run"' in plain.text, "the control: the other session has a menu at all"
+        assert 'value="online"' not in plain.text
+
+    async def test_running_it_online_through_the_console_records_that_it_did(
+        self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+
+        async with calling(app) as caller:
+            answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "echo hi", "disposition": "online"})
+
+        assert answer.status == 200
+        assert recorded_command("echo hi", online=True) in (await running.checkpointer.load(session)).values()
 
     async def test_pushing_through_the_console_takes_an_empty_box(
         self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice

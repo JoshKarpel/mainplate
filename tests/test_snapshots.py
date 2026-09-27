@@ -1169,51 +1169,45 @@ class TestWhatTheStoreBelieves:
             await worktree.store.fetched(link, "refs/heads/main", f"{worktree.refs}/incoming/linked")
 
 
-class TestAdoptingALinkedWorktree:
+class TestASessionThatBreaksItsOwnGit:
     """
-    A session planted while checkouts were linked worktrees of the store, carried over in place.
+    A checkout whose `.git` the session deleted or replaced, from inside its own sandbox.
 
-    Built the way those were built, with `git worktree add` against the store, so what is adopted is
-    the real shape rather than a picture of it.
+    Whether a checkout is planted is read from the directory and not from `.git`, so planting again
+    is still a no-op and never a rebuild over the session's files. What fails is the capture, which
+    is git inside the sandbox finding no repository, and that failure is the pass's.
     """
 
-    @pytest.fixture
-    async def linked(self, workspaces: Workspaces, origin: Path) -> Worktree:
-        await workspaces.plant("c" * 32, FIXTURE)
-        worktrees = workspaces.worktrees(FIXTURE)
-        await worktrees.uproot("c" * 32)
-        session = "d" * 32
-        await worktrees.store.demand("worktree", "add", "-q", "-b", branch_named(session), str(worktrees.at(session)))
-        (worktrees.at(session) / "src" / "kept.txt").write_text("edited while linked\n")
-        (worktrees.at(session) / "src" / "staged.txt").write_text("staged while linked\n")
-        await run("git", "add", "src/staged.txt", cwd=worktrees.at(session))
-        return worktrees.worktree(session)
+    async def in_the_sandbox(self, worktree: Worktree, tmp_path: Path, bwrap: str, command: str) -> None:
+        scratch = tmp_path / "breaking-scratch"
+        scratch.mkdir(exist_ok=True)
+        await ran(InAWorktree(worktree=worktree, scratch=scratch), bwrap, Venue.CONFINED, command, seconds=20)
 
-    async def test_it_is_found_as_linked_and_not_as_planted(self, workspaces: Workspaces, linked: Worktree) -> None:
-        worktrees = workspaces.worktrees(FIXTURE)
-
-        assert worktrees.linked(linked.session) is not None
-        assert not worktrees.planted(linked.session)
-
-    async def test_adopting_it_keeps_its_files_its_branch_and_what_was_staged(
-        self, workspaces: Workspaces, linked: Worktree
+    @pytest.mark.parametrize("breaking", ["rm -rf .git", "rm -rf .git && echo 'gitdir: /nowhere' > .git"])
+    async def test_it_is_still_planted_and_planting_leaves_its_files_alone(
+        self, workspaces: Workspaces, worktree: Worktree, tmp_path: Path, bwrap: str, breaking: str
     ) -> None:
-        worktrees = workspaces.worktrees(FIXTURE)
+        (worktree.root / "src" / "in-progress.txt").write_text("half done\n")
+        await self.in_the_sandbox(worktree, tmp_path, bwrap, breaking)
 
-        adopted = await worktrees.plant(linked.session)
+        again = await workspaces.plant(worktree.session, FIXTURE)
 
-        assert worktrees.planted(linked.session)
-        assert (adopted.root / "src" / "kept.txt").read_text() == "edited while linked\n"
-        assert await run("git", "branch", "--show-current", cwd=adopted.root) == branch_named(linked.session)
-        assert await run("git", "diff", "--cached", "--name-only", cwd=adopted.root) == "src/staged.txt"
-        assert "linked" not in await worktrees.store.demand("worktree", "list"), "the store forgot it"
+        assert again == worktree
+        assert (worktree.root / "src" / "in-progress.txt").read_text() == "half done\n"
 
-    async def test_an_adopted_checkout_captures_like_any_other(self, workspaces: Workspaces, linked: Worktree) -> None:
-        adopted = await workspaces.worktrees(FIXTURE).plant(linked.session)
+    async def test_the_next_capture_fails_naming_git(self, worktree: Worktree, tmp_path: Path, bwrap: str) -> None:
+        await self.in_the_sandbox(worktree, tmp_path, bwrap, "rm -rf .git")
 
-        tree = await adopted.capture("after adoption")
+        with pytest.raises(SnapshotFailed, match="git add"):
+            await worktree.capture("after the session broke it")
 
-        assert "src/staged.txt" in await adopted.paths(tree)
+    async def test_the_sandbox_cannot_take_the_directory_itself_away(
+        self, workspaces: Workspaces, worktree: Worktree, tmp_path: Path, bwrap: str
+    ) -> None:
+        """What `planted` rests on: the checkout is the mount point, so its contents go and it stays."""
+        await self.in_the_sandbox(worktree, tmp_path, bwrap, f"rm -rf {worktree.root}; true")
+
+        assert workspaces.worktrees(FIXTURE).planted(worktree.session)
 
 
 class TestPushing:
@@ -1238,16 +1232,37 @@ class TestPushing:
         )
         made = await run("git", "rev-parse", "HEAD", cwd=worktree.root)
 
-        came = await worktree.push(str(origin))
+        came = await worktree.push(str(origin), branch_named(PLANTED))
 
         assert came.ok, came.err
         assert await run("git", "rev-parse", f"refs/heads/{branch_named(PLANTED)}", cwd=origin) == made
 
-    async def test_a_checkout_on_no_branch_is_refused(self, worktree: Worktree) -> None:
-        await run("git", "checkout", "-q", "--detach", cwd=worktree.root)
+    async def test_the_branch_pushed_is_the_one_named_whatever_head_is_on(
+        self, worktree: Worktree, origin: Path, tmp_path: Path, bwrap: str
+    ) -> None:
+        """A session that moved its `HEAD` to `main` and committed there cannot move `main` through a push."""
+        main_before = await run("git", "rev-parse", "refs/heads/main", cwd=origin)
+        scratch = tmp_path / "pushing-scratch"
+        scratch.mkdir()
+        await ran(
+            InAWorktree(worktree=worktree, scratch=scratch),
+            bwrap,
+            Venue.CONFINED,
+            "git checkout -qB main origin/main && "
+            "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m 'onto main'",
+            seconds=20,
+        )
+        recorded = await run("git", "rev-parse", f"refs/heads/{branch_named(PLANTED)}", cwd=worktree.root)
 
-        with pytest.raises(SnapshotFailed, match="not on a branch"):
-            await worktree.push("/nowhere")
+        came = await worktree.push(str(origin), branch_named(PLANTED))
+
+        assert came.ok, came.err
+        assert await run("git", "rev-parse", "refs/heads/main", cwd=origin) == main_before
+        assert await run("git", "rev-parse", f"refs/heads/{branch_named(PLANTED)}", cwd=origin) == recorded
+
+    async def test_a_branch_the_checkout_does_not_have_is_refused(self, worktree: Worktree, origin: Path) -> None:
+        with pytest.raises(SnapshotFailed, match="nowhere-at-all"):
+            await worktree.push(str(origin), "nowhere-at-all")
 
     async def test_pushing_runs_nothing_the_checkout_configured(
         self, worktree: Worktree, origin: Path, tmp_path: Path
@@ -1258,7 +1273,7 @@ class TestPushing:
         hook.write_text(f"#!/bin/sh\ntouch {escaped}\n")
         hook.chmod(0o755)
 
-        came = await worktree.push(str(origin))
+        came = await worktree.push(str(origin), branch_named(PLANTED))
 
         assert came.ok, came.err
         assert not escaped.exists()

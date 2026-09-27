@@ -66,10 +66,12 @@ drawn as the step-outs they were, because a recorded value is not the console's 
   the session has a worktree to run a command in, and posting it to one that has none is a `422`
   rather than a silence, since a command that vanished is indistinguishable from one that did
   nothing. See [Run](#run).
-- `push` is `Service.push`, which sends the worktree's branch to its repository. It is offered where
-  `run` is, and it is the one console answer that takes **nothing** from the box: its button carries
-  `formnovalidate`, the boundary allows an empty message for it, and text typed beside it is a
-  `422`. See [Push](#push).
+- `online` is `Service.run` with the network on for that one command, offered where `run` is and
+  the session's network is off. See [Online](#online).
+- `push` is `Service.push`, which sends the session's recorded branch to its repository. It is
+  offered where `run` is, and it is the one console answer that takes **nothing** from the box: its
+  button carries `formnovalidate`, the boundary allows an empty message for it, and text typed
+  beside it is a `422`. See [Push](#push).
 - A **steer** is [below](#steer). It is not one of these and never was a choice a form makes: it is
   what becomes of a `here` message that a pass finds while it is working.
 
@@ -591,14 +593,40 @@ The mode is entered from the box and left from the box, both by a key pressed wh
 focus, and it is deliberately *not* stored: it is a mode within a visit, like following the end,
 rather than a decision about a conversation.
 
+## Online
+
+`/online` is `Run` with the network on, for one command, in a session whose commands otherwise have
+it off. Same sandbox, same checkout, same environment; only the network axis flips. It is offered
+only where the network is off, since with it on `Run` already has it.
+
+**Why it exists: the network switch is a decision about the model, and the person is not the
+model.** A session kept offline so the agent cannot reach past the machine still needs `npm
+install`, a `git fetch` from somewhere other than the store, or a look at a URL now and then, and
+starting a second session with the network on to type one command is the workaround this replaces.
+
+**What it gives up is the push gateway, for that command.** On exe.dev [the network is the
+credential](security.md#on-exedev-the-network-is-the-credential), so a command run online can push
+to the repository, force included, without going through `/push`, and it runs whatever hooks and
+configuration the checkout holds while it can. Typing it is the person's call, and the record carries
+`online` so the panel says so beside the line for as long as it is there. The cost, stated: a
+`git commit` run online runs the model's hooks with a network, which is exactly what the session's
+own network answer was keeping them from having.
+
+It shares the command box's monospace and heavier edge, and stays in its mode once a command has
+gone, for `Run`'s reasons.
+
 ## Push
 
-`/push` sends the branch the session's worktree is on to its repository, under the same name. It is
-the one thing `Run` cannot do, because a push needs the console's credential and nothing that holds
-one may read the worktree's configuration: the branch is read in the sandbox and parsed before it is
-anybody's argument, its commit crosses into the store as a bundle unless the store already has it,
-and the store pushes it with its own configuration. [What runs, and as
-whom](security.md#a-persons-command-and-a-push) is why.
+`/push` sends the branch the session *recorded* to its repository, under the same name. That is
+`Choice.branch`, the one the sentence over the box names, and never whatever the checkout's `HEAD`
+is on: a session that checked out `main` and committed there cannot move `main` from this button.
+The cost, stated, is that commits on any other branch stay in the checkout without a word; the
+result says which commit went where. A session with no recorded branch is refused.
+
+It is the one thing `Run` cannot do with the network off, because a push needs the console's
+credential and nothing that holds one may read the worktree's configuration: the branch's commit
+crosses into the store as a bundle unless the store already has it, and the store pushes it with its
+own configuration. [What runs, and as whom](security.md#a-persons-command-and-a-push) is why.
 
 **It takes nothing from the box.** There is one branch to push and one place to push it, so the
 answer does not demand a message, and text typed beside it is refused rather than quietly dropped: a

@@ -3048,15 +3048,15 @@ class TestNamingAModeFromTheKeyboard:
         answer in full, and Enter takes whichever row the arrows have arrived at.
 
         A bare `/` is the one prefix every answer fits, so on a session with files and a turn being
-        answered it offers `next`, `forget`, `run`, `push` and `keep` at once, which is what makes
-        this a test of the *position* rather than of there happening to be one row left. The arrow is
+        answered it offers `next`, `forget`, `run`, `online`, `push` and `keep` at once, which is what
+        makes this a test of the *position* rather than of there happening to be one row left. The arrow is
         what proves it: without it, taking the first row and taking the row the keyboard is on are
         the same thing and the key could be wrong in a way nothing here would see.
         """
         await a_session_with_files(working, page)
         await page.click(".composer textarea")
         await page.keyboard.type("/")
-        await expect(page.locator(".sender__option:visible")).to_have_count(5)
+        await expect(page.locator(".sender__option:visible")).to_have_count(6)
         await page.keyboard.press("ArrowDown")
         await page.keyboard.press("Enter")
 

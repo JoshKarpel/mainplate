@@ -1035,7 +1035,7 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
             # `send`, because a boundary between turns is the only place one can be.
             await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
             return await redrawn(service, session, reader)
-        case Disposition.RUN:
+        case Disposition.RUN | Disposition.ONLINE:
             # Not a message at all: the text is run in this session's sandbox, typed by the person,
             # and the record of it is never told to a model. Refused rather than silently ignored
             # where there is nowhere to run it, because a command that vanished would be
@@ -1044,7 +1044,7 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
                 return page_response(
                     422, refusal_page(LINKS, 422, f"session {session} has no files to run a command in")
                 )
-            await service.run(session, sending.said)
+            await service.run(session, sending.said, online=sending.where is Disposition.ONLINE)
             return await redrawn(service, session, reader)
         case Disposition.PUSH:
             # Refused rather than dropped where something was typed, because a message sent under the

@@ -9,8 +9,9 @@ downstream of that question and are decided on the pages that own them.
 
 There is a **parent** and there is a **sandbox**. The parent is the console process: it holds the
 provider credential, the store with every conversation in it, `config.yaml`, and the service user's
-whole filesystem. The sandbox is a mount namespace with no network, a cleared environment, a
-session's checkout bound read-write, and the repository's bare clone bound read-only beside it.
+whole filesystem. The sandbox is a mount namespace with no network unless the session chose one, a
+cleared environment, a session's checkout bound read-write, and the repository's bare clone bound
+read-only beside it.
 [Where a command runs](sandbox.md) is what builds it.
 
 Three things are untrusted, and they are untrusted equally:
@@ -127,10 +128,13 @@ alone**: they are gone at every event that runs during the conversation.
 
 - **A network, at `setup` and never again.** A plugin that needs a program has to fetch one, so the
   event that runs before the first message is connected and every event during the conversation is
-  not. What makes it safe is *when*: at that moment the checkout holds the commit the repository
-  supplied, nothing the model has written exists, and no credential of this console's is inside the
-  namespace, so what a connected run can carry out is the repository's own code to its own author.
-  A turn boundary is the opposite of that in every respect, which is why it is shut.
+  not. On exe.dev a connected process holds [this console's credential](#on-exedev-the-network-is-the-credential),
+  so a `setup` can push to the repository, force included. What makes that acceptable is *when* and
+  *who said so*: the plugin runs only after somebody pressed the button on the [settings
+  step](plugins.md#starting-a-session-takes-four-steps), and at that moment the checkout holds the commit the
+  repository supplied and nothing the model has written exists. So what can act with the network is
+  the repository's own code, run because a person said yes to it. A turn boundary is the opposite
+  of that in every respect, which is why it is shut.
 - **A scratch directory of its own**, rather than the session's. The model writes the session's, so a
   plugin that installed a program there would be running whatever the model last left at that path.
   Confinement is no answer, because both are confined the same way: what a shared directory would
@@ -172,6 +176,30 @@ that the staging happens over the commit the repository supplied rather than ove
 wrote. [Getting the repository ready is a plugin
 too](plugins.md#getting-the-repository-ready-is-a-plugin-too) is the whole of it.
 
+## On exe.dev, the network is the credential
+
+exe.dev's GitHub integration answers at a hostname that resolves only inside the VM and adds the
+credential at exe.dev's own edge, so `env -i git ls-remote https://<integration>.int.exe.xyz/...`
+answers with an empty environment, and a push there needs no token either: that is how the store's
+own push works. **Any process on this machine that can reach the network holds this console's
+authority over the repository**, force-push included, and the same host serves the API.
+
+So on exe.dev what keeps a session from moving the remote is not a missing credential. It is the
+network being off: a confined sandbox cannot resolve the host at all, and the store, which can, is
+driven by the parent and pushes only what `/push` names. Three things have the network, and each is
+somebody's choice rather than an accident:
+
+- **A session started with the network on.** Its `bash` and every `Run` can push. The picker offers
+  it because some work needs it, and choosing it gives up the push gateway for that session.
+- **[`Online`](composer.md#online)**, one command with the network on in a session that otherwise
+  has it off. A person typed it, and the panel says it ran online for as long as it is there.
+- **A repository plugin at `setup`**, after the press on the settings step; see [what a plugin
+  gets](#what-a-plugin-gets-that-a-command-does-not-and-why-each-is-safe).
+
+A forge that hands out a credential rather than being one would change this section and nothing
+else here: the store would hold the token, and a connected sandbox would reach the network without
+reaching the repository.
+
 ## A person's command, and a push
 
 **[`Run`](composer.md#run) is confined like the model's `bash`**, and that is forced rather than
@@ -179,12 +207,15 @@ chosen. A person's `git commit` in the checkout runs the checkout's hooks, which
 write; run as the service user it would run them with everything that user holds. So a command a
 person types gets the session's sandbox, its network answer and the environment its setup recorded,
 exactly as the model's would. What that costs is the person's own `$HOME` and credentials: nothing
-typed there can reach them, and `git push` in there has nothing to push with.
+typed there can reach them, and with the network off `git push` in there reaches nothing.
+[`Online`](composer.md#online) is the same sandbox with the network on for one command, which on
+exe.dev means `git push` in there does reach the repository.
 
-**Pushing is a control of its own.** [`/push`](composer.md#push) reads the checkout's branch in the
-sandbox, parses the name before it becomes an argument, carries the commit into the store as a
-bundle, and has the store push it, never forced, with the store's configuration and this console's
-credentials. The one git that holds a credential reads no configuration a session wrote.
+**Pushing is a control of its own.** [`/push`](composer.md#push) takes the branch the session
+*recorded*, never whatever the checkout's `HEAD` is on, carries that branch's commit into the store
+as a bundle, and has the store push it, never forced, with the store's configuration. So what moves
+on the remote is the branch the page names beside the button, and the git that pushes reads no
+configuration a session wrote.
 
 Two mitigations were considered for running a person's git outside the sandbox and are not here,
 which is worth recording because both read well:
@@ -213,9 +244,14 @@ a plugin that runs `git -C <worktree>` the ordinary way reads the configuration 
 runs whatever it names, as the service user. Nothing here can stop that, since the plugin is a
 program the operator installed; what the bundled one does is the pattern to copy.
 
-**What a session pushes.** `/push` sends the checkout's branch as the session left it, and the
-content of every commit on it is the session's. A person pressing it is the review; nothing here
+**What a session pushes.** `/push` sends the session's recorded branch as the session left it, and
+the content of every commit on it is the session's. A person pressing it is the review; nothing here
 inspects what a commit holds.
+
+**A connected sandbox and the repository.** On exe.dev, a session with the network on, an `Online`
+command and a `setup` can each push to the repository without `/push`, [for the reason
+above](#on-exedev-the-network-is-the-credential). Nothing filters the network by host, so the
+network switch is the whole of the control.
 
 **A session on `EVERYTHING`.** It binds `/` read-write and can read `config.yaml` and the store. That
 is what choosing it means and the card says so.

@@ -2588,6 +2588,17 @@ def command_block(ran: Command) -> Element:
                     *(
                         (
                             span(
+                                cls="ran__online",
+                                attrs={"title": "This ran with the network on, so it could reach the repository"},
+                                children="online",
+                            ),
+                        )
+                        if ran.online
+                        else ()
+                    ),
+                    *(
+                        (
+                            span(
                                 cls="ran__took",
                                 attrs={"title": f"This took {elapsed(ran.result.took)}"},
                                 children=elapsed(ran.result.took),
@@ -4488,14 +4499,17 @@ def plugin_answers(plugins: Sequence[Enrolled]) -> tuple[Answer, ...]:
     )
 
 
-def sending_answers(returning: bool, answering: bool, runs_in: str | None) -> tuple[Answer, ...]:
+def sending_answers(
+    returning: bool, answering: bool, runs_in: str | None, connected: bool = False
+) -> tuple[Answer, ...]:
     """
     Everything that can happen to what you typed, other than the thing Send already does.
 
     `runs_in` is where a command would run, said in the sentence over the box because the box is the
     one place the branch has to be legible: a commit typed there lands on it, and `Push` sends it.
     Nothing where the session has nowhere to run one, which is also what leaves `Run` and `Push` out
-    of the menu.
+    of the menu. `connected` is whether the session's commands already have the network, which is
+    what leaves `Online` out: with it on, `Run` is already that.
 
     **Declared once and rendered three times**: as a row in the menu, as the button the box shows
     once it is in that answer's mode, and as the sentence above the box saying what will happen. The
@@ -4505,8 +4519,8 @@ def sending_answers(returning: bool, answering: bool, runs_in: str | None) -> tu
     Ordered by how far the text travels: waiting for the next turn keeps it here and merely later,
     `Forget` keeps it here and drops what the model was told, a `Handoff` keeps it here and has the
     session write down what the model should be told instead, `Parent` reaches the conversation this
-    one came out of, `Run` is not a message at all, `Push` takes nothing from the box and reaches the
-    repository, and `Keep` sends it nowhere.
+    one came out of, `Run` is not a message at all, `Online` is `Run` that can reach past the machine,
+    `Push` takes nothing from the box and reaches the repository, and `Keep` sends it nowhere.
 
     **Nothing here forks.** A fork happens at a turn boundary through the link on a rule, where what
     it plants at is settled; an answer that forked the end of a live conversation was the same as
@@ -4556,8 +4570,19 @@ def sending_answers(returning: bool, answering: bool, runs_in: str | None) -> tu
         *(
             (
                 dispatched(
+                    Disposition.ONLINE,
+                    f"Run it in {runs_in} with the network on, where it can reach the repository as you",
+                    staying=True,
+                ),
+            )
+            if runs_in is not None and not connected
+            else ()
+        ),
+        *(
+            (
+                dispatched(
                     Disposition.PUSH,
-                    f"Push the branch checked out in {runs_in} to its repository, as you",
+                    f"Push the session's branch in {runs_in} to its repository, as you",
                     demands=False,
                 ),
             )
@@ -4719,6 +4744,7 @@ def composer(
     returning: bool = False,
     answering: bool = False,
     runs_in: str | None = None,
+    connected: bool = False,
     above: Placed = None,
     identified: str | None = None,
     plugins: Sequence[Enrolled] = (),
@@ -4760,7 +4786,7 @@ def composer(
     commit or push reads which branch it lands on, now that nothing under the box says. Nothing else
     is needed to gate the mode: the script can only put the box into a mode the server drew a button
     for, so a page for a session with no repository has no run mode to enter and the two cannot
-    drift.
+    drift. `connected` is whether those commands already have the network; see `sending_answers`.
 
     **Everything that is not the box sits above it, and nothing sits under it.** The composer is the
     bottom of the page, so a row appearing anywhere in its column pushes everything above that row
@@ -4772,7 +4798,9 @@ def composer(
     scroll past. What is above it is only what the next press depends on - what re-sending costs,
     and what the press will do - and what the session *is* stands in the rail; see `about_card`.
     """
-    answers = (*sending_answers(returning, answering, runs_in), *plugin_answers(plugins)) if continuing else ()
+    answers = (
+        (*sending_answers(returning, answering, runs_in, connected), *plugin_answers(plugins)) if continuing else ()
+    )
     driving = (
         {
             "hx-post": action,
@@ -5379,6 +5407,7 @@ def session_page(
                             # Only where there are files to run in. A session with no repository has
                             # no worktree, so `Run` would be an offer with nowhere to honour it.
                             runs_in=runs_in(showing),
+                            connected=showing.chosen is not None and showing.chosen.isolation.network,
                             # Above the box, where the mode sentence already is, and above that
                             # sentence: this is a standing fact about the conversation and that is
                             # what the next press does, so the transient one sits closest to the

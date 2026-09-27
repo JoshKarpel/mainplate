@@ -466,12 +466,28 @@ class Disposition(Enum):
 
     Recorded and not told, so nothing here reaches the model. See the key scheme."""
 
-    PUSH = "push"
-    """`Service.push`, which pushes the branch this session's checkout is on to its repository.
+    ONLINE = "online"
+    """`Service.run` with the network on, for a session whose commands otherwise have it off.
 
-    The one thing `RUN` cannot do, because a push needs the person's credential and nothing that
-    holds one may read the checkout's configuration. The branch crosses into the store and the store
-    pushes it, never forced, and what came of it is recorded where a command's would be.
+    The same sandbox and the same checkout as `RUN`, with the one axis flipped for one command: a
+    session kept offline still needs `npm install` or `git fetch` from a mirror now and then, and
+    the person typing is the one who decides that. Offered only where the network is off, since
+    with it on `RUN` already has it.
+
+    **What it gives up is the push gateway, for that command.** On a forge where being on the
+    network is the credential, a command run online can push to the repository, force included,
+    without going through `PUSH`, and runs whatever the checkout's configuration names while it
+    can. That is the person's call to make, per command, and the record says it ran online so the
+    page keeps saying so."""
+
+    PUSH = "push"
+    """`Service.push`, which pushes the branch this session recorded to its repository.
+
+    The recorded branch and not whatever the checkout's `HEAD` is on, so what moves is the branch
+    the page names. The one thing `RUN` cannot do in a session with the network off, because a push
+    needs the person's credential and nothing that holds one may read the checkout's configuration.
+    The branch crosses into the store and the store pushes it, never forced, and what came of it is
+    recorded where a command's would be.
 
     It takes nothing from the box: there is one branch to push and one place to push it, so a message
     typed beside it is refused rather than quietly dropped."""
@@ -516,7 +532,8 @@ Every word the console's own composer can answer to, which no plugin of the oper
 
 `here` is left out because it is never typed: it is what Send does, and Send is a button rather than
 a leader. Everything else is a row somebody can reach by `/word`, on *some* session - `run` and `push`
-only where there is a worktree, `parent` only on a fork, `next` only while a turn is being answered - and
+only where there is a worktree, `online` only where its network is off, `parent` only on a fork,
+`next` only while a turn is being answered - and
 the set is the union rather than what one session draws, since a leader that collided only while a
 turn was running would be a row that means two things some of the time.
 
@@ -1492,6 +1509,8 @@ class Command:
     entry: str
     text: str
     result: Result | None = None
+    online: bool = False
+    """Whether it ran with the network on in a session whose commands otherwise have it off."""
 
 
 type Block = Prose | Steering | Guidance | Command | Reasoning | ToolUse
@@ -2122,9 +2141,9 @@ def returned_step(held: records.Returned) -> Returned:
     return Returned(outcome="success", content=said, metadata=held.metadata)
 
 
-def recorded_command(said: str) -> dict[str, object]:
-    """What the person ran, as the JSON-native value the store's codec will take."""
-    return records.Command(said=said).recorded()
+def recorded_command(said: str, *, online: bool = False) -> dict[str, object]:
+    """What the person ran, and whether the network was on for it, as the value the store's codec will take."""
+    return records.Command(said=said, online=online).recorded()
 
 
 def recorded_result(result: Result) -> dict[str, object]:
@@ -2173,7 +2192,7 @@ def ran_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) ->
         if key.startswith(answering):
             made += 1
         elif (was := said.get(key)) is not None:
-            ran.append((made, Command(entry=key, text=was.said, result=result_in(recorded, key))))
+            ran.append((made, Command(entry=key, text=was.said, result=result_in(recorded, key), online=was.online)))
     return tuple(ran)
 
 
@@ -2807,7 +2826,12 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     for waiting in queued_in(recorded, inbox, opened, listening=running is not None):
         if isinstance(waiting.what, records.Command):
             at = max(turn - 1, 0)
-            ran = Command(entry=waiting.key, text=waiting.what.said, result=result_in(recorded, waiting.key))
+            ran = Command(
+                entry=waiting.key,
+                text=waiting.what.said,
+                result=result_in(recorded, waiting.key),
+                online=waiting.what.online,
+            )
             panels.append(
                 Panel(turn=at, at=sum(1 for panel in panels if panel.turn == at), kind="command", blocks=(ran,))
             )
