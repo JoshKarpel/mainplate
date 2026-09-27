@@ -615,7 +615,21 @@ own network answer was keeping them from having.
 It shares the command box's monospace and heavier edge, and stays in its mode once a command has
 gone, for `Run`'s reasons.
 
+## Commit
+
+`/commit` runs `git commit` in the session's worktree with what was typed as the message. It is a
+shortcut and nothing more: [`Run`](#run) with the command written for you, quoted so an apostrophe or
+a second paragraph is still one argument, and recorded as that command, so the panel says exactly
+what ran and a reader could have typed it.
+
+**It commits what is staged and stages nothing.** What belongs in a commit is an opinion, and not
+this console's: the person stages with `Run`, the model stages with `bash`, or a plugin stages on
+their behalf, and each of those is somebody's choice to make. Nothing staged is git's own refusal,
+recorded as the result like any command's. The snapshots the console takes before each request are
+the console's own bookkeeping and have nothing to do with what is committed.
+
 ## Push
+
 
 `/push` sends the branch the session *recorded* to its repository, under the same name. That is
 `Choice.branch`, the one the sentence over the box names, and never whatever the checkout's `HEAD`

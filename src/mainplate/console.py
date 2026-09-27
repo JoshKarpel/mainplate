@@ -46,6 +46,7 @@ from mainplate.conversation import OUTPUT_OVERRIDE_FIELD
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
+from mainplate.conversation import commit_command
 from mainplate.conversation import parse_disposition
 from mainplate.pages import PLUGIN_LEADER
 from mainplate.pages import SHAPE_FIELD
@@ -1077,6 +1078,12 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
                     422, refusal_page(LINKS, 422, f"session {session} has no files to run a command in")
                 )
             await service.run(session, sending.said, online=sending.where is Disposition.ONLINE)
+            return await redrawn(service, session, reader)
+        case Disposition.COMMIT:
+            # A `RUN` of the command written for the person, refused where `RUN` is for its reason.
+            if not found.runnable:
+                return page_response(422, refusal_page(LINKS, 422, f"session {session} has no files to commit in"))
+            await service.run(session, commit_command(sending.said))
             return await redrawn(service, session, reader)
         case Disposition.PUSH:
             # Refused rather than dropped where something was typed, because a message sent under the

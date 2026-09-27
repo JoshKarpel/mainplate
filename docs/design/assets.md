@@ -128,6 +128,33 @@ carrying a rail is still *one* grid track there, and whether the narrow shape be
 three columns stop fitting. The second is the direct guard on a sidebar track coming back, which a
 second query would reintroduce, and it reports that rather than one of the ways it shows.
 
+### Putting a column away, and how wide the conversation is read
+
+**On a wide window each side column can be put away, and the conversation's width can be dragged.**
+Both are the reader's and are kept per browser, in `localStorage`, because what fits is a fact about
+the screen and not about the person; both are pinned on `<html>` before the first paint, for the
+theme's reason, so a page opened with the list away never draws it and takes it back.
+
+A column put away is a strip the width of the chevron that brings it back, standing on the column's
+inner edge in both states. A strip rather than the narrow shape's drawer, because a drawer needs a
+clasp to stand somewhere, and on a wide window the only places are over the conversation's corners,
+which is the argument above against floating clasps. Each column's width is one custom property
+the grid reads, so two columns out or away are four layouts and one rule each. The narrow block
+draws both columns as sheets behind clasps whatever this says, and draws no chevron.
+
+**The width is one value, `--column`, that the transcript and the message box both read**: the
+reader's `--reading` where they have dragged one and the measure where they have not, held to the
+room there is by `width: 100%`, so a width chosen on a wide screen is simply as wide as a narrower
+one allows, and nothing has to notice the window changing. The grip is the conversation's *left*
+edge, because the right one is the transcript's scrollbar, and it moves both edges at once since the
+column is centred; the arrows move it a step and Home or a double press puts the measure back. What
+is kept is the width the column was drawn at, so a drag past the edge of a wide screen keeps that
+screen's width rather than a number no screen showed. **The cost, stated:** past about ninety
+characters prose is harder to read, which is why the measure is still the default, and the grip is
+not drawn while a fork is being chosen, since the picker there is wider than the column and the
+grip would stand over its controls. `TestPuttingASideColumnAway` and
+`TestTheWidthTheConversationIsReadAt` are what fail when either goes.
+
 ## The document never scrolls, and every box between has to say so
 
 `.shell` is `100dvh` and nothing above it moves, so a page is a window with one thing scrolling

@@ -826,8 +826,8 @@ but the original beside the current.
 
 **`mainplate.js` records every toggle as the reader's decision, and what makes that true is that
 the server never changes its mind about a fold.** Where a fold starts is decided per kind and never
-per render: a read is shut and an edit is open whether or not either has come back, a command is
-open, a system prompt is away. So a morph delivering a result adds no `open` and removes none the
+per render: a call is shut whether or not it has come back, a command is open, a system prompt is
+away. So a morph delivering a result adds no `open` and removes none the
 reader did not set, and the
 only toggles left to record are presses. The script cannot tell a morph's toggle from a reader's,
 and does not try; a render whose answer moved between two states of the same fold would be recorded
@@ -837,15 +837,12 @@ turn of twenty reads was twenty open boxes. A call still out is drawn as its too
 the working mark in its summary saying it is out and [the subject beside its
 name](#what-a-folded-call-says) saying what it is about. `TestWatchingATurnArrive` pins it.
 
-**A `create` is drawn open and every other call shut.** What a reader watching a turn is watching for
-is what the model is doing to the repository, which is the new file a `create` made; what a read
-brought back or a command said, and an edit's operations and its reply, are context they reach for
-when they want to check the work. An `edit` used to be open too, for its diff, and is shut now
-because that diff moved: the whole batch's diff stands below the panel, covering every tool it ran
-at once, so an edit's own diff is the fine print a reader opens a call to see. Decided by the tool
-alone, for the reason above: a call drawn shut while it was out and open once its diff landed would
-be a default that moved, and the morph delivering the diff would be recorded as the reader opening
-it.
+**Every call is drawn shut.** What a reader watching a turn is watching for is what the model is doing
+to the repository, and that is [the batch's diff](#the-batchs-diff) below the panel, which covers an
+`edit`, a `create` and a `bash` at once; what a read brought back or a command said, and a call's
+own diff or new file, are the fine print a reader opens a call to check. The same for every tool and
+every state, for the reason above: a call drawn shut while it was out and open once it landed would
+be a default that moved, and the morph delivering it would be recorded as the reader opening it.
 
 **A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
 working, on its own panel, and it is the model's call, so a second panel of dots under it says the
@@ -994,6 +991,51 @@ an edit's diff draws, one gutter width across the whole block so the columns lin
 line the console writes, marked `said`, and a binary change, which has no lines to show, is left out.
 The whole block draws nothing where the two trees are the same, which is the common case for a turn
 that read more than it wrote.
+
+**It is a fold, and not shaped as a call.** Drawn as a card like the calls above it, it read as a
+fourth call, when it is what the calls came to. So it stands under them as a labelled rule, `changed`
+and the counts, with the diff bare beneath it, and the rule is the fold's summary: the dock's fold-all
+reaches it and the script keeps a reader's toggle of it the way it keeps a call's. The counts are how
+many files and how many lines went in and out, which is what a reader scanning a turn wants without
+opening it.
+
+**The calls above it are one box, a row each**, because they are one thing: the calls the model made
+in one response, run at once, rather than separate cards that happen to be stacked. The stylesheet
+draws each run of calls that way from the blocks as they stand, so a call still opens in its own row. **It is drawn open unless it runs past `LONGEST_OPEN_DIFF` lines**, because a batch that
+merged a branch or ran a formatter over the tree changes thousands of lines nobody asked to read, and
+drawn open that is the whole transcript spent on them. That is not a default that moves: the diff is
+recorded once, whole, so it arrives at the size it will always be. **The cost, stated:** a long diff
+that *is* the point of the turn is one press further away than a short one, and where the line falls
+is a judgement, which is why it is one named number.
+
+### A line that does not fit
+
+**A block of lines scrolls sideways and never wraps.** A file, a diff and a shell command are text where a
+line is a line: wrapped, a diff's row breaks in two under its own gutter and an indented block loses
+the shape a reader reads it by. So `pre.lines` scrolls, one level in on its `code` for the reason
+[a fence does](#the-copy-button), and the `code` is a one-column grid whose column is the longest
+line's width, stretched to the block's where every line is shorter. That is what lets a changed
+line's wash run to the end of the longest line: a column of `minmax(100%, max-content)` reads as the
+same thing and never grows, since a grid of definite width has no free space to grow a track into.
+What a tool said in prose, and a command's output, still wrap, since a log line cut off at the
+block's edge hides the half of it that says what went wrong.
+
+**A block whose lines do not fit takes a `focus` button that opens it on its own, as wide as the
+window.** The
+reading measure is 46rem, and a diff's gutter plus a line of real code outgrows it. The room beside
+the measure would be the obvious place to widen into, and at the widths a laptop has there is none:
+the transcript fills its column between the list and the rail up to about 1400px, and it is the
+scroll container, so a block let wider than it is clipped. So the press opens a modal `<dialog>`
+over everything, holding a copy of the block as it was when pressed, and Escape, a press on the
+backdrop, or its own `close` put it away. A copy rather than the block moved, because the block is
+the server's markup and a morph would go looking for it; the copy is sound because a file, a diff or
+a fence does not change under a later render. **The cost, stated:** the dialog is modal, so the
+conversation cannot be scrolled beside it, and it carries no copy button of its own.
+
+The button is seated where the block overflows *now*, which is a measurement rather than anything
+the markup says, so it is taken again after every swap, when a fold toggles, when the column
+changes width, and once the face has loaded. A phone is offered none, since the window there is barely
+wider than the block already is.
 
 ## The line a shut panel stands for
 

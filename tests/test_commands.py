@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -30,6 +31,7 @@ from mainplate.conversation import SETUP_ENVIRONMENT_KEY
 from mainplate.conversation import Command
 from mainplate.conversation import Panel
 from mainplate.conversation import Result
+from mainplate.conversation import commit_command
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import parse_result
@@ -730,6 +732,79 @@ class TestThroughTheConsole:
 
         assert answer.status == 422
         assert recorded_command(PUSHED) not in (await running.checkpointer.load(session)).values()
+
+
+class TestCommittingThroughTheConsole:
+    """
+    `/commit`, which is a `Run` of `git commit` with the box as the message: a shortcut that commits
+    what is staged and stages nothing. What git did is read off the recorded result, which is what a
+    reader sees too, rather than by running git against the worktree from out here.
+    """
+
+    MESSAGE = "Scroll a long line inside its block\n\nIt's the block that scrolls, and never the page."
+
+    @pytest.fixture
+    def app(self, running: Service) -> ASGIApp:
+        return build_app(already(running))
+
+    async def ran(self, app: ASGIApp, running: Service, session: str, said: str, disposition: str) -> Result:
+        async with calling(app) as caller:
+            answer = await caller.post(f"/sessions/{session}/messages", {"prompt": said, "disposition": disposition})
+        assert answer.status == 200
+        recorded = await running.checkpointer.load(session)
+        wanted = recorded_command(commit_command(said) if disposition == "commit" else said)
+        entry = next(key for key, held in recorded.items() if held == wanted)
+        return await settled(running, session, entry)
+
+    async def test_what_is_staged_is_committed_with_the_box_as_its_message(
+        self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+        staged = await self.ran(app, running, session, "echo scrolled > scrolled.txt && git add scrolled.txt", "run")
+        assert staged.status == 0, staged.output
+
+        committed = await self.ran(app, running, session, self.MESSAGE, "commit")
+
+        assert committed.status == 0, committed.output
+        assert "Scroll a long line inside its block" in committed.output
+        assert "1 file changed" in committed.output
+
+    async def test_nothing_staged_is_gits_own_refusal_and_nothing_is_staged_for_you(
+        self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        session = await planted(running, workspaces, on_fixture)
+        unstaged = await self.ran(app, running, session, "echo stray > stray.txt", "run")
+        assert unstaged.status == 0, unstaged.output
+
+        committed = await self.ran(app, running, session, "Commit the stray file", "commit")
+
+        assert committed.status != 0
+        assert "stray.txt" in committed.output, "git names the file it was not told to commit"
+
+    async def test_the_menu_offers_it_where_there_are_files_and_a_session_without_refuses_it(
+        self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        with_files = await planted(running, workspaces, on_fixture)
+        without = await started(running, "hello", replace(DEFAULT_CHOICE, repository=None))
+
+        async with calling(app) as caller:
+            offered = await caller.get(f"/sessions/{with_files}")
+            plain = await caller.get(f"/sessions/{without.id}")
+            refused = await caller.post(
+                f"/sessions/{without.id}/messages", {"prompt": "a message", "disposition": "commit"}
+            )
+
+        assert 'value="commit"' in offered.text
+        assert 'value="commit"' not in plain.text
+        assert refused.status == 422
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["plain", "it's quoted", 'a "double" one', "several\n\nlines", "$(touch pwned) `and` $HOME"],
+)
+def test_a_commit_message_is_one_argument_whatever_it_holds(message: str) -> None:
+    assert shlex.split(commit_command(message)) == ["git", "commit", "-m", message]
 
 
 class TestStartingSomewhereThroughTheForm:

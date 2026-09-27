@@ -8,9 +8,12 @@
 # static page cannot show - the sidebar reordering as you click between branches, a fork actually
 # being made, the rail projecting onto a transcript that came from a store.
 #
-# Idempotent, and deliberately not destructive: it skips a session already in the index rather than
-# rewriting one, so running it twice does nothing and running it against a database that has real
-# conversations in it adds to them without touching what is there.
+# It replaces its own sessions and nothing else: every fixture's session is taken out of the index
+# and its records discarded, then planted again from the table, so a changed fixture reaches the demo
+# on the next run without the database or the server being restarted. A session that is not one of
+# the fixtures' ids is never touched, so running it against a database with real conversations in it
+# leaves them as they were. The page a reader has open on a replaced session is stale until it is
+# loaded again, since nothing tells a live connection that its session was rewritten underneath it.
 #
 # Every fixture is *settled*, and that is the table's rule rather than this script's: a turn left
 # unanswered would be a page reading as answered by nothing, and were a worker ever to pick one up
@@ -51,10 +54,23 @@ DEFAULT_DATABASE = Path("mainplate-demo.db")
 LEASE = timedelta(minutes=10)
 
 
-async def plant(service: Service, fixture: Fixture) -> bool:
-    """One session, or nothing at all if the index already has it."""
-    if await read_session(service.database, fixture.session.id) is not None:
+# The console never takes a session out of its index, since a conversation ends by being archived,
+# so there is no function for it beside `enrol` and this is written here instead: a way to delete a
+# session is something the console would then be tempted to use.
+UNENROL = "DELETE FROM sessions WHERE id = ?"
+
+
+async def discard(service: Service, session: str) -> bool:
+    """Take one session out of the index and forget everything recorded under it, if it was there."""
+    if await read_session(service.database, session) is None:
         return False
+    await service.durable.delete(session)
+    await service.database.run(lambda connection: connection.execute(UNENROL, (session,)))
+    return True
+
+
+async def plant(service: Service, fixture: Fixture) -> None:
+    """One session, from nothing."""
     await enrol(service.database, fixture.session)
     # The choice as `Fixture.of` settled it against the row, which is where the two rules
     # `Service.start` applies are applied to a fixture: writing the checkpoint directly bypasses the
@@ -78,16 +94,16 @@ async def plant(service: Service, fixture: Fixture) -> bool:
     await service.checkpointer.supply(fixture.session.id, REPOSITORY_PLUGINS_KEY, recorded_registration(()))
     for key, value in fixture.checkpoint.items():
         await service.checkpointer.supply(fixture.session.id, key, value)
-    return True
 
 
 async def seed(database: Path) -> None:
     async with open_store(database, LEASE, Catalogues(current=CATALOGUE)) as service:
         for fixture in FIXTURES:
-            wrote = await plant(service, fixture)
+            replaced = await discard(service, fixture.session.id)
+            await plant(service, fixture)
             session = fixture.session
             origin = f" (forked from turn {session.forked.turn})" if session.forked else ""
-            print(f"  {'wrote  ' if wrote else 'skipped'} {session.id[:12]}… {session.title}{origin}")
+            print(f"  {'replaced' if replaced else 'wrote   '} {session.id[:12]}… {session.title}{origin}")
     print(f"\n{database} is ready. `just demo` serves it; the fixtures are on {CATALOGUE.default.endpoint}.")
 
 
