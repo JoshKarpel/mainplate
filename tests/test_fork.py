@@ -242,12 +242,13 @@ class TestWhatABranchInherits:
 
 
 class TestArrangingTheTree:
-    def branch(self, name: str, parent: str | None = None, turn: int = 0) -> Session:
+    def branch(self, name: str, parent: str | None = None, turn: int = 0, archived: bool = False) -> Session:
         return Session(
             id=name,
             created_at=WHEN,
             title=name,
             forked=None if parent is None else Origin(session=parent, turn=turn),
+            archived=WHEN if archived else None,
         )
 
     def test_a_session_with_no_origin_sits_at_the_root(self) -> None:
@@ -274,6 +275,29 @@ class TestArrangingTheTree:
         orphan = self.branch("orphan", "long-deleted")
 
         assert arrange([orphan]) == ((orphan, 0),)
+
+    def test_an_active_branch_of_an_archived_parent_leads_the_list(self) -> None:
+        parent = self.branch("parent", archived=True)
+        child = self.branch("child", "parent")
+        assert arrange([child, parent]) == ((child, 0), (parent, 0))
+
+    def test_an_archived_branch_of_an_active_parent_follows_all_active_rows(self) -> None:
+        parent = self.branch("parent")
+        child = self.branch("child", "parent", archived=True)
+        other = self.branch("other")
+        assert arrange([parent, child, other]) == ((parent, 0), (other, 0), (child, 0))
+
+    def test_branches_stay_nested_within_their_status_group(self) -> None:
+        active = self.branch("active")
+        active_child = self.branch("active-child", "active")
+        archived = self.branch("archived", archived=True)
+        archived_child = self.branch("archived-child", "archived", archived=True)
+        assert arrange([archived, archived_child, active, active_child]) == (
+            (active, 0),
+            (active_child, 1),
+            (archived, 0),
+            (archived_child, 1),
+        )
 
 
 class TestSayingWhatCarriesOver:

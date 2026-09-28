@@ -258,9 +258,10 @@ class Session:
     the inbox rows is this. It is the store's clock and not the console's, which is why `created_at`
     beside it is the other kind of value and the two are only compared, never subtracted.
 
-    It is what the list is ordered by, because a conversation somebody is in is the one they are
-    looking for, and a creation date puts a session worked in all week under everything started
-    since. A fork copies its parent's prefix at the moment of forking, so a fresh fork counts as
+    It orders sessions within their archive status in the list, because a conversation somebody is
+    in is the one they are looking for, and a creation date puts a session worked in all week under
+    everything started since.
+    A fork copies its parent's prefix at the moment of forking, so a fresh fork counts as
     written to then, which is when somebody did act on it.
     """
 
@@ -488,7 +489,7 @@ async def rename(database: Database, session: str, title: str) -> None:
 
 async def read_sessions(database: Database) -> tuple[Session, ...]:
     """
-    Every session, the one most recently written to first, which is the order a chat console reads in.
+    Every active session, then every archived one, newest message first within each group.
 
     Ordered here rather than in the statement because what orders a row is `Session.latest`, which
     is one moment or the other, and saying which in SQL as well would be the same rule written twice.
@@ -500,7 +501,7 @@ async def read_sessions(database: Database) -> tuple[Session, ...]:
     return tuple(
         sorted(
             (parse_session(row) for row in rows),
-            key=lambda session: (session.latest, session.created_at, session.id),
+            key=lambda session: (session.archived is None, session.latest, session.created_at, session.id),
             reverse=True,
         )
     )
