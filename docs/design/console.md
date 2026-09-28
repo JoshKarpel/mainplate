@@ -180,20 +180,29 @@ empty page between its title and what it says: a change to the whole transcript'
 one control. The permalink gives up its own `margin-left: auto` only where the button is there to
 take it over, so a page rendered with the script absent still has it flush right.
 
+## Renaming a session
+
+The session card in the rail, and the settings step before there is a rail, hold a plain form to
+rename the session. A press redirects to the session page, so its tab title and list row are read
+again from the index. The title belongs only to that index; changing it neither edits the
+checkpoint nor changes what the model has heard. The list's token includes a title revision so a
+rename also redraws the rows on other open pages. The cost is a small index write and one page
+reload for the reader who pressed it.
+
 ## The session list
 
-**The list is ordered by when a session was last written to, not by when it was started**, because
-the conversation somebody is in is the one they are looking for, and a creation date puts a session
-worked in all week under everything started since. The moment is read rather than recorded: the
-store stamps every checkpoint row as it files it, so the newest stamp on a session's inbox is the
-last thing said to it, and a session nobody has written to yet is dated from its making. The row
-prints the moment it is ordered by, with both moments in its title, since a list sorted by one date
-and labelled with another reads as unsorted. The cost is that the order is the tree's: a branch
-worked in this morning sits under what it branched from rather than at the top, and siblings are
-what the moment orders. The clock is the store's and not the console's, which is why the two are
-compared and never subtracted, and why a test about the order writes the stamps rather than racing
-them. An answer arriving moves no row, since nobody said anything; what says an answer arrived is the
-word below.
+**Active sessions precede archived sessions; each group is ordered by when a session was last
+written to, not by when it was started**, because the conversation somebody is in is the one they
+are looking for, and a creation date puts a session worked in all week under everything started
+since. The moment is read rather than recorded: the store stamps every checkpoint row as it files
+it, so the newest stamp on a session's inbox is the last thing said to it, and a session nobody has
+written to yet is dated from its making. The row prints that moment, with both moments in its title.
+The cost is that the order is the tree's within each group: a branch worked in this morning sits
+under what it branched from rather than at the top. A branch whose parent has a different archive
+status becomes a root in its own group, and still names its parent on the row. The clock is the
+store's and not the console's, which is why the two are compared and never subtracted, and why a
+test about the order writes the stamps rather than racing them. An answer arriving moves no row,
+since nobody said anything; what says an answer arrived is the word below.
 
 **A row says `unread` when its session has recorded something since anybody looked at it.** "Recorded
 something" is the newest row in the session's checkpoint that is not in its inbox - an answer, a

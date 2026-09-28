@@ -5,12 +5,8 @@
 # nothing answers "what sessions are there". So an index is the application's to keep, and this
 # is it.
 #
-# It holds a title as well as an id, which is worth saying is *not* the denormalization it looks
-# like. A session is named after the first thing said in it, and that is written once, by the
-# same handler that writes this row, at the same moment; nothing later changes it. What would
-# drift is a copy of something that changes, and this is a copy of something that cannot. The
-# alternative is loading every session's whole checkpoint to render a sidebar, which is the
-# entire conversation history of every session on every page.
+# The title is owned by this index, not copied from a checkpoint. It can be named on
+# creation, inferred from the first message, or changed later without touching what was said.
 #
 # It lives in the store's own SQLite file, deliberately. That file is the whole datastore, so a
 # statement here and a checkpoint write reach the same tables, which is what would let a later
@@ -19,12 +15,10 @@
 #
 # It is also what lets a read here reach *into* a checkpoint rather than copying out of one. A
 # session's repository is recorded in its `choice`, and a checkpoint is a row per key rather than
-# one value, so one join reads that one small row per session and this table stays the settled
-# facts it holds. A column copying something already recorded would be the second copy the whole
-# console is built to avoid.
+# one value, so one join reads that one small row per session. A column copying something
+# already recorded would be the second copy the console is built to avoid.
 #
-# `Tending` is one of two things here that are *not* settled, and it is not that second copy either:
-# it has no other home. A session's own settings have to be mutable to be settings at all, and the
+# `Tending` has no other home. A session's own settings have to be mutable to be settings at all, and the
 # two places this console otherwise keeps things both refuse them - the checkpoint keeps the value a
 # key was first given, so a setting saved twice would keep its first answer for ever, and
 # `localStorage` is in a browser where the worker that reads this may be another process entirely.
@@ -114,6 +108,7 @@ ADDED = (
             "UPDATE sessions SET seen_seq = (SELECT max(seq) FROM workflow_checkpoint WHERE workflow = sessions.id)",
         ),
     ),
+    ("title_revision", ("ALTER TABLE sessions ADD COLUMN title_revision INTEGER NOT NULL DEFAULT 0",)),
 )
 
 # Long enough that an id is not guessable, which matters because a session id *is* its URL: this
@@ -121,11 +116,10 @@ ADDED = (
 # another on a machine more than one person can reach.
 ID_BYTES = 16
 
-# How much of the opening line a session is named after. Cut here rather than at render time so
-# the row holds the name and the page holds no rule about how to make one.
+# The maximum length of a session title, applied to both inferred and chosen names.
 TITLE_LENGTH = 80
 
-# What the field naming a session is called on the form that creates one. Here rather than beside
+# What the field naming a session is called on forms that name one. Here rather than beside
 # the other posted field names in `conversation.py`, because those are *checkpoint* keys that a form
 # happens to share and this one is not: a title goes to the session index and never into what was
 # said. Named once so the page that renders the input and the handler that reads it cannot drift.
@@ -191,10 +185,7 @@ class Session:
     """
     The session and turn this one branched from, or nothing at all for one that began on its own.
 
-    Written once, when the fork is made, and never again. It is not a copy of anything that
-    changes: which session a fork came from is settled the moment it exists, exactly as the title
-    is, so this is the same kind of fact the title already is and not the denormalization it
-    resembles.
+    Written once when the fork is made: its origin cannot change, even when its title does.
     """
 
     repository: str | None = None
@@ -267,9 +258,10 @@ class Session:
     the inbox rows is this. It is the store's clock and not the console's, which is why `created_at`
     beside it is the other kind of value and the two are only compared, never subtracted.
 
-    It is what the list is ordered by, because a conversation somebody is in is the one they are
-    looking for, and a creation date puts a session worked in all week under everything started
-    since. A fork copies its parent's prefix at the moment of forking, so a fresh fork counts as
+    It orders sessions within their archive status in the list, because a conversation somebody is
+    in is the one they are looking for, and a creation date puts a session worked in all week under
+    everything started since.
+    A fork copies its parent's prefix at the moment of forking, so a fresh fork counts as
     written to then, which is when somebody did act on it.
     """
 
@@ -477,28 +469,27 @@ async def enrol(database: Database, session: Session) -> None:
     )
 
 
-async def rename(database: Database, session: str, title: str) -> None:
-    """
-    Name a session after the first thing said in it, which happens once and never again.
-
-    **The one write to this column, and it is still a write of something settled.** A session is
-    named when its first message arrives rather than when it is created, because creating one no
-    longer carries a message; nothing renames it afterwards, so what the index holds is a copy of
-    something that cannot change, which is the whole of why it may hold a title at all.
-
-    Guarded on the column still being empty rather than on a read beside it, so two messages posted
-    at once cannot have the second one win: the statement is the check.
-    """
+async def name_if_untitled(database: Database, session: str, title: str) -> None:
     await database.run(
         lambda connection: connection.execute(
-            "UPDATE sessions SET title = ? WHERE id = ? AND title = ''", (title, session)
+            "UPDATE sessions SET title = ?, title_revision = title_revision + 1 WHERE id = ? AND title = ''",
+            (title, session),
+        )
+    )
+
+
+async def rename(database: Database, session: str, title: str) -> None:
+    await database.run(
+        lambda connection: connection.execute(
+            "UPDATE sessions SET title = ?, title_revision = title_revision + 1 WHERE id = ? AND title != ?",
+            (title, session, title),
         )
     )
 
 
 async def read_sessions(database: Database) -> tuple[Session, ...]:
     """
-    Every session, the one most recently written to first, which is the order a chat console reads in.
+    Every active session, then every archived one, newest message first within each group.
 
     Ordered here rather than in the statement because what orders a row is `Session.latest`, which
     is one moment or the other, and saying which in SQL as well would be the same rule written twice.
@@ -510,7 +501,7 @@ async def read_sessions(database: Database) -> tuple[Session, ...]:
     return tuple(
         sorted(
             (parse_session(row) for row in rows),
-            key=lambda session: (session.latest, session.created_at, session.id),
+            key=lambda session: (session.archived is None, session.latest, session.created_at, session.id),
             reverse=True,
         )
     )
@@ -548,17 +539,13 @@ async def saw(database: Database, session: str) -> None:
     await database.run(lambda connection: connection.execute(SAW, {"session": session}))
 
 
-# Whether anything about the list has changed, in three numbers nothing reads as a position: the
-# highest row the store has filed for anybody, how many sessions there are, and how far every look
-# has got in total. The sum rather than the highest mark, because a look at any one session moves
-# the sum and only a look at the furthest-on session would move the maximum. `max(seq)` is the
-# table's primary key, so the first is an index endpoint and not a scan. The index's half of the
-# list's token; `Service.listing_token` reads it beside the store's half, which is what the worker
-# is doing, since the row draws that too.
+# The title revision covers the one index value that can change without a checkpoint
+# write. Summing it makes a rename visible to every page's session-list stream.
 LISTING = """
 SELECT (SELECT max(seq) FROM workflow_checkpoint),
        count(*),
-       coalesce(sum(seen_seq), 0)
+       coalesce(sum(seen_seq), 0),
+       coalesce(sum(title_revision), 0)
   FROM sessions
 """
 
