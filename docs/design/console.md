@@ -180,6 +180,15 @@ empty page between its title and what it says: a change to the whole transcript'
 one control. The permalink gives up its own `margin-left: auto` only where the button is there to
 take it over, so a page rendered with the script absent still has it flush right.
 
+## Renaming a session
+
+The session card in the rail, and the settings step before there is a rail, hold a plain form to
+rename the session. A press redirects to the session page, so its tab title and list row are read
+again from the index. The title belongs only to that index; changing it neither edits the
+checkpoint nor changes what the model has heard. The list's token includes a title revision so a
+rename also redraws the rows on other open pages. The cost is a small index write and one page
+reload for the reader who pressed it.
+
 ## The session list
 
 **Active sessions precede archived sessions; each group is ordered by when a session was last

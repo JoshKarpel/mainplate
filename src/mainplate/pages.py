@@ -411,10 +411,7 @@ def opens(starts: bool) -> Attributes:
 # would make "a worktree's worktree" a sentence somebody has to parse.
 NEW_SESSION: Final = "New session"
 
-# What a session with no name of its own is called. Unreachable today, because every session is
-# named when it is created - after the box, or after its first message - and nothing renames one.
-# Kept as the answer to a row that has somehow lost its title, which is a database somebody edited
-# rather than a state this console produces.
+# A session created without a name is untitled until its first message arrives.
 UNTITLED: Final = "Untitled"
 
 # How much of a tree hash a rule prints. Git's own abbreviation length for a repository of any size,
@@ -480,6 +477,7 @@ class Links:
     fork: Reversible
     setup: Reversible
     press: Reversible
+    rename: Reversible
     archive: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
@@ -598,6 +596,9 @@ class Links:
         hold without knowing what a session enrolled.
         """
         return url_for(self.press, {"session": session})
+
+    def to_rename(self, session: str) -> str:
+        return url_for(self.rename, {"session": session})
 
     def to_archive(self, session: str) -> str:
         """Where the press that closes a session goes, which is a plain form post answered with a redirect."""
@@ -4308,6 +4309,27 @@ def plugin_id(qualified: str) -> str:
     return f"plugin-{qualified.replace(':', '-')}"
 
 
+def rename_card(links: Links, session: str, title: str) -> Element:
+    return form(
+        cls="rename",
+        attrs={"method": "post", "action": links.to_rename(session)},
+        children=[
+            label(attrs={"for": "session-title"}, children="Name"),
+            input_(
+                attrs={
+                    "id": "session-title",
+                    "type": "text",
+                    "name": TITLE_FIELD,
+                    "value": title,
+                    "maxlength": str(TITLE_LENGTH),
+                    "required": True,
+                }
+            ),
+            button(attrs={"type": "submit"}, children="Rename"),
+        ],
+    )
+
+
 def archive_card(links: Links, reader: Reader, session: str, archived: datetime | None) -> Element:
     """
     The one control that closes a session, or the fact that somebody already did.
@@ -4409,6 +4431,7 @@ def rail(
     links: Links,
     reader: Reader,
     session: str,
+    title: str,
     tended: Tending,
     plugins: Sequence[Enrolled] = (),
     *,
@@ -4490,6 +4513,7 @@ def rail(
                         children=[
                             div(cls="about__head", children="session"),
                             about,
+                            rename_card(links, session, title),
                             archive_card(links, reader, session, archived),
                         ],
                     ),
@@ -5838,6 +5862,7 @@ def session_page(
                 # the step is answered.
                 pane=[
                     setup_step(links, showing),
+                    rename_card(links, showing.session.id, showing.session.title),
                     archive_card(links, reader, showing.session.id, showing.session.archived),
                 ],
             ),
@@ -5906,6 +5931,7 @@ def session_page(
                     links,
                     reader,
                     showing.session.id,
+                    showing.session.title,
                     showing.session.tending,
                     plugins,
                     about=about_card(
@@ -6065,9 +6091,7 @@ def fork_page(
                             attachable(showing, reachable),
                             reference,
                             showing.chosen,
-                            # And no name to give: a fork's title is its parent's, because it
-                            # literally carries it - the title is what the first message says, and
-                            # the first message came across with the rest.
+                            # A fork begins with its parent's current title; it can be renamed later.
                         ),
                         div(
                             cls="forking__act",

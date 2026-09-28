@@ -3653,6 +3653,49 @@ mark.hit.current {
     gap: var(--space-2);
 }
 
+.rename {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.rename label {
+    color: var(--ink-faint);
+}
+
+.rename input {
+    min-width: 0;
+    flex: 1 1 9rem;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--sunk);
+    color: var(--ink);
+    font: inherit;
+}
+
+.rename button {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    cursor: pointer;
+}
+
+.rename button:hover,
+.rename button:focus-visible {
+    color: var(--mark);
+}
+
+.setup + .rename,
+.setup + .rename + .archive {
+    max-width: var(--wide);
+    margin: var(--gap) auto 0;
+}
+
 .about > .archive {
     margin-top: var(--space-1);
     padding-top: var(--space-2);
@@ -3748,12 +3791,6 @@ summary.archive__head {
     color: var(--mark);
 }
 
-/* Under the settings step, which has no rail to hold it: a session stuck on the step is exactly one
-   somebody may want to close. The step's own measure, so the two read as one column. */
-.setup + .archive {
-    max-width: var(--wide);
-    margin: var(--gap) auto 0;
-}
 
 /* The step between creating a session and typing into it: which of the plugins it declares to run.
    It stands alone in `main`, because a session being set up has no transcript to read, nothing to

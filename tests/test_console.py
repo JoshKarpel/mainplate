@@ -1124,6 +1124,44 @@ class TestWhatIsNewInTheList:
         assert found is not None
         assert len(found.session.title) <= TITLE_LENGTH
 
+    async def test_a_session_can_be_renamed_without_changing_its_conversation(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, "the first thing said")
+        before = await service.checkpointer.load(session)
+        async with calling(app) as caller:
+            page = await caller.get(f"/sessions/{session}")
+            assert f'action="/sessions/{session}/rename"' in page.text
+            token = await service.listing_token()
+            changed = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "  Another   name "})
+            assert changed.status == 303
+            assert changed.location == f"/sessions/{session}"
+            page = await caller.get(f"/sessions/{session}")
+        assert "<title>Another name</title>" in page.text
+        assert await service.checkpointer.load(session) == before
+        assert await service.listing_token() != token
+        assert (await service.listed())[0].title == "Another name"
+
+    @pytest.mark.parametrize("given", ["", "  "])
+    async def test_a_blank_rename_is_refused(self, app: ASGIApp, service: Service, given: str) -> None:
+        session = await a_session(app, service, title="Keep this name")
+        async with calling(app) as caller:
+            response = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: given})
+        assert response.status == 422
+        assert (await service.listed())[0].title == "Keep this name"
+
+    async def test_a_rename_for_an_unknown_session_is_not_accepted(self, app: ASGIApp) -> None:
+        async with calling(app) as caller:
+            response = await caller.post(f"/sessions/{'f' * 32}/rename", {TITLE_FIELD: "New name"})
+        assert response.status == 404
+
+    async def test_a_chosen_rename_survives_a_later_message(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service, "first message")
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Chosen name"})
+            await caller.post(f"/sessions/{session}/messages", {"prompt": "later message"})
+        assert (await service.listed())[0].title == "Chosen name"
+
     async def test_the_new_session_page_offers_a_box_to_name_a_session(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
             answered = await caller.get(NEW_PAGE)
