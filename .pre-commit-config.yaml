@@ -4,8 +4,9 @@
 # first vendored htmx came to differ from every published build by one byte. The size guard steps
 # aside for the same files rather than raising its limit: a face is a megabyte for the coverage the
 # stylesheet explains and the diagram library is three and a half, loaded only when a drawing is
-# asked for, and a large file anywhere else in this repository is still an accident.
-exclude: ^src/mainplate/assets/.*(\.woff2|\.min\.js|-LICENSE\.txt|-OFL\.txt)$
+# asked for, and a large file anywhere else in this repository is still an accident. The compressed
+# copies `just vendor` writes beside each are the same bytes in another coding, and a megabyte too.
+exclude: ^src/mainplate/assets/.*(\.woff2|\.min\.js|-LICENSE\.txt|-OFL\.txt)(\.br|\.zst|\.gz)?$
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks

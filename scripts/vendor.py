@@ -13,23 +13,53 @@
 #
 # `tests/test_vendored.py` holds the copies on disk against the same table, with no network, which
 # is what makes an edit to a vendored file by hand a failing test rather than a quiet drift.
+#
+# Each file the server would compress is also written compressed, once per coding, under the
+# suffix the inventory reads a sidecar from, so a process start reads these rather than encoding
+# them. That is where the levels come from: brotli 11 takes six seconds over the diagram library
+# alone, which no start could pay, and ships an eighth less than the default a start would use.
+# They are derived bytes, so they carry no digest of their own; the suite decodes each one and
+# compares it with the file the digest does cover.
 
 from __future__ import annotations
 
 import hashlib
 import io
+import mimetypes
 import sys
 import tomllib
 import urllib.request
 import zipfile
+import zlib
 from collections.abc import Callable
+from collections.abc import Mapping
+from compression.zstd import CompressionParameter
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
+
+from without_asgi.compression import Compressor
+from without_asgi.compression import brotli_compressor
+from without_asgi.compression import gzip_compressor
+from without_asgi.compression import is_compressible
+from without_asgi.compression import zstd_compressor
 
 MANIFEST: Final = Path(__file__).with_name("vendored.toml")
 ASSETS: Final = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 TIMEOUT_SECONDS: Final = 300
+
+# The suffix the inventory looks for beside a file, and the compressor that writes it, each at the
+# top of its range. This runs only when somebody bumps a row, so the time a level costs is paid once
+# and never weighed against what the next release of a library makes it worth. Brotli names no
+# constant for its ceiling; 11 is it.
+SIDECARS: Final[Mapping[str, Callable[[], Compressor]]] = MappingProxyType(
+    {
+        ".br": lambda: brotli_compressor(11),
+        ".zst": lambda: zstd_compressor(CompressionParameter.compression_level.bounds()[1]),
+        ".gz": lambda: gzip_compressor(zlib.Z_BEST_COMPRESSION),
+    }
+)
 
 
 class Mismatch(RuntimeError):
@@ -89,6 +119,23 @@ def extracted(entry: Vendored, published: bytes) -> bytes:
         return archive.read(entry.member)
 
 
+def encodable(name: str) -> bool:
+    """Whether the server compresses a file of this name, which a face, already compressed, is not."""
+    content_type, _ = mimetypes.guess_type(name)
+    return content_type is not None and is_compressible(content_type.encode())
+
+
+def sidecars(name: str, data: bytes) -> dict[str, bytes]:
+    """`data` in every coding the server offers, by the suffix each is read from beside `name`."""
+    if not encodable(name):
+        return {}
+    return {suffix: compressed(data, make()) for suffix, make in SIDECARS.items()}
+
+
+def compressed(data: bytes, compressor: Compressor) -> bytes:
+    return compressor.compress(data) + compressor.flush()
+
+
 def vendor(entries: tuple[Vendored, ...], into: Path, fetch: Callable[[str], bytes] = fetched) -> None:
     """
     Every entry fetched and checked, then every one written: a wrong digest anywhere writes nothing.
@@ -101,8 +148,13 @@ def vendor(entries: tuple[Vendored, ...], into: Path, fetch: Callable[[str], byt
         if entry.url not in published:
             published[entry.url] = fetch(entry.url)
     checked = tuple((entry, verified(entry, extracted(entry, published[entry.url]))) for entry in entries)
-    for entry, data in checked:
+    encoded = tuple((entry, data, sidecars(entry.name, data)) for entry, data in checked)
+    for entry, data, beside in encoded:
         (into / entry.name).write_bytes(data)
+        # After the file, so each is the newer of the two: the inventory takes a sidecar older than
+        # its file to describe bytes the file no longer has, and compresses at startup instead.
+        for suffix, body in beside.items():
+            (into / f"{entry.name}{suffix}").write_bytes(body)
         where = entry.url if entry.member is None else f"{entry.member} in {entry.url}"
         print(f"{entry.name}  {entry.sha256}  {where}")
 

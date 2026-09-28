@@ -36,6 +36,7 @@ from without_durability.interfaces import Checkpointer
 from mainplate.conversation import Result
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
+from mainplate.processes import reaped
 from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
@@ -185,11 +186,22 @@ async def ran(said: str, running: Running, patience: timedelta, into: bytearray)
     except TimeoutError:
         kill(process)
         status = await process.wait()
+        # The drain was cancelled part-way, and `wait` closes no pipe: one paused on a full buffer
+        # never reads its end-of-file, and is collected later with its descriptor still held.
+        reaped(process)
         into.extend(f"\n[killed after {patience.total_seconds():.0f}s]\n".encode())
     except asyncio.CancelledError:
         # The console is stopping. Kill the group rather than leaving a build orphaned, and let the
         # cancellation carry on: what to record is the caller's, which is where the buffer is.
+        #
+        # Then close the pipes and wait for the exit, because a transport nobody finishes is collected
+        # later as a `ResourceWarning` raised into whatever is running then. The pipes are closed
+        # synchronously, so a second cancellation landing in the wait still leaves none open; the
+        # wait is what lets the subprocess transport see its exit and close itself before the loop
+        # it belongs to does. `aclose` cancels each task once, so the wait is not itself cancelled.
         kill(process)
+        reaped(process)
+        await process.wait()
         raise
     return Result(
         status=status,

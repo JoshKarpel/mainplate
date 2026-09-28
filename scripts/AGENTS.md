@@ -124,6 +124,12 @@ one wrong digest writes nothing rather than half, and a row with no digest has n
 is the one rule here, applied to every script and face alike; `tests/test_vendored.py` holds the
 copies on disk against the same table with no network, and refuses a `.js` or `.woff2` no row names.
 
+It also writes each file the server would compress in every coding the server offers, beside it and
+after it, at the top of each coding's range: that is compression paid once per bump rather than at
+every start, and the order matters because the inventory ignores a sidecar older than its file.
+`SIDECARS` is the one table of suffixes and levels, and `docs/hooks.py` reads it to leave them off
+the documentation site.
+
 Bumping one is editing the version in its URL, running the recipe, and recording the digest it
 refuses on once the file has been looked at, with the cooldown the resolver applies to a package: a
 week for a minor and a month for a major. Only zip archives are read, because that is what has been

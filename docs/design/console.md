@@ -837,6 +837,13 @@ turn of twenty reads was twenty open boxes. A call still out is drawn as its too
 the working mark in its summary saying it is out and [the subject beside its
 name](#what-a-folded-call-says) saying what it is about. `TestWatchingATurnArrive` pins it.
 
+**The dock records its decisions as it makes them, rather than waiting for their toggles.** A toggle
+arrives a task after the change that queued it, and a swap landing in that gap repaints every fold
+from the decisions recorded so far, which puts back the one the press just replaced; the late
+toggle then records the undone state. A turn streaming in is when that happens, and it is also when
+somebody reaches for fold-everything. The cost, stated: a summary pressed by hand is still recorded
+by its toggle alone, so it has the same gap for its one fold.
+
 **Every call is drawn shut.** What a reader watching a turn is watching for is what the model is doing
 to the repository, and that is [the batch's diff](#the-batchs-diff) below the panel, which covers an
 `edit`, a `create` and a `bash` at once; what a read brought back or a command said, and a call's

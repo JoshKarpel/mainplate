@@ -32,6 +32,7 @@ from typing import assert_never
 from without_asgi import STATIC_ASSET_HEADERS
 from without_asgi import ASGIApp
 from without_asgi import HttpScope
+from without_asgi import Inventory
 from without_asgi import Lifespan
 from without_asgi import Response
 from without_asgi import headers
@@ -123,6 +124,8 @@ from mainplate.snapshots import operator_identity
 # which is the correct behaviour there rather than something to disable.
 FORGES: Final[tuple[Forge, ...]] = (ExeDevGitHub(),)
 
+# Every file here is served, so it holds nothing but what a browser may fetch: the guidance for
+# editing these files is in the repository's `AGENTS.md`, where `inventory` never walks.
 ASSET_ROOT: Final = Path(__file__).parent / "assets"
 
 logger = logging.getLogger(__name__)
@@ -143,21 +146,29 @@ async def missing(service: Service, scope: HttpScope) -> Response:
     return page_response(404, refusal_page(LINKS, 404, f"no page at {scope.path}"))
 
 
-def build_router() -> Router[Service]:
+def served_assets() -> Inventory:
     """
-    Every route this server answers, in one trie, over an inventory walked once here.
+    Every file under `ASSET_ROOT`, walked and encoded once, as what the asset route answers from.
 
     `inventory` is not a directory mount: it walks the tree at this call and answers every later
     request out of the resulting mapping, so a request never contributes a filesystem path and
     there is no traversal to get wrong. The cost is the one in the name, that nothing may write
     into `assets/` while the process runs.
+
+    Separate from `build_app` because it is a value and the expensive part: every representation a
+    sidecar does not supply is compressed here, so a process that builds several apps builds this
+    once and hands it to each.
     """
-    assets = inventory(
+    return inventory(
         ASSET_ROOT,
         # The worker lives under the asset prefix but controls the whole console. The scope header is
         # read only for a service-worker script, so carrying it on the other static responses is inert.
         headers=headers.add(STATIC_ASSET_HEADERS, b"service-worker-allowed", b"/"),
     )
+
+
+def build_router(assets: Inventory) -> Router[Service]:
+    """Every route this server answers, in one trie."""
     return Router(
         routes=(*CONSOLE_ROUTES, static_files(ASSETS, assets)),
         fallback=handle(http_scope(), fn=missing),
@@ -520,7 +531,7 @@ def readying(durable: Durable, converse: Callable[[Run], Awaitable[Ended]]) -> C
     return answer
 
 
-def build_app(opening: Lifespan[Service]) -> ASGIApp:
+def build_app(opening: Lifespan[Service], assets: Inventory) -> ASGIApp:
     """
     The routes, over whatever supplies a `Service` for the life of the server.
 
@@ -528,7 +539,7 @@ def build_app(opening: Lifespan[Service]) -> ASGIApp:
     cannot tell whether a worker is running inside that block, so the same app serves a process
     that answers its own sessions and one that leaves them to another.
     """
-    return make_asgi_app(opening, http=build_router().dispatch)
+    return make_asgi_app(opening, http=build_router(assets).dispatch)
 
 
 async def serve(settings: Settings) -> None:
@@ -540,7 +551,7 @@ async def serve(settings: Settings) -> None:
         return open_console(settings, config, endpoints)
 
     try:
-        async with serving(build_app(opening), host=settings.host, port=settings.port):
+        async with serving(build_app(opening, served_assets()), host=settings.host, port=settings.port):
             await sleep_forever()
     except LifespanError as unstarted:
         raise DidNotStart(str(unstarted)) from unstarted

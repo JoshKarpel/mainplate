@@ -39,6 +39,7 @@ from playwright.async_api import Route
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
 from playwright.async_api import expect
+from without_asgi import Inventory
 from without_durability.interfaces import INBOX
 from without_http import serving
 
@@ -160,7 +161,7 @@ async def browser() -> AsyncIterator[Browser]:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple[str, Service]]:
+async def console(tmp_path: Path, catalogues: Catalogues, assets: Inventory) -> AsyncIterator[tuple[str, Service]]:
     """
     The real console on a real port, with the store it reads handed back beside it.
 
@@ -182,7 +183,7 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
         # never reached. It is supplied all the same and would fail loudly if it were, since a
         # console that quietly did nothing here would pass these tests while doing nothing.
         service = replace(opened, declaring=Declaring(speaking=Spawned(environ={})))
-        async with serving(build_app(already(service)), port=0) as server:
+        async with serving(build_app(already(service), assets), port=0) as server:
             yield f"http://{server.host}:{server.port}", service
 
 
@@ -1217,7 +1218,7 @@ class TestDrawingAFence:
 
     async def drawable(self, page: Page, gallery: str, kind: str) -> Locator:
         """The first fence of one drawable kind, drawn, with its button offering the text."""
-        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.goto(f"{gallery}/drawing.html", wait_until="load")
         pre = page.locator(f"pre:has(> code.language-{kind})").first
         await expect(pre.locator(".draw")).to_have_text("code", timeout=15_000)
         return pre
@@ -1910,6 +1911,28 @@ class TestWatchingATurnArrive:
         # Each back where the console put it, which for these two is not the same answer.
         await expect(call).not_to_have_attribute("open", "")
         await expect(reply).to_have_attribute("open", "")
+
+    async def test_a_swap_landing_before_the_press_is_recorded_does_not_undo_it(self, page: Page, gallery: str) -> None:
+        """
+        A press on the dock is followed by the `toggle` it queues, a task later, and a swap arriving in
+        between repaints every fold from what was decided before. Forced here in one task, which is
+        the order a turn streaming in produces now and then: shut after open, then a swap, and the
+        call has to stay shut.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        shut = await page.evaluate(
+            """async () => {
+                const fold = document.querySelector("details.tool");
+                const opened = new Promise((done) => fold.addEventListener("toggle", done, { once: true }));
+                document.querySelector('[data-fold="open"]').click();
+                await opened;
+                document.querySelector('[data-fold="shut"]').click();
+                document.dispatchEvent(new CustomEvent("htmx:after:swap"));
+                return !fold.open;
+            }"""
+        )
+        assert shut, "the swap put back the decision the press had just replaced"
+        await expect(page.locator("details.tool").first).not_to_have_attribute("open", "")
 
     async def test_the_settings_step_becomes_the_conversation_when_the_session_loads(
         self, page: Page, console: tuple[str, Service]
@@ -3026,7 +3049,9 @@ class TestWhereTheComposerSendsTo:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces) -> AsyncIterator[tuple[str, Service]]:
+async def working(
+    tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces, assets: Inventory
+) -> AsyncIterator[tuple[str, Service]]:
     """
     The console over a store with files, which is what a command needs somewhere to run in.
 
@@ -3035,7 +3060,7 @@ async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces
     real repository would put a clone and a worktree behind tests that never look at either.
     """
     async with open_store(tmp_path / "mainplate.db", LEASE, catalogues, workspaces) as service:
-        async with serving(build_app(already(service)), port=0) as server:
+        async with serving(build_app(already(service), assets), port=0) as server:
             yield f"http://{server.host}:{server.port}", service
 
 

@@ -25,6 +25,10 @@ The `app` fixture deliberately runs the console over a store with **no worker**,
 on a pending turn cannot race one. What the worker does is tested in `test_conversation.py`, a pass
 at a time.
 
+**A test that builds its own app hands it the session's `assets`** rather than calling
+`served_assets()`: the inventory is a value, and building it compresses every first-party asset, which
+paid per test was the largest single cost the suite had.
+
 **A test that wants a turn writes the two records a pass would**, which is the cursor saying which
 entry the turn took and the messages saying what came of it. The suites that run without a worker
 have a helper apiece for that (`taken` and `answered` in `test_console.py`, `taking` in

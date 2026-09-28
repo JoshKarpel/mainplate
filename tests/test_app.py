@@ -22,6 +22,7 @@ from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
+from without_asgi import Inventory
 
 from mainplate.agent import Wires
 from mainplate.app import build_app
@@ -64,7 +65,7 @@ async def loaded(caller: Any, service: Service, session: str) -> None:
 
 
 @pytest.mark.timeout(30)
-async def test_a_message_posted_to_the_console_is_answered_by_the_worker(database: Path) -> None:
+async def test_a_message_posted_to_the_console_is_answered_by_the_worker(database: Path, assets: Inventory) -> None:
     """
     The one test of the wiring: the console records, the queue delivers, and the worker answers.
 
@@ -94,7 +95,7 @@ async def test_a_message_posted_to_the_console_is_answered_by_the_worker(databas
     endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
 
     async with open_console(Settings(database=database), CONFIG, endpoints) as service:
-        async with calling(build_app(already(service))) as caller:
+        async with calling(build_app(already(service), assets)) as caller:
             started = await caller.post(
                 "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
             )
@@ -154,7 +155,9 @@ async def test_a_plugins_scratch_is_nowhere_the_model_can_write(database: Path) 
 
 
 @pytest.mark.timeout(30)
-async def test_a_session_the_provider_deferred_is_held_until_the_moment_it_named(database: Path) -> None:
+async def test_a_session_the_provider_deferred_is_held_until_the_moment_it_named(
+    database: Path, assets: Inventory
+) -> None:
     """
     The other end of a wait: the queue actually holding the delivery until then.
 
@@ -178,7 +181,7 @@ async def test_a_session_the_provider_deferred_is_held_until_the_moment_it_named
     endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
 
     async with open_console(Settings(database=database), CONFIG, endpoints) as service:
-        async with calling(build_app(already(service))) as caller:
+        async with calling(build_app(already(service), assets)) as caller:
             started = await caller.post(
                 "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
             )
@@ -208,7 +211,9 @@ async def unanswered(messages: list[ModelMessage], info: AgentInfo) -> ModelResp
 
 
 @pytest.mark.timeout(30)
-async def test_a_turn_of_more_than_one_request_is_carried_on_by_the_pass_after_it(database: Path) -> None:
+async def test_a_turn_of_more_than_one_request_is_carried_on_by_the_pass_after_it(
+    database: Path, assets: Inventory
+) -> None:
     """
     The other half of the wiring, and the one that fails silently: a pass ends mid-turn now.
 
@@ -236,7 +241,7 @@ async def test_a_turn_of_more_than_one_request_is_carried_on_by_the_pass_after_i
     endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
 
     async with open_console(Settings(database=database), CONFIG, endpoints) as service:
-        async with calling(build_app(already(service))) as caller:
+        async with calling(build_app(already(service), assets)) as caller:
             started = await caller.post(
                 "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
             )

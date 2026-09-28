@@ -227,3 +227,7 @@ __marimo__/
 # land beside the database by default. `just serve` and `just demo` name a database in this
 # directory, so they put this one here too.
 workspaces/
+
+# The compressed copies `just vendor` writes beside each vendored file are committed, whatever a
+# contributor's own excludes say about archives: a checkout without them compresses at every start.
+!src/mainplate/assets/*.gz

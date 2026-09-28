@@ -1,20 +1,37 @@
 from __future__ import annotations
 
+import gzip
 import io
 import zipfile
+from collections.abc import Callable
+from compression import zstd
 from pathlib import Path
 
+import brotli  # type: ignore[import-untyped]  # the bindings ship no types
 import pytest
 
+from mainplate.app import served_assets
 from scripts.vendor import ASSETS
+from scripts.vendor import SIDECARS
 from scripts.vendor import Mismatch
 from scripts.vendor import Vendored
 from scripts.vendor import digest
+from scripts.vendor import encodable
 from scripts.vendor import manifest
 from scripts.vendor import unverified
 from scripts.vendor import vendor
 
 VENDORED = manifest()
+
+# Every row the server compresses, which is every row with sidecars beside it.
+ENCODED = tuple(entry for entry in VENDORED if encodable(entry.name))
+
+# How each sidecar is read back, and the coding the inventory serves it as.
+DECODED: dict[str, tuple[Callable[[bytes], bytes], bytes]] = {
+    ".br": (brotli.decompress, b"br"),
+    ".zst": (zstd.decompress, b"zstd"),
+    ".gz": (gzip.decompress, b"gzip"),
+}
 
 # This console's own scripts, which are the only files of these kinds under `assets/` that no
 # manifest row names.
@@ -45,6 +62,26 @@ class TestWhatIsVendored:
         """
         found = {path.name for pattern in SOMEBODY_ELSES for path in ASSETS.glob(pattern)} - OURS
         assert found == {entry.name for entry in VENDORED if entry.name.endswith((".js", ".woff2"))}
+
+    @pytest.mark.parametrize("suffix", SIDECARS)
+    @pytest.mark.parametrize("entry", ENCODED, ids=lambda entry: entry.name)
+    def test_each_sidecar_decodes_to_the_bytes_the_manifest_records(self, entry: Vendored, suffix: str) -> None:
+        """A sidecar carries no digest of its own, so what holds it to the manifest is decoding it."""
+        decode, _ = DECODED[suffix]
+        sidecar = ASSETS / f"{entry.name}{suffix}"
+        assert sidecar.is_file(), f"{sidecar.name} is missing; `just vendor` writes it"
+        assert digest(decode(sidecar.read_bytes())) == entry.sha256
+
+    @pytest.mark.parametrize("entry", ENCODED, ids=lambda entry: entry.name)
+    def test_the_server_serves_the_sidecars_rather_than_compressing_at_startup(self, entry: Vendored) -> None:
+        """
+        The inventory falls back to compressing a file whose sidecar is older than it, and says so
+        only in a log line, so a checkout that wrote them in the wrong order would pass everything
+        above while paying for the diagram library at every start.
+        """
+        encodings = served_assets().assets[entry.name].encodings
+        for suffix, (_, coding) in DECODED.items():
+            assert encodings[coding].body == (ASSETS / f"{entry.name}{suffix}").read_bytes(), coding
 
     def test_every_vendored_file_names_a_pinned_release(self) -> None:
         """A URL with no version in it fetches whatever was published most recently, which is not a pin."""
@@ -92,6 +129,22 @@ class TestWhatTheRecipeRefuses:
         assert fetches == [release]
         assert (tmp_path / "Face-Regular.woff2").read_bytes() == b"regular face"
         assert (tmp_path / "Face-Bold.woff2").read_bytes() == b"bold face"
+
+    def test_a_script_is_written_with_a_sidecar_per_coding_each_newer_than_it(self, tmp_path: Path) -> None:
+        script = b"var lib = 1;\n" * 64
+        entry = Vendored(name="lib.min.js", url="https://example.test/lib", sha256=digest(script))
+        vendor((entry,), tmp_path, fetch=lambda url: script)
+        written = tmp_path / "lib.min.js"
+        for suffix, (decode, _) in DECODED.items():
+            sidecar = tmp_path / f"lib.min.js{suffix}"
+            assert decode(sidecar.read_bytes()) == script, suffix
+            assert sidecar.stat().st_mtime_ns >= written.stat().st_mtime_ns, suffix
+
+    def test_a_face_is_written_with_no_sidecar(self, tmp_path: Path) -> None:
+        """A face is compressed already, so the server never encodes one and a sidecar would be dead weight."""
+        entry = Vendored(name="Face.woff2", url="https://example.test/face", sha256=digest(b"wOF2 face"))
+        vendor((entry,), tmp_path, fetch=lambda url: b"wOF2 face")
+        assert [path.name for path in tmp_path.iterdir()] == ["Face.woff2"]
 
     def test_a_copy_that_drifted_from_the_manifest_is_named(self, tmp_path: Path) -> None:
         kept = Vendored(name="kept.js", url="https://example.test/kept", sha256=digest(b"kept"))

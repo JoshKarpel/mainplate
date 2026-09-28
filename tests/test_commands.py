@@ -19,6 +19,7 @@ from conftest import said_at
 from conftest import started
 from pydantic import ValidationError
 from without_asgi import ASGIApp
+from without_asgi import Inventory
 from without_durability.interfaces import inbox_key
 
 from mainplate import records
@@ -614,8 +615,8 @@ class TestThroughTheConsole:
     """
 
     @pytest.fixture
-    def app(self, running: Service) -> ASGIApp:
-        return build_app(already(running))
+    def app(self, running: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(running), assets)
 
     async def test_running_it_records_a_command_and_answers_with_the_conversation(
         self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -738,8 +739,8 @@ class TestCommittingThroughTheConsole:
     MESSAGE = "Scroll a long line inside its block\n\nIt's the block that scrolls, and never the page."
 
     @pytest.fixture
-    def app(self, running: Service) -> ASGIApp:
-        return build_app(already(running))
+    def app(self, running: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(running), assets)
 
     async def ran(self, app: ASGIApp, running: Service, session: str, said: str, disposition: str) -> Result:
         async with calling(app) as caller:
@@ -811,8 +812,8 @@ class TestStartingSomewhereThroughTheForm:
     """
 
     @pytest.fixture
-    def app(self, running: Service) -> ASGIApp:
-        return build_app(already(running))
+    def app(self, running: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(running), assets)
 
     async def test_a_base_and_a_branch_are_recorded_on_the_session(
         self, app: ASGIApp, running: Service, caller_form: dict[str, str]
@@ -866,8 +867,8 @@ class TestOfferingWhereToStart:
     """
 
     @pytest.fixture
-    def app(self, running: Service) -> ASGIApp:
-        return build_app(already(running))
+    def app(self, running: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(running), assets)
 
     async def test_picking_a_repository_offers_its_branches(self, app: ASGIApp, origin: Path) -> None:
         await run("git", "branch", "release/2.1", cwd=origin)

@@ -1655,8 +1655,11 @@
       // a different answer per fold - a call shut, a reply open, a system prompt away. It is the way
       // back from either of the others, which without it are one-way presses over a conversation.
       //
-      // Nothing here records anything: setting `open` dispatches `toggle`, so `wireFolds` takes all
-      // three down the one path every other press already goes down.
+      // Each decision is recorded here as it is made, and not left to the `toggle` that setting `open`
+      // dispatches: that event arrives a task later, and a morph landing in between repaints every
+      // fold from the decisions recorded *before* this press, which undoes it, and the late `toggle`
+      // then records the undone state. A turn streaming in is exactly when somebody reaches for this.
+      // The `toggle` still comes and records the same value again.
       document.querySelectorAll("[data-fold]").forEach((button) => {
         button.addEventListener("click", () => {
           const box = transcript();
@@ -1664,6 +1667,7 @@
           const asked = button.dataset.fold;
           box.querySelectorAll(FOLDS).forEach((fold) => {
             fold.open = asked === "default" ? fold.dataset.opens === "open" : asked === "open";
+            folds.set(fold.id, fold.open);
           });
         });
       });

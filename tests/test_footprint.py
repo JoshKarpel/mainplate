@@ -11,6 +11,7 @@ from conftest import WHEN
 from conftest import already
 from conftest import started
 from without_asgi import ASGIApp
+from without_asgi import Inventory
 
 from mainplate.app import build_app
 from mainplate.footprint import Footprints
@@ -197,8 +198,8 @@ class TestWhatAPageSaysASessionTakes:
     """
 
     @pytest.fixture
-    def app(self, service: Service) -> ASGIApp:
-        return build_app(already(service))
+    def app(self, service: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(service), assets)
 
     async def test_a_row_and_the_card_draw_the_figure_with_the_sentence_behind_it(
         self, app: ASGIApp, service: Service
