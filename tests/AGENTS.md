@@ -157,6 +157,21 @@ loop on the calling thread, and this suite is already running one, so the sync A
 browser test passing and every *other* async test failing its teardown. One session-scoped loop
 (`pytestmark = pytest.mark.asyncio(loop_scope="session")`) so the browser can be session-scoped too.
 
+**A claim that only reads a page another test already loads is a subtest of that test**, through
+pytest's own `subtests` fixture, rather than a test with a context of its own. What a browser test
+costs is its fresh context: a renderer process and both faces decoded again, about 300ms of CPU on
+the suite's two cores, where one more claim read off a page already loaded costs milliseconds. Each
+subtest still reports as its own `SUBFAILED[...]` and the rest still run, so a merged test fails at
+every claim that broke rather than at the first. `test_a_conversation_draws_its_grid_whole` is the
+shape to copy, and `test_no_page_pushes_the_document_sideways` is the same move over every gallery
+page in one context, with its timeout raised to cover the loop.
+
+**Only reading.** A claim that clicks, fills, scrolls, reloads, or writes through the `Service`
+changes what every claim after it sees, which is the leak a context per test exists to prevent,
+moved inside one test; those stay tests of their own. The context per test stays for the reason
+Playwright gives for it: a context cleaned up and reused has state nothing can reset (visited
+links), and a reset list is one more thing to keep complete.
+
 ## What has to be a browser, and why
 
 A rule worth applying before writing an assertion: **where every rendering is a correct picture of
