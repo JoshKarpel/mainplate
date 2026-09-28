@@ -34,7 +34,7 @@ $ just setup            # uv sync, the browser, and pre-commit as a git hook
 $ just dependencies     # the same without the hook, which is the half a session's `.mainplate/setup` runs
 $ just vendor           # every script and face somebody else wrote, fetched and checked against scripts/vendored.toml
 $ just test             # mypy, then pytest
-$ just test tests/test_console.py::TestTheConsole  # extra args go straight to pytest
+$ just test -n0 tests/test_console.py::TestTheConsole  # extra args go straight to pytest; -n0 below the whole suite
 $ just check            # pre-commit over all files, then mypy
 $ just serve            # foreground, on port 8101 so it never fights the installed service
 $ just demo             # the same, on a database of its own, for poking without touching real sessions
@@ -61,6 +61,27 @@ browser, which is one keystroke against needing a dev-only script injected into 
 look never takes down the service. `just install` runs `uv sync` first, and that is not a
 convenience: the unit names this checkout's interpreter, so an install from a stale environment
 points systemd at a venv missing whatever was just added.
+
+### Running less of the suite while working
+
+**Pass `-n0` for anything narrower than the whole suite**: `just test -n0 tests/test_console.py`.
+Each `xdist` worker imports the console, whose provider SDKs are over a second of imports, and
+collects every test before running any, so starting two of them costs three to four seconds that a
+single test, a class, or even a whole file never earns back on two cores. Only the full suite and
+`test_browser.py` are faster with workers. That is why `addopts` keeps `-n auto`: it is what a bare
+`just test` wants, and `-n0` on the command line overrides it.
+
+- `--lf` reruns what failed last time, and `--ff` runs it first and then everything else.
+- `-k` picks tests by name, and it matches a test's name, never a subtest's label: a browser test
+  that checks several claims as subtests runs whole or not at all, so a failing subtest is reached
+  by the test holding it.
+- `-p no:randomly` fixes the order, for bisecting; `--randomly-seed=last` replays the order of the
+  run that failed, which is the one to reach for when a test passes alone and fails in the suite.
+- Anything outside `test_browser.py` runs without launching Chromium, since the browser is a
+  fixture only that file asks for.
+
+Finish with a bare `just test`, since a narrow run is not the suite and `randomly` is only shuffling
+whatever it was handed.
 
 ## A real turn costs real money
 

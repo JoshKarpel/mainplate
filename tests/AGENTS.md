@@ -4,9 +4,8 @@ description: "How the suite is driven: the in-memory client, the browser tests, 
 
 # The suite
 
-`just test` is mypy then pytest, and extra arguments go straight to pytest (`just test
-tests/test_console.py::TestTheConsole`). Run it, or `just check`, before saying anything is done. CI
-runs the same pre-commit configuration, so there is one definition of what the checks are.
+How to run it, and how to run less of it while working, is in the root [`AGENTS.md`](../AGENTS.md);
+this is how the suite is written.
 
 `pytest` runs under `xdist` (`-n auto`), `pytest-randomly`, and a 10-second per-test timeout, all
 from `addopts`. A test that needs longer raises it with `@pytest.mark.timeout(...)` rather than
