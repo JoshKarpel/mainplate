@@ -813,20 +813,17 @@ DEEPEST: Final = 3
 
 def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
     """
-    Every session with how deep in the tree it sits, a branch directly under what it branched from.
+    Every active session above every archived one, with branches nested within each group.
 
-    Pure, and separate from the rendering, because it is the one piece of real reasoning in the
-    sidebar: the flat list the index hands back says nothing about shape, and the shape is the
-    whole reason forking is worth having a picture of.
-
-    A branch whose parent is not in the list is drawn as a root. That is not a fallback but the
-    honest reading: the row says where it came from either way, and hiding a session because its
-    parent went missing would lose a conversation somebody can still read.
+    The index supplies newest-first order within each group. A branch whose parent is archived or
+    absent is a root among active sessions; an archived branch of an active parent is a root among
+    archived sessions. Each still names its origin on its row.
     """
-    known = {session.id for session in listed}
+    known = {session.id: session for session in listed}
     children: dict[str | None, list[Session]] = {}
     for session in listed:
-        parent = session.forked.session if session.forked and session.forked.session in known else None
+        origin = known.get(session.forked.session) if session.forked else None
+        parent = origin.id if origin is not None and (origin.archived is None) == (session.archived is None) else None
         children.setdefault(parent, []).append(session)
 
     arranged: list[tuple[Session, int]] = []
@@ -836,7 +833,9 @@ def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
             arranged.append((session, depth))
             walk(session.id, min(depth + 1, DEEPEST))
 
-    walk(None, 0)
+    for session in sorted(children.get(None, ()), key=lambda session: session.archived is not None):
+        arranged.append((session, 0))
+        walk(session.id, 1)
     return tuple(arranged)
 
 
@@ -844,14 +843,9 @@ def sidebar(
     links: Links, reader: Reader, listed: tuple[Session, ...], showing: str | None, reachable: Reachable
 ) -> Element:
     """
-    Every session, the one most recently written to first, with branches under what they branched
-    from and the current one marked.
-
-    Most recent first among siblings rather than across the whole list, which is what a tree costs
-    and what it buys: a branch worked in this morning sits with the conversation it came from rather
-    than at the top away from it, and the ordering within any one group is still the one a chat
-    console reads in. The row dates itself by the same moment it is ordered by, since a list sorted by
-    one date and labelled with another reads as unsorted.
+    Active sessions above archived ones, newest first within each, with branches under their parents
+    where both share a status. A branch of an archived parent sits among active roots, so no archived
+    row precedes an active one. The row dates itself by the moment it is ordered by within its group.
 
     A row says which repository its session works in, because that is the thing two conversations
     with the same opening line are actually told apart by once a console is used to work in more

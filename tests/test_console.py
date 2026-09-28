@@ -988,6 +988,20 @@ class TestWhatIsNewInTheList:
         assert answered.text.index("the older one") < answered.text.index("the newer one")
         assert [each.last_said_at for each in await service.listed()] == [WHEN + timedelta(hours=1), WHEN]
 
+    async def test_archived_sessions_follow_active_sessions_regardless_of_message_time(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        archived = await a_session(app, service, "archived one")
+        active = await a_session(app, service, "active one")
+        await said_to_at(service, archived, WHEN + timedelta(days=3))
+        await said_to_at(service, active, WHEN + timedelta(days=1))
+        await service.archive(archived)
+        assert [session.id for session in await service.listed()] == [active, archived]
+        async with calling(app) as caller:
+            answered = await caller.get("/")
+        rows = answered.text
+        assert rows.index(f'id="listed-{active}"') < rows.index(f'id="listed-{archived}"')
+
     async def test_a_session_nobody_has_written_to_is_dated_from_its_making(
         self, app: ASGIApp, service: Service
     ) -> None:
