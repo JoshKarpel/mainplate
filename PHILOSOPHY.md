@@ -26,8 +26,8 @@ proposed and the argument for it has to look like one of these.
 ### The session index is one row, and it reaches rather than copies
 
 `sessions.py` holds one row per session, because `without-durability` cannot enumerate workflows. It
-holds a title as well as an id, and that is *not* a copy of changing state, because a session is
-named after its first message and nothing ever renames it.
+holds the session's title as well as its id: the title belongs to the index and can be changed there,
+without copying or rewriting anything in the checkpoint.
 
 What the index does not hold, it **reaches for**. A checkpoint is a row per key rather than one
 value, and both tables are in the one file, so `SELECTION` reads a session's repository straight out
