@@ -31,6 +31,7 @@ from conftest import recorded_turn
 from conftest import registered
 from conftest import snapshotted
 from without_asgi import ASGIApp
+from without_asgi import Inventory
 from without_durability.interfaces import INBOX
 
 from mainplate import records
@@ -1260,7 +1261,7 @@ class TestWhatIsNewInTheList:
         assert 'name="endpoint"' not in answered.text, "a session's choice is fixed, so offering one would lie"
 
     async def test_a_session_whose_profile_is_gone_says_so_and_draws_no_spinner(
-        self, app: ASGIApp, service: Service
+        self, app: ASGIApp, service: Service, assets: Inventory
     ) -> None:
         """
         The one state a person cannot otherwise diagnose: a spinner that will never resolve.
@@ -1279,7 +1280,7 @@ class TestWhatIsNewInTheList:
         """
         session = await a_session(app, service)
         narrowed = replace(service, catalogues=Catalogues(current=OTHER_CATALOGUE))
-        async with calling(build_app(already(narrowed))) as caller:
+        async with calling(build_app(already(narrowed), assets)) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert DEFAULT_CHOICE.endpoint in answered.text
         assert "no longer declares" in answered.text
@@ -1311,7 +1312,7 @@ class TestWhatIsNewInTheList:
         assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
 
     async def test_a_session_on_a_model_the_picker_stopped_listing_is_not_stuck(
-        self, app: ASGIApp, service: Service
+        self, app: ASGIApp, service: Service, assets: Inventory
     ) -> None:
         """
         An endpoint routes more ids than it advertises, so a missing model is not a stuck session.
@@ -1335,7 +1336,7 @@ class TestWhatIsNewInTheList:
             default=Choice(endpoint=DEFAULT_CHOICE.endpoint, model="ripe/other"),
         )
         narrowed = replace(service, catalogues=Catalogues(current=thinned))
-        async with calling(build_app(already(narrowed))) as caller:
+        async with calling(build_app(already(narrowed), assets)) as caller:
             answered = await caller.get(f"/sessions/{session}")
         assert "no longer" not in answered.text
         assert 'id="waiting"' in answered.text, "the worker can still answer it, so an answer is coming"
@@ -2567,10 +2568,10 @@ class TestLoadingASessionsPlugins:
     what the press runs is exactly what the switches left on.
     """
 
-    async def console(self, service: Service, answering: Answering) -> tuple[ASGIApp, Service]:
+    async def console(self, service: Service, answering: Answering, assets: Inventory) -> tuple[ASGIApp, Service]:
         """The console over a service that can run a plugin, which the shared fixture's cannot."""
         running = replace(service, declaring=Declaring(console=DECLARES, speaking=answering))
-        return build_app(already(running)), running
+        return build_app(already(running), assets), running
 
     async def declared(self, service: Service) -> str:
         """A session whose first pass has planted and read the files, and done nothing else."""
@@ -2596,14 +2597,14 @@ class TestLoadingASessionsPlugins:
         )
         return await passing(service, session, body)
 
-    async def test_the_step_offers_switches_and_nothing_to_type_into(self, service: Service) -> None:
+    async def test_the_step_offers_switches_and_nothing_to_type_into(self, service: Service, assets: Inventory) -> None:
         """
         A session being set up has no transcript, no message box and no rail: every control in those
         is pointed at a conversation that does not exist, and the rail's own cards are the surface of
         the plugins this screen exists to decide about.
         """
         answering = Answering()
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await self.declared(running)
         async with calling(app) as caller:
             page = await caller.get(f"/sessions/{session}")
@@ -2619,7 +2620,9 @@ class TestLoadingASessionsPlugins:
         assert 'class="rail"' not in page.text
         assert answering.asked == [], "and nothing has been run to draw it"
 
-    async def test_a_repositorys_own_plugin_gets_a_switch_under_its_tier(self, service: Service) -> None:
+    async def test_a_repositorys_own_plugin_gets_a_switch_under_its_tier(
+        self, service: Service, assets: Inventory
+    ) -> None:
         """
         Every tier draws the same control, which is what makes the step one thing rather than three.
 
@@ -2628,7 +2631,7 @@ class TestLoadingASessionsPlugins:
         by the qualified name, and nothing is run to draw any of it.
         """
         answering = Answering()
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await running.start(DEFAULT_CHOICE)
         setting_up = Installed(tier=Tier.REPOSITORY, name="setup", path=Path("/tree/.mainplate/setup"))
         await running.checkpointer.supply(session.id, DECLARED_KEY, recorded_declaration(DECLARES))
@@ -2642,7 +2645,9 @@ class TestLoadingASessionsPlugins:
         assert ".mainplate/setup" in page.text, "the path, which is the whole of what there is to go on"
         assert answering.asked == [], "and nothing has been run to draw it"
 
-    async def test_the_press_itself_runs_nothing_and_the_pass_runs_what_was_left_on(self, service: Service) -> None:
+    async def test_the_press_itself_runs_nothing_and_the_pass_runs_what_was_left_on(
+        self, service: Service, assets: Inventory
+    ) -> None:
         """
         Which is the whole of the boundary, in the two moments it now takes: the press records the
         switches and asks for a pass, and the pass runs exactly the plugins they left on.
@@ -2652,7 +2657,7 @@ class TestLoadingASessionsPlugins:
         very request open for minutes.
         """
         answering = Answering()
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await self.declared(running)
         async with calling(app) as caller:
             pressed = await caller.post(
@@ -2672,14 +2677,14 @@ class TestLoadingASessionsPlugins:
         assert enrolled is not None
         assert [each.qualified for each in enrolled] == ["user:lint"]
 
-    async def test_a_step_with_every_switch_off_runs_none_of_them(self, service: Service) -> None:
+    async def test_a_step_with_every_switch_off_runs_none_of_them(self, service: Service, assets: Inventory) -> None:
         """
         The case a form cannot express on its own, and what the hidden field beside each box is for:
         an unchecked checkbox posts nothing, so without it this post is indistinguishable from a form
         that carried no switches at all.
         """
         answering = Answering()
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await self.declared(running)
         async with calling(app) as caller:
             pressed = await caller.post(
@@ -2692,7 +2697,9 @@ class TestLoadingASessionsPlugins:
         assert answering.asked == []
         assert registered_in(await running.checkpointer.load(session)) == ()
 
-    async def test_a_plugin_that_will_not_set_up_comes_back_to_the_step(self, service: Service) -> None:
+    async def test_a_plugin_that_will_not_set_up_comes_back_to_the_step(
+        self, service: Service, assets: Inventory
+    ) -> None:
         """
         Rather than stalling a conversation, because the thing to do about a plugin that will not set
         up is turn it off - and the switch is on the screen this answers with.
@@ -2702,7 +2709,7 @@ class TestLoadingASessionsPlugins:
         would be a spinner that never resolves.
         """
         answering = Answering(refusing="user:notify")
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await self.declared(running)
         async with calling(app) as caller:
             pressed = await caller.post(
@@ -2720,7 +2727,7 @@ class TestLoadingASessionsPlugins:
         assert registered_in(recorded) is None, "and nothing was registered, so pressing again is a fresh attempt"
 
     async def test_pressing_again_after_a_failure_is_a_fresh_attempt_with_no_sentence_on_it(
-        self, service: Service
+        self, service: Service, assets: Inventory
     ) -> None:
         """
         Which is what the attempt number buys, and the reason the confirmation records no list of its
@@ -2728,7 +2735,7 @@ class TestLoadingASessionsPlugins:
         write-once refusal would be the sentence every later press showed.
         """
         answering = Answering(refusing="user:notify")
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await self.declared(running)
         async with calling(app) as caller:
             await caller.post(
@@ -2751,7 +2758,9 @@ class TestLoadingASessionsPlugins:
         assert enrolled is not None
         assert [each.qualified for each in enrolled] == ["user:lint"]
 
-    async def test_a_session_that_has_already_loaded_its_plugins_is_refused(self, service: Service) -> None:
+    async def test_a_session_that_has_already_loaded_its_plugins_is_refused(
+        self, service: Service, assets: Inventory
+    ) -> None:
         """
         A tool definition leaving the cached prefix invalidates everything under it exactly as one
         arriving late does, so which plugins run is settled the moment a registration is recorded.
@@ -2761,7 +2770,7 @@ class TestLoadingASessionsPlugins:
         while already holding turns. What it may not do is answer it twice.
         """
         answering = Answering()
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await self.declared(running)
         await running.say(session, "hello")
         async with calling(app) as caller:
@@ -2775,13 +2784,13 @@ class TestLoadingASessionsPlugins:
         assert pressed.status == 422
         assert "fork it instead" in pressed.text
 
-    async def test_try_again_asks_for_another_pass_and_runs_nothing(self, service: Service) -> None:
+    async def test_try_again_asks_for_another_pass_and_runs_nothing(self, service: Service, assets: Inventory) -> None:
         """
         The other button, and the reason the two are told apart by a field rather than by the shape of
         the post: a step with every switch off posts the same emptiness a retry does.
         """
         answering = Answering()
-        app, running = await self.console(service, answering)
+        app, running = await self.console(service, answering, assets)
         session = await running.start(DEFAULT_CHOICE)
         async with calling(app) as caller:
             pressed = await caller.post(f"/sessions/{session.id}/setup", {SETTLE_FIELD: AGAIN})

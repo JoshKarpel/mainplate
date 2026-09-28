@@ -24,6 +24,7 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from test_conversation import pass_at
 from without_asgi import ASGIApp
+from without_asgi import Inventory
 
 from mainplate.agent import Choice
 from mainplate.app import build_app
@@ -850,8 +851,8 @@ class TestPickingOneThroughTheConsole:
     """
 
     @pytest.fixture
-    def app(self, planting: Service) -> ASGIApp:
-        return build_app(already(planting))
+    def app(self, planting: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(planting), assets)
 
     async def test_the_dashboard_offers_a_session_in_what_the_forges_reach(self, app: ASGIApp) -> None:
         async with calling(app) as caller:
@@ -948,8 +949,8 @@ class TestWhatTheSidebarSaysASessionWorksIn:
     """
 
     @pytest.fixture
-    def app(self, planting: Service) -> ASGIApp:
-        return build_app(already(planting))
+    def app(self, planting: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(planting), assets)
 
     async def test_a_row_names_the_repository_its_session_works_in(self, app: ASGIApp, planting: Service) -> None:
         session = await started(planting, "first", replace(DEFAULT_CHOICE, repository=FIXTURE))

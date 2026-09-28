@@ -20,6 +20,7 @@ from test_console import answered
 from test_console import taken
 from test_conversation import pass_at
 from without_asgi import ASGIApp
+from without_asgi import Inventory
 from without_durability.interfaces import claimed
 from without_durability.stepwise import Completed
 
@@ -265,8 +266,8 @@ class TestTakingAnArchivedSessionOffTheDisk:
 
 class TestWhatThePageDoesWithAnArchivedSession:
     @pytest.fixture
-    def app(self, service: Service) -> ASGIApp:
-        return build_app(already(service))
+    def app(self, service: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(service), assets)
 
     async def test_there_is_no_box_the_transcript_says_why_and_the_rail_says_when(
         self, app: ASGIApp, service: Service
@@ -390,8 +391,8 @@ class TestWhatThePageDoesWithAnArchivedSession:
 
 class TestForkingFromTheEnd:
     @pytest.fixture
-    def app(self, service: Service) -> ASGIApp:
-        return build_app(already(service))
+    def app(self, service: Service, assets: Inventory) -> ASGIApp:
+        return build_app(already(service), assets)
 
     async def test_an_archived_conversation_ends_in_a_rule_forking_from_the_end(
         self, app: ASGIApp, service: Service

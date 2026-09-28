@@ -315,6 +315,8 @@ LISTED = (
         attention=Queued(),
     ),
     Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
+    # The session with the drawings in it, working in nothing, since a picture needs no files.
+    Session(id="99" * 16, created_at=WHEN - timedelta(hours=5), title="Draw the poll's path"),
     # Archived, and already off the disk, so the row is drawn muted with the word beside the date
     # and no figure: what a closed session looks like once the reconciler has been round.
     Session(
@@ -741,12 +743,40 @@ CONVERSATION: list[ModelMessage] = [
                     "                        └──────────┘\n"
                     "\n"
                     "  ✓ survives a morph        ✗ fires once\n"
+                    "```\n"
+                )
+            )
+        ],
+        usage=spending(asked=44_800, answered=832, cached=38_400, cost="0.0432"),
+        metadata=timing(9.7),
+    ),
+]
+
+# The two fences the script can draw a picture from, in a session of their own, so the gallery has a
+# `draw` button to press and the browser tests have one to assert on. A diagram, and an SVG written by
+# hand, because they are drawn by different means: one goes through the library and the other is an
+# image as written. A plain fence beside them, because what a drawable block is measured against is
+# an ordinary one on the same page.
+#
+# Their own session rather than a turn of `CONVERSATION`, because a diagram on the page is three and
+# a half megabytes of library every load of it compiles, and the conversation is the page nearly
+# every browser test opens: carried there, it was most of what a page load cost, on pages whose
+# tests are about something else.
+DRAWN: list[ModelMessage] = [
+    ModelRequest(
+        parts=[UserPromptPart(content="Draw the poll's path from the worker to the page.")],
+        instructions=INSTRUCTIONS,
+    ),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(
+                content=(
+                    "The page asks on an interval, which is what survives a morph:\n\n"
+                    "```html\n"
+                    '<div hx-get="/fragments/sessions/{id}" hx-trigger="every 1s"></div>\n'
                     "```\n\n"
-                    # The two fences the script can draw a picture from, so the gallery has a `draw`
-                    # button to press and the browser tests have one to assert on. A diagram, and
-                    # an SVG written by hand, because they are drawn by different means: one goes
-                    # through the library and the other is an image as written.
-                    "Or, as the library would draw it:\n\n"
+                    "As the library would draw it:\n\n"
                     "```mermaid\n"
                     "flowchart LR\n"
                     "  worker -- records --> store -- token --> page\n"
@@ -762,8 +792,8 @@ CONVERSATION: list[ModelMessage] = [
                 )
             )
         ],
-        usage=spending(asked=44_800, answered=832, cached=38_400, cost="0.0432"),
-        metadata=timing(9.7),
+        usage=spending(asked=12_600, answered=214, cost="0.0391"),
+        metadata=timing(4.1),
     ),
 ]
 
@@ -1367,7 +1397,7 @@ def fixtures() -> tuple[Fixture, ...]:
     before the one it branched at: a checkpoint that said otherwise would be a plausible-looking
     approximation of a fork rather than one.
     """
-    parent, branch, deeper, other, detached, archived = LISTED
+    parent, branch, deeper, other, detached, drawing, archived = LISTED
     if archived.archived is None:  # pragma: no cover - the fixture says it is, and this is what reads it
         raise ValueError("the gallery's last session is the archived one, and it records no time")
     return (
@@ -1380,6 +1410,7 @@ def fixtures() -> tuple[Fixture, ...]:
         Fixture.of(other, ON_SONNET, recorded(CONVERSATION)),
         # On a repository nothing reaches, so a demo console has the row that renders a bare id.
         Fixture.of(detached, ON_SONNET, recorded(CONVERSATION)),
+        Fixture.of(drawing, ON_SONNET, recorded(DRAWN)),
         # Archived, with the key the press writes rather than only the row's field, because the row's
         # field is *read* out of that key: a session with the field alone is one the sidebar draws as
         # open. The reconciler finds nothing on disk for it and leaves it be.
@@ -1486,11 +1517,12 @@ CAPTIONS: Final[dict[str, str]] = {
     "settings-refused.html": "A setup that stopped, naming the plugin that would not answer.",
     "opening.html": "A session with its first message queued and nothing answered yet.",
     "session.html": (
-        "A settled conversation: reasoning, a read, a highlighted reply with a table, a diagram and an SVG to "
-        "draw, commands the person ran, a boundary where the context started again, and under it a read of "
+        "A settled conversation: reasoning, a read, a highlighted reply with a table and box drawing, "
+        "commands the person ran, a boundary where the context started again, and under it a read of "
         "the stylesheet, a batch drawn with its diff of an edit and a file created, a formatter whose diff is "
         "too long to draw open, and a shell command with what it said."
     ),
+    "drawing.html": "A reply with a diagram and an SVG drawn as pictures, each a press away from its text.",
     "waiting.html": "A message waiting for its turn.",
     "answering.html": "A turn part way through: two reads out at once, a steer taken and one still to be, a command running.",
     "handed-off.html": "A handoff: the plugin's ask, and the document the next stretch of context opens on.",
@@ -1519,7 +1551,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     a fixture's checkpoint rather than fixtures of their own, because every one of them is a session
     something should be answering, and in the demo nothing would be.
     """
-    parent, branch, _, other, _, archived = FIXTURES
+    parent, branch, _, other, _, drawing, archived = FIXTURES
     settled = parent.checkpoint
     waiting = dict(settled)
     waiting[inbox_key(5)] = recorded_prompt("And what about a turn still being answered?")
@@ -1684,6 +1716,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         "settings-refused.html": session_page(links, READER, LISTED, failed_setup, REACHABLE),
         "opening.html": session_page(links, READER, LISTED, queued, REACHABLE),
         "session.html": session_page(links, READER, LISTED, showing(parent.session, settled), REACHABLE),
+        "drawing.html": session_page(
+            links, READER, LISTED, showing(drawing.session, drawing.checkpoint, chosen=drawing.chosen), REACHABLE
+        ),
         "waiting.html": session_page(links, READER, LISTED, showing(parent.session, waiting), REACHABLE),
         "answering.html": session_page(links, READER, LISTED, showing(parent.session, answering), REACHABLE),
         "handed-off.html": session_page(links, READER, LISTED, showing(parent.session, handed), REACHABLE),
