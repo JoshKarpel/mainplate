@@ -33,9 +33,10 @@
   // theirs to decide, and the server only says where each kind starts. A *call's* is the call's,
   // because its summary is facts about it - a name, an outcome, how long it ran - rather than the
   // block restated, and a panel holds a whole batch, so a reader wanting one read out of three needs
-  // a fold per call and not only one per panel. A stretch of reasoning and a document have neither
-  // of those and so have no fold of their own: the panel's row already says what they are.
-  const FOLDS = "details.panel, details.tool, details.ran";
+  // a fold per call and not only one per panel. A batch's diff has its own for the same reason: its
+  // rule says how much changed, which the panel's row does not. A stretch of reasoning and a document
+  // have neither and so have no fold of their own: the panel's row already says what they are.
+  const FOLDS = "details.panel, details.tool, details.batch, details.ran";
 
   // The frames a press can shut a fold from; see `wireShutting`. Written as the *bodies* rather than
   // as the folds around them, which is what lets one rule survive a fold moving out to the panel: a
@@ -45,7 +46,7 @@
   // Stated this way it also says the thing a list of folds could not. A panel's own room is the
   // whitespace between the blocks of a conversation, and that is in no frame here, so a press that
   // missed a paragraph cannot fold the reply it missed.
-  const FRAMES = ".tool__body, .ran__body, .block--document";
+  const FRAMES = ".tool__body, .batch__body, .ran__body, .block--document";
 
   // The line at the end of a transcript saying why nothing is happening, which two things here reach
   // for: the countdown it carries, and the copy button its reason gets. The server's own `ATTENTION_ID`.
@@ -115,6 +116,12 @@
     } catch {}
   };
 
+  const unhold = (key) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+  };
+
   // The one thing here the *server* reads back, which is why it is a cookie and not storage: the
   // zone a page's moments are printed in is decided while the page is being rendered, so the answer
   // has to ride on the request for the document itself. Everything else in this file is the reader's
@@ -175,6 +182,38 @@
   };
 
   applyTheme(asTheme(held(THEME_KEY)));
+
+  // --- The columns -------------------------------------------------------
+  //
+  // Which side columns a reader has put away and how wide they read the conversation, pinned before
+  // the first paint for the theme's reason: applied any later, a page opened with the list away
+  // draws it and then takes it back. Per browser rather than per account, because what fits is a
+  // property of the screen and not of the person.
+
+  const COLUMN_KEYS = { list: "mainplate:list", rail: "mainplate:rail" };
+
+  const applyColumn = (column, away) => {
+    if (away) document.documentElement.dataset[column] = "shut";
+    else delete document.documentElement.dataset[column];
+  };
+
+  Object.entries(COLUMN_KEYS).forEach(([column, key]) => applyColumn(column, held(key) === "shut"));
+
+  const READING_KEY = "mainplate:reading";
+
+  // In `rem`, so a width chosen scales with the text it is the width of. Anything that is not a
+  // positive number is nothing, which is the measure: this is storage, and arbitrary text.
+  const asReading = (value) => {
+    const rem = Number.parseFloat(value ?? "");
+    return Number.isFinite(rem) && rem > 0 ? rem : null;
+  };
+
+  const applyReading = (rem) => {
+    if (rem === null) document.documentElement.style.removeProperty("--reading");
+    else document.documentElement.style.setProperty("--reading", `${rem}rem`);
+  };
+
+  applyReading(asReading(held(READING_KEY)));
 
   const paintClock = () => {
     // Which zone every moment on this page is printed in is the server's decision, and this is the
@@ -1033,6 +1072,116 @@
       });
     };
 
+    // --- Focusing ----------------------------------------------------------
+    //
+    // A block of lines scrolls sideways rather than wrapping, and the column it scrolls in is the
+    // reading measure, which a diff's gutter and a line of real code outgrow. So a block whose lines
+    // do not fit takes a `focus` button that opens it on its own, as wide as the window, over
+    // everything, in a modal dialog. Over everything rather than into the room beside the measure, because at the widths a
+    // laptop has there is none: the transcript already fills its column between the list and the
+    // rail, and it is a scroll container, so a block let wider than it is clipped.
+    //
+    // What the dialog shows is a copy of the block as it was when pressed. A copy and not the block
+    // moved, because the block is the server's markup and a morph would go looking for it; and a copy
+    // is sound because what overflows is a file, a diff or a fence, which a later render does not
+    // change. The cost, stated: the dialog is modal, so the conversation cannot be scrolled beside
+    // it, and it carries no copy button of its own.
+    //
+    // Only where the block overflows *now*, which is a measurement: it changes as a fold opens, the
+    // column changes width, and the face arrives, so each of those measures again.
+
+    const FOCUSED = "focused";
+
+    const overflows = (pre) => {
+      const code = pre.querySelector(":scope > code");
+      return Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
+    };
+
+    // Every block measured before any is changed, so the walk costs the page one layout rather than
+    // one per block.
+    const paintFocuses = () => {
+      const box = transcript();
+      if (!box) return;
+      const blocks = [...box.querySelectorAll(".panel pre")].map((pre) => [pre, overflows(pre)]);
+      blocks.forEach(([pre, wide]) => {
+        const button = pre.querySelector(":scope > [data-focus]");
+        if (!wide) {
+          if (button) button.remove();
+          return;
+        }
+        if (button) return;
+        const seat = document.createElement("button");
+        seat.type = "button";
+        seat.className = "copy focus";
+        seat.dataset.focus = "";
+        seat.textContent = "focus";
+        seat.title = "Open this block on its own, as wide as the window";
+        pre.insertBefore(seat, pre.querySelector(":scope > code"));
+      });
+    };
+
+    const stripFocuses = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-focus]").forEach((button) => button.remove());
+    };
+
+    // Made on the first press and found again after that, in the body rather than the transcript so
+    // no swap ever meets it. Shut by the form's own `dialog` method, by Escape, and by a press on the
+    // backdrop, which is the dialog itself as a target because nothing in it is padding.
+    const focusDialog = () => {
+      const found = document.getElementById(FOCUSED);
+      if (found) return found;
+      const dialog = document.createElement("dialog");
+      dialog.id = FOCUSED;
+      dialog.className = FOCUSED;
+      dialog.setAttribute("aria-label", "The block, on its own");
+      const form = document.createElement("form");
+      form.method = "dialog";
+      const shut = document.createElement("button");
+      shut.className = "copy";
+      shut.textContent = "close";
+      shut.title = "Put this away";
+      form.appendChild(shut);
+      dialog.appendChild(form);
+      dialog.addEventListener("click", (event) => {
+        if (event.target === dialog) dialog.close();
+      });
+      document.body.appendChild(dialog);
+      return dialog;
+    };
+
+    const wireFocus = () => {
+      document.addEventListener("click", (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const button = pressed.closest("[data-focus]");
+        if (!button) return;
+        const pre = button.parentElement.closest("pre");
+        if (!pre) return;
+        const shown = pre.cloneNode(true);
+        shown.querySelectorAll("[data-copy], [data-draw], [data-focus], .drawing").forEach((seated) => seated.remove());
+        const dialog = focusDialog();
+        dialog.querySelector(":scope > pre")?.remove();
+        dialog.appendChild(shown);
+        dialog.showModal();
+      });
+      let measuring = null;
+      const measure = () => {
+        if (measuring !== null) return;
+        measuring = requestAnimationFrame(() => {
+          measuring = null;
+          paintFocuses();
+        });
+      };
+      document.addEventListener("toggle", measure, true);
+      // The column changes width with the window, with a side column put away or brought back, and
+      // with the reader dragging its edge, and watching the box it is in covers all three.
+      const place = document.querySelector("main");
+      if (place) new ResizeObserver(measure).observe(place);
+      document.fonts?.ready.then(measure);
+    };
+
     // --- Search ----------------------------------------------------------
 
     const clearHits = () => {
@@ -1228,6 +1377,7 @@
       paintCopies();
       paintCopied();
       paintDrawings();
+      paintFocuses();
       paintCache();
       paintDue();
       paintNumbers();
@@ -1558,8 +1708,8 @@
     // reading a set of ids back off the page could not tell a decision from a default.
     //
     // **Every toggle is taken as the reader's, and that is only true because the server never
-    // changes its mind.** Where a fold starts is decided per kind and never per render - a read is
-    // shut and an edit is open whether or not either has come back, a command is open - so a morph
+    // changes its mind.** Where a fold starts is decided per kind and never per render - a call is
+    // shut whether or not it has come back, a command is open - so a morph
     // delivering a result adds no `open` and removes none the reader did not set, and the only
     // toggles left are presses. A server that drew a call open while it was out and shut once it
     // returned broke exactly this: the morph's own toggle was recorded as a decision, and every
@@ -1662,6 +1812,102 @@
       });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") folds.forEach((fold) => open(fold, false));
+      });
+    };
+
+    // On a wide window each side column has a press on its inner edge that puts it away, and the
+    // same press brings it back. What is away was pinned on <html> before the first paint; this says
+    // it on the buttons and keeps it. The stylesheet draws no button on a narrow window, where the
+    // clasps are what put the columns away, so nothing here asks how wide the window is.
+    const wireColumns = () => {
+      document.querySelectorAll("[data-fold-column]").forEach((button) => {
+        const column = button.dataset.foldColumn;
+        const called = button.dataset.called;
+        const paint = () => {
+          const away = document.documentElement.dataset[column] === "shut";
+          button.setAttribute("aria-expanded", String(!away));
+          button.setAttribute("aria-label", away ? `Bring the ${called} back` : `Put the ${called} away`);
+          button.title = button.getAttribute("aria-label");
+        };
+        paint();
+        button.addEventListener("click", () => {
+          const away = document.documentElement.dataset[column] !== "shut";
+          applyColumn(column, away);
+          if (away) hold(COLUMN_KEYS[column], "shut");
+          else unhold(COLUMN_KEYS[column]);
+          paint();
+        });
+      });
+    };
+
+    // The conversation's left edge, dragged, sets how wide it is read; the right edge is the
+    // transcript's scrollbar. Symmetric about the middle, since the column is centred, so the width
+    // is twice the distance from the pointer to the middle. What is kept is the width the column was
+    // actually drawn at, which the stylesheet has already held to the room there is: a drag past the
+    // edge of a wide screen keeps that screen's width rather than a number no screen showed.
+    //
+    // A separator a keyboard can reach, as the pattern for one says: the arrows move it a step, and
+    // a double press or Home puts the measure back.
+    const READING_FLOOR = 30;
+    const READING_STEP = 2;
+
+    const wireReading = () => {
+      const place = document.querySelector("main");
+      const column = place?.querySelector(":scope > .transcript");
+      if (!place || !column) return;
+      const grip = document.createElement("div");
+      grip.className = "reading__grip";
+      grip.tabIndex = 0;
+      grip.setAttribute("role", "separator");
+      grip.setAttribute("aria-orientation", "vertical");
+      grip.setAttribute("aria-label", "How wide the conversation is read");
+      grip.title = "Drag to change how wide the conversation is read; double-click for the default";
+      place.appendChild(grip);
+      const rem = () => Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const drawn = () => Math.round((column.getBoundingClientRect().width / rem()) * 2) / 2;
+      const say = () => grip.setAttribute("aria-valuenow", String(drawn()));
+      const keep = () => {
+        hold(READING_KEY, String(drawn()));
+        say();
+      };
+      const reset = () => {
+        applyReading(null);
+        unhold(READING_KEY);
+        say();
+      };
+      say();
+      // How far the pointer took hold to the left of the edge itself, so the edge follows the
+      // pointer from where it was grabbed rather than jumping to it by the grip's own width.
+      let grabbed = 0;
+      grip.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        grabbed = column.getBoundingClientRect().left - event.clientX;
+        grip.setPointerCapture(event.pointerId);
+        grip.dataset.dragging = "";
+      });
+      grip.addEventListener("pointermove", (event) => {
+        if (!grip.hasPointerCapture(event.pointerId)) return;
+        const box = place.getBoundingClientRect();
+        const middle = box.left + box.width / 2;
+        applyReading(Math.max(READING_FLOOR, (2 * (middle - event.clientX - grabbed)) / rem()));
+      });
+      grip.addEventListener("lostpointercapture", () => {
+        delete grip.dataset.dragging;
+        keep();
+      });
+      grip.addEventListener("dblclick", reset);
+      grip.addEventListener("keydown", (event) => {
+        const step = { ArrowLeft: READING_STEP, ArrowRight: -READING_STEP }[event.key];
+        if (event.key === "Home") {
+          event.preventDefault();
+          reset();
+          return;
+        }
+        if (step === undefined) return;
+        event.preventDefault();
+        applyReading(Math.max(READING_FLOOR, drawn() + step));
+        keep();
       });
     };
 
@@ -1871,7 +2117,7 @@
     // summary alone and one button would give two different answers a click apart.
     const wordsOf = (node) => {
       const taken = node.cloneNode(true);
-      taken.querySelectorAll("[data-copy], [data-draw], .drawing").forEach((seated) => seated.remove());
+      taken.querySelectorAll("[data-copy], [data-draw], [data-focus], .drawing").forEach((seated) => seated.remove());
       return taken.textContent;
     };
 
@@ -2079,6 +2325,7 @@
         clearHits();
         stripCopies();
         stripDrawings();
+        stripFocuses();
       });
       document.addEventListener("htmx:after:swap", () => repaint());
     };
@@ -2170,6 +2417,8 @@
     wireShutting();
     wireTheme();
     wireClasps();
+    wireColumns();
+    wireReading();
     wireFolding();
     wireFilter();
     wireNumbers();
@@ -2179,6 +2428,7 @@
     wireSend();
     wireCopy();
     wireDraw();
+    wireFocus();
     wireFresh();
     wireSwaps();
     wireShapes();

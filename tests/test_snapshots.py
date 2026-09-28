@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import signal
+from collections.abc import Awaitable
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -8,6 +11,7 @@ import pytest
 from calling import calling
 from conftest import DEFAULT_CHOICE
 from conftest import FIXTURE
+from conftest import IDENTITY
 from conftest import INSTRUCTIONS
 from conftest import PLANTED
 from conftest import Provider
@@ -82,7 +86,7 @@ class TestWorkingFromARelativeDatabase:
         clones = Clones(root=root / "clones")
         repository = Repository(forge="test", key="fixture", name="me/fixture", url=str(origin))
         await clones.ensure(repository)
-        worktrees = clones.worktrees(repository.id, root / "worktrees", bwrap)
+        worktrees = clones.worktrees(repository.id, root / "worktrees", bwrap, IDENTITY)
 
         planted = await worktrees.plant("a" * 32)
         assert planted.root == worktrees.at("a" * 32)
@@ -328,6 +332,52 @@ class TestCapturingAtOnce:
         assert await worktree.store.demand("for-each-ref", f"{worktree.refs}/incoming") == ""
 
 
+HANGING = ("-c", "alias.hang=!sleep 5", "hang")
+
+
+class TestBeingStoppedPartWay:
+    @pytest.mark.parametrize(
+        "running",
+        [
+            pytest.param(lambda worktree: worktree.store.git(*HANGING), id="the store, which the fetch loop reaches"),
+            pytest.param(lambda worktree: worktree.git(*HANGING), id="the checkout, behind its sandbox"),
+        ],
+    )
+    async def test_a_git_cancelled_part_way_leaves_nothing_open_behind_it(
+        self,
+        worktree: Worktree,
+        running: Callable[[Worktree], Awaitable[object]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A pass is cancelled when the worker is and the fetch loop when the console stops, so a git
+        still running then has a `communicate` that never resumes. Left alone, the process runs on
+        and its pipes are collected at some later moment, as a `ResourceWarning` failing whichever
+        test happens to be running.
+
+        Asserted on the process and its pipes rather than by forcing a collection, because none can
+        find the leak here: asyncio holds a running child's transport, and a pipe whose write end a
+        grandchild still holds stays registered with the loop. Killing git does not kill what git
+        started, which is why the pipes are closed as well rather than left to reach end of file.
+        """
+        cancelled: list[asyncio.subprocess.Process] = []
+        communicate = asyncio.subprocess.Process.communicate
+
+        async def recorded(process: asyncio.subprocess.Process, sent: bytes | None = None) -> tuple[bytes, bytes]:
+            cancelled.append(process)
+            return await communicate(process, sent)
+
+        monkeypatch.setattr(asyncio.subprocess.Process, "communicate", recorded)
+
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(1):
+                await running(worktree)
+
+        [process] = cancelled
+        assert await process.wait() == -signal.SIGKILL
+        assert [reader is not None and reader.at_eof() for reader in (process.stdout, process.stderr)] == [True, True]
+
+
 class TestAWorktreePerSession:
     async def test_creating_a_session_clones_nothing(
         self, planting: Service, workspaces: Workspaces, on_fixture: Choice
@@ -383,27 +433,8 @@ class TestAWorktreePerSession:
         second_branch = await run("git", "branch", "--show-current", cwd=second)
 
         (first / "src" / "only-mine.txt").write_text("mine\n")
-        await run(
-            "git",
-            "-c",
-            "user.email=probe@example.invalid",
-            "-c",
-            "user.name=probe",
-            "add",
-            "-A",
-            cwd=first,
-        )
-        await run(
-            "git",
-            "-c",
-            "user.email=probe@example.invalid",
-            "-c",
-            "user.name=probe",
-            "commit",
-            "-qm",
-            "mine",
-            cwd=first,
-        )
+        await run("git", "add", "-A", cwd=first)
+        await run("git", "commit", "-qm", "mine", cwd=first)
         await run("git", "rebase", "HEAD~1", cwd=first)
 
         assert await run("git", "rev-parse", "HEAD", cwd=second) == second_head
@@ -1231,6 +1262,36 @@ class TestASessionThatBreaksItsOwnGit:
         assert workspaces.worktrees(FIXTURE).planted(worktree.session)
 
 
+class TestWhoASessionCommitsAs:
+    """
+    The identity `Workspaces` is handed, copied into each checkout as it is planted.
+
+    From inside the sandbox, where the operator's global configuration is not, so the checkout's own
+    configuration is the only place a name can come from.
+    """
+
+    async def test_a_commit_carries_the_identity_the_workspaces_were_handed(
+        self, workspaces: Workspaces, tmp_path: Path, bwrap: str
+    ) -> None:
+        naming = replace(workspaces, identity=(("user.name", "Ada Lovelace"), ("user.email", "ada@example.invalid")))
+        planted = await naming.plant("1a" * 16, FIXTURE)
+        assert planted is not None
+        scratch = tmp_path / "committing-scratch"
+        scratch.mkdir()
+
+        await ran(
+            InAWorktree(worktree=planted, scratch=scratch),
+            bwrap,
+            Venue.CONFINED,
+            "git commit -q --allow-empty -m 'who made this'",
+            seconds=20,
+        )
+
+        assert await run("git", "log", "-1", "--format=%an <%ae>", cwd=planted.root) == (
+            "Ada Lovelace <ada@example.invalid>"
+        )
+
+
 class TestPushing:
     """
     A session's branch reaching the repository, which is the one thing its sandbox cannot do.
@@ -1247,8 +1308,7 @@ class TestPushing:
             InAWorktree(worktree=worktree, scratch=scratch),
             bwrap,
             Venue.CONFINED,
-            "git -c user.email=probe@example.invalid -c user.name=probe commit -qam 'the session made this' "
-            "--allow-empty",
+            "git commit -qam 'the session made this' --allow-empty",
             seconds=20,
         )
         made = await run("git", "rev-parse", "HEAD", cwd=worktree.root)
@@ -1269,8 +1329,7 @@ class TestPushing:
             InAWorktree(worktree=worktree, scratch=scratch),
             bwrap,
             Venue.CONFINED,
-            "git checkout -qB main origin/main && "
-            "git -c user.email=probe@example.invalid -c user.name=probe commit -q --allow-empty -m 'onto main'",
+            "git checkout -qB main origin/main && git commit -q --allow-empty -m 'onto main'",
             seconds=20,
         )
         recorded = await run("git", "rev-parse", f"refs/heads/{branch_named(PLANTED)}", cwd=worktree.root)

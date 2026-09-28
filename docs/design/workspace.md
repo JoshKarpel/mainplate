@@ -71,7 +71,8 @@ things make that cheap and keep it apart:
   console refreshes. `git fetch` in a session brings the repository's current branches with no
   network and no credential, and nothing can be pushed there.
 - **It is built beside where it goes and renamed into place**, with the operator's `user.name` and
-  `user.email` copied in so a commit carries the name the person pushing it would give it. A crash
+  `user.email`, read once at startup, copied in so a commit carries the name the person pushing it
+  would give it. A crash
   part-way leaves a directory nothing names rather than a worktree half made. Every git that builds
   it runs in the parent, which is safe for exactly as long as it takes: until the rename, no session
   has had a moment to write its configuration. After it, [no git in the parent touches

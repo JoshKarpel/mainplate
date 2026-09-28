@@ -37,6 +37,7 @@ from pathlib import Path
 from secrets import token_hex
 from typing import Final
 
+from mainplate.processes import reaped
 from mainplate.sandbox import Bind
 from mainplate.sandbox import Sandbox
 from mainplate.sandbox import Venue
@@ -218,7 +219,11 @@ async def git_at(at: Path, *arguments: str, environment: Mapping[str, str] | Non
         stderr=asyncio.subprocess.PIPE,
         env={**IDENTITY, "PATH": WHERE_GIT_IS, **(environment or {})},
     )
-    out, err = await process.communicate()
+    try:
+        out, err = await process.communicate()
+    except BaseException:
+        reaped(process)
+        raise
     return Ran(code=process.returncode or 0, stdout=out, stderr=err)
 
 
@@ -407,7 +412,11 @@ class Worktree:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await process.communicate()
+        try:
+            out, err = await process.communicate()
+        except BaseException:
+            reaped(process)
+            raise
         return Ran(code=process.returncode or 0, stdout=out, stderr=err)
 
     async def demand(
@@ -560,6 +569,7 @@ class Worktrees:
     store: Store
     root: Path
     bwrap: str
+    identity: tuple[tuple[str, str], ...]
 
     def at(self, session: str) -> Path:
         return self.root / session
@@ -673,8 +683,8 @@ class Worktrees:
         `origin` is the store and the fetch refspec reads its `refs/remotes/origin/*`, which are the
         ones this console refreshes, so `git fetch` in a session brings the repository's current
         branches without a network or a credential. Nothing can be pushed there: the store is bound
-        read-only. What the operator is called in their own git configuration is copied in, so a
-        commit a session makes carries the name the person pushing it would give it.
+        read-only. The identity this was handed is copied in, so a commit a session makes carries the
+        name the person pushing it would give it.
         """
         await git_at(self.root, "init", "--quiet", str(building))
         gitdir = building / POINTER
@@ -682,7 +692,7 @@ class Worktrees:
         configured: list[tuple[str, str]] = [
             ("remote.origin.url", str(self.store.path)),
             ("remote.origin.fetch", "+refs/remotes/origin/*:refs/remotes/origin/*"),
-            *await operator_identity(),
+            *self.identity,
         ]
         for key, value in configured:
             await self.fresh(gitdir, building, "config", key, value)

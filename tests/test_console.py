@@ -1500,11 +1500,18 @@ class TestForgettingFromTheComposer:
 
 
 class TestTheSendingMenu:
-    async def test_a_conversation_with_nothing_in_it_offers_no_answers(self, app: ASGIApp) -> None:
-        """There is nothing to act on until there is a conversation, so the start page draws no menu."""
+    async def test_a_session_with_nothing_said_in_it_offers_the_answers(self, app: ASGIApp, service: Service) -> None:
+        """
+        The first message swaps the transcript and never the composer, so a menu left off the page a
+        session arrives on stays off until the page is loaded again.
+        """
         async with calling(app) as caller:
-            answered = await caller.get("/")
-        assert "sender__option" not in answered.text
+            created = await caller.post("/sessions", starting_form(DEFAULT_CHOICE))
+            session = created.location.rsplit("/", 1)[-1]
+            await registered(service, session)
+            answered = await caller.get(f"/sessions/{session}")
+        assert "sender__option" in answered.text
+        assert 'value="forget"' in answered.text
 
     async def test_a_conversation_with_a_turn_in_it_does(self, app: ASGIApp, service: Service) -> None:
         session = await a_session(app, service)

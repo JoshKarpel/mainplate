@@ -230,6 +230,7 @@ async def drive(root: Path, requests: int, allowance: int | None) -> Timed:
         # The real one, because a snapshot runs git in the session's sandbox and that is part of what
         # a pass costs.
         bwrap=sandbox_command(),
+        identity=(("user.name", "probe"), ("user.email", "probe@example.invalid")),
     )
     async with open_store(root / "mainplate.db", LEASE, CATALOGUES) as opened:
         service = Service(

@@ -90,7 +90,7 @@ from mainplate.agent import Listed
 from mainplate.calls import INDENT
 from mainplate.calls import block_diff_element
 from mainplate.calls import call_body
-from mainplate.calls import starts_open
+from mainplate.calls import changes_by_file
 from mainplate.calls import subject_of
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
@@ -839,6 +839,28 @@ def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
     return tuple(arranged)
 
 
+def fold_button(column: str, called: str) -> Element:
+    """
+    The press that puts a side column away on a wide window, and brings it back.
+
+    Which columns are away is the reader's, per browser, so it is `localStorage` and the script's:
+    this draws the button as though the column were out, and the script pins the real answer on
+    `<html>` before the first paint and says it on the button, the way the theme is. The glyph is the
+    stylesheet's, read off that same attribute, so a column put away never flashes the wrong arrow.
+    Not drawn on a narrow window, where the clasps already put both columns away.
+    """
+    return button(
+        cls="fold",
+        attrs={
+            "type": "button",
+            "aria-expanded": "true",
+            "aria-label": f"Put the {called} away",
+            "data-fold-column": column,
+            "data-called": called,
+        },
+    )
+
+
 def sidebar(
     links: Links, reader: Reader, listed: tuple[Session, ...], showing: str | None, reachable: Reachable
 ) -> Element:
@@ -879,6 +901,7 @@ def sidebar(
                 attrs={"type": "button", "aria-expanded": "false"},
                 children="Sessions",
             ),
+            fold_button("list", "session list"),
             div(
                 cls="sessions__sheet",
                 children=[
@@ -2499,21 +2522,18 @@ def working(*, saying: str = "working", extra: str | None = None, identified: st
 
 def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     """
-    One call, folded or not by its tool, with what it was handed and what it gave back.
+    One call, folded, with what it was handed and what it gave back.
 
     A real `<details>` because that is what works with no script at all and what the dock's fold
-    controls act on. Most calls are folded, because what a read brought back or a command said is
-    context a reader reaches for rather than prose they read through; a call that *wrote* something
-    is open, because the diff or the new file is what a reader watching a turn is watching for.
-    `starts_open` in `calls.py` is where that is decided.
+    controls act on. Every call is folded: what a read brought back or a command said is context a
+    reader reaches for rather than prose they read through, and what the calls that write did is
+    the batch's diff below the panel, which covers every file they touched at once.
 
-    **Decided by the tool and never by whether the call has come back.** A call still out is drawn
-    working, with the dots in its summary, and folded or open exactly as it will be once it returns,
-    because the script keeps every toggle as the reader's decision: a fold whose default moved as
-    its result landed would be recorded as a decision nobody made, and a read drawn open while it
-    was out would stay open once it returned, so a turn of twenty reads would be twenty open boxes.
-    What the summary says is what makes shut affordable for the rest, since the subject of the call
-    - the path, the command - is on the line a reader scans without a press.
+    **Shut whether or not the call has come back.** A call still out is drawn working, with the dots
+    in its summary, and folded exactly as it will be once it returns, because the script keeps every
+    toggle as the reader's decision: a fold whose default moved as its result landed would be
+    recorded as a decision nobody made. What the summary says is what makes shut affordable, since
+    the subject of the call - the path, the command - is on the line a reader scans without a press.
 
     The id is the panel's own plus this block's place in it, which is stable in both halves: a
     panel's blocks only ever grow at the end, so a call keeps its place once made whether or not it
@@ -2528,7 +2548,7 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     subject = subject_of(used.tool, used.arguments)
     return details(
         cls="tool",
-        attrs={"id": f"{anchor}-tool-{at}", **opens(starts_open(used.tool))},
+        attrs={"id": f"{anchor}-tool-{at}", **opens(False)},
         children=[
             summary(
                 children=[
@@ -3085,7 +3105,64 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 title=panel.title,
             ),
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
-            *((div(cls=("block", "block--diff"), children=block_diff_element(panel.diff)),) if panel.diff else ()),
+            *(
+                (div(cls=("block", "block--diff"), children=batch),)
+                if panel.diff and (batch := batch_element(panel.anchor, panel.diff)) is not None
+                else ()
+            ),
+        ],
+    )
+
+
+# How many lines a batch's diff may run to and still be drawn open. A batch that merged a branch or
+# ran a formatter over the tree changes thousands of lines nobody asked to read, and drawn open that
+# is the whole transcript spent on it; shut, the summary still says how many files and lines it was.
+# A knob rather than a rule, since where "too long to read in passing" starts is a judgement.
+LONGEST_OPEN_DIFF: Final = 150
+
+
+def batch_element(anchor: str, diff: str) -> Element | None:
+    """
+    The net change a batch made, as a fold of its own below the panel's calls, or nothing where no
+    file's lines changed.
+
+    Not shaped as a call, because it is not one: it is what the batch's calls came to, so it stands
+    under them as a labelled rule with the diff bare beneath it, where a card like theirs read as a
+    fourth call. It is still a fold, which the dock's fold-all and the script's memory of a reader's
+    toggles reach the way they reach a call's. The rule says what a reader scanning a turn wants
+    without opening it: how many files, and how many lines went in and out.
+
+    **Open unless it is long, and that is not a default that moves.** The diff is recorded once,
+    whole, when the request after the batch snapshots, so it arrives at the size it will always be
+    and the fold's starting state is decided exactly once; see `opens`.
+    """
+    files = changes_by_file(diff)
+    if not files:
+        return None
+    changes = [change for _, changed in files for change in changed]
+    added = sum(change.mark == "+" for change in changes)
+    removed = sum(change.mark == "-" for change in changes)
+    lines = len(files) + len(changes)
+    return details(
+        cls="batch",
+        attrs={"id": f"{anchor}-diff", **opens(lines <= LONGEST_OPEN_DIFF)},
+        children=[
+            summary(
+                children=[
+                    span(cls="batch__word", children="changed"),
+                    span(cls="batch__files", children=f"{len(files)} file{'' if len(files) == 1 else 's'}"),
+                    span(
+                        cls="batch__lines",
+                        attrs={"title": f"{added} lines added and {removed} taken away, over {lines} lines"},
+                        children=[
+                            span(cls="batch__added", children=f"+{added}"),
+                            " ",
+                            span(cls="batch__removed", children=f"\N{MINUS SIGN}{removed}"),
+                        ],
+                    ),
+                ]
+            ),
+            div(cls="batch__body", children=block_diff_element(files)),
         ],
     )
 
@@ -4396,6 +4473,7 @@ def rail(
                 attrs={"type": "button", "aria-expanded": "false", "aria-label": "Conversation controls"},
                 children="Controls",
             ),
+            fold_button("rail", "conversation controls"),
             div(
                 cls="rail__sheet",
                 children=[
@@ -4584,7 +4662,10 @@ def sending_answers(
     `Forget` keeps it here and drops what the model was told, a `Handoff` keeps it here and has the
     session write down what the model should be told instead, `Parent` reaches the conversation this
     one came out of, `Run` is not a message at all, `Online` is `Run` that can reach past the machine,
-    `Push` takes nothing from the box and reaches the repository, and `Keep` sends it nowhere.
+    `Commit` is a `Run` whose command is written for you and whose message is what you typed, `Push`
+    takes nothing from the box and reaches the repository, and `Keep` sends it nowhere. `Commit` and
+    `Push` are shortcuts for what `Run` and the store would do anyway, and neither stages anything:
+    what goes in a commit is the person's, the model's, or a plugin's to decide.
 
     **Nothing here forks.** A fork happens at a turn boundary through the link on a rule, where what
     it plants at is settled; an answer that forked the end of a live conversation was the same as
@@ -4640,6 +4721,11 @@ def sending_answers(
                 ),
             )
             if runs_in is not None and not connected
+            else ()
+        ),
+        *(
+            (dispatched(Disposition.COMMIT, f"Commit what is staged in {runs_in}, with this as the message"),)
+            if runs_in is not None
             else ()
         ),
         *(
@@ -4760,8 +4846,7 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
     of `Send` by the script. The server parses no leader out of what was posted, so a paragraph that
     opens with `/` is a paragraph, and the menu is what works with the file absent.
 
-    With no conversation yet there are no answers and so no menu, only Send: nothing to fork from,
-    and no session for a shelf to belong to.
+    With no answers there is no menu, only Send.
     """
     send = button(
         # Classed rather than found by position, because the script has to name it: it is the
@@ -4804,7 +4889,6 @@ def composer(
     *,
     live: bool,
     refusing: bool = False,
-    continuing: bool = False,
     returning: bool = False,
     answering: bool = False,
     runs_in: str | None = None,
@@ -4838,11 +4922,11 @@ def composer(
     only on the page that has one: an id nothing points at would say there is something here to
     associate with.
 
-    `continuing` is whether this composer is in a conversation that already exists, which is what
-    decides the menu: there is nothing to fork from and no session for a shelf to belong to until
-    there is one. Its own argument rather than read off `live` even though the two coincide today,
-    because they mean different things - `live` is whether the answer swaps or navigates - so tying
-    them together would be one of the two silently deciding the other.
+    **The menu is drawn before the first message as well as after it.** The composer is only ever on
+    a session's own page, so there is always a session for the shelf to belong to and a worktree for
+    `Run` and `Push`, and nothing among the answers forks. It is also the only chance: the first
+    message swaps the transcript and never the composer, so a menu left off an empty conversation
+    stays off until the page is loaded again.
 
     `runs_in` names where a command the person types would run, and is what puts `Run` among the
     answers: nothing where this session has nowhere to run one. The name is in the argument rather
@@ -4862,9 +4946,7 @@ def composer(
     scroll past. What is above it is only what the next press depends on - what re-sending costs,
     and what the press will do - and what the session *is* stands in the rail; see `about_card`.
     """
-    answers = (
-        (*sending_answers(returning, answering, runs_in, connected), *plugin_answers(plugins)) if continuing else ()
-    )
+    answers = (*sending_answers(returning, answering, runs_in, connected), *plugin_answers(plugins))
     driving = (
         {
             "hx-post": action,
@@ -5792,10 +5874,6 @@ def session_page(
                             links.to_say(showing.session.id),
                             live=True,
                             refusing=stalled is not None,
-                            # Only where there is something to act on. Forking an empty conversation
-                            # makes a session identical to starting one, so the offer would be a
-                            # second way to do what the dashboard's cards already do.
-                            continuing=showing.said.turns > 0,
                             # Any fork can send back to what it came out of; an aside is the case it
                             # is for.
                             returning=showing.session.forked is not None,

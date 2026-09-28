@@ -263,9 +263,9 @@ class Clones:
     def store(self, repository: str) -> Store:
         return Store(path=self.at(repository))
 
-    def worktrees(self, repository: str, under: Path, bwrap: str) -> Worktrees:
+    def worktrees(self, repository: str, under: Path, bwrap: str, identity: tuple[tuple[str, str], ...]) -> Worktrees:
         """The checkouts of one repository, which is what a session is actually planted in."""
-        return Worktrees(store=self.store(repository), root=under, bwrap=bwrap)
+        return Worktrees(store=self.store(repository), root=under, bwrap=bwrap, identity=identity)
 
     def cloned(self, repository: str) -> bool:
         """Whether this repository is already on disk, which is a question with no I/O in it."""
@@ -380,6 +380,16 @@ class Workspaces:
     regardless is refused with `NoSandbox`.
     """
 
+    identity: tuple[tuple[str, str], ...]
+    """
+    The git `user.*` keys every checkout planted from here is configured with.
+
+    Handed in rather than read while planting, so what a session commits as is decided by whoever
+    builds this: the operator's own configuration, read once at startup, or a stated identity for a
+    suite that must commit the same way on a machine with none. The cost, stated: a change to the
+    operator's global identity reaches new sessions only after a restart.
+    """
+
     fetches: Fetches = field(default_factory=Fetches)
     """What each store's last clone or fetch came to, which the dashboard draws. See `refresh`."""
 
@@ -422,7 +432,7 @@ class Workspaces:
         """Every session's checkout of one repository, refused where nothing could confine git in one."""
         if self.bwrap is None:
             raise NoSandbox(f"nothing confines git on this machine, so no session may work in {repository!r}")
-        return self.clones.worktrees(repository, self.root, self.bwrap)
+        return self.clones.worktrees(repository, self.root, self.bwrap, self.identity)
 
     def worktree(self, session: str, repository: str) -> Worktree:
         """

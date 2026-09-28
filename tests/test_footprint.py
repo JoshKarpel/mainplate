@@ -111,6 +111,7 @@ def places(tmp_path: Path) -> Places:
             scratch=tmp_path / "scratch",
             reaching=Reaching(current=Reachable(repositories=())),
             bwrap=None,
+            identity=(),
         ),
         plugins=tmp_path / "plugins",
     )

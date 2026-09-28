@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shlex
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -479,6 +480,15 @@ class Disposition(Enum):
     without going through `PUSH`, and runs whatever the checkout's configuration names while it
     can. That is the person's call to make, per command, and the record says it ran online so the
     page keeps saying so."""
+
+    COMMIT = "commit"
+    """`Service.run` of `git commit`, with the text as the message; see `commit_command`.
+
+    A shortcut and nothing more: a `RUN` whose command is written for you, so it runs where `RUN`
+    does, in the session's sandbox, and is recorded the same way. **It commits what is staged and
+    stages nothing**, because what belongs in a commit is an opinion: staging is left to the person,
+    to the model, or to a plugin that stages on their behalf, and this is the same `git commit` any of
+    them would type. Nothing staged is git's own refusal, recorded as the result."""
 
     PUSH = "push"
     """`Service.push`, which pushes the branch this session recorded to its repository.
@@ -2144,6 +2154,17 @@ def returned_step(held: records.Returned) -> Returned:
 def recorded_command(said: str, *, online: bool = False) -> dict[str, object]:
     """What the person ran, and whether the network was on for it, as the value the store's codec will take."""
     return records.Command(said=said, online=online).recorded()
+
+
+def commit_command(message: str) -> str:
+    """
+    The command `/commit` runs: `git commit` with `message`, quoted, as its message.
+
+    Composed into the one line a `RUN` would record rather than carried as a kind of its own, so the
+    panel says exactly what ran and a reader could have typed it; the quoting is what lets a message
+    carry an apostrophe or run to several lines and still be one argument.
+    """
+    return f"git commit -m {shlex.quote(message)}"
 
 
 def recorded_result(result: Result) -> dict[str, object]:

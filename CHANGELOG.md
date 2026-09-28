@@ -13,6 +13,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository, with its sessions, a **New session** press, a link to the repository on GitHub, and
   when this console last fetched it or that the fetch failed. The press opens the questions about a
   new session with that workspace already answered, where to start in a repository first.
+- **The session list and the rail can each be put away on a wide window**, from a chevron on the
+  column's inner edge, leaving a strip to bring it back; the list's choice holds on the dashboard
+  too. **And the conversation's width can be dragged** from its left edge, wider for a diff or
+  narrower for prose, with the arrow keys as well and Home or a double press putting it back. Both
+  are kept per browser, and the width is never more than the window has room for.
+- **`/commit` commits what is staged, with what you typed as the message.** A shortcut for the
+  `git commit` you would type into `Run`, run the same way in the session's sandbox and drawn as
+  that command. It stages nothing: what goes in a commit is yours, the model's or a plugin's to
+  stage.
 - **`/push` sends a session's branch to its repository.** It takes nothing from the box, pushes the
   session's own branch, the one named above the box, under the same name with this console's
   credentials, never forced, and draws what git said the way a command's result is drawn. What the
@@ -25,9 +34,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and so can a session started with the network on; the security notes say so.
 - **A batch of tool calls is drawn with its diff below the panel.** The net change the whole batch
   made, as a `git diff` between the snapshots around it, so an `edit`, a `create` and a `bash` that
-  ran at once read as one change rather than three or none; an `edit`'s own diff is still a press
-  away inside its now-collapsed call. Nothing is drawn where the batch changed no file, and a
-  scratch-only session, with no worktree to snapshot, shows none, as before.
+  ran at once read as one change rather than three or none. It stands under a rule saying how many
+  files and lines it touched, which folds it, and one past 150 lines starts folded, so a merge does
+  not fill the page. The batch's calls above it are drawn as one box with a row each. An `edit`'s own diff and a `create`'s new file are still a press away inside their
+  calls, which are now drawn shut like every other. Nothing is drawn where the batch changed no
+  file, and a scratch-only session, with no worktree to snapshot, shows none, as before.
+- **A diff, a file and a shell command scroll sideways rather than wrapping**, as a fence already
+  did, and a block whose lines do not fit gets a `focus` button that opens it on its own, as wide as
+  the window. Escape or a press outside puts it away. Not on a phone, where the window is barely
+  wider than the block.
 - **A fence labelled `mermaid` or `svg` is drawn.** The picture it describes stands where the code
   would, SVG as it was written or the diagram as the mermaid library renders it in your theme, and a
   button to the left of `copy` puts the text back and takes it away again. The picture is an image,

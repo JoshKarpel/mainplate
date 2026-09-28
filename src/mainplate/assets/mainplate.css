@@ -106,6 +106,8 @@
     /* What lifts a card off the page: the rail's cards, and on a phone the session list's. */
     --lift: 0 2px 12px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
     --sidebar: 17rem;
+    /* A side column put away is a strip this wide, which is the button that brings it back. */
+    --folded: 1.5rem;
     /* One width at every shape, so a card has one layout to be right in, and a wide one, because
        every card in it is rows of a key at the left and a value or a control at the right, and a
        row is only a row while the two fit on one line: a repository or a branch beside its key is
@@ -202,8 +204,13 @@ body {
 }
 
 .shell {
+    /* Each side column's width is one property, so a column the reader has put away changes that
+       property and never the template: four combinations of two columns out or away, and one rule
+       for each column rather than one per combination. */
+    --list-column: var(--sidebar);
+    --rail-column: var(--rail);
     display: grid;
-    grid-template-columns: var(--sidebar) 1fr;
+    grid-template-columns: var(--list-column) 1fr;
     /* The window, less a phone's keyboard. `dvh` is the window less the browser's own bars and
        nothing else: a keyboard laid over the page leaves it as it was, and the shell would run on
        under the keys with the message box at the bottom of it. `--visible-height` is what the script
@@ -217,7 +224,7 @@ body {
    stay put. It therefore takes room instead of covering the text it exists to navigate, and the
    start page, which has no rail, simply has no third column. */
 .shell:has(> .rail) {
-    grid-template-columns: var(--sidebar) 1fr var(--rail);
+    grid-template-columns: var(--list-column) 1fr var(--rail-column);
 }
 
 /* The console has two shapes, and one width decides between them: over 78rem, three columns, with
@@ -357,6 +364,56 @@ main {
        the one thing every page here must never do. */
     min-width: 0;
     padding: 0 var(--gap);
+    /* What the conversation is read at: the reader's own width where they have dragged one, which
+       the script pins as `--reading` from `localStorage` before the first paint, and the measure
+       where they have not. Held to the room there is by `width: 100%` on everything that reads it,
+       so a width chosen on a wide screen is simply as wide as a narrower one allows. */
+    --column: var(--reading, var(--measure));
+    position: relative;
+}
+
+/* The edge the reader drags to change `--column`, on the conversation's left, in the gutter `main`
+   keeps either side: the right edge is the transcript's scrollbar. Seated by the script, since a grip
+   that does nothing without it is a control that lies, and only where there is a conversation. A
+   faint mark rather than nothing, because a control drawn only under the pointer is one nobody
+   finds. */
+.reading__grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(50% - min(var(--column), 100% - 2 * var(--gap)) / 2 - var(--gap));
+    width: var(--gap);
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.reading__grip::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 3px;
+    height: 2.5rem;
+    border-radius: 999px;
+    background: var(--edge);
+    translate: -50% -50%;
+}
+
+.reading__grip:hover::after,
+.reading__grip:focus-visible::after,
+.reading__grip[data-dragging]::after {
+    height: 4rem;
+    background: var(--mark);
+}
+
+.reading__grip:focus-visible {
+    outline: none;
+}
+
+/* Not while a fork is being chosen: the picker is laid out at the card measure, wider than the column
+   the grip stands at the edge of, so the grip would stand over the picker's own controls. */
+main:has(> .forking) > .reading__grip {
+    display: none;
 }
 
 /* And again for the rows inside it, because `min-width: auto` applies to every grid item and not
@@ -381,7 +438,7 @@ main > * {
        The room above the first thing is padding, since a gap has nothing to stand between there. */
     gap: var(--space-5);
     width: 100%;
-    max-width: var(--measure);
+    max-width: var(--column);
     margin: 0 auto;
     padding-top: var(--space-5);
     /* The scroll is this element's, not the document's, so the composer stays put while the
@@ -710,6 +767,71 @@ pre > .draw[aria-busy] {
     cursor: progress;
 }
 
+/* --- Focusing: seated by the script ---------------------------------------- */
+
+/* A block whose lines do not fit takes a button that opens it on its own, as wide as the window,
+   standing where `draw` does, and one further in where a fence shown as code carries both. */
+pre > .focus {
+    right: calc(var(--space-3) + 3.3rem + 0.3rem);
+    min-width: 2.7rem;
+}
+
+pre:has(> .draw) > .focus {
+    right: calc(var(--space-3) + 3.3rem + 0.3rem + 2.7rem + 0.3rem);
+}
+
+/* As wide as its longest line and no wider than the window, over a dimmed page. The block scrolls
+   inside it on both axes and the dialog itself does not, so the close button keeps its corner; and
+   nothing in the dialog is padding, so a press that lands on the dialog itself is a press on the
+   backdrop. */
+.focused {
+    width: fit-content;
+    max-width: calc(100vw - 2 * var(--space-6));
+    max-height: calc(100dvh - 2 * var(--space-6));
+    padding: 0;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--sunk);
+    color: var(--ink);
+    overflow: hidden;
+}
+
+.focused[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+.focused::backdrop {
+    background: color-mix(in srgb, var(--ground) 70%, transparent);
+}
+
+.focused > form {
+    position: absolute;
+    z-index: 1;
+    top: var(--space-3);
+    right: var(--space-3);
+    margin: 0;
+}
+
+/* The copy keeps the block's classes, so its lines are drawn as they were, and sheds its frame, since
+   the dialog is the frame now. */
+.focused > pre {
+    min-height: 0;
+    margin: 0;
+    padding: var(--space-4) var(--space-5);
+    border: none;
+    border-radius: 0;
+    background: none;
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    overflow: auto;
+}
+
+.focused > pre > code {
+    overflow: visible;
+}
+
 /* The picture stands where the code stood, scaled to the block and never wider than it. The code
    is hidden with the attribute the script sets, and told so here because `.text pre code`'s own
    `display: block` outranks the browser's `[hidden]` rule. */
@@ -1031,18 +1153,41 @@ pre .gs {
 
 /* --- Tool calls ------------------------------------------------------- */
 
-/* Folded by default for most tools: what a read brought back or a command said is context a reader
-   reaches for, not prose they read through. A call that wrote something - an edit, a create - is
-   drawn open, since the diff or the new file is what a reader watching a turn is watching for;
-   `starts_open` in `calls.py` decides. The fold is a real `<details>`, which is what the dock's
-   fold-all works on and what keeps the whole thing usable with no script at all. */
+/* Folded, every one: what a read brought back or a command said is context a reader reaches for,
+   and what the calls that write did is the batch's diff under them. The fold is a real `<details>`,
+   which is what the dock's fold-all works on and what keeps the whole thing usable with no script at
+   all. */
 .tool {
-    margin: 0.5rem 0;
+    margin: 0;
     border: 1px solid var(--edge-soft);
     border-radius: var(--radius);
     background: var(--raised);
     font-family: var(--mono);
     font-size: 0.78rem;
+}
+
+/* A batch's calls are one box with a row each, because they are one thing: the calls the model made
+   in one response, run at once, rather than separate cards that happen to be stacked. Drawn from the
+   blocks as they stand, by run: the first of a run keeps the top of the box and the last its foot,
+   and each row between is parted from the one above by a hairline. An open call opens in its row. */
+.block--tool + .block--tool {
+    margin-top: 0;
+}
+
+.block--tool:has(+ .block--tool) {
+    margin-bottom: 0;
+}
+
+.block--tool + .block--tool > .tool {
+    border-top-color: var(--edge-soft);
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.block--tool:has(+ .block--tool) > .tool {
+    border-bottom: none;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
 }
 
 .tool > summary {
@@ -1228,6 +1373,105 @@ pre .gs {
 
 .line[data-mark="@"] {
     color: var(--ink-faint);
+}
+
+/* A block of lines is a file, a diff or a command, where a line is a line: wrapped, a diff's row
+   breaks in two under its own gutter and an indented block loses its shape. So it scrolls sideways
+   instead, one level in rather than on the `pre` for the reason a fence does, so the copy button
+   keeps its corner. The code is a grid whose one column is the longest line's width and stretches to
+   the block's where every line is shorter, so a changed line's wash runs to the end of the longest
+   line rather than stopping where the block's edge was before it was scrolled. The other way round,
+   `minmax(100%, max-content)`, never grows: a grid of definite width has no free space to grow a
+   track into. */
+pre.lines {
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+pre.lines > code {
+    display: grid;
+    grid-template-columns: minmax(max-content, 1fr);
+    overflow-x: auto;
+}
+
+/* The net change a batch made, under its calls: a labelled rule that is the fold's summary, and the
+   diff bare beneath it. Not a card, because it is not a call - it is what the calls came to, and a
+   card like theirs read as a fourth one. The rule runs out to the panel's edge after the counts, so
+   it reads as the end of the batch rather than as one more row of it. */
+.batch {
+    font-family: var(--mono);
+}
+
+.batch > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: var(--space-2) 0;
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    cursor: pointer;
+    list-style: none;
+}
+
+.batch > summary::-webkit-details-marker {
+    display: none;
+}
+
+.batch > summary::before {
+    content: "\25B8";
+    color: var(--tool-edge);
+    transition: transform 0.12s ease;
+}
+
+.batch[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.batch > summary::after {
+    content: "";
+    flex: 1 1 2rem;
+    align-self: center;
+    border-top: 1px solid var(--edge);
+}
+
+.batch__word {
+    font-size: 0.66rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+.batch__files {
+    color: var(--ink-soft);
+}
+
+.batch__lines {
+    white-space: nowrap;
+}
+
+.batch__body {
+    padding-top: var(--space-2);
+    cursor: pointer;
+}
+
+.batch__body pre {
+    position: relative;
+    margin: 0;
+    cursor: auto;
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+}
+
+.batch__added {
+    color: var(--moss);
+}
+
+.batch__removed {
+    color: var(--vermilion);
 }
 
 /* An edit whose diff is empty, said rather than drawn as a box with nothing in it, the way a
@@ -1663,7 +1907,7 @@ pre .gs {
     flex-direction: column;
     gap: var(--space-3);
     width: 100%;
-    max-width: var(--measure);
+    max-width: var(--column);
     margin: 0 auto;
     /* The transcript's column ends flush with its last child, so this is the whole of the room
        between the conversation and the box: less than the gap between two panels, since the box is
@@ -3021,6 +3265,94 @@ pre .gs {
     display: none;
 }
 
+/* --- Putting a side column away ------------------------------------------ */
+
+/* On a wide window: a strip as wide as the button that brings it back, and the conversation takes the
+   rest. The reader's, per browser, so the script pins it on `<html>` from `localStorage` before the
+   first paint, the way the theme is. After both columns' own rules and through `:where()`, so each
+   rule here weighs what the rule it changes weighs and wins on order, and the narrow block, which is
+   later still and draws both columns as sheets behind clasps whatever this says, wins the same way. */
+:where(:root[data-list="shut"]) .shell {
+    --list-column: var(--folded);
+}
+
+:where(:root[data-rail="shut"]) .shell {
+    --rail-column: var(--folded);
+}
+
+:where(:root[data-list="shut"]) .sessions__sheet,
+:where(:root[data-rail="shut"]) .rail__sheet {
+    display: none;
+}
+
+:where(:root[data-list="shut"]) .sessions,
+:where(:root[data-rail="shut"]) .rail {
+    padding-inline: 0;
+}
+
+/* The press stands at the column's inner edge at the height of the first thing in it, which is the
+   column's edge whether the column is out or away. Its arrow points the way the column will go. */
+.sessions,
+.rail {
+    position: relative;
+}
+
+.fold {
+    position: absolute;
+    z-index: 2;
+    top: var(--gap);
+    display: grid;
+    place-items: center;
+    width: var(--folded);
+    height: var(--folded);
+    padding: 0;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--raised);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.fold:hover,
+.fold:focus-visible {
+    color: var(--ink);
+}
+
+/* Half over the list's border, which is a line the button can stand on. */
+.sessions > .fold {
+    right: calc(var(--folded) / -2);
+}
+
+/* Wholly outside the rail rather than half over it, since the rail has no padding on that side and
+   its first card starts at the edge: half over it, the button stood on the card's own corner. */
+.rail > .fold {
+    right: calc(100% + 2px);
+}
+
+:where(:root[data-rail="shut"]) .rail > .fold {
+    right: auto;
+    left: 0;
+}
+
+.sessions > .fold::before {
+    content: "\2039";
+}
+
+.rail > .fold::before {
+    content: "\203A";
+}
+
+:where(:root[data-list="shut"]) .sessions > .fold::before {
+    content: "\203A";
+}
+
+:where(:root[data-rail="shut"]) .rail > .fold::before {
+    content: "\2039";
+}
+
 /* Everything that reads the conversation, on one card: the search, the key and the dock, as
    sections parted by a rule rather than three cards, so the rail is three kinds of card - reading,
    a plugin's, the session's - rather than eight things with the same edge. */
@@ -4252,6 +4584,20 @@ main:has(> .forking) {
         grid-template-rows: auto 1fr;
     }
 
+    /* Both columns are already away here, behind their clasps, so a wide window's choice to put one
+       away is not this shape's to act on: no fold button, and a sheet the wide window hid is still
+       the sheet a clasp slides out. Nor is there a grip, since the conversation already has the
+       whole width. */
+    .fold,
+    .reading__grip {
+        display: none;
+    }
+
+    .sessions__sheet,
+    .rail__sheet {
+        display: flex;
+    }
+
     /* The row itself, laid out rather than reserved: `main` starts under it because it is a track
        of the shell, and the clasps, which are fixed to the viewport, are placed to stand in it. Its
        content box is exactly the clasps' own height at the clasps' own inset, which is what keeps
@@ -4445,6 +4791,12 @@ main:has(> .forking) {
         /* Nothing hovers on a phone, so a control revealed by hovering is one that is never reached;
            a session is opened and closed from its rail. */
         .session__archive {
+            display: none;
+        }
+
+        /* A window a phone's width is barely wider than the block already is, so opening it as wide
+           as the window buys a few characters for a dialog to put away again. */
+        pre > .focus {
             display: none;
         }
 
