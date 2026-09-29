@@ -6,6 +6,7 @@ import pytest
 from markupsafe import Markup
 from pygments.token import Token
 
+from mainplate.agent import drawing_note
 from mainplate.markup import DRAWABLE
 from mainplate.markup import HIGHLIGHT
 from mainplate.markup import LANGUAGE_PREFIX
@@ -138,6 +139,14 @@ class TestWhichFencesCanBeDrawn:
     def test_a_label_that_is_markup_cannot_break_out_of_the_attribute(self) -> None:
         rendered = as_message('```svg"><script>alert(1)</script>\nx\n```')
         assert "<script>" not in rendered
+
+    @pytest.mark.parametrize("drawable", sorted(DRAWABLE))
+    def test_a_session_is_told_of_every_label_the_page_draws(self, drawable: str) -> None:
+        """
+        `DRAWABLE` and the sentence a session is told are one fact written twice, and a label added
+        to the set and not to the sentence would be a picture no model ever knows to write.
+        """
+        assert f"`{drawable.removeprefix(LANGUAGE_PREFIX)}`" in drawing_note()
 
 
 class TestWhereANewlineIsALineBreak:

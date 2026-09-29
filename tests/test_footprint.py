@@ -119,7 +119,7 @@ def places(tmp_path: Path) -> Places:
 
 
 class TestWhereASessionsDirectoriesAre:
-    def test_a_session_in_a_repository_has_its_checkout_and_scratches(self, places: Places, tmp_path: Path) -> None:
+    def test_a_session_in_a_repository_has_its_worktree_and_scratches(self, places: Places, tmp_path: Path) -> None:
         assert places.of("ab" * 16, "test:fixture") == (
             tmp_path / "worktrees" / ("ab" * 16),
             tmp_path / "scratch" / ("ab" * 16),
@@ -194,7 +194,7 @@ class TestSweeping:
 class TestWhatAPageSaysASessionTakes:
     """
     The figure on a row and on the session's card in the rail, read out of the holder rather than
-    walked, which is what lets these run over a store with no directories at all.
+    walked, which is what lets these run over a database with no directories at all.
     """
 
     @pytest.fixture

@@ -46,16 +46,16 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
     """
     Every directory that is this session's, off the disk, with the worktree's last tree recorded first.
 
-    The checkout's last tree is captured first, under `archived:tree`, so a fork from the end of this
-    session plants at the files it actually ended with; the capture puts that tree in the store, and
-    the store is not the session's, so it outlives the checkout.
+    The worktree's last tree is captured first, under `archived:tree`, so a fork from the end of
+    this session plants at the files it actually ended with; the capture puts that tree in the
+    store, and the store is not the session's, so it outlives the worktree.
 
     **A capture that fails is logged and the files go anyway.** The usual reason is a session that
     broke its own `.git`, which no later round would fix, so retrying would keep its files for ever.
     Without the key, a fork from the end plants at the newest tree a turn recorded, and what changed
-    after that is lost with the checkout.
+    after that is lost with the worktree.
 
-    Then everything `Places.of` names that is still there, which is the checkout, the scratch and
+    Then everything `Places.of` names that is still there, which is the worktree, the scratch and
     the plugins' scratches.
     """
     workspaces = places.workspaces

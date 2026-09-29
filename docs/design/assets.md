@@ -135,12 +135,21 @@ Both are the reader's and are kept per browser, in `localStorage`, because what 
 the screen and not about the person; both are pinned on `<html>` before the first paint, for the
 theme's reason, so a page opened with the list away never draws it and takes it back.
 
-A column put away is a strip the width of the chevron that brings it back, standing on the column's
+A column put away is a strip the width of the button that brings it back, standing on the column's
 inner edge in both states. A strip rather than the narrow shape's drawer, because a drawer needs a
 clasp to stand somewhere, and on a wide window the only places are over the conversation's corners,
 which is the argument above against floating clasps. Each column's width is one custom property
 the grid reads, so two columns out or away are four layouts and one rule each. The narrow block
-draws both columns as sheets behind clasps whatever this says, and draws no chevron.
+draws both columns as sheets behind clasps whatever this says, and draws no button to put one away.
+
+**The button moves when it is pressed, and that is a named exception to a control that toggles
+staying put** ([controls](../philosophy.md#controls) is the rule). What the press moves is the
+very edge the button stands on, and the one place a column's toggle could stand still is over the
+conversation, which is the same argument against floating clasps again. The cost, stated: undoing a
+press means finding the button a column's width from where the pointer left it, rather than pressing
+twice where it was. **The script seats it**, as it does the grip, since a button that does nothing
+without the script is a control that lies: with the file absent both columns are out and there is
+no press offered to put either away.
 
 **The width is one value, `--column`, that the transcript and the message box both read**: the
 reader's `--reading` where they have dragged one and the measure where they have not, held to the
@@ -325,9 +334,8 @@ rather than a download apiece, because the check is the whole of the safety and 
 checked would otherwise have somewhere to land. The pre-commit hooks step around the same files,
 since a newline one of them appends is a digest the test then refuses, and `.gitattributes` has git
 store them verbatim, since a line ending normalised on the way into the index is the same refusal
-on every other machine. A release is taken on once it
-has aged, a week for a minor and a month for a major, which is `uv`'s cooldown applied by hand to a
-fetch `uv` does not make.
+on every other machine. A release is taken on once it has aged, a week for a minor and a month for
+a major, which is `uv`'s cooldown applied by hand to a fetch `uv` does not make.
 
 Each vendored file the server compresses is committed compressed as well, once per coding it
 offers, as the `.br`, `.zst` and `.gz` beside it. The inventory reads a sidecar where it finds one no
@@ -335,13 +343,14 @@ older than its file and compresses at startup where it does not, and the levels 
 are not ones a start could pay: brotli at its ceiling takes six seconds over the diagram library and
 ships 13% less than the default a start would use, which takes under a tenth of one. The recipe runs
 only on a bump, so it takes every coding's highest level rather than weighing each against what the
-next release of a library makes it worth. A sidecar is derived bytes and carries no digest; the suite decodes each
-one against the digest of its file. The cost, stated: about two and a half megabytes more in the
-repository per version of the diagram library, and a sidecar older than its file is ignored for a
-startup compression with nothing but a log line to say so, which is why the suite also asks the
-inventory what it actually serves. `mainplate.css` and `mainplate.js` have none: they change with
-most commits, a sidecar would be a second copy to keep in step with each, and at startup's default
-they cost hundredths of a second.
+next release of a library makes it worth. A sidecar is derived bytes and carries no digest; the
+suite decodes each one against the digest of its file. The cost, stated: about two and a half
+megabytes more in the repository per version of the diagram library, and a sidecar older than its
+file is ignored for a startup compression with nothing but a log line to say so, which is why the
+suite also asks the inventory what it actually serves. Which files get sidecars at all is a second
+answer to a question the inventory keeps private, so the suite asks it that too, for every row.
+`mainplate.css` and `mainplate.js` have none: they change with most commits, a sidecar would be a
+second copy to keep in step with each, and at startup's default they cost hundredths of a second.
 
 `htmax.min.js` is htmx 4 core plus every bundled extension in one file, with an allowlist in a meta
 tag deciding which actually register. Why one file rather than core plus separately vendored

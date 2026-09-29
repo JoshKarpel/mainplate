@@ -119,6 +119,7 @@ from mainplate.durability import terminally
 from mainplate.forge import Workspaces
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
+from mainplate.snapshots import Store
 
 SESSION = "a-session"
 
@@ -369,12 +370,14 @@ class TestReadingABatchsDiff:
         assert got_tool.diff == "--- a\n+++ a"
         assert got_other.diff is None
 
-    def test_a_batch_that_changed_nothing_is_drawn_same_as_one_that_never_differed(self) -> None:
+    @pytest.mark.parametrize("wrote", [{0: ""}, {}], ids=["changed-nothing", "never-diffed"])
+    def test_a_batch_with_no_change_to_draw_carries_none(self, wrote: dict[int, str]) -> None:
+        """A batch that changed nothing and one never diffed are one state, so they are one value."""
         tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
 
-        (got,) = with_diffs((tool,), {0: ""})
+        (got,) = with_diffs((tool,), wrote)
 
-        assert got.diff == "", "an empty diff is a diff, and the page draws nothing for either"
+        assert got.diff is None
 
 
 class TestForgettingWhatCameBefore:
@@ -1029,7 +1032,7 @@ class TestWatchingATurnHappen:
 
     def test_a_turn_is_priced_while_it_is_still_being_answered(self) -> None:
         """
-        The half of the pricing decision that is visible on the page rather than in the store.
+        The half of the pricing decision that is visible on the page rather than in the database.
 
         A response is priced before the step records it, so what a turn has spent is readable from
         the same steps its blocks are, and a rule fills in as the turn runs instead of appearing
@@ -1530,19 +1533,33 @@ class TestWhatOnePassDoes:
         self, service: Service, workspaces: Workspaces
     ) -> None:
         """
-        The console's to say rather than the operator's, so it is composed beside the note about the
-        session's places and reaches the record the same way: an operator who rewrites the standing
+        The console's to say rather than the operator's, so it is composed into the record beside
+        the operator's instructions rather than inside them: an operator who rewrites the standing
         instructions keeps the one sentence saying what the page can show.
         """
+        told = await self.told_in_a_session(service, workspaces)
+        assert "labelled `mermaid` or `svg` is drawn as a picture" in told
+
+    async def test_what_the_page_draws_is_said_before_anything_more_specific(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        First, as the least specific block: it is the same in every session on every console, so
+        the operator's standing instructions, a plugin's and the note about the session's places
+        all come after it and have the later word.
+        """
+        told = await self.told_in_a_session(service, workspaces)
+        assert told.startswith("A fenced code block labelled `mermaid`")
+        assert told.index("`mermaid`") < told.index(INSTRUCTIONS)
+
+    async def told_in_a_session(self, service: Service, workspaces: Workspaces) -> str:
+        """What a session on the fixture repository recorded it was answered under, after one pass."""
         planting = replace(service, workspaces=workspaces)
         session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
         await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
-
         recorded = await planting.checkpointer.load(session.id)
-        told = parse_instructions(recorded[instructions_key(0)])
-        assert "labelled `mermaid` or `svg` is drawn as a picture" in told
-        assert told.index(INSTRUCTIONS) < told.index("`mermaid`"), "after the operator's own, whose word it never takes"
+        return parse_instructions(recorded[instructions_key(0)])
 
     async def test_the_system_prompt_is_settled_before_the_first_answer_and_never_recomposed(
         self, service: Service, workspaces: Workspaces
@@ -1619,6 +1636,59 @@ class TestWhatOnePassDoes:
         await passes_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1), session.id)
 
         assert scripted.asked == 2, "two requests, one per pass, and neither asked twice"
+
+    async def test_what_a_batch_wrote_is_recorded_under_the_request_that_asked_for_it(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        `wrote_key` here and `Stepping.wrote` in the loop build one key from opposite ends, so this
+        is the assertion that turns a drift between them into a failure: the batch behind request 0
+        wrote a file, and the diff naming it has to be where the page will look for request 0's.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        await passes_at(planting, conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        assert "+++ b/src/added.txt" in wrote_in(recorded, 0)[0]
+
+    async def test_a_pass_that_replays_a_batchs_diff_runs_no_git_for_it(
+        self, service: Service, workspaces: Workspaces, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        Three requests cut one to a pass, so the third pass replays the request whose snapshot
+        recorded the first batch's diff. A replay that ran `git diff` again would make three diffs
+        of two batches.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        creating = (
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="create", args={"path": f"src/{name}.txt", "content": f"{name}\n"}, tool_call_id=name
+                    )
+                ]
+            )
+            for name in ("added", "also")
+        )
+        scripted = Scripted(script=(*creating, ModelResponse(parts=[TextPart("made both")])))
+        diffed: list[tuple[str, str]] = []
+        diff = Store.diff
+
+        async def counted(store: Store, before: str, after: str) -> str:
+            diffed.append((before, after))
+            return await diff(store, before, after)
+
+        monkeypatch.setattr(Store, "diff", counted)
+
+        made = await passes_at(
+            planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1), session.id
+        )
+
+        assert len(made) == 3, "the control: a turn in fewer passes replays no diff to run twice"
+        assert len(diffed) == 2
 
     async def test_a_turn_is_recorded_the_same_however_the_passes_fall(
         self, service: Service, workspaces: Workspaces

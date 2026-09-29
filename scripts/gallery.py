@@ -42,14 +42,19 @@ from without_durability.interfaces import inbox_key
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Listed
+from mainplate.agent import drawing_note
+from mainplate.agent import network_note
+from mainplate.agent import working_note
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import retention_for
 from mainplate.console import LINKS
 from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import Result
+from mainplate.conversation import before
 from mainplate.conversation import commit_command
 from mainplate.conversation import heard_key
+from mainplate.conversation import instructing
 from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
@@ -58,6 +63,7 @@ from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_messages
 from mainplate.conversation import recorded_prompt
+from mainplate.conversation import recorded_push
 from mainplate.conversation import recorded_result
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
@@ -96,6 +102,7 @@ from mainplate.sessions import Idle
 from mainplate.sessions import Origin
 from mainplate.sessions import Queued
 from mainplate.sessions import Session
+from mainplate.settings import DEFAULT_INSTRUCTIONS
 from mainplate.snapshots import branch_named
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
@@ -280,6 +287,10 @@ PARENT = Session(
 #
 # Every unit the figure can be drawn in is on one row or another, and the two states that draw no
 # figure at all are too: a session measured at nothing, and one nothing has measured.
+#
+# The roots are in the order `read_sessions` hands them back, every active one above the archived
+# one and each group most recently written to first, because `arrange` keeps the order it is given
+# rather than sorting again: a table out of that order draws a list no console can.
 LISTED = (
     PARENT,
     Session(
@@ -313,6 +324,17 @@ LISTED = (
         # pass as well, so the two words are drawn side by side on this one.
         unseen=True,
         attention=Queued(),
+    ),
+    # Forked from the end of the archived session at the foot of the list, which is how an archived
+    # conversation is carried on: a root among the active rows, carrying its turn, with the session
+    # it came from below the lot, since a branch is only nested under a parent in its own group.
+    Session(
+        id="ab" * 16,
+        created_at=WHEN - timedelta(hours=1),
+        title="Rewrite the seeder around Choice.settled",
+        forked=Origin(session="ff" * 16, turn=2),
+        repository=WORKING_IN,
+        footprint=Footprint(allocated=38_200_000, measured_at=MEASURED),
     ),
     Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
     # The session with the drawings in it, working in nothing, since a picture needs no files.
@@ -572,29 +594,7 @@ BLOCK_DIFF = "\n".join(
     ]
 )
 
-# What the requests in this fixture carried, so the panel that draws a session's system prompt has
-# something to draw. Three scopes in the order `instructing` composes them - the console's standing
-# directions, the working note the session's own isolation adds, and the repository's own
-# `AGENTS.md` last - because what that panel is for is showing a reader which of those they are
-# looking at.
-INSTRUCTIONS = """\
-You are a helpful assistant, working with a software engineer. Be concise and direct.
-
-You are working in a git worktree, which is called `worktree`. The file tools take paths relative to
-it and reach nothing outside it. Changes you make there are snapshotted automatically; you never
-need to commit, and you should not run git commands to record your work. You also have a scratch
-directory called `scratch`, outside the worktree and outside every snapshot. Reach it by passing
-`root: "scratch"` to `read`, `edit` or `create`; in a command it is `$MAINPLATE_SCRATCH`, and the
-worktree is `$MAINPLATE_WORKTREE`.
-
-Commands you run cannot reach the network: no fetching, no installing, no cloning. Something that
-needs one fails rather than hanging.
-
-A fenced code block labelled `mermaid` or `svg` is drawn as a picture on the page, so when a
-diagram or a figure would say it better than prose, write one: `mermaid` for a flow, a sequence, a
-state machine or a timeline, and `svg` when you need to draw exactly what you mean. Every other
-fence is shown as code.
-
+GUIDED = """\
 `AGENTS.md`, this repository's own guidance:
 
 # Polling
@@ -604,6 +604,33 @@ own. A region that asks for itself has to get its own trigger right; a region wi
 nothing to get wrong.
 
 Run `just test` before saying anything is done.
+"""
+"""
+What the bundled `guidance` plugin contributes for a repository carrying an `AGENTS.md`, written out.
+
+**One fact in two places, for `ASKING`'s reason**: the plugin is a script this console speaks to
+over a pipe, so there is nothing to import, and asking it would mean spawning the process this
+gallery exists not to. The heading line is the plugin's own wording; a reworded one leaves a
+screenshot of words nobody will read again.
+"""
+
+INSTRUCTIONS = instructing(
+    drawing_note(),
+    DEFAULT_INSTRUCTIONS,
+    GUIDED,
+    working_note(scratch=True),
+    network_note(CATALOGUE.default.isolation.network),
+)
+"""
+What the requests in this fixture carried, so the panel that draws a session's system prompt has
+something to draw.
+
+Composed by `instructing` from the blocks `conversing` hands it, in its order: what the page draws,
+the operator's standing instructions, what a plugin contributed, and what this session's tools
+reach, which `reaching` joins from the working note and the network note of a worktree session with
+a sandbox. Every block but the plugin's is the console's own function, so a reworded note reaches
+the panel without anybody copying it here; what that panel is for is showing a reader which of the
+scopes they are looking at.
 """
 
 ASKING = (
@@ -794,6 +821,29 @@ DRAWN: list[ModelMessage] = [
         ],
         usage=spending(asked=12_600, answered=214, cost="0.0391"),
         metadata=timing(4.1),
+    ),
+]
+
+# A reply that opens with its reasoning inside `<think>` tags rather than in a part of its own, which
+# is how some wires carry it, so a page draws what `unthought` makes of one: a reasoning panel with
+# the tags and the newlines they stood on gone, and the prose after it as the reply. A turn of the
+# branch on the other wire, since that is where a reader meets it.
+THOUGHT_INLINE: list[ModelMessage] = [
+    ModelRequest(parts=[UserPromptPart(content="Is an interval enough, or does the region need a key as well?")]),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(
+                content=(
+                    "<think>\n**Checking what the morph matches a region by**\n</think>\n\n"
+                    "An interval is enough on its own. The morph matches the region by its `id`, which "
+                    "the page already carries, so what was missing was only a trigger that outlives the "
+                    "element's first load."
+                )
+            )
+        ],
+        usage=spending(asked=46_000, answered=310, cost="0.0606"),
+        metadata=timing(5.2),
     ),
 ]
 
@@ -1217,7 +1267,7 @@ def snapshotted(written: dict[str, object]) -> dict[str, object]:
     where its tools changed the tree.
 
     Only for the turns the checkpoint holds, because a tree recorded before a request in a turn
-    nobody took is a record no pass could write, and the seeder plants these into a real store.
+    nobody took is a record no pass could write, and the seeder plants these into a real database.
     """
     turns = transcript(written).turns
     return {
@@ -1291,8 +1341,8 @@ ENROLLED: tuple[Enrolled, ...] = (
 
 def settled_checkpoint() -> dict[str, object]:
     """
-    The parent session's checkpoint: two turns, a boundary between them, three commands and a
-    `/commit`, which is drawn as the command it ran.
+    The parent session's checkpoint: two turns, a boundary between them, three commands, a
+    `/commit`, which is drawn as the command it ran, one command run with the network on, and a push.
 
     The commands are ones the person ran themselves, which no model was told about and which the
     store holds beside what was said. Two exit states, because they are drawn differently and the
@@ -1342,6 +1392,28 @@ def settled_checkpoint() -> dict[str, object]:
                 " create mode 100644 tests/test_long_lines.py\n"
             ),
             took=timedelta(seconds=0.21),
+        )
+    )
+    # Run with the network on, so the one mark a command's line carries for that is drawn somewhere.
+    written[inbox_key(6)] = recorded_command("uv sync", online=True)
+    written[result_key(inbox_key(6))] = recorded_result(
+        Result(
+            status=0,
+            output="Resolved 142 packages in 1.21s\nAudited 139 packages in 0.48ms\n",
+            took=timedelta(seconds=1.74),
+        )
+    )
+    # A push, drawn from the branch it records rather than from its text, which is what a screenshot
+    # has to show is not a line somebody typed.
+    written[inbox_key(7)] = recorded_push(branch_named(PARENT_ID))
+    written[result_key(inbox_key(7))] = recorded_result(
+        Result(
+            status=0,
+            output=(
+                "To github.com:joshkarpel/mainplate.git\n"
+                f" * [new branch]      {branch_named(PARENT_ID)} -> {branch_named(PARENT_ID)}\n"
+            ),
+            took=timedelta(seconds=1.32),
         )
     )
     written[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
@@ -1397,28 +1469,32 @@ def fixtures() -> tuple[Fixture, ...]:
     before the one it branched at: a checkpoint that said otherwise would be a plausible-looking
     approximation of a fork rather than one.
     """
-    parent, branch, deeper, other, detached, drawing, archived = LISTED
+    parent, branch, deeper, other, carried_on, detached, drawing, archived = LISTED
     if archived.archived is None:  # pragma: no cover - the fixture says it is, and this is what reads it
         raise ValueError("the gallery's last session is the archived one, and it records no time")
+    if carried_on.forked is None:  # pragma: no cover - the fixture says it is, and this is what reads it
+        raise ValueError("the gallery's carried-on session is a fork, and it records no origin")
+    closed = {**settled_checkpoint(), ARCHIVED_KEY: records.Archived(at=archived.archived).recorded()}
     return (
         Fixture.of(parent, ON_SONNET, settled_checkpoint()),
         # Branched at turn 1 and answered on a different model, so it carries turn 0 and nothing
         # after it.
         Fixture.of(branch, ON_OPUS, recorded(CONVERSATION)),
-        # A branch of that branch, at turn 2, on the other wire entirely: turns 0 and 1 come across.
-        Fixture.of(deeper, ON_GPT, recorded(CONVERSATION, TOOL_IN_FLIGHT)),
+        # A branch of that branch, at turn 2, on the other wire entirely: turns 0 and 1 come across,
+        # and turn 2 is its own, answered the way that wire answers.
+        Fixture.of(deeper, ON_GPT, recorded(CONVERSATION, TOOL_IN_FLIGHT, THOUGHT_INLINE)),
         Fixture.of(other, ON_SONNET, recorded(CONVERSATION)),
+        # What `Service.fork` carries from the end of the archived session below, through the same
+        # `before`, so it holds every turn and waits for the next message rather than re-asking one;
+        # and settled as a fork is, so it starts a branch of its own rather than its parent's.
+        Fixture.of(carried_on, ON_SONNET.settled(forked=True), before(closed, carried_on.forked.turn)),
         # On a repository nothing reaches, so a demo console has the row that renders a bare id.
         Fixture.of(detached, ON_SONNET, recorded(CONVERSATION)),
         Fixture.of(drawing, ON_SONNET, recorded(DRAWN)),
         # Archived, with the key the press writes rather than only the row's field, because the row's
         # field is *read* out of that key: a session with the field alone is one the sidebar draws as
         # open. The reconciler finds nothing on disk for it and leaves it be.
-        Fixture.of(
-            archived,
-            ON_SONNET,
-            {**settled_checkpoint(), ARCHIVED_KEY: records.Archived(at=archived.archived).recorded()},
-        ),
+        Fixture.of(archived, ON_SONNET, closed),
     )
 
 
@@ -1504,7 +1580,7 @@ def showing(
 
 
 # One sentence per page, for the index the documentation site draws over them. Every page has one
-# and nothing else does, which `test_browser.py` holds: a page added below without a caption here
+# and nothing else does, which `test_seed.py` holds: a page added below without a caption here
 # is a page the site would list with nothing beside it.
 CAPTIONS: Final[dict[str, str]] = {
     "dashboard.html": "The dashboard: what is unread and what is working, then a card per place to start a session in.",
@@ -1523,6 +1599,10 @@ CAPTIONS: Final[dict[str, str]] = {
         "too long to draw open, and a shell command with what it said."
     ),
     "drawing.html": "A reply with a diagram and an SVG drawn as pictures, each a press away from its text.",
+    "reasoning-inline.html": (
+        "A branch on the other wire, whose last reply opens with its reasoning in `<think>` tags and is "
+        "drawn as a reasoning panel above the prose."
+    ),
     "waiting.html": "A message waiting for its turn.",
     "answering.html": "A turn part way through: two reads out at once, a steer taken and one still to be, a command running.",
     "handed-off.html": "A handoff: the plugin's ask, and the document the next stretch of context opens on.",
@@ -1551,10 +1631,12 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     a fixture's checkpoint rather than fixtures of their own, because every one of them is a session
     something should be answering, and in the demo nothing would be.
     """
-    parent, branch, _, other, _, drawing, archived = FIXTURES
+    parent, branch, deeper, other, _, _, drawing, archived = FIXTURES
     settled = parent.checkpoint
+    # Every entry below is numbered past the last one `settled_checkpoint` files, since a key written
+    # over one of those replaces what the settled session said rather than adding to it.
     waiting = dict(settled)
-    waiting[inbox_key(5)] = recorded_prompt("And what about a turn still being answered?")
+    waiting[inbox_key(8)] = recorded_prompt("And what about a turn still being answered?")
 
     # A turn part way through, read from the steps behind it rather than from messages it has not
     # written yet. The state exists only while a pass is actually running, so a fixture is the one
@@ -1564,9 +1646,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     # And a command still running beside it, which is the third of a command's states and the one
     # that belongs on a page where something is still happening: a command with no result under a
     # settled turn would be one that never finishes.
-    answering[inbox_key(8)] = recorded_command("just shots")
-    answering[opened_key(2)] = inbox_key(5)
-    answering[heard_key(2, 0)] = inbox_key(5)
+    answering[inbox_key(11)] = recorded_command("just shots")
+    answering[opened_key(2)] = inbox_key(8)
+    answering[heard_key(2, 0)] = inbox_key(8)
     answering[model_key(2, 0)] = records.Response(
         response=ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
     ).recorded()
@@ -1585,9 +1667,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     # which is the honest state and not a distinction being lost: what separates them is which request
     # took them, and a request that has said nothing is not somewhere a panel can sit above. The taken
     # one moves up to its own answer when that lands, which is the one reorder this reading performs.
-    answering[inbox_key(6)] = recorded_steer("use the endpoint's own name for it, not the wire's")
-    answering[heard_key(2, 1)] = inbox_key(6)
-    answering[inbox_key(7)] = recorded_steer("and while you are there, check the phone width")
+    answering[inbox_key(9)] = recorded_steer("use the endpoint's own name for it, not the wire's")
+    answering[heard_key(2, 1)] = inbox_key(9)
+    answering[inbox_key(10)] = recorded_steer("and while you are there, check the phone width")
 
     # A handoff, which is two panels of a kind nobody in the conversation typed: the bundled plugin's
     # own ask, and the document that came back and starts the model's history again. Turn 1's opener
@@ -1609,7 +1691,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         title="This session was asked to write down where it has got to.",
         tone="quiet",
     ).recorded()
-    handed[inbox_key(7)] = records.Note(
+    handed[inbox_key(8)] = records.Note(
         said=HANDED_OVER,
         plugin="bundled:handoff",
         forget=True,
@@ -1718,6 +1800,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         "session.html": session_page(links, READER, LISTED, showing(parent.session, settled), REACHABLE),
         "drawing.html": session_page(
             links, READER, LISTED, showing(drawing.session, drawing.checkpoint, chosen=drawing.chosen), REACHABLE
+        ),
+        "reasoning-inline.html": session_page(
+            links, READER, LISTED, showing(deeper.session, deeper.checkpoint, chosen=deeper.chosen), REACHABLE
         ),
         "waiting.html": session_page(links, READER, LISTED, showing(parent.session, waiting), REACHABLE),
         "answering.html": session_page(links, READER, LISTED, showing(parent.session, answering), REACHABLE),

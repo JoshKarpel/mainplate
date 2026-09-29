@@ -598,6 +598,7 @@ class Links:
         return url_for(self.press, {"session": session})
 
     def to_rename(self, session: str) -> str:
+        """Where the name row posts, which answers with the row itself rather than the page."""
         return url_for(self.rename, {"session": session})
 
     def to_archive(self, session: str) -> str:
@@ -814,11 +815,23 @@ DEEPEST: Final = 3
 
 def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
     """
-    Every active session above every archived one, with branches nested within each group.
+    Every session with how deep in the tree it sits, a branch directly under what it branched from.
 
-    The index supplies newest-first order within each group. A branch whose parent is archived or
-    absent is a root among active sessions; an archived branch of an active parent is a root among
-    archived sessions. Each still names its origin on its row.
+    Pure, and separate from the rendering, because it is the one piece of real reasoning in the
+    sidebar: the flat list the index hands back says nothing about shape, and the shape is the
+    whole reason forking is worth having a picture of.
+
+    The order is the index's to give, and this keeps it rather than sorting again: every active
+    session above every archived one and each group most recently written to first, which
+    `read_sessions` says why of. So a branch sits under its parent only where the two are in the same
+    group. An active branch whose parent is archived or absent is a root among active sessions, and
+    an archived branch whose parent is active or absent is a root among archived ones; forking from
+    the end of an archived session always produces the first. The cost, stated: nothing on the list
+    then says which session such a branch came from, since its row names only the turn it left at.
+
+    Drawn as a root rather than left out, which is not a fallback but the honest reading: hiding a
+    session because its parent went missing, or went into the other group, would lose a conversation
+    somebody can still read.
     """
     known = {session.id: session for session in listed}
     children: dict[str | None, list[Session]] = {}
@@ -834,41 +847,23 @@ def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
             arranged.append((session, depth))
             walk(session.id, min(depth + 1, DEEPEST))
 
-    for session in sorted(children.get(None, ()), key=lambda session: session.archived is not None):
-        arranged.append((session, 0))
-        walk(session.id, 1)
+    walk(None, 0)
     return tuple(arranged)
-
-
-def fold_button(column: str, called: str) -> Element:
-    """
-    The press that puts a side column away on a wide window, and brings it back.
-
-    Which columns are away is the reader's, per browser, so it is `localStorage` and the script's:
-    this draws the button as though the column were out, and the script pins the real answer on
-    `<html>` before the first paint and says it on the button, the way the theme is. The glyph is the
-    stylesheet's, read off that same attribute, so a column put away never flashes the wrong arrow.
-    Not drawn on a narrow window, where the clasps already put both columns away.
-    """
-    return button(
-        cls="fold",
-        attrs={
-            "type": "button",
-            "aria-expanded": "true",
-            "aria-label": f"Put the {called} away",
-            "data-fold-column": column,
-            "data-called": called,
-        },
-    )
 
 
 def sidebar(
     links: Links, reader: Reader, listed: tuple[Session, ...], showing: str | None, reachable: Reachable
 ) -> Element:
     """
-    Active sessions above archived ones, newest first within each, with branches under their parents
-    where both share a status. A branch of an archived parent sits among active roots, so no archived
-    row precedes an active one. The row dates itself by the moment it is ordered by within its group.
+    Every session, active ones above archived ones and each group the one most recently written to
+    first, with branches under what they branched from and the current one marked. Which group a
+    session is in is `read_sessions`'s to say and where a branch goes is `arrange`'s.
+
+    Most recent first among siblings rather than across the whole list, which is what a tree costs
+    and what it buys: a branch worked in this morning sits with the conversation it came from rather
+    than at the top away from it, and the ordering among any one set of siblings is still the one a
+    chat console reads in. The row dates itself by the same moment it is ordered by, since a list sorted by
+    one date and labelled with another reads as unsorted.
 
     A row says which repository its session works in, because that is the thing two conversations
     with the same opening line are actually told apart by once a console is used to work in more
@@ -884,6 +879,9 @@ def sidebar(
     page and this is left where its head was, so the sheet can slide out from under it. Which width
     that is stays the stylesheet's to say, and everywhere wider it is not drawn at all. It says its
     word rather than a glyph, because it stands in a row the page clears for it anyway.
+
+    The button that puts the list away on a wide window is not drawn here at all: the script seats
+    it, since a button that does nothing without the script is a control that lies.
 
     Everything but the clasp is in one sheet, which is the thing that slides: one box with a ground
     of its own, so that on a phone a finger between two rows lands on the list and scrolls it rather
@@ -902,7 +900,6 @@ def sidebar(
                 attrs={"type": "button", "aria-expanded": "false"},
                 children="Sessions",
             ),
-            fold_button("list", "session list"),
             div(
                 cls="sessions__sheet",
                 children=[
@@ -2528,7 +2525,9 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     A real `<details>` because that is what works with no script at all and what the dock's fold
     controls act on. Every call is folded: what a read brought back or a command said is context a
     reader reaches for rather than prose they read through, and what the calls that write did is
-    the batch's diff below the panel, which covers every file they touched at once.
+    the batch's diff below the panel, which covers every file they touched at once. The cost,
+    stated: a session with no worktree has no snapshots and so no batch's diff, and there an `edit`
+    or a `create` is shut with nothing standing in for it.
 
     **Shut whether or not the call has come back.** A call still out is drawn working, with the dots
     in its summary, and folded exactly as it will be once it returns, because the script keeps every
@@ -2661,15 +2660,31 @@ def command_block(ran: Command) -> Element:
     fold would spend a row on the sentence saying there is nothing under it. A command still running
     is drawn open, as every command is until it finishes, so one that finishes with output does not
     have to be opened to be read.
+
+    **A push is drawn from the branch it records, never from its text.** Its text is `push`, which is
+    also what a person running `push` in the sandbox recorded, so a page reading the text would draw
+    the two alike. What a push shows is the branch, under a mark of its own in place of the `$`:
+    nobody typed it into a shell, and the branch is what a reader needs to know went where.
     """
     said = None if ran.result is None else ran.result.output
     return details(
-        cls="ran",
+        cls="ran" if ran.pushed is None else "ran ran--push",
         attrs={"id": f"ran-{ran.entry}", **opens(said is None or bool(said))},
         children=[
             summary(
                 children=[
-                    code(cls="ran__line", children=ran.text),
+                    *(
+                        (code(cls="ran__line", children=ran.text),)
+                        if ran.pushed is None
+                        else (
+                            span(
+                                cls="ran__pushed",
+                                attrs={"title": "This console pushed the session's branch to its repository"},
+                                children="push",
+                            ),
+                            code(cls="ran__line", children=ran.pushed),
+                        )
+                    ),
                     *(
                         (
                             span(
@@ -3029,7 +3044,8 @@ def panel_opening(blocks: Sequence[Block]) -> str:
     document - stands for itself with its own opening, clipped by the browser at whatever width the
     panel has. A call and a command have no prose opening to take, so the panel names what is in it:
     a batch is `read, read` and `git status --short, git diff --quiet`, which is the one thing a
-    reader scanning a shut turn wants from either.
+    reader scanning a shut turn wants from either. A push is named by the branch it sent, as its
+    panel is.
 
     The *first* block for the prose kinds, and every block for the two that are named. That is not an
     inconsistency: an opening is a prefix, and a prefix of a run of paragraphs is the front of the
@@ -3039,7 +3055,11 @@ def panel_opening(blocks: Sequence[Block]) -> str:
         case [ToolUse(), *_]:
             return ", ".join(block.tool for block in blocks if isinstance(block, ToolUse))
         case [Command(), *_]:
-            return ", ".join(block.text for block in blocks if isinstance(block, Command))
+            return ", ".join(
+                block.text if block.pushed is None else f"push {block.pushed}"
+                for block in blocks
+                if isinstance(block, Command)
+            )
         case [Prose(text=text) | Steering(text=text) | Reasoning(text=text) | Guidance(text=text), *_]:
             return opening_of(text)
         case _:
@@ -3108,7 +3128,7 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
             *(block_element(block, panel, at) for at, block in enumerate(panel.blocks)),
             *(
                 (div(cls=("block", "block--diff"), children=batch),)
-                if panel.diff and (batch := batch_element(panel.anchor, panel.diff)) is not None
+                if panel.diff is not None and (batch := batch_element(panel.anchor, panel.diff)) is not None
                 else ()
             ),
         ],
@@ -3932,11 +3952,13 @@ def plugin_control(control: Switch | Number, held: Setting, plugin: str, form: s
             ],
         )
     return label(
-        cls="plugin__number",
+        # `typed` is the shape and the mark every row somebody types into shares; `plugin__number`
+        # is what is particular to a number, its width and its lack of a spinner.
+        cls="typed plugin__number",
         children=[
-            span(children=control.label),
+            span(cls="typed__key", children=control.label),
             span(
-                cls="plugin__value",
+                cls="typed__value",
                 children=[
                     input_(
                         attrs={
@@ -3961,7 +3983,7 @@ def plugin_control(control: Switch | Number, held: Setting, plugin: str, form: s
                     # and a number does not, so this is the press that records it, and the
                     # stylesheet draws it only while there is something in the box to record.
                     button(
-                        cls="plugin__set",
+                        cls="typed__set",
                         attrs={"type": "submit", "form": form, "aria-label": f"Set {control.label}", "title": "Set"},
                         children="\N{CHECK MARK}",
                     ),
@@ -4309,25 +4331,85 @@ def plugin_id(qualified: str) -> str:
     return f"plugin-{qualified.replace(':', '-')}"
 
 
-def rename_card(links: Links, session: str, title: str) -> Element:
+UNNAMED: Final = "Named after the first thing said in it"
+"""What an empty name box says will happen, wherever a session can be named before it is."""
+
+RENAME_ID: Final = "rename"
+"""The one rename row a page draws, named so its own form can swap it."""
+
+
+def rename_row(links: Links, session: str, name: str) -> Element:
+    """
+    What this session is called, as a box holding it and the press that records a new one.
+
+    **A typed row, the same one a plugin's number is**: a key at the left, the box at the right, and
+    `✓` against the box drawn only while it holds something unrecorded, because a name is half-written
+    for as long as somebody is writing it and so takes effect on the press rather than on a keystroke.
+    A `Rename` button drawn at rest was tried and spent a line of the card on a press nobody had
+    anything to make. The key is in the facts' own chrome, since the row stands among them and a name
+    is the first fact about a session.
+
+    A form swapping itself, as a plugin's card does: nothing about the conversation changed, so a
+    reload would redraw the transcript to show a box that already says the new name. What else draws
+    the name follows without this row's help - the tab from the `<title>` in the answer, see
+    `renamed`, and the list's row from its own connection, whose token counts renames.
+
+    `required`, so an empty box is refused before the post; the route refuses it again regardless,
+    since `required` is a suggestion.
+    """
     return form(
         cls="rename",
-        attrs={"method": "post", "action": links.to_rename(session)},
-        children=[
-            label(attrs={"for": "session-title"}, children="Name"),
-            input_(
-                attrs={
-                    "id": "session-title",
-                    "type": "text",
-                    "name": TITLE_FIELD,
-                    "value": title,
-                    "maxlength": str(TITLE_LENGTH),
-                    "required": True,
-                }
-            ),
-            button(attrs={"type": "submit"}, children="Rename"),
-        ],
+        attrs={
+            "id": RENAME_ID,
+            "method": "post",
+            "action": links.to_rename(session),
+            "hx-post": links.to_rename(session),
+            "hx-target": "this",
+            "hx-swap": "outerHTML",
+            "hx-status:4xx": "swap:none",
+            "hx-status:5xx": "swap:none",
+        },
+        children=label(
+            cls="typed",
+            children=[
+                span(cls="typed__key", children="name"),
+                span(
+                    cls="typed__value",
+                    children=[
+                        input_(
+                            attrs={
+                                "type": "text",
+                                "name": TITLE_FIELD,
+                                "value": name,
+                                "maxlength": str(TITLE_LENGTH),
+                                "required": True,
+                                # A session nobody has named yet, before its first message, as the
+                                # box on the new-session page says it.
+                                "placeholder": UNNAMED,
+                                "aria-label": "Session name",
+                            }
+                        ),
+                        button(
+                            cls="typed__set",
+                            attrs={"type": "submit", "aria-label": "Rename", "title": "Rename"},
+                            children="\N{CHECK MARK}",
+                        ),
+                    ],
+                ),
+            ],
+        ),
     )
+
+
+def renamed(links: Links, session: str, name: str) -> str:
+    """
+    The answer to a rename: the row as it now stands, and the tab's new title.
+
+    The `<title>` is not swapped anywhere. htmx lifts a `<title>` out of any answer it swaps and sets
+    the document's from it, which is what lets a fragment rename the tab without a second region or
+    a reload.
+    """
+    return fragment(rename_row(links, session, name)) + fragment(title(children=name))
 
 
 def archive_card(links: Links, reader: Reader, session: str, archived: datetime | None) -> Element:
@@ -4431,7 +4513,7 @@ def rail(
     links: Links,
     reader: Reader,
     session: str,
-    title: str,
+    name: str,
     tended: Tending,
     plugins: Sequence[Enrolled] = (),
     *,
@@ -4449,7 +4531,8 @@ def rail(
     The clasp comes first so that on a window too narrow to stand the rail beside the conversation
     it is left where the cards' head was, and the cards slide off. Which width that is stays the
     stylesheet's to say. It says its word, as the session list's does, because wherever it is drawn
-    at all it stands in a row the page clears for the two of them.
+    at all it stands in a row the page clears for the two of them. The button that puts the rail
+    away on a wide window is not drawn here, for the session list's reason.
 
     The cards are in one sheet, and the sheet is what slides, for the session list's reason: a
     finger between two cards lands on the sheet and scrolls it, rather than falling through to the
@@ -4496,7 +4579,6 @@ def rail(
                 attrs={"type": "button", "aria-expanded": "false", "aria-label": "Conversation controls"},
                 children="Controls",
             ),
-            fold_button("rail", "conversation controls"),
             div(
                 cls="rail__sheet",
                 children=[
@@ -4512,8 +4594,8 @@ def rail(
                         attrs={"aria-label": "About this session"},
                         children=[
                             div(cls="about__head", children="session"),
+                            rename_row(links, session, name),
                             about,
-                            rename_card(links, session, title),
                             archive_card(links, reader, session, archived),
                         ],
                     ),
@@ -4552,7 +4634,7 @@ def naming() -> Element:
                             "type": "text",
                             "name": TITLE_FIELD,
                             "maxlength": str(TITLE_LENGTH),
-                            "placeholder": "Named after the first thing said in it",
+                            "placeholder": UNNAMED,
                             "aria-label": "Session name",
                         }
                     ),
@@ -4574,8 +4656,8 @@ class Answer:
     **One word used three times.** `leader` is what the menu row is called, what is typed after `/`
     to reach it from the keyboard, and what the form carries in `data-leading` while the box is in
     its mode. Where it names a disposition it *is* that disposition's recorded value, so the word on
-    the page, the word on the keyboard and the word in the store cannot come apart; `keep` is the one
-    answer with no disposition behind it, because it sends the text nowhere.
+    the page, the word on the keyboard and the word in the database cannot come apart; `keep` is the
+    one answer with no disposition behind it, because it sends the text nowhere.
 
     That is also why there is no separate label. A button reading `Fork` and a leader spelled
     `/branch` would be a synonym to keep in step for ever, so what a control says is the word itself.
@@ -4869,8 +4951,6 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
     the whole safety property, and it is why every mode's button is rendered here rather than made out
     of `Send` by the script. The server parses no leader out of what was posted, so a paragraph that
     opens with `/` is a paragraph, and the menu is what works with the file absent.
-
-    With no answers there is no menu, only Send.
     """
     send = button(
         # Classed rather than found by position, because the script has to name it: it is the
@@ -4883,8 +4963,6 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
         attrs={"type": "submit", "disabled": refusing, "title": "Shift-Enter"},
         children="Send",
     )
-    if not answers:
-        return send
     return div(
         cls="sender",
         children=[
@@ -4911,7 +4989,6 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
 def composer(
     action: str,
     *,
-    live: bool,
     refusing: bool = False,
     returning: bool = False,
     answering: bool = False,
@@ -4924,11 +5001,8 @@ def composer(
     """
     The box you type in, which posts to `action`.
 
-    `live` is what differs between the two pages, and it is not styling: sending into a session
-    that already exists swaps the transcript and leaves the address bar alone, while sending the
-    first message *creates* a session and has to end up at that session's own URL. htmx cannot do
-    the second one, because a redirect's headers never reach it, so the first message is an
-    ordinary form post and the browser follows the `303` itself.
+    Sending swaps the transcript and leaves the address bar alone, since the box is only ever on a
+    session's own page and the session already exists.
 
     `refusing` disables the whole thing, for a session nothing can answer. The disabling is real
     rather than styling: a box that still submitted would record a message into a session whose
@@ -4947,8 +5021,8 @@ def composer(
     associate with.
 
     **The menu is drawn before the first message as well as after it.** The composer is only ever on
-    a session's own page, so there is always a session for the shelf to belong to and a worktree for
-    `Run` and `Push`, and nothing among the answers forks. It is also the only chance: the first
+    a session's own page, so there is always a session for the shelf to belong to, and `Run`,
+    `Commit` and `Push` wherever `runs_in` names somewhere, and nothing among the answers forks. It is also the only chance: the first
     message swaps the transcript and never the composer, so a menu left off an empty conversation
     stays off until the page is loaded again.
 
@@ -4971,23 +5045,19 @@ def composer(
     and what the press will do - and what the session *is* stands in the rail; see `about_card`.
     """
     answers = (*sending_answers(returning, answering, runs_in, connected), *plugin_answers(plugins))
-    driving = (
-        {
-            "hx-post": action,
-            "hx-target": f"#{TRANSCRIPT_ID}",
-            "hx-swap": SEND_SWAP,
-            "hx-indicator": f"#{SENDING_ID}",
-            "hx-on:htmx:after:swap": "this.reset()",
-            "hx-disable": "find button, find textarea",
-            # A refusal is not a transcript, so it must not become one. The box is `required`, so
-            # the only way to reach this is a caller that is not this page; leaving the
-            # conversation on screen is the honest answer to that.
-            "hx-status:4xx": "swap:none",
-            "hx-status:5xx": "swap:none",
-        }
-        if live
-        else {}
-    )
+    driving = {
+        "hx-post": action,
+        "hx-target": f"#{TRANSCRIPT_ID}",
+        "hx-swap": SEND_SWAP,
+        "hx-indicator": f"#{SENDING_ID}",
+        "hx-on:htmx:after:swap": "this.reset()",
+        "hx-disable": "find button, find textarea",
+        # A refusal is not a transcript, so it must not become one. The box is `required`, so the
+        # only way to reach this is a caller that is not this page; leaving the conversation on
+        # screen is the honest answer to that.
+        "hx-status:4xx": "swap:none",
+        "hx-status:5xx": "swap:none",
+    }
     return form(
         cls="composer",
         attrs={"method": "post", "action": action, "id": identified, **driving},
@@ -5862,7 +5932,7 @@ def session_page(
                 # the step is answered.
                 pane=[
                     setup_step(links, showing),
-                    rename_card(links, showing.session.id, showing.session.title),
+                    rename_row(links, showing.session.id, showing.session.title),
                     archive_card(links, reader, showing.session.id, showing.session.archived),
                 ],
             ),
@@ -5897,14 +5967,13 @@ def session_page(
                     (
                         composer(
                             links.to_say(showing.session.id),
-                            live=True,
                             refusing=stalled is not None,
                             # Any fork can send back to what it came out of; an aside is the case it
                             # is for.
                             returning=showing.session.forked is not None,
                             # Only while something is actually being answered: a steer into a turn
-                            # nobody is running would sit in the store unread, which is a message on
-                            # the floor.
+                            # nobody is running would sit in the database unread, which is a message
+                            # on the floor.
                             answering=showing.said.answering is not None,
                             # Only where there are files to run in. A session with no repository has
                             # no worktree, so `Run` would be an offer with nowhere to honour it.

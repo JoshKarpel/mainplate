@@ -45,13 +45,15 @@ Read off `Choice.isolation`, not off whether the session picked a repository:
 | Filesystem | Over its files | `bash` |
 |---|---|---|
 | `WORKTREE` | `read`, `edit`, `create` over the worktree and scratch; `list`, `grep` over the worktree | where there is a sandbox |
-| `EVERYTHING` | `read`, `edit`, `create` over `/`; `list` and `grep` refuse | where there is a sandbox |
-| `NOTHING` | `read`, `edit`, `create` over the scratch, where there is a sandbox; `list` and `grep` refuse | where there is a sandbox |
+| `EVERYTHING` | `read`, `edit`, `create` over `/`, where there is a sandbox; no `list` or `grep` | where there is a sandbox |
+| `NOTHING` | `read`, `edit`, `create` over the scratch, where there is a sandbox; no `list` or `grep` | where there is a sandbox |
 
 `NOTHING` gets its file tools only beside `bash`, and nothing at all without one, because the scratch
 is made by the first command and a tool that cannot work still costs its description on every
-request. `reaching` in `agent.py` is the one place that table is decided, and `tests/test_agent.py`
-holds every arm of it.
+request. `list` and `grep` are offered only where a root is a worktree, `Files.has_repository`, for
+the same reason: both ask git, and over a scratch or `/` either could only refuse. `reaching` in
+`agent.py` decides the roots, `agent_for` builds the tools from them, and `tests/test_agent.py` holds
+every row of that table against the agent a pass builds.
 
 **A plugin's tools are outside that table**, and a session with `NOTHING` still gets them: what a
 plugin reaches is decided by its own tier rather than by what the *model* may touch. They are settled

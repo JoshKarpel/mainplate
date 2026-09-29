@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.machinery
+import importlib.util
 import os
 import subprocess
+import sys
+import types
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -770,7 +774,8 @@ class TestWhereARepositorysPluginRuns:
         """
         **Before the conversation, connected; during it, never.** A plugin that needs a program has to
         fetch one, and `setup` runs before the first message: the worktree holds the commit the
-        repository supplied, and nothing the model wrote exists yet.
+        repository supplied in a new session, and a fork plants at a tree the model wrote, whose own
+        press is what licenses that.
         """
         assert "--unshare-net" not in await self.invocation(spawned, "setup", worktree)
         for event in ("tool", "before_tool", "before_request", "before_turn_end", "after_turn", "compose", "action"):
@@ -912,7 +917,7 @@ class TestWhatASetupActuallyReaches:
         One repository plugin, written into the tree and run at `setup` as the console runs one.
 
         In the tree because that is the only place a repository's plugin can be: the namespace binds
-        the worktree, its clone and two scratches, so a script anywhere else is one `bwrap` cannot
+        the worktree, its store and two scratches, so a script anywhere else is one `bwrap` cannot
         find - which is the first thing this arrangement proves.
         """
         at = worktree.root / ".mainplate" / "setup"
@@ -1318,11 +1323,11 @@ class TestTheBundledGuidance:
         assert "`apps/web/AGENTS.md`: How the web app is laid out" in described.instructions
         assert "Use the design tokens." not in described.instructions, "the index names it rather than quoting it"
 
-    async def test_asking_what_is_tracked_runs_nothing_the_checkout_configured(
+    async def test_asking_what_is_tracked_runs_nothing_the_worktree_configured(
         self, guidance: Path, repository: Path, tmp_path: Path
     ) -> None:
         """
-        The plugin runs as the operator, outside every sandbox, over a checkout whose `.git` the model
+        The plugin runs as the operator, outside every sandbox, over a worktree whose `.git` the model
         writes. The control runs the same payload through git the ordinary way first, so a pass here
         is the plugin not reading the configuration rather than a payload that never fires.
         """
@@ -1503,6 +1508,310 @@ class TestTheBundledGuidance:
         assert len(answered.inject) == 1
         assert "Use the design tokens." in answered.inject[0]
         assert "Somebody else's project" not in answered.inject[0]
+
+
+def reading(path: str) -> list[dict[str, object]]:
+    """The history of a model that has called `read` on one path, which is what hands guidance over."""
+    return [
+        {
+            "kind": "response",
+            "parts": [{"part_kind": "tool-call", "tool_name": "read", "args": {"path": path}, "tool_call_id": "c1"}],
+        }
+    ]
+
+
+class TestWhatTheBundledGuidanceWillNotFollow:
+    """
+    Everything in a worktree is the session's to write, its `.git` included, and the plugin reads as
+    the operator. So a link in the worktree is nothing, rather than a file somewhere the session could
+    never read for itself; each test here plants the link a session could commit.
+    """
+
+    @pytest.fixture
+    def guidance(self) -> Path:
+        return BUNDLED_ROOT / "guidance"
+
+    @pytest.fixture
+    def secret(self, tmp_path: Path) -> Path:
+        outside = tmp_path / "operator"
+        outside.mkdir()
+        written = outside / "AGENTS.md"
+        written.write_text("OPERATOR ONLY: a key the session must never see\n")
+        return written
+
+    @pytest.fixture
+    def repository(self, tmp_path: Path) -> Path:
+        root = tmp_path / "repo"
+        (root / "docs").mkdir(parents=True)
+        (root / "docs" / "page.md").write_text("a page\n")
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        return root
+
+    async def test_a_nested_guidance_file_that_is_a_link_is_not_handed_over(
+        self, guidance: Path, repository: Path, secret: Path
+    ) -> None:
+        (repository / "docs" / "AGENTS.md").symlink_to(secret)
+        await run("git", "add", "-A", cwd=repository)
+
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked(
+                guidance, spoken(event="before_request", worktree=str(repository), messages=reading("docs/page.md"))
+            ),
+        )
+
+        assert answered.inject == ()
+
+    async def test_the_root_guidance_file_that_is_a_link_is_not_read_into_the_instructions(
+        self, guidance: Path, repository: Path, secret: Path
+    ) -> None:
+        (repository / "AGENTS.md").symlink_to(secret)
+        await run("git", "add", "-A", cwd=repository)
+
+        described = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+        )
+
+        assert "OPERATOR ONLY" not in (described.instructions or "")
+
+    async def test_a_directory_that_is_a_link_is_not_walked_through_for_the_index(
+        self, guidance: Path, repository: Path, secret: Path
+    ) -> None:
+        """
+        The index of nested guidance reads each listed file's `description:`, so an entry under a
+        linked directory would put a line of the operator's file into every request. Git will not
+        stage a file under a linked directory, but the index is the session's to write, so the entry
+        is staged while the directory is real and the directory swapped for a link after.
+        """
+        secret.write_text("---\ndescription: OPERATOR ONLY\n---\n\nprose\n")
+        (repository / "docs" / "AGENTS.md").write_text("---\ndescription: the real one\n---\n\nprose\n")
+        await run("git", "add", "-A", cwd=repository)
+        (repository / "docs" / "AGENTS.md").unlink()
+        (repository / "docs" / "page.md").unlink()
+        (repository / "docs").rmdir()
+        (repository / "docs").symlink_to(secret.parent, target_is_directory=True)
+
+        described = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+        )
+
+        assert "OPERATOR ONLY" not in (described.instructions or "")
+
+    async def test_an_index_that_is_a_link_lists_nothing(
+        self, guidance: Path, repository: Path, tmp_path: Path
+    ) -> None:
+        """
+        The control is the same repository with its own index in place, which does list the file, so
+        what is under test is the link and not a repository that tracks nothing.
+        """
+        (repository / "AGENTS.md").write_text("This project is a console.\n")
+        await run("git", "add", "-A", cwd=repository)
+        control = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+        )
+        assert "This project is a console." in (control.instructions or ""), "the control"
+
+        index = repository / ".git" / "index"
+        moved = tmp_path / "elsewhere-index"
+        index.rename(moved)
+        index.symlink_to(moved)
+        described = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+        )
+
+        assert "This project is a console." not in (described.instructions or "")
+
+    async def test_a_guidance_file_that_is_a_fifo_is_passed_over_rather_than_waited_on(
+        self, guidance: Path, repository: Path
+    ) -> None:
+        """
+        Opening a FIFO to read waits for a writer, and here there would never be one. Git does not
+        stage a FIFO, so the file is staged while it is a file and swapped for one after, which the
+        session writing its own index can do.
+        """
+        (repository / "docs" / "AGENTS.md").write_text("the real one\n")
+        await run("git", "add", "-A", cwd=repository)
+        (repository / "docs" / "AGENTS.md").unlink()
+        os.mkfifo(repository / "docs" / "AGENTS.md")
+
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked(
+                guidance, spoken(event="before_request", worktree=str(repository), messages=reading("docs/page.md"))
+            ),
+        )
+
+        assert answered.inject == ()
+
+
+def load_bundled(name: str) -> types.ModuleType:
+    """
+    A bundled plugin's script as a module, for the pure functions inside it and nothing else.
+
+    What a plugin *does* is asked of it over a real pipe everywhere else in this file, because a
+    plugin is a file this console runs. A table of globs is a different question: it is a function
+    of its arguments, and asking it a process at a time would be the same assertions made slowly.
+    The script has no `.py`, so the loader is named rather than inferred, and the module is put in
+    `sys.modules` under its own name because a dataclass looks its module up there while it is built.
+    """
+    loader = importlib.machinery.SourceFileLoader(f"bundled_{name}", str(BUNDLED_ROOT / name))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = module
+    loader.exec_module(module)
+    return module
+
+
+async def asked_under(plugin: Path, payload: Payload, config_home: Path) -> Any:
+    """`asked`, by a console that was told where the operator's own files are."""
+    installed = Installed(tier=Tier.USER, name=plugin.name, path=plugin)
+    return (await Spawned(environ={}, config_home=config_home)(installed, payload, None)).said
+
+
+class TestTheOperatorsScopedGuidance:
+    """
+    An operator's guidance file with `paths:` is held back until a file it covers is reached, where
+    one without is in every session's instructions. What the globs mean is `.gitignore`'s reading.
+    """
+
+    @pytest.fixture
+    def guidance(self) -> Path:
+        return BUNDLED_ROOT / "guidance"
+
+    @pytest.fixture
+    def config_home(self, tmp_path: Path) -> Path:
+        home = tmp_path / "config"
+        rules = home / "mainplate" / "guidance"
+        rules.mkdir(parents=True)
+        (rules / "always.md").write_text("Say what it costs.\n")
+        (rules / "python.md").write_text('---\npaths:\n  - "**/*.py"\n  - "**/pyproject.toml"\n---\n\nType it.\n')
+        return home
+
+    @pytest.fixture
+    def repository(self, tmp_path: Path) -> Path:
+        root = tmp_path / "repo"
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        return root
+
+    async def test_a_scoped_file_is_not_in_the_instructions(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        described = parse_described(
+            "bundled:guidance",
+            await asked_under(guidance, spoken(event="setup", worktree=str(repository)), config_home),
+        )
+        assert described.instructions is not None
+        assert "Say what it costs." in described.instructions, "the control: an unscoped file is"
+        assert "Type it." not in described.instructions
+
+    async def test_a_scoped_file_is_named_in_the_index_with_what_it_covers(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        described = parse_described(
+            "bundled:guidance",
+            await asked_under(guidance, spoken(event="setup", worktree=str(repository)), config_home),
+        )
+        assert "- `python.md`: `**/*.py`, `**/pyproject.toml`" in (described.instructions or "")
+
+    async def test_a_session_with_no_worktree_is_not_promised_what_it_can_never_be_handed(
+        self, guidance: Path, config_home: Path
+    ) -> None:
+        described = parse_described("bundled:guidance", await asked_under(guidance, spoken(event="setup"), config_home))
+        assert "python.md" not in (described.instructions or "")
+
+    async def test_reaching_a_file_it_covers_hands_it_over(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked_under(
+                guidance,
+                spoken(event="before_request", worktree=str(repository), messages=reading("src/app/main.py")),
+                config_home,
+            ),
+        )
+        assert answered.inject == ("`python.md`, the operator's guidance for the files it covers:\n\nType it.",)
+
+    async def test_reaching_a_file_it_does_not_cover_hands_over_nothing(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked_under(
+                guidance,
+                spoken(event="before_request", worktree=str(repository), messages=reading("src/app/main.rs")),
+                config_home,
+            ),
+        )
+        assert answered.inject == ()
+
+    async def test_what_has_been_handed_over_is_not_handed_again(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        messages = [
+            *reading("main.py"),
+            {
+                "kind": "request",
+                "parts": [
+                    {
+                        "part_kind": "system-prompt",
+                        "content": "`python.md`, the operator's guidance for the files it covers:\n\nType it.",
+                    }
+                ],
+            },
+            *reading("other.py"),
+        ]
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked_under(
+                guidance, spoken(event="before_request", worktree=str(repository), messages=messages), config_home
+            ),
+        )
+        assert answered.inject == ()
+
+
+@pytest.mark.parametrize(
+    ("patterns", "path", "expected"),
+    [
+        pytest.param(("*.py",), "deep/in/it.py", True, id="no slash names a file at any depth"),
+        pytest.param(("*",), "any/file.txt", True, id="a bare star is every file"),
+        pytest.param((".github/dependabot.yml",), ".github/dependabot.yml", True, id="a slash anchors"),
+        pytest.param((".github/dependabot.yml",), "vendor/.github/dependabot.yml", False, id="anchored elsewhere"),
+        pytest.param(("**/Cargo.toml",), "Cargo.toml", True, id="leading doublestar includes the root"),
+        pytest.param(("**/Cargo.toml",), "crates/core/Cargo.toml", True, id="leading doublestar at depth"),
+        pytest.param(("src/*.py",), "src/deep/it.py", False, id="a star stops at a slash"),
+        pytest.param(("docs/**",), "docs/a/b.md", True, id="trailing doublestar is everything under"),
+        pytest.param(("docs/",), "docs/guide.md", False, id="a directory's name covers nothing under it"),
+        pytest.param(("**/*.{py,rs}",), "lib.rs", True, id="braces expand"),
+        pytest.param(("**/*.{py,rs}",), "lib.go", False, id="braces expand to only what they list"),
+        pytest.param(("**/*", "!**/*.md"), "README.md", False, id="a negation takes a path back out"),
+        pytest.param(("!**/*.md", "**/*"), "main.py", True, id="negation is not order-sensitive"),
+        pytest.param(("f?o.py",), "fxo.py", True, id="a question mark is one character"),
+        pytest.param(("a.b",), "axb", False, id="everything else is itself"),
+    ],
+)
+def test_what_a_scoped_files_globs_cover(patterns: tuple[str, ...], path: str, expected: bool) -> None:
+    covers = load_bundled("guidance").covers
+    assert covers(patterns, path) is expected
+
+
+@pytest.mark.parametrize(
+    ("block", "expected"),
+    [
+        pytest.param("paths:\n  - \"**/*.py\"\n  - '*.md'\n  - bare", ("**/*.py", "*.md", "bare"), id="block list"),
+        pytest.param('paths: ["**/*.py", "*.md"]', ("**/*.py", "*.md"), id="flow list"),
+        pytest.param(
+            'paths: ["**/*.{py,rs}", *.md]', ("**/*.{py,rs}", "*.md"), id="a comma inside braces is the glob's own"
+        ),
+        pytest.param('paths: "**/*.py"', ("**/*.py",), id="one scalar"),
+        pytest.param("description: unscoped", None, id="no paths key is not scoped"),
+        pytest.param("paths:\n  nested: mapping", (), id="a shape it cannot read covers nothing"),
+    ],
+)
+def test_what_a_paths_list_is_read_as(block: str, expected: tuple[str, ...] | None) -> None:
+    assert load_bundled("guidance").paths_of(block) == expected
 
 
 class TestWhatTheBundledSetIs:

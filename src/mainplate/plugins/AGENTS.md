@@ -73,8 +73,9 @@ reach.
 
 So a change to what a handoff says, what it costs, or when it fires is a change to a *script*, and
 the console learns about it through `setup` like any other. The price is stated: `bundled/guidance`
-carries a `description:` line reader rather than a YAML parser, because a plugin with no dependencies
-is worth more here than the general case of a field nothing else reads.
+carries line readers for `description:` and `paths:` rather than a YAML parser, and a small glob
+translator rather than a library, because a plugin with no dependencies is worth more here than the
+general case of fields nothing else reads.
 
 **A console-tier plugin must not run git against the worktree the ordinary way.** It runs as the
 operator, unconfined, and the worktree's `.git/config` is the session's to write, so `git -C
@@ -98,7 +99,8 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
   event, and it is why a forget no longer picks up a repository's edited guidance - forking does.
 - **`setup` is the only event with a network, and it must stay the only one.** What makes a connected
   run safe there is *when* it happens: before the first message, over a worktree holding the commit
-  the repository supplied and nothing the model wrote. An event during the conversation with a
+  the repository supplied, or in a fork a tree the model wrote, which that branch's own press
+  licenses. An event during the conversation with a
   network would be a plugin that has read whatever the model has been writing and can send it
   anywhere.
 - **A plugin's scratch is its own and never the session's.** The model writes the session's, so a

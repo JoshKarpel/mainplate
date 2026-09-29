@@ -189,15 +189,21 @@
   // the first paint for the theme's reason: applied any later, a page opened with the list away
   // draws it and then takes it back. Per browser rather than per account, because what fits is a
   // property of the screen and not of the person.
+  //
+  // What is stored is the one word `away` and anything else read back is a column out: this is
+  // storage, and arbitrary text, so a value this build does not write costs a reader one press to
+  // put the column away again rather than a page drawn wrong.
 
   const COLUMN_KEYS = { list: "mainplate:list", rail: "mainplate:rail" };
 
   const applyColumn = (column, away) => {
-    if (away) document.documentElement.dataset[column] = "shut";
+    if (away) document.documentElement.dataset[column] = "away";
     else delete document.documentElement.dataset[column];
   };
 
-  Object.entries(COLUMN_KEYS).forEach(([column, key]) => applyColumn(column, held(key) === "shut"));
+  const isAway = (column) => document.documentElement.dataset[column] === "away";
+
+  Object.entries(COLUMN_KEYS).forEach(([column, key]) => applyColumn(column, held(key) === "away"));
 
   const READING_KEY = "mainplate:reading";
 
@@ -282,11 +288,11 @@
     let at = -1;
 
     // Pinned to the end as answers arrive, which is where a page starts and where scrolling back to
-    // the bottom returns it. Not stored, and that is the difference from everything else here: the
-    // rest of this state is a decision the reader made *about a conversation* and should find again
-    // tomorrow, where this one is a mode you fall out of by scrolling up and back into by scrolling
-    // down. Kept across a reload it would be a page that opens somewhere the reader has to notice
-    // and undo, rather than at the end of what was said.
+    // the bottom returns it. Not stored, and neither are the folds: the muted kinds are a decision
+    // the reader made *about a conversation* and should find again tomorrow, where this is a mode
+    // you fall out of by scrolling up and back into by scrolling down. Kept across a reload it would
+    // be a page that opens somewhere the reader has to notice and undo, rather than at the end of
+    // what was said.
     let following = true;
     let signatures = new Map(); // what each panel said, so a change can be told from a repaint
     let sentFrom = null; // the box a message has just left, so the cursor can be put back in it
@@ -295,7 +301,7 @@
 
     // The drawable blocks a reader asked to see as text rather than as the picture they are drawn
     // as by default, by the name their copy button has. Not stored, for `following`'s reason: which
-    // way round a diagram is shown is a mode within a visit.
+    // way round a diagram is shown is a mode within a visit, which `PHILOSOPHY.md` names beside it.
     let asCode = new Set();
 
     let shelf = []; // text kept and not sent, as {name, text}
@@ -504,9 +510,9 @@
       const box = transcript();
       if (!box) return;
       // Only a fold the reader has actually acted on is forced, and it is forced *either* way. The
-      // server renders a read shut and an edit or a command open, so one set of ids to reopen would
-      // put back every command a reader had put away; what has to survive a swap is the decision,
-      // whichever way it went. A fold nobody has touched is left where the server put it.
+      // server renders a call shut and a command open, so one set of ids to reopen would put back
+      // every command a reader had put away; what has to survive a swap is the decision, whichever
+      // way it went. A fold nobody has touched is left where the server put it.
       box.querySelectorAll(FOLDS).forEach((fold) => {
         const decided = folds.get(fold.id);
         if (decided !== undefined) fold.open = decided;
@@ -884,7 +890,8 @@
     // asked for. A block is named the way its copy button is, by the panel and the position in it.
 
     // The class the sanitiser lets through on a fence's `<code>`, and what each is drawn as; see
-    // `DRAWABLE` in `markup.py`, which is the one place a label is allowed onto the page.
+    // `DRAWABLE` in `markup.py`, which is the one place a label is allowed onto the page, and
+    // `test_the_buttons_a_fence_takes` in `test_browser.py`, which holds this map against it.
     const DRAWABLE = { "language-mermaid": "mermaid", "language-svg": "svg" };
 
     // What each text drew, by kind, theme and text: `{ src }`, `{ failed }`, or `{ pending: true }`
@@ -1075,11 +1082,12 @@
     // --- Focusing ----------------------------------------------------------
     //
     // A block of lines scrolls sideways rather than wrapping, and the column it scrolls in is the
-    // reading measure, which a diff's gutter and a line of real code outgrow. So a block whose lines
-    // do not fit takes a `focus` button that opens it on its own, as wide as the window, over
-    // everything, in a modal dialog. Over everything rather than into the room beside the measure, because at the widths a
-    // laptop has there is none: the transcript already fills its column between the list and the
-    // rail, and it is a scroll container, so a block let wider than it is clipped.
+    // conversation's (`--column`), which at the measure a diff's gutter and a line of real code
+    // outgrow. So a block whose lines do not fit takes a `focus` button that opens it on its own, as
+    // wide as the window, over everything, in a modal dialog. Over everything rather than into the
+    // room beside the column, because at the widths a laptop has there is none: the transcript
+    // already fills its column between the list and the rail, and it is a scroll container, so a
+    // block let wider than it is clipped. The grip is the other answer, for every block at once.
     //
     // What the dialog shows is a copy of the block as it was when pressed. A copy and not the block
     // moved, because the block is the server's markup and a morph would go looking for it; and a copy
@@ -1380,7 +1388,7 @@
       paintFocuses();
       paintCache();
       paintDue();
-      paintNumbers();
+      paintTyped();
       research(false);
       if (following) toEnd();
     };
@@ -1820,27 +1828,39 @@
     };
 
     // On a wide window each side column has a press on its inner edge that puts it away, and the
-    // same press brings it back. What is away was pinned on <html> before the first paint; this says
-    // it on the buttons and keeps it. The stylesheet draws no button on a narrow window, where the
-    // clasps are what put the columns away, so nothing here asks how wide the window is.
+    // same press brings it back. Seated by the script, as the grip below is, since a button that
+    // does nothing without it is a control that lies. What is away was pinned on <html> before the
+    // first paint; this says it on the buttons and keeps it. The stylesheet draws no button on a
+    // narrow window, where the clasps are what put the columns away, so nothing here asks how wide
+    // the window is.
+    const AWAY = [
+      { column: "list", box: ".sessions", called: "session list" },
+      { column: "rail", box: ".rail", called: "conversation controls" },
+    ];
+
     const wireColumns = () => {
-      document.querySelectorAll("[data-fold-column]").forEach((button) => {
-        const column = button.dataset.foldColumn;
-        const called = button.dataset.called;
+      AWAY.forEach(({ column, box, called }) => {
+        const place = document.querySelector(box);
+        if (!place) return;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "away";
         const paint = () => {
-          const away = document.documentElement.dataset[column] === "shut";
+          const away = isAway(column);
           button.setAttribute("aria-expanded", String(!away));
           button.setAttribute("aria-label", away ? `Bring the ${called} back` : `Put the ${called} away`);
           button.title = button.getAttribute("aria-label");
         };
         paint();
         button.addEventListener("click", () => {
-          const away = document.documentElement.dataset[column] !== "shut";
+          const away = !isAway(column);
           applyColumn(column, away);
-          if (away) hold(COLUMN_KEYS[column], "shut");
+          if (away) hold(COLUMN_KEYS[column], "away");
           else unhold(COLUMN_KEYS[column]);
           paint();
         });
+        // Before the sheet, so the tab order is the clasp, this, and then what the column holds.
+        place.insertBefore(button, place.querySelector(":scope > [class$='__sheet']"));
       });
     };
 
@@ -2102,10 +2122,9 @@
       document.addEventListener("htmx:finally:request", () => {
         const box = sentFrom;
         sentFrom = null;
-        if (!box) return;
+        if (!box || touchScreen()) return;
         setTimeout(() => {
           const holding = document.activeElement;
-          if (touchScreen()) return;
           if (holding === null || holding === document.body) box.focus();
         }, 0);
       });
@@ -2136,10 +2155,10 @@
     // A tool call is the block that is not simply its own text either: its parts are a name, what it
     // was handed and what it gave back, and run together they are one unreadable line. So the pairs
     // are read off the list the server already draws them as, which keeps the labels in one place -
-    // "called with", "returned" and "diff" are written in `calls.py` and nowhere here. A diff's
-    // line numbers are an attribute the stylesheet paints rather than text, so they are not in
-    // what comes out here, which is the point: copying a diff copies the diff. A read's anchors are
-    // not on the page at all.
+    // `CALLED_WITH`, `RETURNED` and `DIFFERED` in `calls.py` are the words, and none is written
+    // here. A diff's line numbers are an attribute the stylesheet paints rather than text, so they
+    // are not in what comes out here, which is the point: copying a diff copies the diff. A read's
+    // anchors are not on the page at all.
     //
     // A command is the same problem in a smaller shape: the line, the status and the output run
     // together read as one word followed by a wall. Its line is what somebody copying almost always
@@ -2237,8 +2256,8 @@
     // the incoming markup into the DOM already on screen, and elements this file put there are not
     // in that markup, so leaving them would make the merge reconcile nodes the server has never
     // heard of.
-    // A number on a plugin's card is typed rather than set, so it does not take effect on a keystroke
-    // and the button beside it has to say there is something to press. `defaultValue` is exactly the
+    // A typed row - a plugin's number, a session's name - does not take effect on a keystroke, so
+    // the mark beside its box has to say there is something to press. `defaultValue` is exactly the
     // `value` attribute the server rendered, so this compares what is in the box against what was
     // recorded rather than against anything kept here - which is why a swap needs no repaint: the box
     // that comes back is a new element carrying the new default and no mark.
@@ -2250,23 +2269,23 @@
     // with two numbers shows a mark against the one that changed. A clean row is marked as well as
     // a dirty one, since a clean row hides its button and a row nothing has marked shows it, which
     // is what keeps the form working with this file absent.
-    const markNumber = (box) => {
-      const row = box.closest(".plugin__number");
+    const markTyped = (box) => {
+      const row = box.closest(".typed");
       if (!row) return;
       const clean = box.value === box.defaultValue;
       row.toggleAttribute("data-clean", clean);
       row.toggleAttribute("data-dirty", !clean);
     };
 
-    const paintNumbers = () => {
-      document.querySelectorAll(".plugin__number input").forEach(markNumber);
+    const paintTyped = () => {
+      document.querySelectorAll(".typed input").forEach(markTyped);
     };
 
-    const wireNumbers = () => {
+    const wireTyped = () => {
       document.addEventListener("input", (event) => {
         const box = event.target;
         if (!(box instanceof HTMLInputElement)) return;
-        markNumber(box);
+        markTyped(box);
       });
     };
 
@@ -2425,7 +2444,7 @@
     wireReading();
     wireFolding();
     wireFilter();
-    wireNumbers();
+    wireTyped();
     wireTiers();
     wireCache();
     wireDue();
@@ -2454,7 +2473,7 @@
     // The box is where a pointer belongs on arrival, since a session opens at the end where the box
     // is and the next thing somebody with a keyboard does is type. `preventScroll` so taking it does
     // not move the page the reader has just arrived at; a touch screen is left alone, for the reason
-    // below the sends.
+    // given in `wireSend` for leaving it alone after a send.
     if (!touchScreen()) composerBox()?.focus({ preventScroll: true });
   };
 

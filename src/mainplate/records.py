@@ -302,6 +302,25 @@ class Command(Record):
     without going through `push`. So the page says so beside the line, for as long as it is there.
     """
 
+    pushed: str | None = None
+    """
+    The branch this console pushed to the repository, where this is a push rather than a line
+    somebody typed; nothing for every command that ran in the sandbox.
+
+    What tells a push from a person's `push`, which the text alone cannot: both say `push`. The page
+    draws a push from this and names the branch, so a reader sees what went where rather than the
+    word for asking.
+
+    **A field rather than an arm of its own**, although nobody typed a push, because an unknown
+    field survives a rollback and an unknown kind does not; `docs/design/checkpoints.md` says so at
+    length. That is also why a push still records `said` as `push`. The cost is a shape nothing
+    refuses, a shell line beside a branch, which only `recorded_push` writes.
+
+    Optional at the boundary because rows written before it carry none. One of those is a push
+    whose branch was never recorded, so it reads as a command whose text is `push`, as it always
+    did: there is nothing in it to recover the branch from.
+    """
+
 
 class Result(Record):
     """
@@ -350,11 +369,13 @@ class Wrote(Record):
     The net change one request's tool batch made to the worktree, as a unified diff.
 
     Computed where the two trees are both in hand, which is the moment the *next* request's snapshot is
-    taken, and recorded rather than derived: every later pass replays the diff instead of running git
-    again, and by the time a page is drawn the worktree has moved on. The diff is over the whole
-    worktree and across every tool the batch ran, an `edit`, a `create` and a `bash` alike, because
-    that is the one thing only a snapshot can see: what `bash` touched is invisible to any of the
-    tools themselves.
+    taken, and recorded rather than derived. Not because the answer could change: both trees are
+    immutable objects in the store, and `git diff` over them would print the same text next year. It
+    is recorded because a page is a pure function of already-answered questions, and a diff derived
+    at render time would be a page running git; recorded, every later pass replays it and every page
+    reads it, and neither runs anything. The diff is over the whole worktree and across every tool
+    the batch ran, an `edit`, a `create` and a `bash` alike, because that is the one thing only a
+    snapshot can see: what `bash` touched is invisible to any of the tools themselves.
 
     An empty `diff` is "no file changed", not "nothing recorded" - a batch that merely read, or one
     whose writes came to nothing, still ran, and the page draws nothing for the difference between

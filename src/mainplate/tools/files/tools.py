@@ -13,7 +13,7 @@
 # that follows one.
 #
 # **A path can also be in reach and still refused**, which is `Root.sealed`: git's own directory at a
-# checkout's root is git's to write, and `bash` runs git. These tools write from the parent and pass
+# worktree's root is git's to write, and `bash` runs git. These tools write from the parent and pass
 # through no sandbox, so what that buys is that an `edit` never becomes a way to rewrite a ref or a
 # config line underneath git's locking.
 #
@@ -93,9 +93,9 @@ class ListingFailed(RuntimeError):
     """
     git could not say what is in a directory.
 
-    Not a `Refused`, because it is not something a model can retry its way out of: every worktree
-    these tools are built against is a checkout, so this is a broken environment rather than
-    a badly-aimed call.
+    Not a `Refused`, because it is not something a model can retry its way out of: every root these
+    tools list is a worktree git made, so this is a broken environment rather than a badly-aimed
+    call.
     """
 
 
@@ -157,8 +157,12 @@ class GitTracked:
     is the one thing that is true of this root and false of every other. A second worktree is one
     more of these in `Files.roots` and nothing else.
 
-    It holds the `Worktree` rather than only its path because enumeration runs Git, and Git against
-    model-writable configuration must run through the worktree's confinement.
+    It holds the `Worktree` rather than its path, because enumerating it means running git against a
+    directory a session may write, and *how* to do that safely is one answer this console has
+    already worked out: in the worktree's sandbox, through `Worktree.git`. Holding the path would be
+    holding half of it, and the other half would be reassembled here as a git in the parent, reading
+    the session's configuration with this process's authority and nothing at the call site saying
+    so.
     """
 
     worktree: Worktree
@@ -202,9 +206,12 @@ class GitTracked:
         so git failing here is not something a model can retry its way out of, and returning nothing
         would be a silent wrong answer.
 
-        Through `Worktree.git`, which runs the fixed `ls-files` argv inside the checkout's sandbox.
-        Git may read model-writable configuration there, but every program it launches has only the
-        session checkout and no network or parent credentials.
+        **Through `Worktree.git` rather than a subprocess of its own**, which is what runs this
+        behind `bwrap`: `ls-files` reads the worktree's configuration, which the session writes and
+        which can name a program git runs, so a git here in the parent would run it as the service
+        user, and a second copy of how to confine one would be a second thing to keep in step. What
+        a poisoned configuration can do in there is what the session's own `bash` could already do.
+        `at` is where git runs, so a listing of a subdirectory comes back relative to it.
 
         `stdout` rather than `out` because `-z` separates paths with NUL, which is not text to strip.
         """
@@ -232,7 +239,7 @@ class Scratch:
 
     @property
     def sealed(self) -> tuple[str, ...]:
-        """Nothing: this is not a checkout, so a `.git` here is just a file."""
+        """Nothing: this is not a worktree, so a `.git` here is just a file."""
         return ()
 
 
@@ -241,8 +248,9 @@ class System:
     """
     The whole machine, for a session that chose to work on it rather than in a repository.
 
-    Like `Scratch` it answers no question git answers, so `list` refuses it for the same reason and
-    points at `bash`. Unlike `Scratch` it is not somewhere to *keep* things, it is everywhere: a
+    Like `Scratch` it answers no question git answers, so a session reaching only this is offered
+    neither `list` nor `grep`, and `bash` answers what they would. Unlike `Scratch` it is not
+    somewhere to *keep* things, it is everywhere: a
     relative path lands here only because it is the session's first and only root.
     """
 
@@ -317,6 +325,18 @@ class Files:
     thrown away with the pass. It does not reach `bash`, whose paths are not knowable in advance:
     a command that rewrites a file under an `edit` is outside what this can see.
     """
+
+    @property
+    def has_repository(self) -> bool:
+        """
+        Whether any of these roots is a git worktree, which is what `list` and `grep` are offered on.
+
+        Both answer by asking git, so over a scratch or the whole machine either can only refuse, and
+        a tool that can only refuse still spends its description on every request. Read off the roots
+        rather than off the isolation, because the roots are what the tools act on and `reaching` has
+        already turned the isolation into them.
+        """
+        return any(isinstance(root, GitTracked) for root in self.roots)
 
     def exclusively(self, here: Path) -> asyncio.Lock:
         """
@@ -586,11 +606,15 @@ async def guarded[T](work: Awaitable[T]) -> T:
 
 def file_tools(files: Files) -> FunctionToolset[None]:
     """
-    The four tools, bound to one session's worktree.
+    `read`, `edit` and `create` over every root a session reaches, and `list` where one of them is a
+    worktree.
 
-    Built per session rather than declared once, because the root is what makes a path safe and
-    every session has its own. A session with no repository gets no toolset at all, which is the
-    honest answer rather than a tool that refuses every call: there are no files.
+    Built per session rather than declared once, because the roots are what make a path safe and
+    every session has its own. `list` asks git, so it is offered only where `Files.has_repository`
+    says there is something to ask, rather than as a tool that refuses every call over a scratch or
+    the whole machine. A session that reaches nothing gets no toolset from here at all, and that is
+    `reaching`'s to decide: a session on `NOTHING` reaches its scratch where there is a sandbox to
+    make it in, and nothing without one.
     """
     toolset = FunctionToolset[None]()
 
@@ -752,6 +776,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
 
     for tool in (read, edit, create):
         toolset.add_function(tool)
+    if not files.has_repository:
+        return toolset
     # Asked for as `list`, which is the word a model reaches for, and defined as `listing`, because
     # `list` is a builtin and shadowing one inside this scope is a lint error rather than a style
     # question. The name the model sees is the only one that matters, so it is set here explicitly.

@@ -11,7 +11,7 @@ reads as safe and reverts every tracked edit in the worktree, `git config` can s
 and a release next year adds something nobody has classified. A mount says what a process can
 *reach*, so it is already right about commands nobody has thought of, including whatever a
 repository's own build script runs, and it is why every git in here may do whatever git does:
-what it can touch is the session's checkout and nothing else.
+what it can touch is the session's worktree and nothing else.
 
 **Per call, never a long-lived executor**, and the reason is replay rather than cost. A pass re-runs
 the conversation body from the top and `Stepping.call` replays recorded results instead of
@@ -22,21 +22,26 @@ only under crash-resume. A fresh namespace costs a couple of milliseconds agains
 hundreds, and leaves no process to supervise, reap, or reconstruct. The tool's own description says
 nothing persists, and `test_sandbox.py` asserts it.
 
-Five things about the policy are decided rather than incidental:
+Six things about the policy are decided rather than incidental:
 
-- **The checkout is bound read-write whole, `.git` included.** It is a repository of the session's
+- **The worktree is bound read-write whole, `.git` included.** It is a repository of the session's
   own, so `add`, `commit`, `merge`, `rebase`, `stash` and `fetch` do what they say, against this
   session's refs and index and nobody else's. What a commit in there is *not* is the record: the
-  conversation's snapshots are taken out of the checkout into the store, so a rebase that rewrites
+  conversation's snapshots are taken out of the worktree into the store, so a rebase that rewrites
   the session's branch rewrites nothing a panel shows or a fork plants from. The cost is that the
-  checkout's configuration is the session's to write, which is why [the parent never runs git
-  against it](security.md#the-parent-never-runs-git-against-a-checkout).
-- **The store is bound read-only beside it.** The checkout borrows the store's objects through
+  worktree's configuration is the session's to write, which is why [the parent never runs git
+  against it](security.md#the-parent-never-runs-git-against-a-worktree).
+- **The store is bound read-only beside it.** The worktree borrows the store's objects through
   `alternates`, and `origin` is the store, so without the bind there is no git in the sandbox at all,
   and with it `git fetch` brings the repository's refreshed branches with no network. Read-only is
   what keeps one session's git from reaching another's; what it costs is that every session on a
-  repository can read every tree any of them snapshotted. Nothing can push from in here, since the
-  one remote there is cannot be written.
+  repository can read every tree any of them snapshotted. Nothing can push to `origin` from in here,
+  since the store cannot be written, and with the network off nothing can push at all. With it on,
+  on exe.dev, a command can push to the repository itself, which [what runs, and as
+  whom](security.md#on-exedev-the-network-is-the-credential) is about.
+- **Both come from `worktree_places`**, which `Sandbox.around` and `Worktree.confined` both call, so
+  a session's commands and the git this console runs to snapshot them see one repository bound one
+  way. Two copies of two binds would agree until one of them changed.
 - **Both are bound at their own absolute paths**, never remapped to a tidy `/workspace`. That is
   forced by `alternates` naming the store by its absolute path. The alternative is a
   `GIT_ALTERNATE_OBJECT_DIRECTORIES` that every consumer has to carry and any subprocess is free to
@@ -63,19 +68,25 @@ carries, that what is in there goes stale while the source around it moves back.
 relative path to the file tools means it, since there is no worktree for one to mean instead. That
 is `InAScratch` beside `InAWorktree`, and the same one bind is what `Sandbox.within` makes. It is
 what lets a conversation that is not about a repository run a script or keep a plan across turns
-without being handed the whole machine to do it, which was the only other answer.
+without being handed the whole machine to do it, which is the only other arm that has a shell.
+
+The cost, stated, is three things the arm that reaches nothing takes on by having one. It runs
+commands a model wrote, where a session with no shell would run none. Its network switch means
+something: with it on, that shell can dial out, and on exe.dev that is [this console's authority
+over the repositories](security.md#on-exedev-the-network-is-the-credential). And every session with
+no repository keeps a directory on the disk, counted on its row, until it is archived.
 
 **It is `$HOME` for a session's commands**, rather than the tmpfs, because that is where every tool
 that fetches keeps what it fetched: a toolchain [a repository's plugin
 installs](plugins.md#getting-the-repository-ready-is-a-plugin-too) lands under `$HOME`, and a shell
-whose `$HOME` is anywhere else cannot find its own tools. `home_in` is
-where that is decided, and it retires the earlier reading that what a shell leaves in a home
-directory is scratch by accident - it is scratch by intent now, and the cost is that a stray dotfile
-survives the call. A session over the whole machine has no scratch and keeps the tmpfs.
+whose `$HOME` is anywhere else cannot find its own tools. `home_in` is where that is decided, and it
+makes what a shell leaves in a home directory scratch by intent rather than by accident; the cost is
+that a stray dotfile survives the call. A session over the whole machine has no scratch and keeps
+the tmpfs.
 
 Outside the worktree rather than under it, and that is not tidiness. `list` passes `--others`, so a
 directory inside the worktree is in every listing and every `git status` until something excludes
-it, and the only place to write that exclusion is the checkout's own `.git/info/exclude`, which
+it, and the only place to write that exclusion is the worktree's own `.git/info/exclude`, which
 anything the session runs could take out again. `test_sandbox.py` pins this by asserting that
 nothing in the scratch reaches either.
 
@@ -91,7 +102,7 @@ a line editor; a build cache never does.
 
 It is also most of [what a session takes on disk](workspace.md#what-a-session-takes-on-disk), which
 is the figure on the session's row: a toolchain fetched in here is tens of thousands of files, where
-a worktree is a checkout.
+a worktree is one copy of the repository's files.
 
 **A plugin gets a different one, and `$HOME` points at it.** `workspaces/plugins/<session>/<tier>/
 <name>` is bound in place of the session's for a repository's plugin, because the session's is a
@@ -153,8 +164,7 @@ of a round trip. Four things there are decided:
 beside `name`. A `GitTracked` seals `.git` and everything under it, because that is git's own state
 and a line edit of a ref or a config line would bypass git's locking and its formats; a `Scratch` and
 a `System` seal nothing, having no git of their own. `Files.resolved` refuses a sealed path after
-it has established the path is in reach, so being inside a root is necessary and no longer
-sufficient.
+it has established the path is in reach, so being inside a root is necessary and not sufficient.
 
 It is about correctness rather than reach: `bash` runs git against the same directory, confined like
 every other command, so the same bytes are one `git config` away. It is a root's *top level* only: a
@@ -175,14 +185,16 @@ directory exist `read` would name a path nothing ever creates.
 so a command can start a server and curl it within one call, which covers integration tests. What it
 cannot do is make that port visible to a person, and that is deliberate: a dev server somebody
 watches is the harness's to run, outside the sandbox, not something an agent tool call should leave
-behind. `Venue.CONNECTED` is the arm for that and nothing uses it yet.
+behind. `Venue.CONNECTED`, the arm a session picks with the network on, is the whole network for a
+command, and a server one starts still ends with the call.
 
-Network is **off**, and off rather than allowlisted. An allowlist containing github.com contains
-gists, one containing a package registry contains a package anybody can publish, and a DNS query to
-`<secret>.attacker.example` leaves through any resolver that is allowed. It would buy a MITM proxy,
-a CA inside the sandbox, and every tool that pins certificates breaking, for a defence against the
-malicious-repository case and almost none against a determined injection. Landlock cannot help here
-either: its network rules key on a *port*, never an address, and do not cover UDP at all.
+Network is **off** unless a session picks it, and off or on rather than allowlisted. An allowlist
+containing github.com contains gists, one containing a package registry contains a package anybody
+can publish, and a DNS query to `<secret>.attacker.example` leaves through any resolver that is
+allowed. It would buy a MITM proxy, a CA inside the sandbox, and every tool that pins certificates
+breaking, for a defence against the malicious-repository case and almost none against a determined
+injection. Landlock cannot help here either: its network rules key on a *port*, never an address,
+and do not cover UDP at all.
 
 `--clearenv` is what keeps the parent's environment out, and the credential is out of the sandbox
 structurally rather than carefully: the agent loop that holds it stays in the parent and only the
@@ -190,7 +202,7 @@ command crosses.
 
 **A missing sandbox is reported, not refused.** `open_console` resolves `bwrap` once and logs what
 it found; without it no session is offered `bash` and **no repository is offered at all**, since a
-checkout's git reads configuration the session writes and there is nowhere safe to run it to take a
+worktree's git reads configuration the session writes and there is nowhere safe to run it to take a
 snapshot. What is left is a place to talk. That is [the promise rather than the
 refusal](../philosophy.md#refusing-at-startup-or-promising-not-to-raise), because nothing here
 leaves somebody holding a choice they cannot use. It is logged because a shell and a repository list
@@ -227,7 +239,7 @@ answer stored in two places. It is the worked example behind [the rule about con
 keeping in step](../philosophy.md#controls).
 
 **An enum whose members are recorded cannot be renamed freely, because the *value* is what is in the
-store.** `Filesystem.WORKTREE` was `WORKSPACE`, and renaming the member changed the recorded string
+database.** `Filesystem.WORKTREE` was `WORKSPACE`, and renaming the member changed the recorded string
 too, so every session written until then became a page that answered 500. Nothing had been released,
 so those records were only ever in a development database and the rename stands as it is.
 
@@ -238,12 +250,12 @@ field is a different thing and stays: that is ordinary parsing of an optional, t
 read, and it is what lets every session written before `isolation` existed read back as what it
 already had.
 
-`Isolation.settled` survives the merge and is still applied by `Service.start` and `Service.fork`,
-because a fork's repository is *inherited* rather than posted and a form is not the only way in.
-What it no longer has to do is correct the new-session page, which can no longer express a contradiction.
+`Isolation.settled` is applied by `Service.start` and `Service.fork` all the same, because a fork's
+repository is *inherited* rather than posted and a form is not the only way in. What it does not
+have to do is correct the new-session page, which cannot express a contradiction.
 
 Whether the workspace can be chosen at all is the caller's answer, given to `picker` as `None`
-rather than as an empty `Reachable`. The difference is load-bearing now that the group holds more
+rather than as an empty `Reachable`. The difference is load-bearing because the group holds more
 than repositories: empty means no forge reaches anything, which still leaves two answers worth
 offering, where `None` means a fork already works somewhere and a control would be a lie about what
 the page does.
@@ -252,13 +264,13 @@ The network sits under the workspace and above the endpoint, following the picke
 breadth: what a session's files are decides what it can touch, whether it can dial out decides what
 it can do with them, and the endpoint and model only decide who answers.
 
-**A session on `EVERYTHING` can read `config.yaml` and the store**, which is to say the credentials
+**A session on `EVERYTHING` can read `config.yaml` and the database**, which is to say the credentials
 and every other conversation. That is what choosing it means rather than an oversight, and the card
 says so.
 
 **The same axes bind a command the *person* runs**, which is [the composer's
 `Run`](composer.md#run): it gets the session's sandbox, its network answer and the environment its
-setup recorded. The checkout's hooks are the model's to write, so a person's `git commit` run
+setup recorded. The worktree's hooks are the model's to write, so a person's `git commit` run
 anywhere else would run them with the service user's authority. What that costs the person is their
 own `$HOME` and credentials inside the command, which is why pushing is [a control of its
 own](composer.md#push) rather than something typed.
@@ -266,9 +278,9 @@ own](composer.md#push) rather than something typed.
 ## What the parent still runs
 
 The binds above say what a *command* reaches. The parent also has git to run against a session's
-files, to snapshot them and to answer `list` and `grep`, and the checkout's configuration is the
+files, to snapshot them and to answer `list` and `grep`, and the worktree's configuration is the
 session's to write. So the parent runs none of it itself: `Worktree.git` runs every one of those
 behind this same namespace, and what comes back to the parent is a listing or a bundle, read as
 data. The parent runs git only against the store, which nothing in here can write. [What runs, and
 as whom](security.md) is the whole of it, and it is the page to read before adding anything to the
-parent that touches a checkout.
+parent that touches a worktree.

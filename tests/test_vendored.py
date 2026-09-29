@@ -9,8 +9,8 @@ from pathlib import Path
 
 import brotli  # type: ignore[import-untyped]  # the bindings ship no types
 import pytest
+from without_asgi.assets import Inventory
 
-from mainplate.app import served_assets
 from scripts.vendor import ASSETS
 from scripts.vendor import SIDECARS
 from scripts.vendor import Mismatch
@@ -20,10 +20,12 @@ from scripts.vendor import encodable
 from scripts.vendor import manifest
 from scripts.vendor import unverified
 from scripts.vendor import vendor
+from scripts.vendor import writes
 
 VENDORED = manifest()
 
-# Every row the server compresses, which is every row with sidecars beside it.
+# Every row with sidecars beside it, which is every row the server compresses for as long as
+# `test_the_recipe_encodes_exactly_what_the_server_does` passes.
 ENCODED = tuple(entry for entry in VENDORED if encodable(entry.name))
 
 # How each sidecar is read back, and the coding the inventory serves it as.
@@ -49,10 +51,9 @@ class TestWhatIsVendored:
     whose digest is not the recorded one, and this refuses to pass while a file on disk is not.
     """
 
-    @pytest.mark.parametrize("entry", VENDORED, ids=lambda entry: entry.name)
-    def test_the_copy_on_disk_is_the_bytes_the_manifest_records(self, entry: Vendored) -> None:
-        assert (ASSETS / entry.name).is_file(), f"{entry.name} is in the manifest and not in assets/"
-        assert digest((ASSETS / entry.name).read_bytes()) == entry.sha256
+    def test_the_copy_on_disk_is_the_bytes_the_manifest_records(self) -> None:
+        """Through `unverified`, so what the suite checks is the check a test below can make fail."""
+        assert unverified(VENDORED, ASSETS) == ()
 
     def test_every_script_and_face_that_is_not_this_console_s_own_is_in_the_manifest(self) -> None:
         """
@@ -72,14 +73,25 @@ class TestWhatIsVendored:
         assert sidecar.is_file(), f"{sidecar.name} is missing; `just vendor` writes it"
         assert digest(decode(sidecar.read_bytes())) == entry.sha256
 
+    @pytest.mark.parametrize("entry", VENDORED, ids=lambda entry: entry.name)
+    def test_the_recipe_encodes_exactly_what_the_server_does(self, entry: Vendored, assets: Inventory) -> None:
+        """
+        `encodable` restates a question the inventory answers privately, so this is what turns the
+        two disagreeing into a failure: a row the recipe skips that the server encodes is paid for
+        at every start, and one it encodes that the server does not is a sidecar nothing reads.
+        """
+        assert bool(assets.assets[entry.name].encodings) == encodable(entry.name)
+
     @pytest.mark.parametrize("entry", ENCODED, ids=lambda entry: entry.name)
-    def test_the_server_serves_the_sidecars_rather_than_compressing_at_startup(self, entry: Vendored) -> None:
+    def test_the_server_serves_the_sidecars_rather_than_compressing_at_startup(
+        self, entry: Vendored, assets: Inventory
+    ) -> None:
         """
         The inventory falls back to compressing a file whose sidecar is older than it, and says so
         only in a log line, so a checkout that wrote them in the wrong order would pass everything
         above while paying for the diagram library at every start.
         """
-        encodings = served_assets().assets[entry.name].encodings
+        encodings = assets.assets[entry.name].encodings
         for suffix, (_, coding) in DECODED.items():
             assert encodings[coding].body == (ASSETS / f"{entry.name}{suffix}").read_bytes(), coding
 
@@ -130,21 +142,43 @@ class TestWhatTheRecipeRefuses:
         assert (tmp_path / "Face-Regular.woff2").read_bytes() == b"regular face"
         assert (tmp_path / "Face-Bold.woff2").read_bytes() == b"bold face"
 
-    def test_a_script_is_written_with_a_sidecar_per_coding_each_newer_than_it(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("suffix", SIDECARS)
+    def test_a_script_is_written_with_a_sidecar_that_decodes_to_it(self, tmp_path: Path, suffix: str) -> None:
+        """One sidecar per coding the server offers, under the suffix the inventory reads it from."""
         script = b"var lib = 1;\n" * 64
         entry = Vendored(name="lib.min.js", url="https://example.test/lib", sha256=digest(script))
         vendor((entry,), tmp_path, fetch=lambda url: script)
-        written = tmp_path / "lib.min.js"
-        for suffix, (decode, _) in DECODED.items():
-            sidecar = tmp_path / f"lib.min.js{suffix}"
-            assert decode(sidecar.read_bytes()) == script, suffix
-            assert sidecar.stat().st_mtime_ns >= written.stat().st_mtime_ns, suffix
+        decode, _ = DECODED[suffix]
+        assert decode((tmp_path / f"lib.min.js{suffix}").read_bytes()) == script
+
+    @pytest.mark.parametrize("suffix", SIDECARS)
+    def test_each_sidecar_is_written_after_the_file_it_encodes(self, suffix: str) -> None:
+        """
+        The inventory ignores a sidecar older than its file, so the order is the claim. It is read
+        off `writes` rather than off the files' timestamps, which a filesystem rounds to one tick
+        often enough that the wrong order would still pass most runs.
+        """
+        first = Vendored(name="first.min.js", url="https://example.test/first", sha256=digest(b"var first;"))
+        second = Vendored(name="second.min.js", url="https://example.test/second", sha256=digest(b"var second;"))
+        names = [name for name, _ in writes(((first, b"var first;"), (second, b"var second;")))]
+        for entry in (first, second):
+            assert names.index(f"{entry.name}{suffix}") > names.index(entry.name), entry.name
 
     def test_a_face_is_written_with_no_sidecar(self, tmp_path: Path) -> None:
         """A face is compressed already, so the server never encodes one and a sidecar would be dead weight."""
         entry = Vendored(name="Face.woff2", url="https://example.test/face", sha256=digest(b"wOF2 face"))
         vendor((entry,), tmp_path, fetch=lambda url: b"wOF2 face")
         assert [path.name for path in tmp_path.iterdir()] == ["Face.woff2"]
+
+    @pytest.mark.parametrize("field", ["url", "sha256", "member"])
+    def test_a_field_that_is_not_a_string_is_refused_rather_than_coerced(self, tmp_path: Path, field: str) -> None:
+        """A row TOML reads as anything but strings is one nobody meant, so it is never fetched."""
+        row = {"url": '"https://example.test/lib"', "sha256": f'"{digest(b"lib")}"', "member": '"lib.js"'}
+        row[field] = "[2, 3]"
+        table = tmp_path / "vendored.toml"
+        table.write_text('["lib.js"]\n' + "".join(f"{key} = {value}\n" for key, value in row.items()))
+        with pytest.raises(ValueError, match=rf"lib\.js: {field} is \[2, 3\]"):
+            manifest(table)
 
     def test_a_copy_that_drifted_from_the_manifest_is_named(self, tmp_path: Path) -> None:
         kept = Vendored(name="kept.js", url="https://example.test/kept", sha256=digest(b"kept"))

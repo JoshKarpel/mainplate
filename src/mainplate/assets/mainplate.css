@@ -107,7 +107,7 @@
     --lift: 0 2px 12px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
     --sidebar: 17rem;
     /* A side column put away is a strip this wide, which is the button that brings it back. */
-    --folded: 1.5rem;
+    --away-width: 1.5rem;
     /* One width at every shape, so a card has one layout to be right in, and a wide one, because
        every card in it is rows of a key at the left and a value or a control at the right, and a
        row is only a row while the two fit on one line: a repository or a branch beside its key is
@@ -752,15 +752,26 @@ pre > .copy {
    rather than measured, so neither button moves when its word changes: `copy` grows to `copied` and
    `draw` swaps for `code`, and a button that shifted under the pointer on being pressed is one that
    is missed on the second press. The copy button's width is `copied`'s, and only inside a block,
-   where the panel's own stands in a row that sizes it. */
+   where the panel's own stands in a row that sizes it.
+
+   Properties rather than numbers, because each button further in stands at the sum of the widths
+   outside it: a width written out in every sum is a width that moves in one of them and not the
+   others, and the buttons then overlap. `--seated-width` is the widest of `draw`, `code` and
+   `focus`, in the same face. */
+pre {
+    --copy-width: 3.3rem;
+    --seated-width: 2.7rem;
+    --seated-gap: 0.3rem;
+}
+
 pre > .copy {
-    min-width: 3.3rem;
+    min-width: var(--copy-width);
     text-align: center;
 }
 
 pre > .draw {
-    right: calc(var(--space-3) + 3.3rem + 0.3rem);
-    min-width: 2.7rem;
+    right: calc(var(--space-3) + var(--copy-width) + var(--seated-gap));
+    min-width: var(--seated-width);
 }
 
 pre > .draw[aria-busy] {
@@ -772,12 +783,12 @@ pre > .draw[aria-busy] {
 /* A block whose lines do not fit takes a button that opens it on its own, as wide as the window,
    standing where `draw` does, and one further in where a fence shown as code carries both. */
 pre > .focus {
-    right: calc(var(--space-3) + 3.3rem + 0.3rem);
-    min-width: 2.7rem;
+    right: calc(var(--space-3) + var(--copy-width) + var(--seated-gap));
+    min-width: var(--seated-width);
 }
 
 pre:has(> .draw) > .focus {
-    right: calc(var(--space-3) + 3.3rem + 0.3rem + 2.7rem + 0.3rem);
+    right: calc(var(--space-3) + var(--copy-width) + 2 * var(--seated-gap) + var(--seated-width));
 }
 
 /* As wide as its longest line and no wider than the window, over a dimmed page. The block scrolls
@@ -1156,7 +1167,8 @@ pre .gs {
 /* Folded, every one: what a read brought back or a command said is context a reader reaches for,
    and what the calls that write did is the batch's diff under them. The fold is a real `<details>`,
    which is what the dock's fold-all works on and what keeps the whole thing usable with no script at
-   all. */
+   all. The cost, stated: a session with no worktree has no batch's diff, so there an `edit` or a
+   `create` is shut with nothing standing in for it. */
 .tool {
     margin: 0;
     border: 1px solid var(--edge-soft);
@@ -1179,7 +1191,6 @@ pre .gs {
 }
 
 .block--tool + .block--tool > .tool {
-    border-top-color: var(--edge-soft);
     border-top-left-radius: 0;
     border-top-right-radius: 0;
 }
@@ -1210,17 +1221,23 @@ pre .gs {
     overflow-wrap: anywhere;
 }
 
-.tool > summary::-webkit-details-marker {
+/* The batch's diff under the calls turns on the same marker, since it is a fold in the same panel.
+   Unlike `.ran`, which keeps rules of its own, it shares these: what is inside it is what an edit's
+   own body draws, so the two cannot differ without one of them being wrong. */
+.tool > summary::-webkit-details-marker,
+.batch > summary::-webkit-details-marker {
     display: none;
 }
 
-.tool > summary::before {
+.tool > summary::before,
+.batch > summary::before {
     content: "\25B8";
     color: var(--tool-edge);
     transition: transform 0.12s ease;
 }
 
-.tool[open] > summary::before {
+.tool[open] > summary::before,
+.batch[open] > summary::before {
     transform: rotate(90deg);
 }
 
@@ -1299,7 +1316,10 @@ pre .gs {
     margin: 0.15rem 0 0;
 }
 
-.tool__body pre {
+/* The batch's diff is the same block an edit's body draws, so it is the same rule, for the reason
+   the marker above is shared. */
+.tool__body pre,
+.batch__body pre {
     position: relative;
     margin: 0;
     /* What the call returned is not part of the band that shuts the panel, because a press here is
@@ -1336,11 +1356,11 @@ pre .gs {
     margin-top: 0.15rem;
 }
 
-/* A block of lines with something the console drew in front of each: the anchor a read put there,
-   which is a diff's line numbers. The gutter is an attribute the stylesheet paints rather than
-   text, which is what makes copying the block copy the diff: the numbers are the console's and
-   are not in the change. A line is a block with its newline inside it, so it paints its whole row
-   and the text of the block still reads as lines; see `line_element` in `calls.py`.
+/* A block of lines, each its own `.line` span: a block with its newline inside it, so it paints its
+   whole row and the text of the block still reads as lines; see `line_element` in `calls.py`. A
+   diff's line numbers are a gutter the stylesheet paints from an attribute rather than text, which
+   is what makes copying the block copy the diff: the numbers are the console's and are not in the
+   change.
 
    A read's anchors are not drawn at all. They are the model's names for lines and mean nothing to
    a person, so what is left to tell a file's lines from the tool's own - the header saying which
@@ -1414,20 +1434,6 @@ pre.lines > code {
     list-style: none;
 }
 
-.batch > summary::-webkit-details-marker {
-    display: none;
-}
-
-.batch > summary::before {
-    content: "\25B8";
-    color: var(--tool-edge);
-    transition: transform 0.12s ease;
-}
-
-.batch[open] > summary::before {
-    transform: rotate(90deg);
-}
-
 .batch > summary::after {
     content: "";
     flex: 1 1 2rem;
@@ -1449,21 +1455,11 @@ pre.lines > code {
     white-space: nowrap;
 }
 
+/* The room around the diff is the other way to shut the fold, which is what the cursor says, for
+   `.tool__body`'s reason: a diff can run to the length `LONGEST_OPEN_DIFF` allows. */
 .batch__body {
     padding-top: var(--space-2);
     cursor: pointer;
-}
-
-.batch__body pre {
-    position: relative;
-    margin: 0;
-    cursor: auto;
-    font-family: var(--mono);
-    font-size: var(--mono-size);
-    line-height: var(--mono-line);
-    padding: var(--space-3) var(--space-4);
-    border-radius: calc(var(--radius) / 1.5);
-    background: var(--sunk);
 }
 
 .batch__added {
@@ -1472,14 +1468,6 @@ pre.lines > code {
 
 .batch__removed {
     color: var(--vermilion);
-}
-
-/* An edit whose diff is empty, said rather than drawn as a box with nothing in it, the way a
-   command with no output is. */
-.tool__silent {
-    color: var(--ink-faint);
-    font-size: 0.72rem;
-    font-style: italic;
 }
 
 /* --- Commands the person ran ------------------------------------------- */
@@ -1567,6 +1555,12 @@ pre.lines > code {
     opacity: 1;
 }
 
+/* A push is not a shell line, so it does not wear the prompt: nobody typed it, and a `$` in front of
+   a branch name would read as a command somebody ran with that name. */
+.ran--push > summary::before {
+    content: "↑";
+}
+
 /* The line is the part that can be long, so it is the part that gives way. */
 .ran__line {
     min-width: 0;
@@ -1584,6 +1578,15 @@ pre.lines > code {
    shape so it reads as a fact about the run rather than as part of what was typed. */
 .ran__online {
     color: var(--error-edge);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* The word in front of a push's branch, in the same shape as `online`, so it reads as what this
+   console did rather than as part of the branch's name. */
+.ran__pushed {
+    color: var(--person-edge);
     font-size: 0.68rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -1627,9 +1630,11 @@ pre.lines > code {
     cursor: pointer;
 }
 
-/* A command whose whole answer was its exit status. Faint and italic, which is how `unfinished`
-   beside it already says a thing this console knows rather than a thing the command said. */
-.ran__silent {
+/* A command whose whole answer was its exit status, and an edit whose diff is empty: said rather
+   than drawn as a box with nothing in it. Faint and italic, which is how `unfinished` beside it
+   already says a thing this console knows rather than a thing the command or the tool said. */
+.ran__silent,
+.tool__silent {
     color: var(--ink-faint);
     font-size: 0.72rem;
     font-style: italic;
@@ -3272,39 +3277,45 @@ pre.lines > code {
    first paint, the way the theme is. After both columns' own rules and through `:where()`, so each
    rule here weighs what the rule it changes weighs and wins on order, and the narrow block, which is
    later still and draws both columns as sheets behind clasps whatever this says, wins the same way. */
-:where(:root[data-list="shut"]) .shell {
-    --list-column: var(--folded);
+:where(:root[data-list="away"]) .shell {
+    --list-column: var(--away-width);
 }
 
-:where(:root[data-rail="shut"]) .shell {
-    --rail-column: var(--folded);
+:where(:root[data-rail="away"]) .shell {
+    --rail-column: var(--away-width);
 }
 
-:where(:root[data-list="shut"]) .sessions__sheet,
-:where(:root[data-rail="shut"]) .rail__sheet {
+:where(:root[data-list="away"]) .sessions__sheet,
+:where(:root[data-rail="away"]) .rail__sheet {
     display: none;
 }
 
-:where(:root[data-list="shut"]) .sessions,
-:where(:root[data-rail="shut"]) .rail {
+:where(:root[data-list="away"]) .sessions,
+:where(:root[data-rail="away"]) .rail {
     padding-inline: 0;
 }
 
 /* The press stands at the column's inner edge at the height of the first thing in it, which is the
-   column's edge whether the column is out or away. Its arrow points the way the column will go. */
+   column's edge whether the column is out or away. Its arrow points the way the column will go.
+   Seated by the script, since a button that does nothing without it is a control that lies.
+
+   **It moves when it is pressed, and that is the one named exception to a control that toggles
+   staying put.** The press is what moves the edge it stands on, and the only place that does not
+   move is over the conversation, which is the argument against floating clasps. The cost, stated:
+   a second press to undo the first has to find the button again, a column's width away. */
 .sessions,
 .rail {
     position: relative;
 }
 
-.fold {
+.away {
     position: absolute;
     z-index: 2;
     top: var(--gap);
     display: grid;
     place-items: center;
-    width: var(--folded);
-    height: var(--folded);
+    width: var(--away-width);
+    height: var(--away-width);
     padding: 0;
     border: 1px solid var(--edge);
     border-radius: 999px;
@@ -3316,40 +3327,40 @@ pre.lines > code {
     cursor: pointer;
 }
 
-.fold:hover,
-.fold:focus-visible {
+.away:hover,
+.away:focus-visible {
     color: var(--ink);
 }
 
 /* Half over the list's border, which is a line the button can stand on. */
-.sessions > .fold {
-    right: calc(var(--folded) / -2);
+.sessions > .away {
+    right: calc(var(--away-width) / -2);
 }
 
 /* Wholly outside the rail rather than half over it, since the rail has no padding on that side and
    its first card starts at the edge: half over it, the button stood on the card's own corner. */
-.rail > .fold {
+.rail > .away {
     right: calc(100% + 2px);
 }
 
-:where(:root[data-rail="shut"]) .rail > .fold {
+:where(:root[data-rail="away"]) .rail > .away {
     right: auto;
     left: 0;
 }
 
-.sessions > .fold::before {
+.sessions > .away::before {
     content: "\2039";
 }
 
-.rail > .fold::before {
+.rail > .away::before {
     content: "\203A";
 }
 
-:where(:root[data-list="shut"]) .sessions > .fold::before {
+:where(:root[data-list="away"]) .sessions > .away::before {
     content: "\203A";
 }
 
-:where(:root[data-rail="shut"]) .rail > .fold::before {
+:where(:root[data-rail="away"]) .rail > .away::before {
     content: "\2039";
 }
 
@@ -3474,7 +3485,7 @@ mark.hit.current {
    item's own floor is its content, so without it a number's row refuses to shrink and pushes its
    box out of the card rather than cutting its label. */
 .plugin__switch,
-.plugin__number {
+.typed {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -3538,16 +3549,21 @@ mark.hit.current {
     background: var(--ink);
 }
 
-/* Where the row does not fit on one line, which `attempts per turn` does not at the phone's size,
+/* A typed row: somebody writes into its box, and what they wrote is recorded on the press of the
+   mark against it rather than on a keystroke. A plugin's number is one and a session's name is
+   another, and every row that takes typing is this one rather than a form of its own, so they all
+   read and press alike.
+
+   Where the row does not fit on one line, which `attempts per turn` does not at the phone's size,
    the box and its unit drop to the line under, still at the right, so a long label costs a line
    rather than pushing the box out of the card or breaking into two lines of its own beside it. The
    label is held to one line and cut only where it alone is wider than the row, which no label a
    card should carry is. */
-.plugin__number {
+.typed {
     flex-wrap: wrap;
 }
 
-.plugin__number > span:first-child {
+.typed__key {
     flex: none;
     max-width: 100%;
     overflow: hidden;
@@ -3555,8 +3571,8 @@ mark.hit.current {
     white-space: nowrap;
 }
 
-/* The box, its unit and its own `Set`, as one item at the right, so they drop together. */
-.plugin__value {
+/* The box, its unit and its own mark, as one item at the right, so they drop together. */
+.typed__value {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
@@ -3564,13 +3580,7 @@ mark.hit.current {
     margin-left: auto;
 }
 
-/* Four digits and no more, which is a bound rather than a guess: a control declared in units is
-   chosen in round ones, and a box sized for six is one nobody can read at a glance. Sized rather
-   than stretched, so the box says how much it expects and `Set` sits against it instead of across
-   the card. */
-.plugin__number input {
-    flex: none;
-    inline-size: calc(4ch + 1.2rem);
+.typed input {
     min-width: 0;
     padding: 0.2rem 0.35rem;
     border: 1px solid var(--edge);
@@ -3578,6 +3588,15 @@ mark.hit.current {
     background: var(--sunk);
     color: var(--ink);
     font: inherit;
+}
+
+/* Four digits and no more, which is a bound rather than a guess: a control declared in units is
+   chosen in round ones, and a box sized for six is one nobody can read at a glance. Sized rather
+   than stretched, so the box says how much it expects and the mark sits against it instead of
+   across the card. */
+.plugin__number input {
+    flex: none;
+    inline-size: calc(4ch + 1.2rem);
 
     /* No spinner, because there is no increment that is right: a step of 1 is a hundred presses to
        move a number anywhere worth moving it, and any larger one is a value this console would have
@@ -3600,16 +3619,16 @@ mark.hit.current {
     color: var(--ink);
 }
 
-/* A number's own `Set`, a mark against its box, and drawn only while there is something in the box
-   that has not been recorded: a switch takes effect on the press and a number does not, so a row
-   at rest has nothing to press and shows nothing, and a row somebody has typed in shows the one
-   press that records it, against the figure it records. A `Set` on a row of its own was tried and
-   spent a line on every card whether anything was pending or not.
+/* A typed row's own press, a mark against its box, and drawn only while there is something in the
+   box that has not been recorded: a switch takes effect on the press and a typed value does not, so
+   a row at rest has nothing to press and shows nothing, and a row somebody has typed in shows the
+   one press that records it, against the value it records. A button on a row of its own was tried
+   and spent a line on every card whether anything was pending or not.
 
-   The script marks every number row clean or dirty, and a clean row hides its mark. With
+   The script marks every typed row clean or dirty, and a clean row hides its mark. With
    `mainplate.js` absent nothing marks anything, so the mark is simply always drawn, plain, which is
    the form working: the tick is the form's submit, and Enter in the box is the same press. */
-.plugin__set {
+.typed__set {
     display: inline-grid;
     place-items: center;
     width: 1.5rem;
@@ -3624,12 +3643,12 @@ mark.hit.current {
     cursor: pointer;
 }
 
-.plugin__number[data-clean] .plugin__set {
+.typed[data-clean] .typed__set {
     display: none;
 }
 
-.plugin__set:hover,
-.plugin__set:focus-visible {
+.typed__set:hover,
+.typed__set:focus-visible {
     background: var(--sunk);
     color: var(--mark);
 }
@@ -3637,7 +3656,7 @@ mark.hit.current {
 /* `--mark` is the same gold every control on this page draws its focus ring in, which is what makes
    it read as "this wants a press" rather than as a warning; the border alone, since filling it would
    make an unpressed button look pressed. */
-.plugin__number[data-dirty] .plugin__set {
+.typed[data-dirty] .typed__set {
     border-color: var(--mark);
     color: var(--mark);
 }
@@ -3653,43 +3672,20 @@ mark.hit.current {
     gap: var(--space-2);
 }
 
-.rename {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2);
-}
-
-.rename label {
-    color: var(--ink-faint);
+/* The name is a typed row whose value is text rather than a figure, so where a number's box is
+   sized to what it expects, this one takes the rest of the row: a name is read, and a box cut to a
+   few characters would show a reader the start of it and nothing more. Past the width the key
+   leaves it, it drops to its own line, as any typed value does. */
+.rename .typed__value {
+    flex: 1 1 8rem;
 }
 
 .rename input {
-    min-width: 0;
-    flex: 1 1 9rem;
-    padding: 0.25rem 0.4rem;
-    border: 1px solid var(--edge);
-    border-radius: 0.35rem;
-    background: var(--sunk);
-    color: var(--ink);
-    font: inherit;
+    flex: 1 1 auto;
 }
 
-.rename button {
-    padding: 0.25rem 0.4rem;
-    border: 1px solid var(--edge);
-    border-radius: 0.35rem;
-    background: transparent;
-    color: var(--ink-soft);
-    font: inherit;
-    cursor: pointer;
-}
-
-.rename button:hover,
-.rename button:focus-visible {
-    color: var(--mark);
-}
-
+/* Under the settings step, which has no rail to hold it: a session stuck on the step is exactly one
+   somebody may want to name or close. The step's own measure, so the three read as one column. */
 .setup + .rename,
 .setup + .rename + .archive {
     max-width: var(--wide);
@@ -3734,7 +3730,9 @@ mark.hit.current {
     column-gap: var(--space-3);
 }
 
-.fact dt {
+/* The name row's key as well, since it stands at the head of these facts and is one of them. */
+.fact dt,
+.rename .typed__key {
     color: var(--ink-faint);
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -3790,7 +3788,6 @@ summary.archive__head {
     background: var(--sunk);
     color: var(--mark);
 }
-
 
 /* The step between creating a session and typing into it: which of the plugins it declares to run.
    It stands alone in `main`, because a session being set up has no transcript to read, nothing to
@@ -4622,10 +4619,10 @@ main:has(> .forking) {
     }
 
     /* Both columns are already away here, behind their clasps, so a wide window's choice to put one
-       away is not this shape's to act on: no fold button, and a sheet the wide window hid is still
-       the sheet a clasp slides out. Nor is there a grip, since the conversation already has the
-       whole width. */
-    .fold,
+       away is not this shape's to act on: no button to put one away, and a sheet the wide window
+       hid is still the sheet a clasp slides out. Nor is there a grip, since the conversation
+       already has the whole width. */
+    .away,
     .reading__grip {
         display: none;
     }
@@ -4854,7 +4851,7 @@ main:has(> .forking) {
         .naming input,
         .basis input,
         .override input,
-        .plugin__number input,
+        .typed input,
         .forking textarea,
         .picker__filter-field,
         .search__input {

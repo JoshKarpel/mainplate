@@ -141,7 +141,7 @@ class PluginFailed(RuntimeError):
 
     **A failure at `setup` ends the pass with no registration written**, so the settings step is
     drawn again with this sentence above the switches and pressing the button is a fresh attempt.
-    That is forced rather than chosen: the store keeps the value a key was first given, so a
+    That is forced rather than chosen: the database keeps the value a key was first given, so a
     registration written with one plugin missing could never be corrected.
     """
 
@@ -197,9 +197,13 @@ and knows about sandboxes, and injecting the one question keeps everything above
 service, the routes - ignorant of how a plugin is run. It is also what lets a test drive the whole
 mechanism with a mapping of answers and no subprocess at all.
 
-The worktree is passed beside the payload rather than reconstructed from the wire value. The payload
-is untrusted data a plugin parses; this value carries the checkout together with the trusted snapshot
-store it belongs to and the confinement used for any Git it runs.
+**The worktree is passed beside the payload rather than read out of it**, and the two are not the
+same thing: the payload's is a string a plugin parses, and this is the worktree as this console
+knows it, with the store it borrows from and the `bwrap` every git against it runs behind. A
+`Worktree` rebuilt from the wire string would have to find those again from a path, and a path is
+what a caller that has lost track of the sandbox runs git against the ordinary way, in the parent,
+with nothing at the call site saying so. See [what runs, and as
+whom](../../docs/design/security.md).
 """
 
 
@@ -306,8 +310,8 @@ class Spawned:
         The same question `venue` asks and the same answer, written separately because what turns on
         it is different: that one decides a network, and this decides whether the session's own
         scratch is bound and an environment file is named. Three consequences of one rule rather than
-        three rules, and keyed on the event for the reason the network is - before the conversation,
-        over the commit the repository supplied, with nothing the model wrote anywhere yet.
+        three rules, and keyed on the event for the reason the network is: before the conversation,
+        after a person pressed the button that runs it, and never at a turn boundary. See `venue`.
         """
         return event == SETUP
 
@@ -320,12 +324,16 @@ class Spawned:
         chose - so without this a setup is a plugin asked to install something with nothing to install
         from, and the whole stage is one that can only fail.
 
-        What makes it safe to offer is *when* it is, rather than a check on what is fetched. `setup`
-        runs before the first message: the worktree holds the commit the repository supplied and
-        nothing else, no credential of this console's is inside the namespace, and nothing the model
-        wrote exists yet. So what a connected run there can carry out is the repository's own code, to
-        its own author. Every event after it is confined, which is the half that matters, because a
-        turn boundary is where a plugin has read whatever the model has been writing.
+        What makes it safe to offer is *when* it is and *who said so*, rather than a check on what is
+        fetched. `setup` runs before the first message and only after somebody pressed the button on
+        the settings step. In a new session the worktree holds the commit the repository supplied and
+        nothing the model wrote exists yet, so what a connected run there can carry out is the
+        repository's own code, to its own author. **A fork is the case where that is not so**: it
+        plants at a tree a model wrote, so its `setup` runs over the model's work, and what licenses
+        that is the press in the branch - which on exe.dev, where the network is the credential,
+        includes letting that code push. Every event after it is confined, which is the half that
+        matters, because a turn boundary is where a plugin has read whatever the model has been
+        writing.
 
         **Read off the event and never off the session.** `Filesystem.EVERYTHING` and a session with
         the network shut are both decisions about what the *model* may reach, and a plugin is not the
@@ -379,9 +387,9 @@ class Spawned:
             # them is what the timeout above does and is exactly what cannot be done here, since an
             # `await` inside a cancelled task is cancelled again the moment it is reached.
             #
-            # So the transport is closed instead, which is what asyncio itself does when it collects
-            # one - only here it happens while somebody is still holding the reference, rather than
-            # at an arbitrary later moment as a `ResourceWarning` raised into whatever is running.
+            # So the pipes are closed instead, synchronously, while somebody is still holding the
+            # process, rather than at an arbitrary later moment as a `ResourceWarning` raised into
+            # whatever is running; the transport is left to close itself. See `reaped`.
             reaped(process)
             raise
         said = err.decode(errors="replace").strip()
@@ -470,8 +478,8 @@ class Spawned:
             # run wrote: a setup that failed part-way through leaves its lines behind, and the
             # attempt after it must not inherit them.
             await asyncio.to_thread(lambda: (scratch / ENV_FILE).write_text("", encoding="utf-8"))
-        # The checkout value rather than a path reconstructed from the payload, so confinement and
-        # snapshot storage remain attached to the session value.
+        # The worktree as this console knows it, store and sandbox and all, rather than one rebuilt
+        # from the path on the payload, which is a string the plugin was sent. See `Speaking`.
         #
         # `plugin_scratch` and not `scratch`, which is the name a model's own `bash` finds the
         # *session's* directory under. One word for two places would have a repository's plugin and
