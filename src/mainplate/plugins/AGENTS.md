@@ -73,8 +73,9 @@ reach.
 
 So a change to what a handoff says, what it costs, or when it fires is a change to a *script*, and
 the console learns about it through `setup` like any other. The price is stated: `bundled/guidance`
-carries a `description:` line reader rather than a YAML parser, because a plugin with no dependencies
-is worth more here than the general case of a field nothing else reads.
+carries line readers for `description:` and `paths:` rather than a YAML parser, and a small glob
+translator rather than a library, because a plugin with no dependencies is worth more here than the
+general case of fields nothing else reads.
 
 **A console-tier plugin must not run git against the worktree the ordinary way.** It runs as the
 operator, unconfined, and the worktree's `.git/config` is the session's to write, so `git -C

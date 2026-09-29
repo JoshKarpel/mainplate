@@ -158,6 +158,20 @@ class TestWhatAPoisonedWorktreeCanRun:
         assert not outside.exists()
         assert "+changed" in said
 
+    async def test_a_diff_of_a_file_that_is_not_utf8_is_drawn_rather_than_raised(self, worktree: Worktree) -> None:
+        """
+        Git prints a text file's lines as their own bytes, so a Latin-1 file is a diff that is not
+        UTF-8; decoded strictly, the step recording it would raise on every pass for ever.
+        """
+        (worktree.root / "src" / "kept.txt").write_bytes(b"caf\xe9\n")
+        before = await worktree.capture("before")
+        (worktree.root / "src" / "kept.txt").write_bytes(b"th\xe9\n")
+        after = await worktree.capture("after")
+
+        said = await worktree.diff(before, after)
+
+        assert "+th\N{REPLACEMENT CHARACTER}" in said
+
 
 async def objects_in(store: Store) -> int:
     """How many objects a store holds, loose and packed, which is what a capture adds to."""

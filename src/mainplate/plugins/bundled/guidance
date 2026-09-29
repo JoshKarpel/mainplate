@@ -290,7 +290,7 @@ def paths_of(block: str) -> tuple[str, ...] | None:
             continue
         inline = line.removeprefix("paths:").strip()
         if inline:
-            items = inline.strip("[]").split(",") if inline.startswith("[") else [inline]
+            items = flow_items(inline) if inline.startswith("[") else [inline]
         else:
             items = []
             for following in lines[at + 1 :]:
@@ -300,6 +300,35 @@ def paths_of(block: str) -> tuple[str, ...] | None:
                 items.append(item.removeprefix("- "))
         return tuple(unquoted(item) for item in items if unquoted(item))
     return None
+
+
+def flow_items(inline: str) -> list[str]:
+    """
+    The items of a flow list written on the key's own line, cut only at the commas between them.
+
+    Not a split on every comma, because a glob carries commas of its own: `["**/*.{py,rs}"]` is one
+    item, and cut at its brace it is two halves that each keep one stray quote and match nothing,
+    which is a scoped file silently never applying. So a comma inside quotes or inside braces is
+    part of the item. Only the list's own outer brackets are taken off, since a glob may end in a
+    `]` of its own.
+    """
+    body = inline.removeprefix("[").removesuffix("]")
+    items, start, depth, quote = [], 0, 0, ""
+    for at, character in enumerate(body):
+        if quote:
+            if character == quote:
+                quote = ""
+        elif character in "\"'":
+            quote = character
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(depth - 1, 0)
+        elif character == "," and depth == 0:
+            items.append(body[start:at])
+            start = at + 1
+    items.append(body[start:])
+    return items
 
 
 def unquoted(item: str) -> str:
@@ -353,6 +382,11 @@ def compiled(pattern: str) -> re.Pattern[str]:
     and one with a `/` is anchored at the root, so `.github/dependabot.yml` is that file and no
     other. `**/` is any number of directories including none, `**` at the end is everything under,
     `*` is anything but a `/`, and `?` is one character that is not one. Everything else is itself.
+
+    **It parts from `.gitignore` over directories**: what is matched is always a file's path, so
+    `docs/` and `docs` cover a file called `docs` and nothing beneath a directory of that name, and
+    the glob for everything under one is `docs/**`. The cost is a glob that reads as covering a
+    directory and delivers nothing, which the index shows naming its globs but nothing flags.
     """
     anchored = "/" in pattern.rstrip("/")
     body = pattern.strip("/")
@@ -532,11 +566,17 @@ def indexing(root: Path, found: tuple[Path, ...]) -> str | None:
 
     Nothing where a repository has none, which is most of them: a heading over an empty list reports
     a feature rather than a fact.
+
+    A listed file that `beneath` cannot read is left off, a link most of all: `approaching` reads
+    through the same walk and would never hand it over, and a row promising guidance that never
+    arrives is worse than no row.
     """
     rows = []
     for each in found:
         text = readable_beneath(root, each)
-        said = None if text is None else described(text)
+        if text is None:
+            continue
+        said = described(text)
         rows.append(f"- `{each}`{f': {said}' if said else ''}")
     if not rows:
         return None

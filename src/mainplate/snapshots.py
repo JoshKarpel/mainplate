@@ -348,11 +348,17 @@ class Store:
         gets nothing from, and `--no-ext-diff` is belt and braces over a store that names none.
 
         An unchanged pair prints nothing and exits 0, which is an empty diff rather than a fault.
+
+        **Decoded with replacement, not through `Ran.out`.** Git prints a text file's lines as the
+        bytes they are, so a file in Latin-1 is a diff that is not UTF-8, and a strict decode would
+        raise inside the step that records it: the step never lands, every pass after it replays
+        into the same raise, and the session is stuck on a file its model wrote. The diff is drawn
+        and not applied, so a byte shown as `�` costs nothing a reader needed.
         """
         ran = await self.git("diff", "--no-renames", "--no-ext-diff", before, after)
         if not ran.ok:
             raise SnapshotFailed(f"git diff {before[:8]} {after[:8]} failed ({ran.code}): {ran.err or ran.out}")
-        return ran.out
+        return ran.stdout.decode(errors="replace").strip()
 
 
 @dataclass(frozen=True, slots=True)

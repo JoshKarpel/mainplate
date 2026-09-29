@@ -136,7 +136,9 @@ them already has. One with no `/` names a file at any depth, so `*.py` is every 
 is every file; one with a `/` is anchored at the repository root, so `.github/dependabot.yml` is that
 file and no other. `**/` is any number of directories including none, `*` stops at a `/`, braces
 expand (`**/*.{py,rs}` is two globs), and a glob with `!` in front takes a path back out whatever
-order the lines are in. A `paths:` the reader cannot parse covers nothing rather than everything,
+order the lines are in. The one place the reading parts from `.gitignore` is a directory: a glob
+only ever matches a file's path, so `docs/` covers nothing beneath `docs`, and everything under it
+is `docs/**`. A `paths:` the reader cannot parse covers nothing rather than everything,
 because a scoping mistake should cost the operator a rule that is missing, which they can see, and
 not one that is present in every session, which is the thing scoping was for.
 

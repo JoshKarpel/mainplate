@@ -298,8 +298,12 @@ class Clones:
         would break that worktree's history. Set
         here rather than once at the clone, so a store cloned before the setting was written gets it
         at its next fetch, and before anything that fetch drops can be pruned. A store that will not
-        take the setting is not fetched, and that is reported the way a failed fetch is. The cost,
-        stated: a store only grows, and every fetch is one more `git config` beside it.
+        take the setting is not fetched, and that is reported the way a failed fetch is. **Read
+        before it is written**, because a write takes the configuration's lock and git does not wait
+        for one: two refreshes of one store at once, the loop's round and a session being planted,
+        would race for it, and the one that lost would skip its fetch and report a failure the
+        remote never had. The cost, stated: a store only grows, and every fetch is one more `git
+        config` read beside it.
 
         Logged rather than raised, because this is an improvement on what a name resolves to and not
         a precondition for planting: a machine that is offline, or a repository whose integration was
@@ -309,7 +313,8 @@ class Clones:
         a page can say so; see `Workspaces.refresh`.
         """
         store = self.store(repository.id)
-        kept = await store.git("config", "gc.pruneExpire", "never")
+        held = await store.git("config", "--get", "gc.pruneExpire")
+        kept = held if held.out == "never" else await store.git("config", "gc.pruneExpire", "never")
         fetched = (
             await store.git("fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*")
             if kept.ok

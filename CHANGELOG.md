@@ -290,8 +290,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   does not survive turning mainplate off, which is the whole reason to write it in the repository
   rather than in a prompt. A leading YAML block is taken off, so frontmatter never reaches a context
   window. An operator's file whose frontmatter names the files it is for with `paths:` is held back:
-  the instructions list it by name with its globs, read as a `.gitignore` reads them, and it is
-  handed over the first time a file tool names a file it covers.
+  the instructions list it by name with its globs, read as a `.gitignore` reads them except that a
+  glob only ever matches a file (everything under `docs` is `docs/**`), and it is handed over the first time a file tool names a file it covers.
 - An index of the guidance elsewhere in the repository, one row per directory with the `description`
   from that file's own frontmatter, carried in the instructions on every request. That a directory
   *has* conventions is one line and what they are is a page, so the line rides in the prompt and the

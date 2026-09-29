@@ -1783,6 +1783,7 @@ class TestTheOperatorsScopedGuidance:
         pytest.param(("**/Cargo.toml",), "crates/core/Cargo.toml", True, id="leading doublestar at depth"),
         pytest.param(("src/*.py",), "src/deep/it.py", False, id="a star stops at a slash"),
         pytest.param(("docs/**",), "docs/a/b.md", True, id="trailing doublestar is everything under"),
+        pytest.param(("docs/",), "docs/guide.md", False, id="a directory's name covers nothing under it"),
         pytest.param(("**/*.{py,rs}",), "lib.rs", True, id="braces expand"),
         pytest.param(("**/*.{py,rs}",), "lib.go", False, id="braces expand to only what they list"),
         pytest.param(("**/*", "!**/*.md"), "README.md", False, id="a negation takes a path back out"),
@@ -1801,6 +1802,9 @@ def test_what_a_scoped_files_globs_cover(patterns: tuple[str, ...], path: str, e
     [
         pytest.param("paths:\n  - \"**/*.py\"\n  - '*.md'\n  - bare", ("**/*.py", "*.md", "bare"), id="block list"),
         pytest.param('paths: ["**/*.py", "*.md"]', ("**/*.py", "*.md"), id="flow list"),
+        pytest.param(
+            'paths: ["**/*.{py,rs}", *.md]', ("**/*.{py,rs}", "*.md"), id="a comma inside braces is the glob's own"
+        ),
         pytest.param('paths: "**/*.py"', ("**/*.py",), id="one scalar"),
         pytest.param("description: unscoped", None, id="no paths key is not scoped"),
         pytest.param("paths:\n  nested: mapping", (), id="a shape it cannot read covers nothing"),
