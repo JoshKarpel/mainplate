@@ -72,6 +72,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before this release opens as it always did.
 
 ### Fixed
+- **A long session no longer holds up every other page while it redraws.** Its transcript is drawn
+  off the console's event loop, so a turn running in one session does not stall the pages and live
+  updates of the others each time it records something.
 - **A reasoning summary a gateway hands back as text is read as reasoning.** Some OpenAI-compatible
   gateways return one wrapped in `<think>` tags as an ordinary text part, which the console drew as
   an assistant panel saying `<think>` with a blank line above and below the title. The tags and
@@ -545,8 +548,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing was writing.
 - A rule's line stops where the panels' text does rather than crossing the whole column, so it no
   longer runs under the transcript's scrollbar - which matters more now that the line is a gauge.
-- The marker that opens a request's raw record names its turn as well as its request, `r3.1` rather
-  than `r1`. A rule inside a turn draws no `#N`, so the index alone said which request without saying
+- The marker on a request's rule names its turn as well as its request, `r3.1` rather than `r1`. A rule inside a turn draws no `#N`, so the index alone said which request without saying
   of what.
 - A forget's rule says `context cleared`, in the middle of the line, between the turn's own controls
   at one end and its figures at the other. On a phone those three parts stack, one to a row.
@@ -578,6 +580,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- The raw record behind a request. Its `r3.1` marker on the rule is a label now rather than a
+  disclosure, and the route that served the record is gone.
 - The composer's `fork` and `aside` answers, and the `/fork` and `/aside` leaders with them. Both
   forked the end of a live conversation, which is typing into it with extra steps, and what they
   planted the branch at depended on whether a turn was running at the time, where the `fork` link on

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -23,7 +24,6 @@ from without_asgi import Response
 from without_asgi import html_content
 from without_asgi.sse import event_stream
 from without_asgi.sse import with_heartbeat
-from without_web import INT
 from without_web import STR
 from without_web import ExtractionError
 from without_web import Reply
@@ -58,11 +58,9 @@ from mainplate.pages import Shape
 from mainplate.pages import dashboard_page
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
-from mainplate.pages import missing_record
 from mainplate.pages import model_cards
 from mainplate.pages import new_session_page
 from mainplate.pages import plugin_card
-from mainplate.pages import record_json
 from mainplate.pages import refusal_page
 from mainplate.pages import session_page
 from mainplate.pages import settling
@@ -229,11 +227,6 @@ shaped = query_param(
 )
 # Which turn a fork would start at, which is the first turn the branch does not inherit.
 at_turn = query_param("at", once(int), schema={"type": "integer"})
-# The two halves of a panel's identity, in the path because that is what they are: a panel is named
-# by its turn and its position within it, which is the same pair its anchor and its label are built
-# from. A query string would say these narrow something down, where they pick one thing out.
-of_turn = path_param("turn", INT)
-at_panel = path_param("at", INT)
 
 
 class NotAMessage(ValueError):
@@ -735,7 +728,7 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
     asked = await service.read(session)
     if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(transcript_region(LINKS, reader, asked)))
+    return page_response(200, await asyncio.to_thread(lambda: fragment(transcript_region(LINKS, reader, asked))))
 
 
 @get("/", reading, summary="The dashboard: what wants attention, and where a session can work")
@@ -830,19 +823,19 @@ async def fork_form(service: Service, session: str, at: int, reader: Reader) -> 
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     if not 0 <= at <= found.said.turns:
         return page_response(404, refusal_page(LINKS, 404, f"session {session} has no turn {at}"))
-    return page_response(
-        200,
-        fork_page(
-            LINKS,
-            reader,
-            await service.listed(),
-            found,
-            at,
-            service.catalogues.current,
-            service.reachable,
-            service.references.current,
-        ),
+    listed = await service.listed()
+    markup = await asyncio.to_thread(
+        fork_page,
+        LINKS,
+        reader,
+        listed,
+        found,
+        at,
+        service.catalogues.current,
+        service.reachable,
+        service.references.current,
     )
+    return page_response(200, markup)
 
 
 @post(t"/sessions/{session_id}/forks", session_id, forking, summary="Fork a session at one of its turns")
@@ -933,7 +926,11 @@ async def show_session(service: Service, session: str, reader: Reader) -> Respon
     # Serving the page is showing it to somebody, which is what the mark means; before the list is
     # read, so the row for this session is drawn as looked at. See `Service.saw`.
     await service.saw(session)
-    return page_response(200, session_page(LINKS, reader, await service.listed(), found, service.reachable))
+    listed = await service.listed()
+    # Every page that draws a whole transcript renders it on a worker thread, for the reason the
+    # stream does; see `streaming.watching`.
+    markup = await asyncio.to_thread(session_page, LINKS, reader, listed, found, service.reachable)
+    return page_response(200, markup)
 
 
 @get("/fragments/stream", watched, shaped, reading, summary="What a page is watching, sent as it changes")
@@ -983,31 +980,6 @@ async def seen(service: Service, session: str) -> Response:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     await service.saw(session)
     return Response(status=204)
-
-
-@get(
-    t"/fragments/sessions/{session_id}/requests/{of_turn}/{at_panel}",
-    session_id,
-    of_turn,
-    at_panel,
-    summary="What the checkpoint holds for one model request",
-)
-async def request_record(service: Service, session: str, turn: int, at: int) -> Response:
-    """
-    What one model request of a turn came back with, fetched only when somebody opens its tag.
-
-    On demand rather than rendered into the transcript, because the transcript is swapped whenever a
-    running turn records anything: the raw record of every request is several times the size of the
-    reading of it, and it would be carried by every message for something almost always closed.
-
-    Settled for good the moment it exists, which is what lets the page fetch it once and keep it. A
-    step's key is written once and never rewritten, so unlike a panel's record this is answerable
-    while the turn is still running - the response is there as soon as the provider gave it.
-    """
-    held = await service.requested_at(session, turn, at)
-    if held is None:
-        return page_response(404, fragment(missing_record(turn, at)))
-    return page_response(200, fragment(record_json(held)))
 
 
 @post(t"/sessions/{session_id}/messages", session_id, sending, reading, summary="Say something to a session")
@@ -1062,7 +1034,9 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
         # `set` and nothing else left the checkpoint exactly as it is above, and the conversation is
         # what a full decode of it costs.
         if not delivered:
-            return page_response(200, fragment(transcript_region(LINKS, reader, found)))
+            return page_response(
+                200, await asyncio.to_thread(lambda: fragment(transcript_region(LINKS, reader, found)))
+            )
         return await redrawn(service, session, reader)
     match sending.where:
         case Disposition.HERE:
@@ -1238,7 +1212,6 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     press,
     rename_session,
     archive,
-    request_record,
 )
 
 LINKS = Links(
@@ -1249,7 +1222,6 @@ LINKS = Links(
     say=say,
     stream=stream,
     seen=seen,
-    request_record=request_record,
     endpoint_models=endpoint_models,
     workspace_branches=workspace_branches,
     fork_form=fork_form,

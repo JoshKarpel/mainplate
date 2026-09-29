@@ -147,8 +147,7 @@ things there are decided:
   panel is `.md` files concatenated, the operator's guidance and the repository's `AGENTS.md`, so
   its headings, lists and fences are the structure their authors wrote, and a wall of `##` is the
   one reading of it nobody meant. The claim that this is what was *sent* is kept by the source
-  riding along in `data-markdown`, which is what the copy button hands back, and by the raw record
-  on the rule one step further out. The block is deliberately uncapped and does not scroll: a reader
+  riding along in `data-markdown`, which is what the copy button hands back. The block is deliberately uncapped and does not scroll: a reader
   who opened the panel asked for all of it, and a box that scrolls has no still corner for the copy
   button to pin to.
 

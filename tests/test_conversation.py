@@ -97,7 +97,6 @@ from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import refusal_in
 from mainplate.conversation import refused_key
-from mainplate.conversation import requested_at
 from mainplate.conversation import responded
 from mainplate.conversation import so_far
 from mainplate.conversation import spent_on
@@ -717,27 +716,13 @@ class TestWhatASessionIsAnsweredUnder:
         assert transcript(recorded).system_prompts == {0: "told this to begin with"}
 
 
-class TestWhereARequestBeganAndWhatItHeld:
+class TestWhereARequestBegan:
     """
-    Which round trip each panel came out of, and what that round trip came back with.
+    Which round trip each panel came out of.
 
-    A request is the unit the checkpoint has keys for, where a panel is a reading. That is the whole
-    point of hanging the record on the rule at a request's boundary rather than under a panel - it is
-    a lookup rather than a slice of a stored value reached by indices one walk had to hand to another.
+    A request is the unit the checkpoint has keys for, where a panel is a reading, and one response
+    becomes as many panels as it has kinds of part, so the two have to be told apart.
     """
-
-    def test_a_request_is_the_step_the_checkpoint_holds_for_it(self) -> None:
-        recorded = {
-            **FOUR_PANELS,
-            model_key(0, 0): answered_with(THINKING_AND_CALL),
-            model_key(0, 1): answered_with(THE_ANSWER),
-        }
-        assert requested_at(recorded, 0, 0) == answered_with(THINKING_AND_CALL)
-        assert requested_at(recorded, 0, 1) == answered_with(THE_ANSWER)
-
-    def test_a_request_nobody_made_is_nothing(self) -> None:
-        assert requested_at(FOUR_PANELS, 0, 0) is None
-        assert requested_at(FOUR_PANELS, 7, 0) is None
 
     def test_each_panel_says_which_request_it_came_out_of(self) -> None:
         """

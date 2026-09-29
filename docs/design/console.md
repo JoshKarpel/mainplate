@@ -90,6 +90,14 @@ Three things about that connection are decided rather than incidental:
   console wrote: a page nobody can see costs the console no polling, and coming back to the tab
   reconnects, where the first message is the whole current state, so the page is current at once.
   It is also what makes the seen mark below honest.
+- **A whole transcript is rendered on a worker thread**, by the stream, the session page, the fork
+  page and the fragment a message is answered with. Building the tree of a long session is a
+  fraction of a second of pure Python, and on the event loop every other page and stream the console
+  serves waits behind it. One hop per response, taken after every read and covering the whole build
+  and serialization, since the renders are pure once their inputs are in hand. It moves the work
+  rather than removing it: the GIL means a render still competes with the loop for the interpreter,
+  and decoding the checkpoint, which the store does on the loop, is not moved at all. The Markdown
+  converters are per thread for the same reason; see `markup.Converters`.
 
 **The page acknowledges what it has shown, and that is what marks a session as looked at while it is
 open.** The stream deliberately marks nothing. The server learns that a tab has gone dark only when a
@@ -168,8 +176,7 @@ the panel's own hands over what the panel says. Five things there are decided:
   records anything, which is exactly when somebody is lifting a result out of it, so `copied` names
   the button rather than marking it: the panel it is on and where in the panel it sits.
 - **A block that scrolls has no still corner to pin to.** An absolutely positioned child of a scroll
-  container travels with the content, so `.text pre` no longer scrolls and its `code` does, and the
-  raw record on a rule, a bounded box that genuinely scrolls, gets no button at all.
+  container travels with the content, so `.text pre` no longer scrolls and its `code` does.
 
 The panel's own stands in the row of facts just left of the permalink, and the code's is inset
 inward from its block's corner on both axes, which is where a reader looks for each. **The panel
@@ -755,19 +762,13 @@ change within one, so nothing keeps a second list of where a turn or a request b
 under the last panel of the turn before it, so a bare row of figures there reads as a footer
 summarising what is *above* it, which is the opposite of what it says. The `#1` against the `#1.0`
 on the panels below settles the direction, and doubles as the permalink to the boundary the fork
-acts on. A rule inside a turn names its request the same way, as `r1.1`, which is also what opens
-the record: the whole address rather than the index within the turn, for `Panel.address`'s reason one
+acts on. A rule inside a turn names its request the same way, as `r1.1`: the whole address rather
+than the index within the turn, for `Panel.address`'s reason one
 level along, since a rule inside a turn draws no `#N` and a bare `r1` said which request without
 saying of what. The `r` is what keeps it from being read as a panel, which numbers a different axis:
 `#3.1` is turn 3's second *panel* and `r3.1` is its second *request*.
 
-### The record hangs off a request, not a panel
-
-`Source`, `sourced_at` and the per-panel `recorded` disclosure are gone. A panel is a run of blocks
-of one kind and a request is a round trip, so a panel's record was a *slice* of a stored value
-reached by indices one walk had to hand another. A request has a key of its own, so `requested_at`
-is a lookup, and it answers while the turn is still running: a step is written once and never
-rewritten, where `turn:{n}:messages` does not exist until the turn ends.
+### A rule stands at every request
 
 **A rule per request, with the turn rule being the first one.** That adds no concept: every rule the
 transcript has ever drawn already stood at a request boundary, because a turn opens with its first
@@ -947,8 +948,8 @@ quotes escaped. What a reader opening a call wants is what it did, in the shape 
   body is that alone: the operations are the diff said in anchors and the reply is its right-hand
   side said in anchors again, so either beside it would be the same change a third time. **The cost,
   stated:** the anchors an edit was addressed by, and the ones its reply handed back, are not on the
-  panel, and a reader working out why the model's *next* edit was refused wants exactly those. They
-  are in the raw record on the request. An edit with no diff recorded - one that was refused, or one
+  page, and a reader working out why the model's *next* edit was refused wants exactly those. They
+  are in the checkpoint and nowhere the console draws. An edit with no diff recorded - one that was refused, or one
   recorded before the diff existed - shows its operations and its reply as every other call does.
 - **`read`, `create` and `grep` are lines of a file, with the anchors left out**, and a read or a
   create is coloured by the grammar its path names, through the same Pygments tokens a fence gets
@@ -967,9 +968,8 @@ to in an `edit`, and it says nothing to a person reading the file. Drawn faint t
 column of four letters a reader learned to look past, so they are left out, and what is left to
 tell the file's lines from the tool's own - the header saying which file and which lines, the note
 that an anchor moved - is the tone a `data-said` line is set in. **The cost, stated:** a reader
-working out which line the model meant by `qwrt`, or why the model's next edit was refused, has to
-open the raw record on the request, and the page's own search finds no anchor because none is on
-the page.
+working out which line the model meant by `qwrt`, or why the model's next edit was refused, has
+nothing on the page to work from, and the page's own search finds no anchor because none is there.
 
 **A diff's line numbers are painted by the stylesheet from an attribute, and are not in the text.**
 `data-gutter` carries them and `::before` draws them, which is what makes the copy button on the
@@ -1207,43 +1207,3 @@ transcript rather than the first panel in it: a turn rule carries that turn's ow
 link, and where the stretch has instructions there is a system prompt panel between the rule and the
 message, so landing on the panel put the reader below both with nothing saying so. The leap to the
 end is still the last panel, since nothing is drawn under one.
-
-## Opening the raw record
-
-The raw record hangs off a **model request** rather than a panel, on the rule at that request's own
-boundary. Two things about how it is fetched are decided rather than incidental:
-
-- **On demand and `hx-preserve`d.** A running turn re-renders the transcript repeatedly, so the raw
-  record of every request is not something to carry in it; and because the server renders the
-  disclosure closed, a morph takes the `open` attribute back off unless the element is preserved.
-  htmx reads `hx-preserve` off the *incoming* markup, so taking it off the live node proves nothing.
-- **`once` is safe here in a way it never was under a panel.** A step's key is written once and
-  never rewritten, so a request's record is settled the moment it exists, where a panel's record
-  came out of `turn:{n}:messages`, which does not exist until the turn ends. So a tag can be opened
-  mid-turn and the panel disclosure could not.
-
-**Opened, it grows the rule downward rather than lying over the conversation.** A record read
-against the reply it came from is worth more than a page that holds still, and an overlay is the one
-shape where the two cannot be looked at together. It takes a line of the rule to itself, since the
-rule wraps and the record asks for the whole of one, which is what a phone decides: sharing the line
-leaves the record a column six characters wide, and pinning the figures so it does not is a row that
-runs off the side of the screen.
-
-**[A control that toggles may not move.](../philosophy.md#controls)** The record tag is where that
-was learned: what wrapped onto the second line was the whole `<details>`, so `r0` set off across the
-rule on the way to opening it.
-
-The shape that gets this right is the general one, so reach for it before inventing another. What
-wraps must be the *content* and never the summary above it, which means the summary and the content
-have to be separate items of the row that wraps. `display: contents` on the `<details>` is what does
-that: the tag makes no box of its own, so the summary stays an item in its own place and the content
-becomes the item that takes a line. Both candidates for that item are told the same thing, because
-`::details-content` is the box a browser wraps a disclosure's content in and the content itself is
-the item where there is no such box, and the closed state has to hide *both* or an empty item leaves
-every shut rule a row gap taller.
-
-`TestOpeningTheRecordBehindARequest` is what fails when this breaks, and it has to be a browser:
-both states are correct markup and each screenshot is right on its own, so what is measured is one
-element's box across the press. Within its rule rather than within the window, because the page
-follows the end and a record opening at the bottom scrolls the transcript under it, which is the
-console doing what it is asked, and would otherwise report as the marker having moved.

@@ -828,8 +828,6 @@
         // the empty string is a control offering to do nothing.
         const says = [...panel.querySelectorAll(":scope > .block")].some((block) => block.textContent.trim());
         if (meta && says) seated(meta, panel.id, meta.querySelector(".panel__anchor"));
-        // Only the code *inside a panel*: the raw record on a rule is a bounded box that scrolls,
-        // and a button pinned in a scroller travels with the content and off its own corner.
         panel.querySelectorAll("pre").forEach((code, at) => seated(code, `${panel.id}:${at}`));
       });
       // The reason a pass failed, which is the one thing on this page somebody is going to paste

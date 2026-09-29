@@ -8,12 +8,11 @@
 # tool included, is its arguments laid out one to a row and its return verbatim, which is what
 # every call was drawn as before any of the tools had a rendering of its own.
 #
-# **What the model was handed is on the page, or a press away.** Nothing here shows the model's
-# arguments or return as anything other than what they were, with two exceptions that are both
-# stated on the design page: an `edit` with a recorded diff shows the diff in place of its
-# operations and its reply, and a file's lines are shown without the anchors the tool wrote in
-# front of them, which are the model's names for lines and mean nothing to a person. The raw record
-# hangs off the request either way.
+# **What the model was handed is on the page.** Nothing here shows the model's arguments or return
+# as anything other than what they were, with two exceptions that are both stated on the design
+# page: an `edit` with a recorded diff shows the diff in place of its operations and its reply, and a
+# file's lines are shown without the anchors the tool wrote in front of them, which are the model's
+# names for lines and mean nothing to a person. What those two leave out is in the checkpoint only.
 
 from __future__ import annotations
 
@@ -243,8 +242,8 @@ def anchored_element(content: str, language: str | None) -> Element:
 
     The anchors are left out rather than drawn faint, because they are the model's names for lines
     and say nothing to a person: what tells a file's line from the tool's is the tone the stylesheet
-    sets a tool's own line in, and what tells one line from the next is the file. A reader working
-    out which anchor the model meant has the raw record on the request.
+    sets a tool's own line in, and what tells one line from the next is the file. The cost, stated:
+    which anchor the model meant is not on the page at all, only in the checkpoint.
 
     Each run of the file's lines is coloured as one text rather than a line at a time, so a string
     or a comment that spans lines is read as one token. A run is what lies between two lines the
@@ -528,7 +527,8 @@ def call_body(used: ToolUse) -> Element:
     its reply is the diff's right-hand side said in anchors again, so either beside it would be the
     same change a third time. A `create` that succeeded is its reply: the new file under the tool's
     own line saying it was written, which is the content it was handed with a confirmation on top.
-    A reader who wants the anchors an edit was addressed by has the raw record on the request.
+    The cost, stated: the anchors an edit was addressed by are not on the page, only in the
+    checkpoint.
     """
     if (diff := recorded_diff(used)) is not None:
         return dl(cls="tool__body", children=[dt(children=DIFF), dd(children=diff_element(diff))])
