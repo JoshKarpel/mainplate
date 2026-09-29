@@ -14,7 +14,7 @@ The store's space is one key:
 
 | Key | Holds | Written by |
 |---|---|---|
-| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
+| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run`, `Service.push` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
 
 This console's is the rest:
 
@@ -93,7 +93,12 @@ not take yet](durability.md#a-request-the-provider-will-not-take-yet) for what t
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model requests
 happen in a fixed order, so counting them names a step the same way on every pass, and the tree
 captured before each one and the cursor recorded for it ride the same counter, so `tree:{i}`,
-`heard:{i}` and `model:{i}` are three parts of one request. `end:{j}` counts something else, which
+`heard:{i}` and `model:{i}` are three parts of one request. `wrote:{i}` is named by the same
+position and written one request later: it is the batch that `model:{i}` asked for, `tree:{i}`
+against `tree:{i+1}`, so it cannot exist until the next request has been snapshotted, and a turn's
+last request never has one. It is built from the request's position through
+`Stepping.identified` rather than counted by a counter of its own, which would be a second number
+to keep in step with the first. `end:{j}` counts something else, which
 is how many times the turn has tried to end, and carries the response count it was asked at so the
 page knows which request it went in front of. A *batch* of tool calls runs
 concurrently, so counting those would name a record by whichever won a race and hand a later pass
@@ -263,6 +268,12 @@ An unknown *tag* is a hard parse failure, which is why readers parse by key, whe
 already knows what it asked for, and `records.Step` is only for the places that take a bag: a dump,
 an export, a migration. The HTTP boundary is the opposite case and stays that way, since an
 unrecognised disposition is a refusal.
+
+That asymmetry is why a push is a `command` with a `pushed` branch on it rather than a kind of its
+own, although nobody typed it. A new tag would leave every session that ever pushed unreadable by a
+build rolled back past it; a new field is ignored there, and the older build draws the command's
+text, `push`, as it always did. The cost is a shape nothing refuses, a shell line beside a branch,
+which only `recorded_push` writes.
 
 **Three shapes are deliberate exceptions.** `choice` is not a `records` model: it is already a
 record this console owns and has grown fields twice with no migration, and its parser encodes things

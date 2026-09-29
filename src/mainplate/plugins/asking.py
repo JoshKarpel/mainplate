@@ -187,10 +187,10 @@ class Live:
     speaking: Speaking | None = None
     worktree: Worktree | None = None
     """
-    This session's checkout as this console knows it, store and all, rather than as a path.
+    This session's worktree as this console knows it, store and all, rather than as a path.
 
     The value and not `root`, because what runs a confined plugin builds a sandbox around it, and
-    that sandbox binds the store the checkout borrows its objects from. See `Speaking`.
+    that sandbox binds the store the worktree borrows its objects from. See `Speaking`.
     """
 
     delivering: Delivering = nowhere

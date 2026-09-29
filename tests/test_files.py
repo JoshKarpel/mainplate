@@ -85,7 +85,7 @@ class TestGitsOwnDirectoryIsOutOfReach:
         assert files.resolved("fixture/.git").path == files.roots[0].path / "fixture" / ".git"
 
     async def test_a_scratch_seals_nothing(self, tmp_path: Path) -> None:
-        """A scratch is not a checkout, so a `.git` in it is just a file."""
+        """A scratch is not a worktree, so a `.git` in it is just a file."""
         scratch = tmp_path / "scratch"
         scratch.mkdir()
         (scratch / ".git").write_text("not a pointer\n")

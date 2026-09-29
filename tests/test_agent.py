@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from conftest import DEFAULT_CHOICE
+from conftest import INSTRUCTIONS
+from conftest import Provider
+from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.agent import Reach
+from mainplate.agent import agent_for
 from mainplate.agent import reaching
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import InAScratch
@@ -64,7 +70,20 @@ class TestWhatASessionReaches:
         assert reach.roots == (GitTracked(worktree=WORKTREE), Scratch(path=SCRATCH))
         assert reach.confinement == InAWorktree(worktree=WORKTREE, scratch=SCRATCH)
         assert "git checkout" in reach.note
+
+    @pytest.mark.parametrize("network", [False, True], ids=["offline", "online"])
+    def test_a_worktree_session_is_told_origin_refuses_a_push_whatever_its_network(self, network: bool) -> None:
+        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=network), WORKTREE, SCRATCH, BWRAP)
+        assert "`origin` is a read-only copy of the repository, so a push to it is refused" in reach.note
+
+    def test_a_session_with_no_network_is_told_nothing_it_runs_can_push(self) -> None:
+        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=False), WORKTREE, SCRATCH, BWRAP)
         assert "nothing you run can push" in reach.note
+
+    def test_a_session_with_the_network_is_not_told_nothing_it_runs_can_push(self) -> None:
+        """On exe.dev a connected command reaches the forge with this console's authority."""
+        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=True), WORKTREE, SCRATCH, BWRAP)
+        assert "nothing you run can push" not in reach.note
 
     def test_a_worktree_session_without_a_sandbox_keeps_its_file_tools_and_gets_no_bash(self) -> None:
         reach = reaching(Isolation(filesystem=Filesystem.WORKTREE), WORKTREE, SCRATCH, None)
@@ -82,3 +101,46 @@ class TestWhatASessionReaches:
 
     def test_a_whole_machine_session_without_a_sandbox_reaches_nothing(self) -> None:
         assert reaching(Isolation(filesystem=Filesystem.EVERYTHING), None, SCRATCH, None) == Reach()
+
+
+FILES = {"read", "edit", "create"}
+REPOSITORY = {"list", "grep"}
+
+
+class TestWhichToolsASessionIsGiven:
+    """
+    The table in `src/mainplate/tools/AGENTS.md`, held against the agent a pass actually builds.
+
+    Asked of `agent_for` rather than of `reaching`, because the roots alone do not say it: `list` and
+    `grep` ask git, so they are offered only where a root is a worktree, and a session that reaches
+    only its scratch or the whole machine gets neither rather than two tools that can only refuse.
+    """
+
+    @pytest.mark.parametrize(
+        ("filesystem", "worktree", "bwrap", "given"),
+        [
+            (Filesystem.WORKTREE, WORKTREE, BWRAP, FILES | REPOSITORY | {"bash"}),
+            (Filesystem.WORKTREE, WORKTREE, None, FILES | REPOSITORY),
+            (Filesystem.WORKTREE, None, BWRAP, set()),
+            (Filesystem.EVERYTHING, None, BWRAP, FILES | {"bash"}),
+            (Filesystem.EVERYTHING, None, None, set()),
+            (Filesystem.NOTHING, None, BWRAP, FILES | {"bash"}),
+            (Filesystem.NOTHING, None, None, set()),
+        ],
+        ids=[
+            "worktree",
+            "worktree-no-sandbox",
+            "worktree-not-planted",
+            "everything",
+            "everything-no-sandbox",
+            "nothing",
+            "nothing-no-sandbox",
+        ],
+    )
+    def test_each_isolation_is_given_the_tools_its_table_row_names(
+        self, filesystem: Filesystem, worktree: Worktree | None, bwrap: str | None, given: set[str]
+    ) -> None:
+        chosen = replace(DEFAULT_CHOICE, isolation=Isolation(filesystem=filesystem))
+        agent = agent_for(Provider().endpoints(), chosen, INSTRUCTIONS, worktree, SCRATCH, bwrap)
+        named = {name for toolset in agent.toolsets if isinstance(toolset, FunctionToolset) for name in toolset.tools}
+        assert named == given

@@ -28,10 +28,11 @@
 # the process, because what makes a path safe is the root it is resolved inside and every session
 # picks its own. **Which tools a session gets is decided by its `isolation`**, not by what this
 # module happens to be handed: a worktree gets the file tools over it and its scratch, the whole
-# machine gets them over `/`, and reaching nothing gets no toolset at all - a console used to talk
-# rather than to edit is what this was before there were repositories, and tools that can only fail
-# are worse than none. The loop records every model request and tool call through the `Stepping`
-# it is handed by the conversation.
+# machine gets them over `/`, and reaching nothing of the machine gets them over a scratch of its
+# own - each beside `bash` where there is a sandbox, and the last two with nothing at all without
+# one, because tools that can only fail are worse than none. `list` and `grep` ask git, so only a
+# worktree gets them. The loop records every model request and tool call through the `Stepping` it
+# is handed by the conversation.
 
 from __future__ import annotations
 
@@ -147,7 +148,7 @@ class Choice:
     Fixed for the session's life like everything else here, and it stops mattering after the first
     pass: a worktree is planted once, so this is read by exactly one call and is thereafter a fact
     about where the session began. A fork does not carry it, because a fork plants at a recorded tree
-    and a base beside that would be two claims about one checkout.
+    and a base beside that would be two claims about one worktree.
     """
 
     branch: str | None = None
@@ -160,13 +161,13 @@ class Choice:
     existed. What it buys is somewhere for a commit to go, since a commit on a detached `HEAD` is
     reachable only through the reflog and has no name to push under.
 
-    **Naming a base does not put the checkout on that branch.** Two sessions started at `main` and
+    **Naming a base does not put the worktree on that branch.** Two sessions started at `main` and
     both committing on a branch called `main` would be two histories under one name, and the second
     push would be refused against the first. So a base names *where to begin* and this names *what to
     begin*, which is why they are two fields rather than one that sometimes means both.
 
     Not carried by a fork, and that is a refusal rather than an oversight: a fork on its parent's
-    branch would be two writers in one history, which is the thing a checkout apiece exists to
+    branch would be two writers in one history, which is the thing a worktree apiece exists to
     prevent, and they would meet at the first push. A fork is given one of its **own** instead, by
     the same call.
     """
@@ -209,11 +210,14 @@ class Choice:
     a session with a shell runs its build, its tests, its `pre-commit` and whatever those shell out
     to, every one of them unread. A plugin is one more caller of that, not the escalation.
 
-    **What the switch is actually for is the session where that reading does not hold**, and there
-    are two: a repository somebody is reading rather than working in - a stranger's pull request, a
-    dependency being triaged - and a session on `Filesystem.NOTHING`, which picks a repository and
-    hands the model no shell at all. That second one is why this is drawn in the picker rather than
-    inferred from the isolation: the two are near enough to look like one question and are not.
+    **What the switch is actually for is the session where that reading does not hold**: a
+    repository somebody is reading rather than working in - a stranger's pull request, a dependency
+    being triaged. Nothing else on the choice can say so, which is why this is drawn in the picker
+    rather than inferred from the isolation: a session that picks a repository is on
+    `Filesystem.WORKTREE` whatever was posted, and gets a shell wherever there is a sandbox, so the
+    isolation reads the same for the session working in a repository and the one only reading it. A
+    session on `Filesystem.NOTHING` has no repository to trust at all: it reaches a scratch of its
+    own, with the file tools and `bash` where there is a sandbox and nothing without one.
 
     The cost, stated: a repository's plugin runs unattended at every turn boundary and puts text into
     the conversation, which is a delivery channel for prompt injection with a guaranteed slot. That
@@ -836,8 +840,11 @@ def working_note(scratch: bool) -> str:
     # `cd` does not survive to the next call, which on its own reads as an instruction to put one at
     # the front of every command. `--chdir` has already done it.
     #
-    # Git is said because what it can do here is not what a model assumes of a sandbox: it can do
-    # everything but push, and `fetch` works with no network because `origin` is the store.
+    # Git is said because what it can do here is not what a model assumes of a sandbox: `origin` is
+    # the store, bound read-only, so `fetch` works with no network and a push to `origin` is refused
+    # whatever the session's network. Whether anything *else* can be pushed to is the network's
+    # question, since on exe.dev a connected command reaches the forge with this console's authority,
+    # so it is `network_note`'s to say and this stays a function of the isolation alone.
     return (
         f"{said} You also have a scratch directory called `scratch`, outside the worktree and "
         f"outside every snapshot, which is where anything that is not the repository's belongs. "
@@ -846,9 +853,10 @@ def working_note(scratch: bool) -> str:
         f"Commands you run start in the worktree, so a relative path means the same thing there as "
         f"it does to the file tools and you never need to `cd` into it. They reach those two "
         f"directories and a read-only system, and nothing else: no home directory, no other "
-        f"session's files, and no configuration of the console itself. The checkout's git is yours: "
+        f"session's files, and no configuration of the console itself. The worktree's git is yours: "
         f"`add`, `commit`, `merge` and `rebase` work as they would anywhere, and `git fetch` brings "
-        f"the repository's current branches, but nothing you run can push."
+        f"the repository's current branches. `origin` is a read-only copy of the repository, so a "
+        f"push to it is refused."
     )
 
 
@@ -877,12 +885,18 @@ def drawing_note() -> str:
     """
     What the console draws from a reply, said so a model reaches for it.
 
-    A fact about this console rather than about the session, which is why it is composed here beside
-    the reach note and not left to the operator's standing instructions: an operator who rewrites
-    those should not lose the one sentence that says what the page can show. The same words for every
-    session, so it costs nothing in any cached prefix, and it names the two labels `markup.py`
-    allows onto the page and no others, since a model told `dot` draws too would write one that is
-    shown as code.
+    A fact about what this console's page draws rather than about the session, which is why it is
+    the console's own sentence and not left to the operator's standing instructions or to the bundled
+    `guidance` plugin: an operator who rewrites the one should not lose the sentence that says what
+    the page can show, and it is true of the page whether or not the other is switched on.
+    `conversing` composes it into what a session is answered under, first, since it is the least
+    specific block there is; see `instructing`.
+
+    The cost, stated: its tokens are spent on every request of every session, drawing or not. What
+    keeps that cheap is that it never varies, so it sits at the front of every session's prefix and
+    is read from cache wherever the rest of the prefix is. It names the two labels `markup.py` allows
+    onto the page and no others, since a model told `dot` draws too would write one that is shown as
+    code; that set is written in three places, and `DRAWABLE` there names the other two.
     """
     return (
         "A fenced code block labelled `mermaid` or `svg` is drawn as a picture on the page, so when a "
@@ -898,12 +912,17 @@ def network_note(reachable: bool) -> str:
 
     Said either way rather than only when it is off. "There is no network" stops a model wasting
     a turn on a fetch that cannot work; "there is a network" stops one refusing to try.
+
+    That nothing can be pushed is said here and only on the arm with no network, because it is only
+    true there: `origin` is read-only either way, but a command with the network on can push to
+    anything it can reach, and on exe.dev that includes the repository's own forge. The connected
+    arm says nothing about pushing rather than promising what it cannot.
     """
     if reachable:
         return "Commands you run can reach the network."
     return (
-        "Commands you run cannot reach the network: no fetching, no installing, no cloning. "
-        "Something that needs one fails rather than hanging."
+        "Commands you run cannot reach the network: no fetching, no installing, no cloning, and "
+        "nothing you run can push. Something that needs one fails rather than hanging."
     )
 
 
@@ -959,7 +978,10 @@ def reaching(
     to run a script or keep a note, and what it must not reach is anything that was there before it.
     Offered only where a command can make the directory exist, for the reason the worktree's scratch
     is: a `read` naming a directory nothing ever creates is a tool that can only fail, and a tool
-    that can only fail is worse than none, since it spends its description on every request.
+    that can only fail is worse than none, since it spends its description on every request. So a
+    `NOTHING` session gets `read`, `edit` and `create` over its scratch and `bash` in it where there
+    is a sandbox, and nothing without one. It gets no `list` and no `grep` either way, and neither
+    does `EVERYTHING`: both ask git, and `agent_for` offers them only where a root is a worktree.
 
     `bwrap` is passed in rather than looked up, because where the sandbox binary is is a fact about
     the machine. Without it a `WORKTREE` session keeps its file tools and is offered no `bash`, which
@@ -1077,8 +1099,14 @@ def agent_for(
     if plugins is not None and (contributed := contributions(plugins)):
         tools.append(PluginTools(contributed, asking_through(plugins)))
     if reach.roots:
+        # One `Files` for both, so a search and an edit of one file take the same lock. `grep` only
+        # where there is a worktree, which is `list`'s condition inside `file_tools` and for the same
+        # reason: both ask git, and over anything else a tool that can only refuse still costs its
+        # description on every request.
         files = Files(roots=reach.roots)
-        tools.extend((file_tools(files), grep_tools(files)))
+        tools.append(file_tools(files))
+        if files.has_repository:
+            tools.append(grep_tools(files))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(

@@ -26,8 +26,10 @@ proposed and the argument for it has to look like one of these.
 ### The session index is one row, and it reaches rather than copies
 
 `sessions.py` holds one row per session, because `without-durability` cannot enumerate workflows. It
-holds the session's title as well as its id: the title belongs to the index and can be changed there,
-without copying or rewriting anything in the checkpoint.
+holds a title as well as an id, and the title is not a copy of anything. One cut from the first
+message is cut once, as that message lands, and nothing keeps the two in step afterwards; one somebody
+chose exists nowhere else at all. So a rename writes the index and nothing else, and what the model
+heard is exactly what it heard before.
 
 What the index does not hold, it **reaches for**. A checkpoint is a row per key rather than one
 value, and both tables are in the one file, so `SELECTION` reads a session's repository straight out
@@ -35,17 +37,18 @@ of its `choice` with a `LEFT JOIN` and `json_extract`: one small row per session
 conversation. That is the shape any further "what is this session on" question should take. A column
 would be the second copy this console is built to avoid, and unlike the title it would be a copy of
 something recorded elsewhere and already authoritative. When a session was last written to is the
-same reach one step further: the store stamps every row it files, so the newest stamp on a session's
-inbox is when somebody last said something to it, and the list is ordered by that without a column
-that would have to be kept in step with every message.
+same reach one step further: the database stamps every row it files, so the newest stamp on a
+session's inbox is when somebody last said something to it, and the list is ordered by that without
+a column that would have to be kept in step with every message.
 
-The columns that *are* there for presentation earn it by being facts nothing else records:
-`Origin.aside` is what somebody meant by a fork, `Tending` is what is being done to a running
-session, and `seen_seq` is how far into a session somebody has looked. None is written anywhere else,
-so none is a copy. The last two move, and the same argument carries both: a setting has to be
-mutable to be a setting, and a look is a new fact every time, and the two places this console
-otherwise keeps things refuse them - a checkpoint key keeps its first value for ever, and
-`localStorage` is one browser's, where a look is the reader's on every device they read from.
+The columns that *are* there for presentation earn it by being facts nothing else records: the title
+is what a session is called, `Origin.aside` is what somebody meant by a fork, `Tending` is what is
+being done to a running session, and `seen_seq` is how far into a session somebody has looked. None
+is written anywhere else, so none is a copy. Three of them move, and the same argument carries all
+three: a name has to be changeable to be renamed, a setting has to be mutable to be a setting, and a
+look is a new fact every time, and the two places this console otherwise keeps things refuse them - a
+checkpoint key keeps its first value for ever, and `localStorage` is one browser's, where each of
+these has to read the same on every device.
 
 ### The catalogue is configuration that lives at the far end of a request
 
@@ -62,13 +65,24 @@ that reading copied and kept in step by hand.
 
 ### `localStorage` holds what a reader decided
 
-The theme, which kinds are muted, and what they have written and not sent. Never a word of the
-conversation, since an unsent draft is not one until it is sent, so a browser with it wiped renders
-exactly what one without it does.
+The theme, how the screen is laid out, which kinds are muted, and what they have written and not
+sent. Never a word of the conversation, since an unsent draft is not one until it is sent, so a
+browser with it wiped renders exactly what one without it does.
 
-The theme is the reader's across every session; the other two are facts about one conversation, so
-they are keyed by session id. That scoping is load-bearing rather than tidy: every session shares
-one origin, so an unscoped key would be one conversation's decisions imposed on all of them.
+The theme is the reader's across every session; which kinds are muted and what is unsent are facts
+about one conversation, so they are keyed by session id. That scoping is load-bearing rather than
+tidy: every session shares one origin, so an unscoped key would be one conversation's decisions
+imposed on all of them.
+
+**The layout is three keys and none of them is scoped**: `mainplate:list` and `mainplate:rail` say
+which side column is put away, and `mainplate:reading` how wide the conversation is read. What fits
+is a fact about the *screen*, not about the person or the conversation, so it is per browser: a
+laptop and a phone opening one session want different answers, and every session on one screen
+wants the same one, which is why the list put away on a session is away on the dashboard too.
+Putting a column away survives a reload where folding a call does not, and the line between them is
+the one at the end of this section: a fold is how you read one answer and is done with once it is
+read, while a column away is how this screen is arranged, and a reader who arranged it expects to
+find it so.
 
 **The zone cookie is the one thing that goes the other way**, and it is not an exception to any of
 this. It carries what the *browser* knows rather than what the reader decided, it is a cookie rather
@@ -88,12 +102,13 @@ is for programmers, and one unambiguous stamp that sorts lexicographically beats
 conventions. So the *instant* follows the reader and the *writing* of it never does, and the zone
 may stay `Reader`'s only field for good.
 
-Two things the script holds are deliberately *not* stored, and the line between them is worth
-keeping. What a reader has folded, and whether they are following the end, are modes within a visit
-rather than decisions about a conversation: unfolding a call is how you read one answer, and
+**Modes within a visit are deliberately *not* stored**, and the line between them and the rest is
+worth keeping. What a reader has folded, whether they are following the end, which diagrams they
+asked to see as code, and which of the sending menu's answers the box is in are modes rather than
+decisions about a conversation or a screen: unfolding a call is how you read one answer, and
 following is a mode you fall out of by scrolling up and back into by scrolling down. Carried across
-a reload either would be a page that opens somewhere the reader has to notice and undo. Both survive
-every swap, which is what they actually have to do.
+a reload any of them would be a page that opens somewhere the reader has to notice and undo. All of
+them survive every swap, which is what they actually have to do.
 
 ### A fork copies what was said, and the turns it copies are settled
 
@@ -202,7 +217,7 @@ doc reaches for when it means the operation.
 
 **Choose the word before the value is durable.** A term that has only ever been in a label costs a
 rename; one that has been written into a checkpoint costs a migration, because the *value* is what
-is in the store. See `Filesystem.WORKTREE`, which was `WORKSPACE`, and took every session written
+is in the database. See `Filesystem.WORKTREE`, which was `WORKSPACE`, and took every session written
 until then with it. So a `Disposition` is free to be renamed and a `Choice` field is not, which is
 worth knowing at the moment the word is picked rather than afterwards.
 
@@ -235,8 +250,8 @@ The catalogue and the reference database are both read across the network and bo
 process runs. Neither is an exception to the one idea, and both are handled the same way:
 
 - **Read before ready, refreshed off the request path.** Loaded during the lifespan, before the
-  store is opened, and re-asked afterwards by a background task on a timer. A page render reads the
-  value out of memory and never causes a request to a gateway.
+  database is opened, and re-asked afterwards by a background task on a timer. A page render reads
+  the value out of memory and never causes a request to a gateway.
 - **Swapped whole, never edited.** The holder is rebound to a new value, so a reader that grabbed
   one holds a consistent answer even if a newer one lands mid-render.
 - **A failed refresh keeps the last good value, and there is no staleness bound.** That is
@@ -276,7 +291,10 @@ are one group now.
 
 **A control that toggles may not move.** Whatever a disclosure opens, the thing that opened it stays
 exactly where it was. A control that moves under the finger that pressed it cannot be pressed twice,
-and the page reads as having jumped rather than as something having opened.
+and the page reads as having jumped rather than as something having opened. The one named exception
+is the button that puts a side column away, which stands on the edge its press moves; the
+[stylesheet's notes](https://joshkarpel.github.io/mainplate/design/assets/) say why and what it
+costs.
 
 **A control says what it does, and never remembers what it did last.** A split button that
 remembered its last choice would be a button labelled `Send` that forks, which is the one failure a

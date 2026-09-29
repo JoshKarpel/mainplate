@@ -33,7 +33,7 @@ from mainplate.roots import RootName
 from mainplate.roots import environment_named
 
 if TYPE_CHECKING:
-    # Only as a type: `snapshots.py` runs git against a checkout through a `Sandbox`, so the runtime
+    # Only as a type: `snapshots.py` runs git against a worktree through a `Sandbox`, so the runtime
     # import goes that way round.
     from mainplate.snapshots import Worktree
 
@@ -80,7 +80,10 @@ class Filesystem(Enum):
     and commands inside it, where there is a sandbox to run them in: somewhere to run a script or
     keep a note across turns, reaching no file that was there before the session and none of the
     console's. It is the arm a conversation that is not about a repository lands on, and a
-    conversation still wants to run things.
+    conversation still wants to run things. The cost, stated: the arm that reaches nothing still
+    runs commands a model wrote; with the network on, that shell can dial out, which on exe.dev is
+    this console's authority over every attached repository; and every session with no repository
+    keeps a directory on disk until it is archived.
 
     `EVERYTHING` still runs inside a sandbox, with `/` bound instead of a worktree. That buys nothing
     about the filesystem and everything about the rest: the network switch is `--unshare-net`, the
@@ -145,7 +148,7 @@ class Bind:
     What a command calls this place, where it is one a model has any business naming.
 
     A bind rather than a field on the sandbox, so the two shapes still differ only in what is in
-    `places`. Absent on the store, which is bound so that a checkout's borrowed objects resolve and
+    `places`. Absent on the store, which is bound so that a worktree's borrowed objects resolve and
     is not somewhere anybody should be writing paths into, and absent on `/`, where an environment
     variable saying `/` would be a name for the thing every path already starts with.
 
@@ -157,7 +160,7 @@ class Bind:
 
 @dataclass(frozen=True, slots=True)
 class InAWorktree:
-    """A session's commands inside its own checkout, the store it borrows from, and its scratch directory."""
+    """A session's commands inside its own worktree, the store it borrows from, and its scratch directory."""
 
     worktree: Worktree
     scratch: Path
@@ -296,18 +299,45 @@ def sandbox_command() -> str:
     return found
 
 
+def worktree_places(worktree: Worktree) -> tuple[Bind, Bind]:
+    """
+    What any namespace around a worktree binds for the worktree's sake: it, and its store.
+
+    **The worktree is bound read-write whole, `.git` included**, so git works in there the way it
+    works anywhere: `add`, `commit`, `merge`, `rebase` and `fetch` all do what they say, against
+    this session's refs and nobody else's. What that costs is that the worktree's configuration is
+    the session's to write, and several of its keys name a program git runs. So nothing in the
+    parent runs git against it; `Worktree.git` runs it in a namespace of this shape too. See [what
+    runs, and as whom](../../docs/design/security.md).
+
+    **The store is bound read-only**, because the worktree borrows its objects through
+    `alternates` and `origin` is the store. Every session on the repository can therefore read
+    every tree any of them snapshotted; none of them can write it, which is what keeps one
+    session's git from reaching another's.
+
+    One function for the two namespaces a worktree is seen through, a session's commands in
+    `Sandbox.around` and git this console runs in `Worktree.confined`, because they have to agree:
+    a capture that bound the worktree differently from the command that wrote it would be reading
+    a different repository from the one the session was working in, and nothing would say so.
+    """
+    return (
+        Bind(path=worktree.root, writable=True, name="worktree"),
+        Bind(path=worktree.store.path, writable=False),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Sandbox:
     """
     What one command can see, as the paths bound into its namespace.
 
-    A list rather than named fields, so the shapes a session can have - a checkout with its store
+    A list rather than named fields, so the shapes a session can have - a worktree with its store
     and scratch, a scratch alone, or the whole machine - differ only in what is in it and share every
     other argument. That is what keeps the network answer, the cleared environment and the pid
     namespace from being things the filesystem answer can change by accident.
 
     Every path is absolute and every one is bound at *its own* path inside the namespace rather than
-    at a tidy `/worktree`. A checkout's `alternates` file names the store by its absolute path, so a
+    at a tidy `/worktree`. A worktree's `alternates` file names the store by its absolute path, so a
     remapped store is one whose borrowed objects every git in here fails to find.
     """
 
@@ -322,19 +352,10 @@ class Sandbox:
         session_scratch: Path | None = None,
     ) -> Sandbox:
         """
-        A checkout, its store read-only, and a scratch directory: what a `WORKTREE` session reaches.
+        A worktree, its store read-only, and a scratch directory: what a `WORKTREE` session reaches.
 
-        **The checkout is bound read-write whole, `.git` included**, so git works in here the way it
-        works anywhere: `add`, `commit`, `merge`, `rebase` and `fetch` all do what they say, against
-        this session's refs and nobody else's. What that costs is that the checkout's configuration
-        is the session's to write, and several of its keys name a program git runs. So nothing in the
-        parent runs git against it; `Worktree.git` runs it in here too. See [what runs, and as
-        whom](../../docs/design/security.md).
-
-        **The store is bound read-only**, because the checkout borrows its objects through
-        `alternates` and `origin` is the store. Every session on the repository can therefore read
-        every tree any of them snapshotted, which a shared clone always allowed; none of them can
-        write it, which is what keeps one session's git from reaching another's.
+        The worktree and its store are `worktree_places`, which says why each is bound the way it
+        is and why that is one function rather than written here.
 
         `session_scratch` adds a second writable directory under the name a command finds the
         session's own under, which is what a plugin getting the repository ready is given at `setup`.
@@ -343,12 +364,12 @@ class Sandbox:
 
         All of them are **absolute as a precondition**: `Settings.workspace_root` resolves once
         where a configured path enters the process, so everything derived from it is already
-        absolute and nothing here re-establishes it.
+        absolute and nothing here re-establishes it. A relative path would be resolved against
+        whatever directory bwrap happened to start in, which is not a thing to guess at per call.
         """
         return cls(
             places=(
-                Bind(path=worktree.root, writable=True, name="worktree"),
-                Bind(path=worktree.store.path, writable=False),
+                *worktree_places(worktree),
                 Bind(path=scratch, writable=True, name=scratch_named),
                 *(() if session_scratch is None else (Bind(path=session_scratch, writable=True, name="scratch"),)),
             )
@@ -374,7 +395,7 @@ class Sandbox:
         Still a sandbox, and that is the point: the filesystem is wide open here, so what this is
         still buying is the network namespace, the cleared environment, and a pid namespace that
         reaps whatever a command leaves behind. A session on this arm can read the console's own
-        configuration and its store, which is what choosing it means.
+        configuration and its database, which is what choosing it means.
         """
         return cls(places=(Bind(path=Path("/"), writable=True),))
 
@@ -402,11 +423,13 @@ class Sandbox:
         repository's script setting `PATH` for every plugin would redirect what the repository's
         other plugins execute at every turn boundary.
 
-        A `WORKTREE` sandbox binds the complete checkout read-write, including its private Git
-        metadata, and the scratch read-write; a `NOTHING` sandbox binds the scratch alone. Git may
-        therefore add, commit, merge, rebase and continue conflicts normally. Any repository
-        configuration or hook Git executes still runs inside this same namespace, with the parent's
-        environment cleared and only this session's directories writable.
+        A `WORKTREE` sandbox binds the worktree read-write whole, `.git` included, its store
+        read-only, and the scratch read-write; a `NOTHING` sandbox binds the scratch alone. So git in
+        here adds, commits, merges and rebases as it would anywhere, and what that costs is that a
+        hook or a configured program the session wrote runs too. It runs *in here*, with the
+        parent's environment cleared and only this session's directories writable, which is what
+        makes it the session's own `bash` over again rather than a way out of it; see
+        `worktree_places`.
 
         A `EVERYTHING` sandbox binds `/` read-write instead, which subsumes all of that and is the point
         of choosing it. Everything below the binds is identical either way, which is why there is one

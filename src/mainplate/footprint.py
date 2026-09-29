@@ -2,10 +2,10 @@
 #
 # The checkpoint is the conversation, and nothing on disk is a copy of it: a worktree is what the
 # conversation is about, a scratch is what its commands fetched, and a plugin's scratch is what a
-# plugin fetched. All of it is the session's, all of it is outside the store, and all of it is what
-# archiving a session takes away while the checkpoint stays forkable. So the one place that knows
-# where all of it is has to be the place both the figure on a row and that deletion read, or the two
-# would be two lists of the same directories kept in step by hand.
+# plugin fetched. All of it is the session's, all of it is outside the database, and all of it is
+# what archiving a session takes away while the checkpoint stays forkable. So the one place that
+# knows where all of it is has to be the place both the figure on a row and that deletion read, or
+# the two would be two lists of the same directories kept in step by hand.
 #
 # The figure is *measured on a timer* rather than walked at render time, and that is a cost that was
 # measured rather than guessed. A warm walk over a toolchain is about a hundred milliseconds per
@@ -70,7 +70,7 @@ class Places:
         """
         Every directory that is this session's and nothing else's, whether or not it exists yet.
 
-        The checkout, `.git` and all, where the session works in a repository; the scratch and the
+        The worktree, `.git` and all, where the session works in a repository; the scratch and the
         plugins' scratches either way. Not the store, which every session on that repository shares
         and which holds the snapshots that keep a checkpoint forkable once the rest is gone.
         """

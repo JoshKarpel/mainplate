@@ -98,7 +98,8 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
   event, and it is why a forget no longer picks up a repository's edited guidance - forking does.
 - **`setup` is the only event with a network, and it must stay the only one.** What makes a connected
   run safe there is *when* it happens: before the first message, over a worktree holding the commit
-  the repository supplied and nothing the model wrote. An event during the conversation with a
+  the repository supplied, or in a fork a tree the model wrote, which that branch's own press
+  licenses. An event during the conversation with a
   network would be a plugin that has read whatever the model has been writing and can send it
   anywhere.
 - **A plugin's scratch is its own and never the session's.** The model writes the session's, so a

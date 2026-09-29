@@ -165,7 +165,7 @@ suite does not behave differently depending on which machine it runs on.
 
 `catalogue.py` is [configuration that changes under a
 reader](../philosophy.md#configuration-that-changes-under-a-reader) and takes the whole of that
-stance: `open_console` calls `discover` before the store is opened, a background task re-asks on
+stance: `open_console` calls `discover` before the database is opened, a background task re-asks on
 `Settings.refresh`, `Catalogues.current` is rebound rather than edited, and a failed refresh keeps
 the last good value with no staleness bound.
 

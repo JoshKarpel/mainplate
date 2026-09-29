@@ -44,6 +44,14 @@ TOKENS: Final[frozenset[str]] = frozenset({name for name in STANDARD_TYPES.value
 # per label would be a class of the model's choosing on the page. `language-` is `codehilite`'s own
 # prefix, kept so the class reads as what it is. Everything else a fence is labelled with reaches
 # the formatter the same way and is stripped by the sanitiser, which is the test that pins this.
+#
+# One fact written in three places, because three readers need it in three forms: here, as the
+# classes the sanitiser lets through; `DRAWABLE` in `mainplate.js`, as the classes the script draws
+# a picture from; and `drawing_note` in `agent.py`, as the sentence telling a model which labels
+# the page draws. A label added here and to neither of the others is a class that survives to the
+# page and is drawn by nothing, or drawn and never asked for. `test_markup.py` holds the sentence
+# against this set, and `test_the_buttons_a_fence_takes` in `test_browser.py` holds the script's
+# map against it.
 LANGUAGE_PREFIX: Final = "language-"
 DRAWABLE: Final[frozenset[str]] = frozenset(f"{LANGUAGE_PREFIX}{label}" for label in ("mermaid", "svg"))
 
@@ -213,16 +221,18 @@ def highlighted(language: str, text: str) -> tuple[Markup, ...]:
     """
     `text` as one run of markup per line of it, each token wrapped in the class Pygments names it.
 
-    Per line rather than as the one block the HTML formatter produces, because what the page draws
-    in front of each line - an anchor, a diff's line numbers - is a fact about that line, so the
-    markup has to be cut where the lines are. A token that spans lines is cut with them, which is
-    what the formatter's own line wrapping does too.
+    Per line rather than as the one block the HTML formatter produces, because the page draws each
+    line as a `.line` span of its own, `display: block` with its newline as its last character, so
+    that a line paints its whole row and a line the tool wrote can be set in its own tone while the
+    block's text still reads as lines. That span has to hold exactly one line's markup, so the
+    markup is cut where the lines are. A token that spans lines is cut with them, which is what the
+    formatter's own line wrapping does too.
 
     Stripping and the trailing newline are both off, so the lexer is handed exactly the text and
     hands back exactly as many lines. The one preprocessing step no option turns off is a bare
     carriage return becoming a line break, so a text that comes back with a different number of
-    lines is shown uncoloured rather than misaligned: what the gutter says about a line has to be
-    about that line.
+    lines is shown uncoloured rather than misaligned: a line's span has to hold that line, and not
+    the one before it.
 
     Cached for the reason a message is, and bounded smaller because what is cached is larger: a
     read is up to fifteen hundred lines, where a message is a few paragraphs.
