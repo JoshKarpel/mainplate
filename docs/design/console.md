@@ -1036,22 +1036,13 @@ same thing and never grows, since a grid of definite width has no free space to 
 What a tool said in prose, and a command's output, still wrap, since a log line cut off at the
 block's edge hides the half of it that says what went wrong.
 
-**A block whose lines do not fit takes a `focus` button that opens it on its own, as wide as the
-window.** The
-reading measure is 46rem, and a diff's gutter plus a line of real code outgrows it. The room beside
-the measure would be the obvious place to widen into, and at the widths a laptop has there is none:
-the transcript fills its column between the list and the rail up to about 1400px, and it is the
-scroll container, so a block let wider than it is clipped. So the press opens a modal `<dialog>`
-over everything, holding a copy of the block as it was when pressed, and Escape, a press on the
-backdrop, or its own `close` put it away. A copy rather than the block moved, because the block is
-the server's markup and a morph would go looking for it; the copy is sound because a file, a diff or
-a fence does not change under a later render. **The cost, stated:** the dialog is modal, so the
-conversation cannot be scrolled beside it, and it carries no copy button of its own.
-
-The button is seated where the block overflows *now*, which is a measurement rather than anything
-the markup says, so it is taken again after every swap, when a fold toggles, when the column
-changes width, and once the face has loaded. A phone is offered none, since the window there is barely
-wider than the block already is.
+**A reader who wants a wide block wider widens the conversation**, by
+[dragging its edge](assets.md#putting-a-column-away-and-how-wide-the-conversation-is-read), rather
+than opening the block on its own. A per-block control is the tempting alternative, and what it
+costs is a measurement: whether a block overflows is layout, not markup, so it has to be taken after
+every swap, and most blocks sit inside a shut call whose contents the browser never lays out. Asking
+each one its `scrollWidth` lays every folded call out anyway, which on a long session was a second
+of layout on load and again on every message a running turn sent.
 
 ## The line a shut panel stands for
 

@@ -40,9 +40,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls, which are now drawn shut like every other. Nothing is drawn where the batch changed no
   file, and a scratch-only session, with no worktree to snapshot, shows none, as before.
 - **A diff, a file and a shell command scroll sideways rather than wrapping**, as a fence already
-  did, and a block whose lines do not fit gets a `focus` button that opens it on its own, as wide as
-  the window. Escape or a press outside puts it away. Not on a phone, where the window is barely
-  wider than the block.
+  did.
 - **A fence labelled `mermaid` or `svg` is drawn.** The picture it describes stands where the code
   would, SVG as it was written or the diagram as the mermaid library renders it in your theme, and a
   button to the left of `copy` puts the text back and takes it away again. The picture is an image,

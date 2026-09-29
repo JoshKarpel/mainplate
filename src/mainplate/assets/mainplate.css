@@ -767,71 +767,6 @@ pre > .draw[aria-busy] {
     cursor: progress;
 }
 
-/* --- Focusing: seated by the script ---------------------------------------- */
-
-/* A block whose lines do not fit takes a button that opens it on its own, as wide as the window,
-   standing where `draw` does, and one further in where a fence shown as code carries both. */
-pre > .focus {
-    right: calc(var(--space-3) + 3.3rem + 0.3rem);
-    min-width: 2.7rem;
-}
-
-pre:has(> .draw) > .focus {
-    right: calc(var(--space-3) + 3.3rem + 0.3rem + 2.7rem + 0.3rem);
-}
-
-/* As wide as its longest line and no wider than the window, over a dimmed page. The block scrolls
-   inside it on both axes and the dialog itself does not, so the close button keeps its corner; and
-   nothing in the dialog is padding, so a press that lands on the dialog itself is a press on the
-   backdrop. */
-.focused {
-    width: fit-content;
-    max-width: calc(100vw - 2 * var(--space-6));
-    max-height: calc(100dvh - 2 * var(--space-6));
-    padding: 0;
-    border: 1px solid var(--edge);
-    border-radius: var(--radius);
-    background: var(--sunk);
-    color: var(--ink);
-    overflow: hidden;
-}
-
-.focused[open] {
-    display: flex;
-    flex-direction: column;
-}
-
-.focused::backdrop {
-    background: color-mix(in srgb, var(--ground) 70%, transparent);
-}
-
-.focused > form {
-    position: absolute;
-    z-index: 1;
-    top: var(--space-3);
-    right: var(--space-3);
-    margin: 0;
-}
-
-/* The copy keeps the block's classes, so its lines are drawn as they were, and sheds its frame, since
-   the dialog is the frame now. */
-.focused > pre {
-    min-height: 0;
-    margin: 0;
-    padding: var(--space-4) var(--space-5);
-    border: none;
-    border-radius: 0;
-    background: none;
-    font-family: var(--mono);
-    font-size: var(--mono-size);
-    line-height: var(--mono-line);
-    overflow: auto;
-}
-
-.focused > pre > code {
-    overflow: visible;
-}
-
 /* The picture stands where the code stood, scaled to the block and never wider than it. The code
    is hidden with the attribute the script sets, and told so here because `.text pre code`'s own
    `display: block` outranks the browser's `[hidden]` rule. */
@@ -4828,12 +4763,6 @@ main:has(> .forking) {
         /* Nothing hovers on a phone, so a control revealed by hovering is one that is never reached;
            a session is opened and closed from its rail. */
         .session__archive {
-            display: none;
-        }
-
-        /* A window a phone's width is barely wider than the block already is, so opening it as wide
-           as the window buys a few characters for a dialog to put away again. */
-        pre > .focus {
             display: none;
         }
 

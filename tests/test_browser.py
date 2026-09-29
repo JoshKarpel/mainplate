@@ -1335,8 +1335,7 @@ class TestDrawingAFence:
 
 class TestALineThatDoesNotFit:
     """
-    A block of lines scrolls sideways rather than wrapping, and one whose lines do not fit takes a
-    button that opens it on its own, as wide as the window.
+    A block of lines scrolls sideways rather than wrapping.
 
     A browser because every answer here is a measurement: a wrapped diff and a scrolling one are both
     correct markup, and whether a block overflows is a property of the layout and never of the page.
@@ -1377,61 +1376,6 @@ class TestALineThatDoesNotFit:
             )
             longest, *rows = widths
             assert all(abs(row - longest) < 1 for row in rows), f"every row {longest}px wide, and they were {rows}"
-
-        with subtests.test("a block takes a focus button exactly where its lines do not fit"):
-            await expect(pre.locator("[data-focus]")).to_have_count(1)
-            mismatched = await page.evaluate(
-                """() => [...document.querySelectorAll('.transcript .panel pre')].filter((pre) => {
-                  const code = pre.querySelector(':scope > code');
-                  const overflows = Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
-                  return overflows !== Boolean(pre.querySelector(':scope > [data-focus]'));
-                }).map((pre) => pre.closest('.panel').id)"""
-            )
-            fitting = await page.locator(".transcript .panel pre:not(:has(> [data-focus]))").count()
-            assert fitting > 0, "the gallery has blocks that fit, or the rule is unexercised"
-            assert mismatched == []
-
-    async def test_pressing_focus_opens_the_block_wider_than_its_column_and_escape_puts_it_away(
-        self, page: Page, gallery: str
-    ) -> None:
-        pre = await self.batch(page, gallery)
-        column = await pre.bounding_box()
-        assert column is not None
-        await pre.locator("[data-focus]").click()
-        dialog = page.locator("dialog#focused")
-        await expect(dialog).to_be_visible()
-        opened = await dialog.bounding_box()
-        assert opened is not None
-        assert opened["width"] > column["width"] + 200, f"{opened['width']}px against a {column['width']}px column"
-        shown = await dialog.locator("pre").text_content()
-        written = await pre.locator("code").text_content()
-        assert shown == written, "the block as it was, and none of the buttons seated in it"
-        await page.keyboard.press("Escape")
-        await expect(dialog).to_be_hidden()
-
-    async def test_a_press_on_the_backdrop_puts_it_away(self, page: Page, gallery: str) -> None:
-        pre = await self.batch(page, gallery)
-        await pre.locator("[data-focus]").click()
-        dialog = page.locator("dialog#focused")
-        await expect(dialog).to_be_visible()
-        await page.mouse.click(2, 2)
-        await expect(dialog).to_be_hidden()
-
-    async def test_copying_a_block_that_can_be_focused_hands_over_none_of_the_button(
-        self, page: Page, gallery: str
-    ) -> None:
-        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
-        pre = await self.batch(page, gallery)
-        await expect(pre.locator("[data-focus]")).to_have_count(1)
-        await pre.locator("[data-copy]").click()
-        taken = str(await page.evaluate("() => navigator.clipboard.readText()"))
-        assert taken == await pre.locator("code").text_content()
-
-    async def test_a_phone_is_offered_no_focus_button(self, phone: Page, gallery: str) -> None:
-        """A window a phone's width is barely wider than the block, so the button is not drawn there."""
-        pre = await self.batch(phone, gallery)
-        await expect(pre.locator("[data-focus]")).to_have_count(1)
-        await expect(pre.locator("[data-focus]")).to_be_hidden()
 
 
 SIDES = pytest.mark.parametrize(
