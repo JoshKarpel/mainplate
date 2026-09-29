@@ -30,14 +30,14 @@ Three things there are decided rather than incidental:
   That is what tells two attachments apart, and it is narrower besides: an integration's own host
   answers "Repository not found" for any repository but its own.
 
-`Clones` keeps one **bare** clone per repository, the **store**, so there is no "main" checkout to
-confuse with a session's and every session's worktree borrows one object store. `Workspaces` is the
-five of them as one value, clones, the worktree root, the scratch root, what the forges reach, and
-the `bwrap` every git against a worktree runs behind, because they only mean anything as a set: a
-worktree is of a clone, a clone is of something a forge reached, a scratch is what sits beside a
-worktree, and a worktree without a sandbox is one nothing may safely run git in. It is the one place the word "workspaces" still means
-anything, naming the storage area rather than a collection of `Worktree`, which is what
-`MAINPLATE_WORKSPACES` and `Settings.workspace_root` have always called it.
+`Clones` keeps one **bare** clone per repository, the **store**, so there is no "main" worktree to
+confuse with a session's and every session's worktree borrows one set of objects. `Workspaces` is
+the five of them as one value, the stores, the worktree root, the scratch root, what the forges
+reach, and the `bwrap` every git against a worktree runs behind, because they only mean anything as
+a set: a worktree is of a store, a store is of something a forge reached, a scratch is what sits
+beside a worktree, and a worktree without a sandbox is one nothing may safely run git in. It is the
+one place the word "workspaces" means anything, naming the storage area rather than a collection of
+`Worktree`, which is what `MAINPLATE_WORKSPACES` and `Settings.workspace_root` call it.
 
 **The worker clones, never a request handler.** `Service.start` records the choice and returns; the
 session's first pass clones the repository and plants the worktree. A clone is a network fetch that
@@ -72,15 +72,16 @@ things make that cheap and keep it apart:
   network and no credential, and nothing can be pushed there.
 - **It is built beside where it goes and renamed into place**, with the operator's `user.name` and
   `user.email`, read once at startup, copied in so a commit carries the name the person pushing it
-  would give it. A crash
-  part-way leaves a directory nothing names rather than a worktree half made. Every git that builds
-  it runs in the parent, which is safe for exactly as long as it takes: until the rename, no session
-  has had a moment to write its configuration. After it, [no git in the parent touches
-  it](security.md#the-parent-never-runs-git-against-a-checkout).
+  would give it. A crash part-way leaves a directory nothing names rather than a worktree half made.
+  Every git that builds it runs in the parent, which is safe for exactly as long as it takes: until
+  the rename, no session has had a moment to write its configuration. After it, [no git in the
+  parent touches it](security.md#the-parent-never-runs-git-against-a-worktree).
 
 **The store never prunes.** A worktree borrows objects without the store knowing which, so a commit
-a session merged from a branch the remote has since deleted is one only that worktree refers to;
-`Clones.ensure` sets `gc.pruneExpire` to `never` on every call so no `gc` can break it. The cost,
+a session merged from a branch the remote has since deleted is one only that worktree refers to.
+`Clones.refresh` sets `gc.pruneExpire` to `never` before every fetch, because a fetch is what drops
+the store's last ref to such a commit and then runs git's automatic `gc`; so every store gets it at
+its next fetch, whenever it was cloned, before anything that fetch drops can be pruned. The cost,
 stated: a store only grows.
 
 **Whether a worktree is planted is read from its directory, never from its `.git`.** Everything
@@ -99,18 +100,17 @@ The cost, stated: a model "reinitialising" its repository stops its own session 
 puts the history back or forks from the last turn that recorded a tree.
 
 `Settings.workspace_root` **resolves that path**, and it is not tidying. Everything under it runs
-`git` with a `cwd` of its own: a clone is made from the clones root, a worktree is initialised from
-the worktree root. Hand either a relative destination and git resolves it against *that* directory,
-so the clone lands at `workspaces/clones/workspaces/clones/…` and the worktree lands somewhere
-nobody asked for.
-The idempotence checks then look at the path that was asked for, never find it, and let every pass
-try again, which is a `SnapshotFailed` on a session's second turn. The default database is
-`mainplate.db` in the working directory and `just serve`/`just demo` name one there too, so a
-relative root is the common case rather than the odd one. Resolved at the setting because that is
-where a configured path enters the process, and one absolute value cannot be got wrong by the next
-consumer; `Clones` and `Worktrees` take an absolute root as a precondition. `test_snapshots.py` goes
-the whole way from a `Settings` with a relative database, because the other fixtures there hand both
-an absolute root and so would never notice.
+`git` with a `cwd` of its own: a store is cloned from the clones root, a worktree is initialised
+from the worktree root. Hand either a relative destination and git resolves it against *that*
+directory, so the store lands at `workspaces/clones/workspaces/clones/…` and the worktree lands
+somewhere nobody asked for. The idempotence checks then look at the path that was asked for, never
+find it, and let every pass try again, which is a `SnapshotFailed` on a session's second turn. The
+default database is `mainplate.db` in the working directory and `just serve`/`just demo` name one
+there too, so a relative root is the common case rather than the odd one. Resolved at the setting
+because that is where a configured path enters the process, and one absolute value cannot be got
+wrong by the next consumer; `Clones` and `Worktrees` take an absolute root as a precondition.
+`test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
+fixtures there hand both an absolute root and so would never notice.
 
 There is deliberately **no setting naming a repository**. What a session works in is picked when it
 is created and recorded on the session, so a process-wide answer would be a second answer to a
@@ -170,12 +170,12 @@ Five things there are decided rather than incidental:
 - **A fork carries neither**, which is `settled(forked=True)`, and is then given a branch of its
   own. A fork plants at the tree of the turn it re-asks, so a base beside that is a second answer to
   where its files come from; and an inherited branch is one a push from the fork would land on the
-  parent's work. `Worktrees.plant` ranks its three
-  answers, a tree first, then a base, then the default branch, and `settled` is what makes sure it
-  is never handed two.
+  parent's work. `Worktrees.plant` ranks its three answers, a tree first, then a base, then the
+  default branch, and `settled` is what makes sure it is never handed two.
 - **The store is fetched on a timer while any session works in it, and again when one is
-  planted.** A session's own `git fetch` reads the store and not the forge, since its sandbox has no
-  network, so the store is the whole of how current `origin/main` is in there. `fetching.py` fetches
+  planted.** A session's own `git fetch` reads the store and not the forge, since `origin` in a
+  worktree is the store, which needs no network and no credential; so the store is the whole of how
+  current `origin/main` is in there. `fetching.py` fetches
   every repository an unarchived session works in, every `fetch_every` (five minutes), off the
   request path; that is what lets a session an hour in rebase onto the `main` of now, and see a
   commit somebody else pushed to its branch. Planting fetches as well, because a new session is the
@@ -183,34 +183,34 @@ Five things there are decided rather than incidental:
   minutes. A failed round is logged and changes nothing, since the store keeps the refs it last
   fetched. The cost, stated: a round trip per repository per interval whether or not anything moved.
   `Clones.refresh` fetches into `refs/remotes/origin/` and never over `refs/heads/`, which keeps the
-  store's own branches as old as the clone and one namespace apart from the fresh ones; a clone just
-  made copies its heads there itself, with no network, so a worktree's `git fetch` finds them from
+  store's own branches as old as the clone and one namespace apart from the fresh ones; a store just
+  cloned copies its heads there itself, with no network, so a worktree's `git fetch` finds them from
   the start.
 
     **The no-base arm is the one that is easy to get wrong**, and it was wrong first: a fetch writes
-    `refs/remotes/origin/` and leaves the clone's own `HEAD` pointing at the stale `refs/heads/`, so
+    `refs/remotes/origin/` and leaves the store's own `HEAD` pointing at the stale `refs/heads/`, so
     planting at `rev-parse HEAD` refreshed the refs and then checked out the commit beside them, a
     round trip that changes nothing, which is worse than not making it. `Worktrees.default_branch`
-    reads the *name* out of the clone's `HEAD` symref and `resolve` turns that into the current
+    reads the *name* out of the store's `HEAD` symref and `resolve` turns that into the current
     commit, so both arms go down one path. `test_snapshots.py` parametrises over naming a base and
     naming nothing for exactly that reason.
 
-    Two cases skip the fetch and both would be round trips that cannot change an answer: a clone
-    that has just been made is current by construction, and a fork plants at a recorded tree, which
-    is an object this console wrote and already holds.
+    Two cases skip the fetch and both would be round trips that cannot change an answer: a store
+    that has just been cloned is current by construction, and a fork plants at a recorded tree,
+    which is an object this console wrote and already holds.
 
 - **The branches are offered rather than enumerated, and asked of the remote.** Picking a workspace
   card swaps the block under the cards through `/fragments/branches`, which is the shape the model
   group already has under the endpoint cards and for the same reason: what a repository's branches
   are has a different answer per card, so a page that serialized one list would be completing the
   wrong repository's the moment somebody changed their mind. `Clones.branches` runs `git ls-remote`,
-  which transfers no objects, so it needs no clone, which is the point, since the very first session
-  on a repository is both the case with no clone and the case where saying where to start matters
+  which transfers no objects, so it needs no store, which is the point, since the very first session
+  on a repository is both the case with no store and the case where saying where to start matters
   most. It promises not to raise, `forge.offers`-style, so an unreachable host costs a suggestion
   rather than an ability.
 
-    Asking the remote is a round trip, so the fields *arrive* rather than appear, and on a cold
-    clone that is seconds of a block that has not changed yet: a card pressed and nothing under it,
+    Asking the remote is a round trip, so the fields *arrive* rather than appear, and on a slow
+    remote that is seconds of a block that has not changed yet: a card pressed and nothing under it,
     which reads as a card that did nothing. So the block draws the same three dots a turn with no
     answer yet draws, as the card's `hx-indicator`. They stand **inside the block being replaced**,
     which is what makes them right rather than a problem: they are shown for exactly as long as the
@@ -257,7 +257,7 @@ anybody who wants it.
 `snapshots.py` captures a tree through a *shadow index*, so nothing a reader can see moves: not
 their staged changes, not `HEAD`, not a branch, not `git log`. The tree goes into the **store**
 rather than staying in the worktree, which is what lets it outlive the worktree and what a fork
-plants from. Five things there are easy to undo:
+plants from. Six things there are easy to undo:
 
 - **Git against the worktree runs in its sandbox, and only a bundle comes back.** `add -A` and
   `write-tree` run behind `bwrap` through `Worktree.git`. Where the store does not already hold that
@@ -266,8 +266,14 @@ plants from. Five things there are easy to undo:
   store fetches the bundle, reads the tree back out of itself and refuses one the worktree
   misreported. An untouched worktree, or a fork nobody has changed yet, sends nothing. The worktree
   is the one directory a session may write and its configuration names programs git runs, so
-  [the parent reads none of it](security.md#the-parent-never-runs-git-against-a-checkout). The cost,
+  [the parent reads none of it](security.md#the-parent-never-runs-git-against-a-worktree). The cost,
   stated: a capture that changed something is a few more processes than a `write-tree` in place.
+- **Stopped part-way, a git in the parent is terminated and one in the sandbox is killed.** Git
+  removes the lock files it holds on `SIGTERM` and leaves them on `SIGKILL`, and a lock left in the
+  store fails every later write to that ref with nothing able to reach the store to delete it; so
+  `git_at` asks first and kills only after a grace. `bwrap` passes no signal on, so asking would not
+  reach the git inside, and what a killed one can leave is a lock in the worktree, which the
+  session's own `bash` can remove.
 - **A fresh index per operation, not one per workspace.** It lives in a directory made for that one
   capture, never in `.git`. Two concurrent captures over one path write over each other, and the
   loser's `write-tree` then describes a tree that never existed, in practice the *empty* tree.
@@ -298,10 +304,10 @@ its question against the files that question was asked about. Planting at the re
 instead would ask the new model to redo turn 3 against whatever the disk holds now, which is a
 different question wearing the same words and invisible in the transcript.
 
-The mechanism is one extra key rather than a checkout in a request handler: `Service.fork` copies
-`turn:{at}:tree:0` across on its own, even though that turn's prompt and messages are *not*
-inherited, and the fork's first pass plants at whatever tree is already recorded for the turn it is
-about to run. The `:0` is the point: a turn records a tree per model request, and what a fork wants
+The mechanism is one extra key rather than planting a worktree in a request handler:
+`Service.fork` copies `turn:{at}:tree:0` across on its own, even though that turn's prompt and
+messages are *not* inherited, and the fork's first pass plants at whatever tree is already recorded
+for the turn it is about to run. The `:0` is the point: a turn records a tree per model request, and what a fork wants
 is the one before the turn did anything.
 
 ### A fork may attach a repository and may not swap one
@@ -322,9 +328,9 @@ branch out of its repository, the bug that shape of trust actually produced.
 session id and the roots the console started with rather than found by looking. The worktree, `.git`
 and all, where the session works in a repository; the scratch and [the plugins'
 scratches](sandbox.md#the-scratch-directory) either way. Not the store, which every session on that
-repository shares, and not the snapshots, which are objects in the store under refs of their own. That last exclusion is what the list is for: what is on it is what taking
-a session off the disk removes, and what is not on it is what keeps the checkpoint forkable
-afterwards.
+repository shares, and not the snapshots, which are objects in the store under refs of their own.
+That last exclusion is what the list is for: what is on it is what taking a session off the disk
+removes, and what is not on it is what keeps the checkpoint forkable afterwards.
 
 It is the one object handed both the workspaces and the plugins root, which the sandbox keeps apart
 so a plugin's `$HOME` can never sit under a directory the model writes. Seeing both is not the
@@ -364,16 +370,17 @@ session needs from the disk is nothing.
 
 **The press records a fact and a reconciler acts on it.** `Service.archive` writes one key,
 `archived`, and redirects; from that moment [the page has no message box](console.md#the-message-box),
-the transcript says why, the rail's card says when, the row is muted, and the routes that would
+the transcript says why, the rail's card says when, the row is muted and drops below every session
+still active, and the routes that would
 write to the session answer `422`. The press is offered in three places, the rail's card, under the
 settings step, and [on the session's row in the list](console.md#the-session-list), and all three
-are one disclosure over one form. Taking
-the directories away is `archive.py`'s, on a timer: each round reads the key off every row, finds the
-sessions still holding something on disk, and takes it off. A reconciler rather than a job the press
-queues, because what it does is diff a desired state against an actual one and converge, so a
-console that died halfway through, or was pressed while a pass still held the session, finishes on
-its next round with nothing to be told. The cost, stated: a session pressed archived keeps its files
-for up to `archive_every`, and a console with nothing to do reads its index once a minute.
+are one disclosure over one form. Taking the directories away is `archive.py`'s, on a timer: each
+round reads the key off every row, finds the sessions still holding something on disk, and takes it
+off. A reconciler rather than a job the press queues, because what it does is diff a desired state
+against an actual one and converge, so a console that died halfway through, or was pressed while a
+pass still held the session, finishes on its next round with nothing to be told. The cost, stated:
+a session pressed archived keeps its files for up to `archive_every`, and a console with nothing to
+do reads its index once a minute.
 
 **It refuses to take a worktree from under a pass.** A pass reads the checkpoint at its top and never
 sees a key written after it started, so a session the worker holds is left for the next round, and
@@ -390,9 +397,9 @@ never captured included - what a person ran in it after the last request, and wh
 at the turn's end. A worktree whose session broke its own `.git` fails that capture, and its files go
 anyway, since no later round would capture it either: the failure is logged, no `archived:tree` is
 recorded, and a fork from the end plants at the newest tree a turn recorded instead. The cost,
-stated: whatever changed after that turn is lost with the worktree. Then the worktree is a directory like any other and is removed as one; the
-snapshots are in the store under the session's refs and outlive it, which is what keeps
-every earlier fork point reachable too.
+stated: whatever changed after that turn is lost with the worktree. Then the worktree is a directory
+like any other and is removed as one; the snapshots are in the store under the session's refs and
+outlive it, which is what keeps every earlier fork point reachable too.
 
 **Nothing un-archives a session, and that is the design rather than a gap.** The key is write-once,
 and what a person wants back is the conversation with somewhere to work, which is exactly what

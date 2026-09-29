@@ -35,7 +35,6 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import retention_for
-from mainplate.commands import PUSHED
 from mainplate.commands import Commands
 from mainplate.commands import Running
 from mainplate.commands import Slot
@@ -54,6 +53,7 @@ from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_prompt
+from mainplate.conversation import recorded_push
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
@@ -116,6 +116,10 @@ from mainplate.settings import DEFAULT_WATCHING
 #
 # NOTE: `workflow_claim` and `workflow_queue` are `without-durability-sqlite`'s own tables, read here
 # for the same reason and with the same cost as the count above. See `Service.attended`.
+#
+# `ATTENDING` below reads the claim and the delivery a second time, for every session at once, so a
+# change to what either reads here is a change to both. One fact in two places, held together by
+# the test in `test_attending.py` that reads each arm both ways and wants the same answer.
 ATTENDED = """
 SELECT
     (SELECT COUNT(*) FROM workflow_checkpoint WHERE workflow = :workflow),
@@ -812,8 +816,9 @@ class Service:
         that is only whitespace collapses to nothing and is the same as not having named it, which is
         what an empty box posts.
 
-        A name is inferred from the first message only if the title is still empty.
-        A chosen name belongs to the index and may be changed without changing the conversation.
+        **A session is `UNTITLED` until its first message lands**, where a name was not given, and is
+        then named after that message by `naming`. Either name is the index's alone, and `rename`
+        replaces it without touching the checkpoint.
         """
         named = name_from(title) if title else ""
         # Settled here rather than taken as posted, which is the same stance that stops a form with
@@ -830,7 +835,7 @@ class Service:
         # own id and `settled` is a rule about a choice rather than about a session.
         chosen = chosen.branching(session.id)
         await enrol(self.database, session)
-        # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
+        # No cloning and no worktree here, deliberately. Somebody is waiting on this request and a
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
         # already lives. Until then the session renders, names its repository, and has no files.
         await self.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(chosen))
@@ -907,6 +912,8 @@ class Service:
         forked = Session(
             id=mint_session_id(),
             created_at=self.now(),
+            # The parent's name as it stands, because the fork carries the conversation that name
+            # was given to. From here each is its own row, so renaming one leaves the other alone.
             title=parent.title,
             forked=Origin(session=session, turn=at),
         )
@@ -933,7 +940,7 @@ class Service:
         # disagreement would be invisible in the transcript.
         #
         # Recorded here rather than planted here for the reason `start` clones nothing: this is a
-        # request, and a checkout is not.
+        # request, and planting a worktree is not.
         #
         # Forking the *end* has no turn to re-ask and so no opening tree to carry, and planting at the
         # repository's head there would hand the branch files the conversation never saw. So it
@@ -1012,7 +1019,7 @@ class Service:
         Nowhere to run one is `None` and not a raise: it is a state the page can explain, not a fault.
 
         **In the session's sandbox**, under its own network answer and the environment its setup
-        recorded, for the reason `commands.py` opens with: the checkout's git configuration is the
+        recorded, for the reason `commands.py` opens with: the worktree's git configuration is the
         model's to write. `online` turns the network on for this one command whatever the session
         chose, which is `Disposition.ONLINE`, and is recorded on the command so the page says so.
         """
@@ -1042,13 +1049,13 @@ class Service:
         Push this session's branch to its repository, and say which entry recorded it, or nothing
         where there is no branch here to push or nowhere to push it.
 
-        **The branch is the recorded one**, `Choice.branch`, and never whatever the checkout's `HEAD`
+        **The branch is the recorded one**, `Choice.branch`, and never whatever the worktree's `HEAD`
         is on: the page names that branch beside the button, so it is the only thing the button may
         move. A session with none recorded has nothing to push under and is `None`.
 
-        Recorded as a command whose text is what was done, so the page draws it where it happened and
-        a reload finds it, like any `Run`. Nowhere to push is a repository no forge currently reaches,
-        which is `None` for the reason `run`'s is.
+        Recorded as a command naming the branch it pushed, so the page draws it where it happened, a
+        reload finds it like any `Run`, and a person's own `push` is never mistaken for it. Nowhere to
+        push is a repository no forge currently reaches, which is `None` for the reason `run`'s is.
         """
         if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
             return None
@@ -1058,7 +1065,7 @@ class Service:
         repository = self.workspaces.named(found.chosen.repository)
         if repository is None:
             return None
-        entry = await self.checkpointer.append(session, recorded_command(PUSHED))
+        entry = await self.checkpointer.append(session, recorded_push(found.chosen.branch))
         self.commands.push(
             Slot(session=session, entry=entry.key),
             self.workspaces.worktree(session, found.chosen.repository),
@@ -1246,12 +1253,29 @@ class Service:
         """
         Name a session after the first thing said in it, where nobody named it and nothing has been.
 
-        A first message fills an empty title without overwriting a chosen one.
+        **Written when the first message arrives, and only over an empty title**, so a name given at
+        creation or by a rename before anything was said always wins over one cut from the message:
+        `Choice.branching`'s rule one field along, that a name somebody typed beats a generated one.
+
+        The statement is the check, so there is nothing to read first: `name_if_untitled` matches on
+        the title still being empty. A `SELECT` in front of it would be the same condition asked
+        twice, once of a row and once of a join, with a window between them.
         """
         await name_if_untitled(self.database, session, name_from(said))
 
-    async def rename(self, session: str, title: str) -> None:
-        await rename(self.database, session, name_from(title))
+    async def rename(self, session: str, title: str) -> str:
+        """
+        Give a session the name somebody chose, and say what it is now called.
+
+        Through `name_from`, exactly as a name given at creation or cut from a message, so all three
+        are collapsed and cut the same way; what comes back is that settled name rather than what was
+        typed, which is what a page redrawing the name has to show. What arrives here is never blank:
+        the form's parser refuses one, since a name that collapses to nothing would be a session
+        renamed to `UNTITLED` by accident.
+        """
+        named = name_from(title)
+        await rename(self.database, session, named)
+        return named
 
     async def send(self, session: str, said: str) -> None:
         """

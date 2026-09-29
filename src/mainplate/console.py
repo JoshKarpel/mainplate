@@ -62,6 +62,7 @@ from mainplate.pages import model_cards
 from mainplate.pages import new_session_page
 from mainplate.pages import plugin_card
 from mainplate.pages import refusal_page
+from mainplate.pages import renamed
 from mainplate.pages import session_page
 from mainplate.pages import settling
 from mainplate.pages import stalled_by
@@ -269,6 +270,14 @@ prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="applicat
 
 
 def parse_form_title(raw: bytes) -> str:
+    """
+    The name a rename carried, refused if there is not one.
+
+    Refused rather than taken as "untitled", unlike the box on the new-session page, where an empty
+    one means "name it after the first message". A session being renamed has usually had that first
+    message already, so an empty name here could only ever mean a session called `Untitled` by
+    accident.
+    """
     title = fields_in(raw).get(TITLE_FIELD, [""])[0].strip()
     if not title:
         raise NotAMessage("a session name cannot be empty")
@@ -1169,10 +1178,25 @@ async def press(service: Service, session: str, pressed: Pressed) -> Response:
 
 @post(t"/sessions/{session_id}/rename", session_id, title, summary="Rename a session")
 async def rename_session(service: Service, session: str, title: str) -> Response:
+    """
+    Give a session the name somebody typed, and answer with the name row as it now stands.
+
+    Answered with the row, as a plugin's press is answered with its card, and not with a `303` as
+    archiving is: archiving changes four regions and the live connection carries one, where a rename
+    changes the row, the tab and the list's row, and the other two follow by themselves. See
+    `renamed` for the tab and `Service.listing_token` for the list.
+
+    The row is drawn from the name `Service.rename` wrote rather than from what was posted, so what
+    it shows is the name as `name_from` settled it, collapsed and cut, and not the text somebody
+    typed.
+
+    Taken whatever the session's state, archived included: a name is how somebody finds a session in
+    the list, which is as true of one that is closed as of one that is running.
+    """
     if await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    await service.rename(session, title)
-    return seeing(LINKS.to_session(session))
+    named = await service.rename(session, title)
+    return page_response(200, renamed(LINKS, session, named))
 
 
 @post(t"/sessions/{session_id}/archive", session_id, summary="Archive a session, keeping its conversation")

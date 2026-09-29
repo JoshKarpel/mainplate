@@ -91,10 +91,10 @@ the list the script narrows.
 **One word per answer, and `Answer.named` is `leader.capitalize()` rather than a second field.** The
 word is the menu row's name, the leader typed after `/`, and the value in `data-leading`; where it
 names a disposition it *is* `Disposition.value`, so the word on the page, the word on the keyboard
-and the word in the store are one string. That is what took `Wait for the next turn` back to `Next`
-and `Back to where this came from` back to `Parent`: a sentence cannot be typed, so a leader would
-have needed a second name, and a second name is a synonym to keep in step for ever. What each one
-*does* is the `saying` under it, which is where an explanation belongs anyway.
+and the word in the database are one string. That is what took `Wait for the next turn` back to
+`Next` and `Back to where this came from` back to `Parent`: a sentence cannot be typed, so a leader
+would have needed a second name, and a second name is a synonym to keep in step for ever. What each
+one *does* is the `saying` under it, which is where an explanation belongs anyway.
 
 It deliberately does **not** switch what the primary button does *by remembering*, which is where
 GitHub's version of this control goes further, and is [the failure a control like this can
@@ -596,7 +596,7 @@ rather than a decision about a conversation.
 ## Online
 
 `/online` is `Run` with the network on, for one command, in a session whose commands otherwise have
-it off. Same sandbox, same checkout, same environment; only the network axis flips. It is offered
+it off. Same sandbox, same worktree, same environment; only the network axis flips. It is offered
 only where the network is off, since with it on `Run` already has it.
 
 **Why it exists: the network switch is a decision about the model, and the person is not the
@@ -607,9 +607,9 @@ starting a second session with the network on to type one command is the workaro
 **What it gives up is the push gateway, for that command.** On exe.dev [the network is the
 credential](security.md#on-exedev-the-network-is-the-credential), so a command run online can push
 to the repository, force included, without going through `/push`, and it runs whatever hooks and
-configuration the checkout holds while it can. Typing it is the person's call, and the record carries
-`online` so the panel says so beside the line for as long as it is there. The cost, stated: a
-`git commit` run online runs the model's hooks with a network, which is exactly what the session's
+configuration the worktree holds while it can. Typing it is the person's call, and the record
+carries `online` so the panel says so beside the line for as long as it is there. The cost, stated:
+a `git commit` run online runs the model's hooks with a network, which is exactly what the session's
 own network answer was keeping them from having.
 
 It shares the command box's monospace and heavier edge, and stays in its mode once a command has
@@ -630,11 +630,10 @@ the console's own bookkeeping and have nothing to do with what is committed.
 
 ## Push
 
-
 `/push` sends the branch the session *recorded* to its repository, under the same name. That is
-`Choice.branch`, the one the sentence over the box names, and never whatever the checkout's `HEAD`
+`Choice.branch`, the one the sentence over the box names, and never whatever the worktree's `HEAD`
 is on: a session that checked out `main` and committed there cannot move `main` from this button.
-The cost, stated, is that commits on any other branch stay in the checkout without a word; the
+The cost, stated, is that commits on any other branch stay in the worktree without a word; the
 result says which commit went where. A session with no recorded branch is refused.
 
 It is the one thing `Run` cannot do with the network off, because a push needs the console's
@@ -650,7 +649,11 @@ message sent under the wrong answer should come back to the person who typed it.
 than something to override from a button. A person who means to force it has a checkout of their own
 to do that from.
 
-**Recorded like a command**, with `push` as its text and the result beside it, so the panel sits
-where it was pressed and reads exactly like a `Run`: what git said, the time it took, and the status
-as a number. Offered where `Run` is, since both need a worktree, and a session on a repository no
-forge currently reaches is refused, since there is nowhere to push to.
+**Recorded like a command, naming the branch it pushed**, with the result beside it, so the panel
+sits where it was pressed and reads like a `Run`: what git said, the time it took, and the status as
+a number. The line is the branch under a mark of its own rather than a `$` and a command, and it is
+drawn from the recorded branch and never from the text, which is `push` either way: a person who
+runs `push` in the sandbox has typed a command, and the page draws it as one. A push recorded before
+the branch was is a command whose text is `push`, and draws as one. Offered where `Run` is, since
+both need a worktree, and a session on a repository no forge currently reaches is refused, since
+there is nowhere to push to.

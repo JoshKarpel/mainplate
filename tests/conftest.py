@@ -527,7 +527,7 @@ def database(tmp_path: Path) -> Path:
 
 @pytest.fixture
 async def service(database: Path, catalogues: Catalogues) -> AsyncIterator[Service]:
-    """A store on its own file, with no worker: nothing answers a session unless a test does."""
+    """A database of its own, with no worker: nothing answers a session unless a test does."""
     async with open_store(database, LEASE, catalogues) as opened:
         yield Service(
             database=opened.database,
@@ -550,7 +550,7 @@ def assets() -> Inventory:
 @pytest.fixture
 def app(service: Service, assets: Inventory) -> ASGIApp:
     """
-    The console over a store nothing is working, which is what makes these tests deterministic.
+    The console over a database nothing is working, which is what makes these tests deterministic.
 
     A worker beside them would answer a session at a moment no test chose, so an assertion about a
     pending turn would pass or fail on how fast the machine is. What the worker does is tested
@@ -644,7 +644,7 @@ FIXTURE_NAME = "me/fixture"
 
 
 # The session the `worktree` fixture is planted for. Shaped like a real id, and not one `started`
-# ever hands out, so a test that also starts sessions never finds this one's checkout in its way.
+# ever hands out, so a test that also starts sessions never finds this one's worktree in its way.
 PLANTED: Final = "0f" * 16
 
 # Who every repository here commits as. Stated rather than read off the machine running the suite,
@@ -656,7 +656,7 @@ IDENTITY: Final = (("user.name", "probe"), ("user.email", "probe@example.invalid
 @pytest.fixture
 async def origin(tmp_path: Path) -> Path:
     """
-    The repository a stand-in forge reaches, which is where every checkout here comes from.
+    The repository a stand-in forge reaches, which is where every worktree here comes from.
 
     A real one, because everything worth checking against one is what git actually does. A stand-in
     for git would be a second implementation of the thing under test, and the questions asked of
@@ -681,7 +681,7 @@ def bwrap() -> str:
     Where the sandbox binary is, and a loud failure if it is not anywhere.
 
     Not skipped when it is missing, for the same reason the browser tests are not: a check nobody
-    runs is a check that catches nothing, and git against a checkout only ever runs behind it.
+    runs is a check that catches nothing, and git against a worktree only ever runs behind it.
     """
     return sandbox_command()
 
@@ -689,10 +689,10 @@ def bwrap() -> str:
 @pytest.fixture
 async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
     """
-    Somewhere to clone the repository above and to plant each session's checkout of it.
+    Somewhere to clone the repository above and to plant each session's worktree of it.
 
     Both outside the repository deliberately, and these tests would not notice if they were not: a
-    checkout planted *inside* it would be captured by the snapshots it exists to take, so every
+    worktree planted *inside* it would be captured by the snapshots it exists to take, so every
     session would hold a copy of every other session's files.
     """
     reaching = Reaching(
@@ -710,10 +710,10 @@ async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
 
 def checkout_in(root: Path, bwrap: str) -> Worktree:
     """
-    A directory a test set up itself, as the checkout the file tools and `list` are handed.
+    A directory a test set up itself, as the worktree the file tools and `list` are handed.
 
     Its store is an empty directory beside it, which is enough for the sandbox to bind and holds
-    nothing, so what git answers about the checkout comes from the checkout alone. For a test about
+    nothing, so what git answers about the worktree comes from the worktree alone. For a test about
     listing or editing files; a test about snapshots wants the planted `worktree`.
     """
     store = root.parent / f"{root.name}-store"
@@ -724,13 +724,13 @@ def checkout_in(root: Path, bwrap: str) -> Worktree:
 @pytest.fixture
 async def worktree(workspaces: Workspaces) -> Worktree:
     """
-    A session's checkout, planted the way a session's first pass plants one.
+    A session's worktree, planted the way a session's first pass plants one.
 
     With an ignored `.env` and `built/` in it, which a clone never carries, because what a snapshot
     leaves out is half of what these tests ask.
 
     Here rather than beside the snapshot tests because several suites need it: what a command a
-    person runs does to a checkout is the same kind of question, asked from the other end.
+    person runs does to a worktree is the same kind of question, asked from the other end.
     """
     planted = await workspaces.plant(PLANTED, FIXTURE, branch=branch_named(PLANTED))
     if planted is None:

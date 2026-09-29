@@ -91,8 +91,8 @@ class TestWhatAScratchOnlySessionReaches:
         assert home_in(InAScratch(scratch=scratch)) == scratch
 
 
-class TestWhereTheCheckoutIs:
-    async def test_the_checkout_and_scratch_are_writable_and_the_store_is_read_only(
+class TestWhereTheWorktreeIs:
+    async def test_the_worktree_and_scratch_are_writable_and_the_store_is_read_only(
         self, worktree: Worktree, scratch: Path
     ) -> None:
         sandbox = confined_by(InAWorktree(worktree=worktree, scratch=scratch))
@@ -103,7 +103,18 @@ class TestWhereTheCheckoutIs:
             (scratch, True),
         ]
 
-    async def test_git_writes_work_and_stay_in_the_checkout(
+    async def test_git_this_console_runs_sees_the_worktree_as_a_command_does(
+        self, worktree: Worktree, scratch: Path
+    ) -> None:
+        """
+        A capture that bound the worktree or its store differently from the command that wrote them
+        would be reading another repository than the one the session worked in, and saying nothing.
+        """
+        commands = confined_by(InAWorktree(worktree=worktree, scratch=scratch)).places
+
+        assert worktree.confined().places == commands[:2]
+
+    async def test_git_writes_work_and_stay_in_the_worktree(
         self, worktree: Worktree, scratch: Path, bwrap: str
     ) -> None:
         """
@@ -317,7 +328,7 @@ class TestTheScratchDirectory:
 
 
 class TestWhatGitCanDoInThere:
-    """Ordinary local Git is available because this checkout's metadata belongs to this session."""
+    """Ordinary local git works in there, because this worktree's `.git` belongs to this session."""
 
     async def test_reading_git_works(self, worktree: Worktree, scratch: Path, bwrap: str) -> None:
         said = await inside(worktree, scratch, bwrap, "git ls-files")

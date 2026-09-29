@@ -315,7 +315,9 @@ thing than a mechanism.
 The cost, stated: **every repository plugin left on may write the model's `$HOME` and set what its
 commands run under.** Three things bound that and none removes it. It is behind the trust switch and
 a switch of its own, so nothing runs unattended without two answers. It happens before the first
-message, over the commit the repository supplied. And what a plugin can leave in that directory, the
+message, after a person's press: over the commit the repository supplied in a new session, and over a
+tree the model wrote in a fork, whose own press is what says yes to that. And what a plugin can leave
+in that directory, the
 repository's own code could leave there from the session's first `bash` anyway. What the grant really
 buys is the *moment*: a plugin stages the environment before the model has run at all, which is what
 a setup is for and is why the whole thing cannot wait until a command asks for it.
@@ -1052,10 +1054,13 @@ runs its checks with - are both downloads.
 
 **What makes it safe to offer is when it happens and who said yes, rather than a check on what is
 fetched.** `setup` runs only after somebody pressed the button on the settings step, and before the
-first message: the worktree holds the commit the repository supplied and nothing else, and nothing
-the model has written exists yet. So what a connected run there can carry out is the repository's
-own code, run because a person chose to run it. Every later event is shut again, and that is the
-half that matters - a turn boundary is where a plugin has read whatever the model has been writing.
+first message. In a session that began on its own, the worktree holds the commit the repository
+supplied and nothing else, so what a connected run there can carry out is the repository's own code,
+run because a person chose to run it. **A fork is the exception, and the press is what answers it**:
+a branch is planted at a tree the model wrote, so its `setup` runs whatever `.mainplate/` that tree
+holds, connected, and on exe.dev that includes pushing. What licenses it is the press on the branch's
+own settings step, which draws the plugins that tree declares, and not anything the parent agreed to.
+Every later event is shut again, and that is the half that matters - a turn boundary is where a plugin has read whatever the model has been writing.
 
 The cost, stated: **a repository plugin can reach the network once per session, and a session that
 chose no network still gives it that.** On exe.dev that includes [this console's
@@ -1195,11 +1200,11 @@ The line under the repository group on the settings step says that, in those ter
 warning that something may be unsafe. A reader's next question is always *what happens*, and "they
 run unattended at every turn boundary, and what they write is said to the model" answers it.
 
-**What the switch is genuinely for is the session where the reading above does not hold**, and there
-are two: a repository somebody is *reading* rather than working in - a stranger's pull request, a
-dependency being triaged - and a session on `Filesystem.NOTHING`, which picks a repository and hands
-the model no shell at all. That second one is why it is drawn in the picker rather than inferred from
-the isolation: the two are near enough to look like one question and are not.
+**What the switch is genuinely for is the session where the reading above does not hold**: a
+repository somebody is *reading* rather than working in - a stranger's pull request, a dependency
+being triaged. Nothing else a session chooses says so, since picking a repository settles the
+isolation on its worktree and hands the model a shell wherever there is a sandbox, which is why the
+switch is drawn in the picker rather than inferred from anything the session already chose.
 
 **The exposure is made visible rather than the answer made precise.** That is what the [settings
 step](#starting-a-session-takes-four-steps) is for: it runs *before* `setup` and before the first
@@ -1326,9 +1331,10 @@ One question sorts them: **can you describe mainplate with this absent and still
 - **Handoff: yes, and it is the proof**, because the protocol was derived from it. The gauge is the
   only thing it loses: its panel keeps the word and the hover text it has today, since those are a
   `label` and a `title` on the delivery rather than a kind of its own.
-- **[What a session is told](../plugins/guidance.md): yes**, both halves. The operator's guidance, the
-  repository's `AGENTS.md` and the directory index are instructions contributed at `setup`; the
-  nested handover is an injection into a request. It is the half handoff does not exercise.
+- **[What a session is told](../plugins/guidance.md): yes**, both halves. The operator's unscoped
+  guidance, the repository's `AGENTS.md` and the index of everything held back are instructions
+  contributed at `setup`; handing over a scoped or nested file on approach is an injection into a
+  request. It is the half handoff does not exercise.
 
 ### Both are ported, and that is the test
 

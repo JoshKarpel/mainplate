@@ -5,26 +5,32 @@
 # nothing answers "what sessions are there". So an index is the application's to keep, and this
 # is it.
 #
-# The title is owned by this index, not copied from a checkpoint. It can be named on
-# creation, inferred from the first message, or changed later without touching what was said.
+# It holds a title as well as an id, which is worth saying is *not* the denormalization it looks
+# like. A title cut from the first thing said is cut once, as that message lands, and nothing keeps
+# the two in step afterwards; a title somebody chose, at creation or by renaming, is recorded nowhere
+# else at all. Either way this row is its only home, so a rename writes here and never touches what
+# was said. The alternative is loading every session's whole checkpoint to render a sidebar, which is
+# the entire conversation history of every session on every page.
 #
-# It lives in the store's own SQLite file, deliberately. That file is the whole datastore, so a
-# statement here and a checkpoint write reach the same tables, which is what would let a later
-# version write this row inside a pass's own transaction with `Run.transact`. Today's creation
-# path does not need that, and `enrol` says why.
+# It lives in the database, the SQLite file the checkpoints are in, deliberately. That file is the
+# whole datastore, so a statement here and a checkpoint write reach the same tables, which is what
+# would let a later version write this row inside a pass's own transaction with `Run.transact`.
+# Today's creation path does not need that, and `enrol` says why.
 #
 # It is also what lets a read here reach *into* a checkpoint rather than copying out of one. A
 # session's repository is recorded in its `choice`, and a checkpoint is a row per key rather than
-# one value, so one join reads that one small row per session. A column copying something
-# already recorded would be the second copy the console is built to avoid.
+# one value, so one join reads that one small row per session and this table stays the facts only
+# it holds. A column copying something already recorded would be the second copy the whole console
+# is built to avoid.
 #
-# `Tending` has no other home. A session's own settings have to be mutable to be settings at all, and the
-# two places this console otherwise keeps things both refuse them - the checkpoint keeps the value a
+# Three of those facts move. The title is one, and the paragraph above is its argument. `Tending` is
+# another, and it is not that second copy either: it has no other home. A session's own settings
+# have to be mutable to be settings at all, and the two places this console otherwise keeps things both refuse them - the checkpoint keeps the value a
 # key was first given, so a setting saved twice would keep its first answer for ever, and
 # `localStorage` is in a browser where the worker that reads this may be another process entirely.
 # So it is a column, and the table that already answers "which sessions are there" is where it goes.
 #
-# `seen_seq` is the other, and the same argument carries it: how far into a session somebody has
+# `seen_seq` is the third, and the same argument carries it: how far into a session somebody has
 # looked is a fact nothing else records, it moves every time they look, and it has to be the same on
 # every device they look from, which rules out the browser. It is the console's mark and not any one
 # reader's, because this console has no accounts; the day it does, this column becomes a table keyed
@@ -55,8 +61,8 @@ from mainplate.tending import Tending
 from mainplate.tending import parse_tending
 from mainplate.tending import written
 
-# Created here rather than in the store's own `migrate`, which owns three tables of its own and
-# knows nothing about sessions. Both run at startup and both are idempotent.
+# Created here rather than in the durability library's `migrate`, which owns three tables of its
+# own and knows nothing about sessions. Both run at startup and both are idempotent.
 #
 # `forked_from` and `forked_at` are the whole of the session tree. It is *not* held inside any
 # checkpoint, deliberately: a session stays a flat run of turns, and what relates two of them is a
@@ -95,6 +101,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 # nobody having looked: left alone, a console upgraded onto this would light every session it has as
 # new at once, which tells the reader nothing. The cost is one moment's honesty - an answer nobody had
 # looked at before the upgrade is marked as looked at by it - paid once.
+#
+# `title_revision` needs no such filling, because nothing reads it as a quantity: it is summed into
+# the list's token, and the token only has to *change* when a title does. Zero on every existing row
+# is as good a starting point as any.
 ADDED = (
     ("forked_from", ("ALTER TABLE sessions ADD COLUMN forked_from TEXT",)),
     ("forked_at", ("ALTER TABLE sessions ADD COLUMN forked_at INTEGER",)),
@@ -116,7 +126,8 @@ ADDED = (
 # another on a machine more than one person can reach.
 ID_BYTES = 16
 
-# The maximum length of a session title, applied to both inferred and chosen names.
+# How long a title may be, whether cut from the opening line or chosen. Cut here rather than at
+# render time so the row holds the name and the page holds no rule about how to make one.
 TITLE_LENGTH = 80
 
 # What the field naming a session is called on forms that name one. Here rather than beside
@@ -185,7 +196,10 @@ class Session:
     """
     The session and turn this one branched from, or nothing at all for one that began on its own.
 
-    Written once when the fork is made: its origin cannot change, even when its title does.
+    Written once, when the fork is made, and never again. It is not a copy of anything that
+    changes: which session a fork came from is settled the moment it exists, so this is a fact
+    about the pair and not the denormalization it resembles. The title beside it is the one that
+    moves; see `rename`.
     """
 
     repository: str | None = None
@@ -254,15 +268,16 @@ class Session:
     When something was last said to this session, or nothing at all for one nobody has written to.
 
     Reached rather than copied, like the repository and the archive date: everything a person sends
-    is filed in the session's inbox, the store stamps every row it files, and the newest stamp among
-    the inbox rows is this. It is the store's clock and not the console's, which is why `created_at`
-    beside it is the other kind of value and the two are only compared, never subtracted.
+    is filed in the session's inbox, the database stamps every row it files, and the newest stamp
+    among the inbox rows is this. It is the database's clock and not the console's, which is why
+    `created_at` beside it is the other kind of value and the two are only compared, never
+    subtracted.
 
-    It orders sessions within their archive status in the list, because a conversation somebody is
-    in is the one they are looking for, and a creation date puts a session worked in all week under
-    everything started since.
-    A fork copies its parent's prefix at the moment of forking, so a fresh fork counts as
-    written to then, which is when somebody did act on it.
+    It orders the list within each of its two groups, the sessions still being answered and the
+    archived ones below them, because a conversation somebody is in is the one they are looking for,
+    and a creation date puts a session worked in all week under everything started since. A fork
+    copies its parent's prefix at the moment of forking, so a fresh fork counts as written to then,
+    which is when somebody did act on it.
     """
 
     unseen: bool = False
@@ -400,11 +415,11 @@ COLUMNS = "id, created_at, title, forked_from, forked_at, forked_aside"
 # still being answered.
 #
 # The two subqueries are the third and fourth reach, and subqueries rather than joins because each
-# wants the newest of many rows rather than one. The store stamps every row it files, and the newest
-# stamp on a session's inbox is when somebody last said something to it; the highest `seq` among the
-# rows that are *not* its inbox is the newest thing it recorded that nobody said, which against
-# `seen_seq` is whether there is anything new to look at. `GLOB` rather than `LIKE` because the prefix
-# is matched case-sensitively and the unique index on the pair is what the lookup walks.
+# wants the newest of many rows rather than one. The database stamps every row it files, and the
+# newest stamp on a session's inbox is when somebody last said something to it; the highest `seq`
+# among the rows that are *not* its inbox is the newest thing it recorded that nobody said, which
+# against `seen_seq` is whether there is anything new to look at. `GLOB` rather than `LIKE` because
+# the prefix is matched case-sensitively and the unique index on the pair is what the lookup walks.
 SELECTION = """
 SELECT sessions.id,
        sessions.created_at,
@@ -470,6 +485,18 @@ async def enrol(database: Database, session: Session) -> None:
 
 
 async def name_if_untitled(database: Database, session: str, title: str) -> None:
+    """
+    Name a session after the first thing said in it, where nobody has named it yet.
+
+    **Guarded on the column still being empty rather than on a read beside it**, so two messages
+    posted at once cannot have the second one win, and a name somebody chose before their first
+    message is never replaced by one cut from it: the statement is the check. A session created
+    without a name is written `''` rather than `NULL`, which is what lets the guard be one equality.
+
+    The revision moves here as well as in `rename`, though the message landing moves the list's token
+    by itself: one rule for every write to the column is cheaper to keep true than an argument about
+    which writes happen to be covered already.
+    """
     await database.run(
         lambda connection: connection.execute(
             "UPDATE sessions SET title = ?, title_revision = title_revision + 1 WHERE id = ? AND title = ''",
@@ -479,6 +506,17 @@ async def name_if_untitled(database: Database, session: str, title: str) -> None
 
 
 async def rename(database: Database, session: str, title: str) -> None:
+    """
+    Give a session the name somebody chose, over whatever it had.
+
+    The index and nothing else: the title was never in the checkpoint, so a rename changes what the
+    list and the tab say and not a word of what the model heard. A fork took its parent's title as it
+    stood when it was made, and renaming either afterwards leaves the other alone, because each row
+    is that session's only record of what it is called.
+
+    A title equal to the one already held writes nothing, so pressing the mark on an unchanged name
+    does not move the revision and redraw every open list for no change.
+    """
     await database.run(
         lambda connection: connection.execute(
             "UPDATE sessions SET title = ?, title_revision = title_revision + 1 WHERE id = ? AND title != ?",
@@ -489,7 +527,11 @@ async def rename(database: Database, session: str, title: str) -> None:
 
 async def read_sessions(database: Database) -> tuple[Session, ...]:
     """
-    Every active session, then every archived one, newest message first within each group.
+    Every active session, then every archived one, each group most recently written to first.
+
+    Archived below active because nothing more can be said in an archived session, so however
+    recently it was written to it is not the conversation somebody is in. This is the one place the
+    split is made: `arrange` draws the tree over this order and keeps it rather than sorting again.
 
     Ordered here rather than in the statement because what orders a row is `Session.latest`, which
     is one moment or the other, and saying which in SQL as well would be the same rule written twice.
@@ -534,13 +576,20 @@ async def saw(database: Database, session: str) -> None:
     acknowledges what it was shown. With the script absent, serving the page is the one mark there is.
 
     A statement rather than a read and a write, so two pages looking at once cannot move the mark
-    backwards: each sets it to where the store stands, and the store only goes forwards.
+    backwards: each sets it to where the database stands, and the database only goes forwards.
     """
     await database.run(lambda connection: connection.execute(SAW, {"session": session}))
 
 
-# The title revision covers the one index value that can change without a checkpoint
-# write. Summing it makes a rename visible to every page's session-list stream.
+# Whether anything about the list has changed, in four numbers nothing reads as a position: the
+# highest row the database has filed for anybody, how many sessions there are, how far every look
+# has got in total, and how many times any title has been written. Sums rather than highest marks,
+# because a look at any one session moves the sum and only a look at the furthest-on session would
+# move the maximum. A rename is counted for the reason a look is: both change what a row draws while
+# filing nothing in the database, so the first number never sees either. `max(seq)` is the table's
+# primary key, so the first is an index endpoint and not a scan. The index's half of the list's
+# token; `Service.listing_token` reads it beside the durability store's half, which is what the
+# worker is doing, since the row draws that too.
 LISTING = """
 SELECT (SELECT max(seq) FROM workflow_checkpoint),
        count(*),

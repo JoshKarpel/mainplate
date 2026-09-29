@@ -7,6 +7,6 @@ src/mainplate/assets/*-LICENSE.txt -text
 src/mainplate/assets/*-OFL.txt -text
 src/mainplate/assets/*.woff2 -text
 # And the compressed copies `just vendor` writes beside them, which are binary and decode to those.
-src/mainplate/assets/*.br -text
-src/mainplate/assets/*.zst -text
-src/mainplate/assets/*.gz -text
+src/mainplate/assets/*.br binary
+src/mainplate/assets/*.zst binary
+src/mainplate/assets/*.gz binary

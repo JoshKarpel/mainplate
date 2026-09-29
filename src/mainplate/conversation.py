@@ -14,7 +14,7 @@
 # writes them and the functions that read them cannot drift apart:
 #
 #     inbox:{n}            a message or a command, filed by the store in the order it arrived and
-#                          appended from outside a pass, by `Service.say`, `send` and `run`
+#                          appended from outside a pass, by `Service.say`, `send`, `run` and `push`
 #     result:{entry}       what the command delivered under that entry exited with, said and took,
 #                          written by `Commands` when it finishes
 #     choice               the endpoint, model, repository, isolation, thinking level and output
@@ -23,6 +23,8 @@
 #     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
 #     turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `Stepping.request`
+#     turn:{n}:wrote:{i}   what the tool batch that response asked for changed, written a request
+#                          later, once there is a tree on both sides of the batch
 #     turn:{n}:tool:{id}   what one tool call returned, or why it failed, and how long it took,
 #                          named by the call's own id
 #     turn:{n}:deferred:{i} the i-th time this turn was told to come back later, and when
@@ -460,7 +462,7 @@ class Disposition(Enum):
     to it - and because a control of its own would spend a slot in the row above the box, which is
     the row a phone has least of.
 
-    **Typed by the person and confined like the agent.** The checkout's git configuration is the
+    **Typed by the person and confined like the agent.** The worktree's git configuration is the
     session's to write, so a command run here with the person's authority would run whatever the
     model last put in a hook. It gets the session's sandbox instead, which is where `git commit`
     already works; what it cannot do is push, which is `PUSH`.
@@ -470,14 +472,14 @@ class Disposition(Enum):
     ONLINE = "online"
     """`Service.run` with the network on, for a session whose commands otherwise have it off.
 
-    The same sandbox and the same checkout as `RUN`, with the one axis flipped for one command: a
+    The same sandbox and the same worktree as `RUN`, with the one axis flipped for one command: a
     session kept offline still needs `npm install` or `git fetch` from a mirror now and then, and
     the person typing is the one who decides that. Offered only where the network is off, since
     with it on `RUN` already has it.
 
     **What it gives up is the push gateway, for that command.** On a forge where being on the
     network is the credential, a command run online can push to the repository, force included,
-    without going through `PUSH`, and runs whatever the checkout's configuration names while it
+    without going through `PUSH`, and runs whatever the worktree's configuration names while it
     can. That is the person's call to make, per command, and the record says it ran online so the
     page keeps saying so."""
 
@@ -493,9 +495,9 @@ class Disposition(Enum):
     PUSH = "push"
     """`Service.push`, which pushes the branch this session recorded to its repository.
 
-    The recorded branch and not whatever the checkout's `HEAD` is on, so what moves is the branch
+    The recorded branch and not whatever the worktree's `HEAD` is on, so what moves is the branch
     the page names. The one thing `RUN` cannot do in a session with the network off, because a push
-    needs the person's credential and nothing that holds one may read the checkout's configuration.
+    needs the person's credential and nothing that holds one may read the worktree's configuration.
     The branch crosses into the store and the store pushes it, never forced, and what came of it is
     recorded where a command's would be.
 
@@ -804,9 +806,10 @@ def wrote_key(turn: int, at: int) -> StepKey:
 
     Numbered by the request whose *response* produced the batch, in step with `tree_key` one request
     along: the diff under `wrote:{at}` is `tree:{at}` against `tree:{at+1}`, so it exists only once
-    the request after the batch has been snapshotted. Built here and by `Stepping.key("wrote")` there,
-    with the same drift hazard `tree_key` carries and the same answer, an assertion in
-    `test_conversation.py`.
+    the request after the batch has been snapshotted. Built here and by `Stepping.identified("wrote",
+    ...)` there, with the same drift hazard `tree_key` carries; the answer is
+    `TestWhatOnePassDoes`, which runs a batch that writes a file and reads its diff back through
+    this key.
     """
     return f"{turn_prefix(turn)}:wrote:{at}"
 
@@ -1219,15 +1222,24 @@ def instructing(*blocks: str | None) -> str:
     """
     The instructions one request carries, composed from every scope that had something to say.
 
-    In order of increasing specificity, so the last word belongs to whatever is most local: the
-    operator's standing instructions, then whatever each running plugin contributed at `setup`,
-    then the note saying what this session's tools reach. Empty blocks are dropped rather than
-    joined, so a console with no plugins produces exactly what this console produced before there
-    were any.
+    In order of increasing specificity, so the last word belongs to whatever is most local. Four
+    kinds of block, as `conversing` hands them over:
 
-    Here rather than in a module of its own, because what used to be in that module is a plugin now:
-    reading a repository's `AGENTS.md` and handing over the guidance a directory carries are the
-    bundled `guidance` plugin's, and what was left beside them was this one join.
+    - `drawing_note`, what this console's page draws from a reply, the same in every session;
+    - the operator's standing instructions, `Settings.instructions`, the same in every session on
+      this console;
+    - whatever each running plugin contributed at `setup`, which is where the operator's guidance
+      files and a repository's `AGENTS.md` arrive, through the bundled `guidance` plugin;
+    - the note saying what this session's tools reach, from `reaching`.
+
+    The order is also the cache's: the blocks that are the same across sessions come first, so the
+    prefix two sessions share runs as far as it can before anything particular to one of them.
+    Empty blocks are dropped rather than joined, so a console with no plugins composes the
+    instructions with nothing where a plugin's block would be.
+
+    Here rather than in a module of its own, because reading a repository's `AGENTS.md` and handing
+    over the guidance a directory carries are the bundled `guidance` plugin's, and what is left of
+    telling a session anything that is the console's own is this one join.
     """
     return "\n\n".join(block.strip() for block in blocks if block and block.strip())
 
@@ -1521,6 +1533,8 @@ class Command:
     result: Result | None = None
     online: bool = False
     """Whether it ran with the network on in a session whose commands otherwise have it off."""
+    pushed: str | None = None
+    """The branch this console pushed, where this is a push rather than a line somebody typed."""
 
 
 type Block = Prose | Steering | Guidance | Command | Reasoning | ToolUse
@@ -1610,8 +1624,9 @@ class Panel:
 
     Carried on a tool panel rather than on a rule, because it is about what the *batch* did and a batch
     is what one tool panel draws. `None` is every other kind of panel, a batch the turn ended before
-    its diff was taken, and the ordinary case of an empty one: the page draws a figure only where the
-    diff has something in it, so nothing distinguishes "recorded nothing" from "recorded no change".
+    its diff was taken, and the ordinary case of an empty one, which `with_diffs` turns into `None`
+    rather than carrying as `""`: nothing on the page distinguishes "recorded nothing" from
+    "recorded no change", so a panel has one way of saying either and never holds an empty string.
     """
 
     @property
@@ -2156,6 +2171,21 @@ def recorded_command(said: str, *, online: bool = False) -> dict[str, object]:
     return records.Command(said=said, online=online).recorded()
 
 
+# What a push records as its text: the word the composer answers to. Not what the page draws, which
+# is the branch; it is there for a build that predates `pushed` and reads only this.
+PUSHED: Final = "push"
+
+
+def recorded_push(branch: str) -> dict[str, object]:
+    """
+    A push of `branch` by this console, as the value the store's codec will take.
+
+    A command record naming the branch it pushed, which is what sets it apart from a person running
+    `push` in the sandbox: see `records.Command.pushed`.
+    """
+    return records.Command(said=PUSHED, pushed=branch).recorded()
+
+
 def commit_command(message: str) -> str:
     """
     The command `/commit` runs: `git commit` with `message`, quoted, as its message.
@@ -2190,6 +2220,16 @@ def parse_result(recorded: object) -> Result:
     return Result(status=held.status, output=held.output, took=held.took)
 
 
+def command_from(entry: str, was: records.Command, recorded: Mapping[str, object]) -> Command:
+    """
+    One recorded command as the page draws it, with its result where it has one.
+
+    Written once for the two places a command is drawn from, inside a turn and queued past the last
+    one, so a field added to the record reaches both or neither.
+    """
+    return Command(entry=entry, text=was.said, result=result_in(recorded, entry), online=was.online, pushed=was.pushed)
+
+
 def ran_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) -> tuple[tuple[int, Command], ...]:
     """
     Every command run while this turn was in hand, each with how many of its requests had answered.
@@ -2213,7 +2253,7 @@ def ran_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) ->
         if key.startswith(answering):
             made += 1
         elif (was := said.get(key)) is not None:
-            ran.append((made, Command(entry=key, text=was.said, result=result_in(recorded, key), online=was.online)))
+            ran.append((made, command_from(key, was, recorded)))
     return tuple(ran)
 
 
@@ -2593,8 +2633,9 @@ def wrote_in(recorded: Mapping[str, object], turn: int) -> dict[int, str]:
 
     A batch whose diff has not been taken yet is simply absent, which is the running turn's own state:
     the record lands when the request *after* the batch snapshots, so the panel watching the batch
-    runs draws no figure until then rather than a placeholder nothing fills in. Absent and empty read
-    the same to the page, which draws only where a diff has something in it.
+    runs draws no figure until then rather than a placeholder nothing fills in. An empty diff is
+    read back as the empty string it was recorded as; `with_diffs` is where absent and empty become
+    the one `None` a panel carries.
     """
     wanted = f"{turn_prefix(turn)}:wrote:"
     found: dict[int, str] = {}
@@ -2769,11 +2810,14 @@ def with_diffs(panels: Iterable[Panel], wrote: Mapping[int, str]) -> tuple[Panel
 
     A tool panel is what draws a batch, so the diff computed for that batch's request rides on it
     rather than on a rule; `None` where none was recorded, which is a batch the turn ended before
-    diffing, and an empty one, which is a batch that changed nothing. The page draws a figure only
-    where the returned reading is not `None`, so those two read alike there.
+    diffing, and where an empty one was, which is a batch that changed nothing. Both are `None`
+    rather than one being `""`, so a panel has one way of saying there is no change to draw and a
+    reader cannot come to test for the other.
     """
     return tuple(
-        replace(panel, diff=wrote.get(panel.asked)) if panel.kind == "tool" and panel.asked is not None else panel
+        replace(panel, diff=wrote.get(panel.asked) or None)
+        if panel.kind == "tool" and panel.asked is not None
+        else panel
         for panel in panels
     )
 
@@ -2847,12 +2891,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     for waiting in queued_in(recorded, inbox, opened, listening=running is not None):
         if isinstance(waiting.what, records.Command):
             at = max(turn - 1, 0)
-            ran = Command(
-                entry=waiting.key,
-                text=waiting.what.said,
-                result=result_in(recorded, waiting.key),
-                online=waiting.what.online,
-            )
+            ran = command_from(waiting.key, waiting.what, recorded)
             panels.append(
                 Panel(turn=at, at=sum(1 for panel in panels if panel.turn == at), kind="command", blocks=(ran,))
             )
@@ -3353,8 +3392,10 @@ def conversing(
         if archived_in(run.recorded) is not None:
             return Archived()
         # One value for the session's files, used twice: the agent's tools are bound to it, and
-        # every snapshot inside a turn is taken of it. A session with no repository has none, and
-        # gets an agent with no file tools rather than tools that refuse every call.
+        # every snapshot inside a turn is taken of it. A session with no repository has none, so it
+        # has nothing snapshotted and no `list` or `grep`; what its file tools and `bash` reach is
+        # its scratch, or the machine on `EVERYTHING`, where there is a sandbox, and nothing without
+        # one. `reaching` decides which.
         worktree = working_in(workspaces, run.workflow, chosen)
         # Every session's, worktree or none: a session with no repository still runs things, and
         # the scratch is where what they made is kept. Whether the isolation reaches it is
@@ -3501,12 +3542,13 @@ def conversing(
             # What every plugin contributed is already settled: `setup` ran above this loop, on this
             # pass or an earlier one, and its answer is recorded - so this reads a value.
             said_under = (
+                # What the page draws from a reply, which is the console's to say and the same for
+                # every session: the least specific block there is, so it is first, and constant, so
+                # it lengthens the prefix every session shares.
+                drawing_note(),
                 instructions,
                 *live.instructions(),
                 reaching(chosen.isolation, worktree, scratch, bwrap).note,
-                # What the page draws from a reply, which is the console's to say and the same for
-                # every session, so it is last and constant: nothing under it moves between sessions.
-                drawing_note(),
             )
 
             async def composing(blocks: Sequence[str] = said_under) -> object:

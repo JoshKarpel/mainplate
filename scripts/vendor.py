@@ -14,12 +14,8 @@
 # `tests/test_vendored.py` holds the copies on disk against the same table, with no network, which
 # is what makes an edit to a vendored file by hand a failing test rather than a quiet drift.
 #
-# Each file the server would compress is also written compressed, once per coding, under the
-# suffix the inventory reads a sidecar from, so a process start reads these rather than encoding
-# them. That is where the levels come from: brotli 11 takes six seconds over the diagram library
-# alone, which no start could pay, and ships an eighth less than the default a start would use.
-# They are derived bytes, so they carry no digest of their own; the suite decodes each one and
-# compares it with the file the digest does cover.
+# Each file the server would compress is also written compressed, once per coding, beside it and
+# after it; why, and at what levels, is `docs/design/assets.md`.
 
 from __future__ import annotations
 
@@ -81,20 +77,36 @@ class Vendored:
 
 
 def manifest(path: Path = MANIFEST) -> tuple[Vendored, ...]:
+    """
+    Every row of the table at `path`, in the order it is written.
+
+    A field that is not a string is refused rather than coerced: a `url` written as a table or a
+    `member` as a list is a row nobody meant, and `str()` of it would be fetched, or looked for in
+    an archive, as though somebody had.
+    """
     with path.open("rb") as file:
         table = tomllib.load(file)
     return tuple(
         Vendored(
             name=name,
-            url=str(entry["url"]),
-            sha256=str(entry["sha256"]),
-            member=None if "member" not in entry else str(entry["member"]),
+            url=text(name, entry, "url"),
+            sha256=text(name, entry, "sha256"),
+            member=None if "member" not in entry else text(name, entry, "member"),
         )
         for name, entry in table.items()
     )
 
 
+def text(name: str, entry: Mapping[str, object], field: str) -> str:
+    """The string `field` of the row `name`, and a refusal naming both where it is anything else."""
+    value = entry[field]
+    if not isinstance(value, str):
+        raise ValueError(f"{name}: {field} is {value!r}, and only a string is read there")
+    return value
+
+
 def digest(data: bytes) -> str:
+    """The SHA-256 of `data` in hex, which is the form `vendored.toml` records it in."""
     return hashlib.sha256(data).hexdigest()
 
 
@@ -107,6 +119,7 @@ def verified(entry: Vendored, data: bytes) -> bytes:
 
 
 def fetched(url: str) -> bytes:
+    """The bytes published at `url`, unchecked: `vendor` holds them to a digest before any lands."""
     with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as response:
         return bytes(response.read())
 
@@ -120,9 +133,15 @@ def extracted(entry: Vendored, published: bytes) -> bytes:
 
 
 def encodable(name: str) -> bool:
-    """Whether the server compresses a file of this name, which a face, already compressed, is not."""
-    content_type, _ = mimetypes.guess_type(name)
-    return content_type is not None and is_compressible(content_type.encode())
+    """
+    Whether the server compresses a file of this name, which a face, already compressed, is not.
+
+    One fact in two places: `without_asgi`'s inventory answers the same question for itself, from
+    the same `is_compressible`, and keeps the answer private. `tests/test_vendored.py` asks the
+    inventory about every row and fails where the two disagree.
+    """
+    content_type, stored = mimetypes.guess_type(name)
+    return content_type is not None and stored is None and is_compressible(content_type.encode())
 
 
 def sidecars(name: str, data: bytes) -> dict[str, bytes]:
@@ -133,7 +152,27 @@ def sidecars(name: str, data: bytes) -> dict[str, bytes]:
 
 
 def compressed(data: bytes, compressor: Compressor) -> bytes:
+    """`data` through one fresh `compressor`, flushed, as one complete body in its coding."""
     return compressor.compress(data) + compressor.flush()
+
+
+def writes(checked: tuple[tuple[Vendored, bytes], ...]) -> tuple[tuple[str, bytes], ...]:
+    """
+    Every file to land in `assets/`, by its name there, in the order it is to be written.
+
+    Each sidecar comes after its file, so it is the newer of the two: the inventory takes a sidecar
+    older than its file to describe bytes the file no longer has, and compresses at startup
+    instead. The order is a value here rather than only a loop, because two timestamps a
+    filesystem rounds to one tick cannot show which was written first.
+    """
+    return tuple(
+        written
+        for entry, data in checked
+        for written in (
+            (entry.name, data),
+            *((f"{entry.name}{suffix}", body) for suffix, body in sidecars(entry.name, data).items()),
+        )
+    )
 
 
 def vendor(entries: tuple[Vendored, ...], into: Path, fetch: Callable[[str], bytes] = fetched) -> None:
@@ -148,13 +187,9 @@ def vendor(entries: tuple[Vendored, ...], into: Path, fetch: Callable[[str], byt
         if entry.url not in published:
             published[entry.url] = fetch(entry.url)
     checked = tuple((entry, verified(entry, extracted(entry, published[entry.url]))) for entry in entries)
-    encoded = tuple((entry, data, sidecars(entry.name, data)) for entry, data in checked)
-    for entry, data, beside in encoded:
-        (into / entry.name).write_bytes(data)
-        # After the file, so each is the newer of the two: the inventory takes a sidecar older than
-        # its file to describe bytes the file no longer has, and compresses at startup instead.
-        for suffix, body in beside.items():
-            (into / f"{entry.name}{suffix}").write_bytes(body)
+    for name, body in writes(checked):
+        (into / name).write_bytes(body)
+    for entry, _ in checked:
         where = entry.url if entry.member is None else f"{entry.member} in {entry.url}"
         print(f"{entry.name}  {entry.sha256}  {where}")
 
@@ -169,6 +204,7 @@ def unverified(entries: tuple[Vendored, ...], within: Path) -> tuple[str, ...]:
 
 
 def main() -> int:
+    """`just vendor`: every row of `vendored.toml` into `assets/`, or a refusal and nothing written."""
     try:
         vendor(manifest(), ASSETS)
     except Mismatch as refused:

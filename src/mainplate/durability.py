@@ -567,15 +567,18 @@ class Stepping:
         key = self.key("tree")
         return await self.step(key, snapshotting(self.worktree, key), parse_tree)
 
-    async def wrote(self, before: str | None, after: str | None) -> None:
+    async def wrote(self, at: int, before: str | None, after: str | None) -> None:
         """
         Record the net change the tool batch that just ran made, from the tree it started from to the
         one it ended at.
 
-        Called from `request` after the snapshot of the *current* request, because that is the moment
-        both halves are in hand: the current request's tree was just captured and the previous one has
-        been in the store since its own request. It rides under `wrote:{at-1}`, the request whose
-        response produced the batch, so a reader of that request finds the diff its tools wrote.
+        Called from `request` after the snapshot of the *next* request, because that is the moment
+        both halves are in hand: that request's tree was just captured and the batch's own request's
+        has been in the store since it was made. It rides under `wrote:{at}`, where `at` is the
+        request whose response produced the batch, so a reader of that request finds the diff its
+        tools wrote. Named by that position through `identified` rather than counted by a `wrote`
+        counter of its own, for the reason `at` gives: a second counter beside `model`'s would be
+        one more thing to keep in step with it, and would say nothing that position does not.
 
         An unchanged pair records an empty diff rather than running git, and a session with no
         worktree records one too: either is "the batch's net change is nothing to show", which the
@@ -583,7 +586,7 @@ class Stepping:
         so it happens inside the step and a replay is handed the recorded text instead of running it
         again.
         """
-        key = self.key("wrote")
+        key = self.identified("wrote", str(at))
 
         async def diffing() -> object:
             if self.worktree is None or before is None or after is None or before == after:
@@ -713,8 +716,8 @@ class Stepping:
         self.allow(key)
         after = await self.snapshot()
         if at > 0:
-            before = parse_tree(self.run.recorded.get(f"{self.prefix}:tree:{at - 1}"))
-            await self.wrote(before, after)
+            before = parse_tree(self.run.recorded.get(self.identified("tree", str(at - 1))))
+            await self.wrote(at - 1, before, after)
 
         async def ask() -> object:
             started = monotonic()

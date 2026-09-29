@@ -143,8 +143,8 @@ async def answered(service: Service, session: str, *said: object) -> int:
 async def said_to_at(service: Service, session: str, when: datetime) -> None:
     """
     Stamp everything in a session's inbox as said at `when`, which is the one moment the suite's
-    clock does not set: the store stamps an inbox row as it files it, off its own clock, and the list
-    is ordered by that stamp. A test about the order says the stamps rather than racing them.
+    clock does not set: the database stamps an inbox row as it files it, off its own clock, and the
+    list is ordered by that stamp. A test about the order says the stamps rather than racing them.
     """
     await service.database.run(
         lambda connection: connection.execute(
@@ -989,19 +989,19 @@ class TestWhatIsNewInTheList:
         assert answered.text.index("the older one") < answered.text.index("the newer one")
         assert [each.last_said_at for each in await service.listed()] == [WHEN + timedelta(hours=1), WHEN]
 
-    async def test_archived_sessions_follow_active_sessions_regardless_of_message_time(
+    async def test_an_archived_session_follows_an_active_one_written_to_less_recently(
         self, app: ASGIApp, service: Service
     ) -> None:
+        """
+        The index makes the split and `arrange` keeps it, so the index is where it is asserted; how
+        the tree draws over that order is `TestArrangingTheTree`'s.
+        """
         archived = await a_session(app, service, "archived one")
         active = await a_session(app, service, "active one")
         await said_to_at(service, archived, WHEN + timedelta(days=3))
         await said_to_at(service, active, WHEN + timedelta(days=1))
         await service.archive(archived)
         assert [session.id for session in await service.listed()] == [active, archived]
-        async with calling(app) as caller:
-            answered = await caller.get("/")
-        rows = answered.text
-        assert rows.index(f'id="listed-{active}"') < rows.index(f'id="listed-{archived}"')
 
     async def test_a_session_nobody_has_written_to_is_dated_from_its_making(
         self, app: ASGIApp, service: Service
@@ -1125,23 +1125,51 @@ class TestWhatIsNewInTheList:
         assert found is not None
         assert len(found.session.title) <= TITLE_LENGTH
 
-    async def test_a_session_can_be_renamed_without_changing_its_conversation(
+    async def test_a_rename_is_the_name_the_list_shows_settled_as_every_name_is(
         self, app: ASGIApp, service: Service
     ) -> None:
         session = await a_session(app, service, "the first thing said")
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "  Another   name "})
+        assert (await service.listed())[0].title == "Another name"
+
+    async def test_a_rename_leaves_the_conversation_as_it_was(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service, "the first thing said")
         before = await service.checkpointer.load(session)
         async with calling(app) as caller:
-            page = await caller.get(f"/sessions/{session}")
-            assert f'action="/sessions/{session}/rename"' in page.text
-            token = await service.listing_token()
-            changed = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "  Another   name "})
-            assert changed.status == 303
-            assert changed.location == f"/sessions/{session}"
-            page = await caller.get(f"/sessions/{session}")
-        assert "<title>Another name</title>" in page.text
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Another name"})
         assert await service.checkpointer.load(session) == before
+
+    async def test_a_rename_moves_the_lists_token_so_every_open_list_redraws(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, "the first thing said")
+        token = await service.listing_token()
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Another name"})
         assert await service.listing_token() != token
-        assert (await service.listed())[0].title == "Another name"
+
+    async def test_a_rename_to_the_name_it_already_has_leaves_the_token_alone(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, title="Keep this name")
+        token = await service.listing_token()
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Keep this name"})
+        assert await service.listing_token() == token
+
+    async def test_a_rename_answers_with_the_row_holding_the_settled_name(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service, "the first thing said")
+        async with calling(app) as caller:
+            answered = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "  Another   name "})
+        assert answered.status == 200
+        assert 'value="Another name"' in answered.text
+
+    async def test_a_rename_answers_with_the_tabs_new_title(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service, "the first thing said")
+        async with calling(app) as caller:
+            answered = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Another name"})
+        assert "<title>Another name</title>" in answered.text
 
     @pytest.mark.parametrize("given", ["", "  "])
     async def test_a_blank_rename_is_refused(self, app: ASGIApp, service: Service, given: str) -> None:

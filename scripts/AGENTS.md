@@ -96,10 +96,10 @@ the *k-1* requests already recorded. What it exists to answer is
 was a number.
 
 **It is the odd one out here, because it is not downstream of a checkpoint: it writes one.** So it
-drives a real `Service` over a real store and a real git worktree, with only the provider standing
-in - the per-request snapshot leaves the process, behind the real `bwrap`, and a stand-in for either
-would leave the one thing a pass does outside Python out of the measurement. So it needs `bwrap` to
-run at all.
+drives a real `Service` over a real database and a real git worktree, with only the provider
+standing in - the per-request snapshot leaves the process, behind the real `bwrap`, and a stand-in
+for either would leave the one thing a pass does outside Python out of the measurement. So it needs
+`bwrap` to run at all.
 
 **The stand-in states its own usage, which is the control rather than a detail.** `FunctionModel`
 estimates usage for a response that carries none by splitting every message in the history with a
@@ -125,10 +125,9 @@ is the one rule here, applied to every script and face alike; `tests/test_vendor
 copies on disk against the same table with no network, and refuses a `.js` or `.woff2` no row names.
 
 It also writes each file the server would compress in every coding the server offers, beside it and
-after it, at the top of each coding's range: that is compression paid once per bump rather than at
-every start, and the order matters because the inventory ignores a sidecar older than its file.
-`SIDECARS` is the one table of suffixes and levels, and `docs/hooks.py` reads it to leave them off
-the documentation site.
+after it, since the inventory ignores a sidecar older than its file; `writes` is that order as a
+value. `SIDECARS` is the one table of suffixes and levels, and `docs/hooks.py` reads it to leave
+them off the documentation site.
 
 Bumping one is editing the version in its URL, running the recipe, and recording the digest it
 refuses on once the file has been looked at, with the cooldown the resolver applies to a package: a

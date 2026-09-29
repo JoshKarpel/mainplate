@@ -17,6 +17,7 @@ from mainplate.conversation import ToolUse
 from mainplate.pages import LONGEST_OPEN_DIFF
 from mainplate.pages import batch_element
 from mainplate.pages import tool_block
+from mainplate.tools.files.tools import diffed
 
 PYTHON_READ = "a.py, 3 lines\n\nqwrt│def f():\n----│\nmkpv│    return 1"
 
@@ -27,6 +28,16 @@ DIFF = "--- a.py\n+++ a.py\n@@ -1,3 +1,3 @@\n def f():\n-    return 1\n+    retu
 
 def drawn(tool: str, arguments: dict[str, object], returned: Returned | None) -> str:
     return render(call_body(ToolUse(tool=tool, arguments=json.dumps(arguments), returned=returned)))
+
+
+def ran_a_pipe() -> str:
+    """A `bash` call whose command has a token in it that a shell grammar colours."""
+    return drawn("bash", {"command": "ls | wc -l"}, Returned(outcome="success", content="$ ls | wc -l\n\n3\n\nexit 0"))
+
+
+def read_a_python_file() -> str:
+    """A `read` of a file the path names a grammar for, with a blank line and the tool's own line in it."""
+    return drawn("read", {"path": "a.py"}, Returned("success", PYTHON_READ))
 
 
 class TestReadingLinesBehindAGutter:
@@ -77,9 +88,33 @@ class TestReadingADiff:
     def test_the_file_headers_are_passed_over(self) -> None:
         assert all(change.text != "a.py" for change in changes_of(DIFF))
 
+    def test_a_removed_line_that_reads_like_a_file_header_is_a_line(self) -> None:
+        assert list(changes_of(diffed("q.sql", ["select 1;", "-- x", "select 2;"], ["select 1;", "select 2;"]))) == [
+            Change("@", None, None, "@@ -1,3 +1,2 @@"),
+            Change(" ", 1, 1, "select 1;"),
+            Change("-", 2, None, "-- x"),
+            Change(" ", 3, 2, "select 2;"),
+        ]
+
+    def test_an_added_line_that_reads_like_a_file_header_is_a_line(self) -> None:
+        assert list(changes_of(diffed("q.hs", ["a", "b"], ["a", "++ y", "b"]))) == [
+            Change("@", None, None, "@@ -1,2 +1,3 @@"),
+            Change(" ", 1, 1, "a"),
+            Change("+", None, 2, "++ y"),
+            Change(" ", 2, 3, "b"),
+        ]
+
+    def test_a_line_saying_the_file_has_no_final_newline_is_not_a_line(self) -> None:
+        found = list(changes_of("@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b"))
+        assert [change.mark for change in found] == ["@", "-", "+"]
+
     def test_a_line_that_is_not_a_diffs_is_refused(self) -> None:
         with pytest.raises(ValueError, match="not a line of a unified diff"):
             list(changes_of("@@ -1 +1 @@\nnot marked"))
+
+    def test_a_line_past_what_its_hunk_counts_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="not a line of a unified diff"):
+            list(changes_of("@@ -1 +1 @@\n-a\n+b\n+c"))
 
 
 class TestEveryCallStartsShut:
@@ -104,15 +139,19 @@ class TestWhatAnOpenCallShows:
     argument rows and verbatim text where it does not.
     """
 
-    def test_a_shell_command_is_coloured_as_one_and_not_wrapped_in_json(self) -> None:
-        body = drawn(
-            "bash", {"command": "ls | wc -l"}, Returned(outcome="success", content="$ ls | wc -l\n\n3\n\nexit 0")
-        )
-        assert '<div class="argument"><pre class="lines">' in body, "the command stands on its own, unlabelled"
+    def test_a_shell_command_stands_on_its_own_without_its_name(self) -> None:
+        body = ran_a_pipe()
+        assert '<div class="argument"><pre class="lines">' in body
         assert "argument__name" not in body
-        assert '<span class="p">|</span>' in body, "the pipe is a token"
-        assert '{"command"' not in body
-        assert "$ ls | wc -l" in body, "and what came back is as the model saw it"
+
+    def test_a_shell_command_is_coloured_as_one(self) -> None:
+        assert '<span class="p">|</span>' in ran_a_pipe()
+
+    def test_a_shell_command_is_not_wrapped_in_json(self) -> None:
+        assert '{"command"' not in ran_a_pipe()
+
+    def test_what_a_shell_command_gave_back_is_as_the_model_saw_it(self) -> None:
+        assert "$ ls | wc -l" in ran_a_pipe()
 
     def test_every_other_argument_of_a_command_is_still_shown(self) -> None:
         body = drawn("bash", {"command": "sleep 200", "seconds": 300}, None)
@@ -158,13 +197,18 @@ class TestWhatAnOpenCallShows:
         assert "called with" in body
         assert "<dt>diff</dt>" not in body
 
-    def test_a_read_is_coloured_by_the_grammar_its_path_names_with_its_anchors_left_out(self) -> None:
-        body = drawn("read", {"path": "a.py"}, Returned("success", PYTHON_READ))
-        assert '<span class="line"><span class="k">def</span>' in body
-        assert '<span class="line">\n</span>' in body, "a blank line of the file is a blank line"
-        assert '<span class="line" data-said>a.py, 3 lines\n</span>' in body, "the tool's own line is marked"
-        assert "qwrt" not in body, "the anchor is nowhere on the page"
-        assert "│" not in body
+    def test_a_read_is_coloured_by_the_grammar_its_path_names(self) -> None:
+        assert '<span class="line"><span class="k">def</span>' in read_a_python_file()
+
+    def test_a_blank_line_a_read_returned_is_a_blank_line(self) -> None:
+        assert '<span class="line">\n</span>' in read_a_python_file()
+
+    def test_the_line_a_read_wrote_itself_is_marked_as_the_tools(self) -> None:
+        assert '<span class="line" data-said>a.py, 3 lines\n</span>' in read_a_python_file()
+
+    @pytest.mark.parametrize("drawn_in_front", ["qwrt", "│"], ids=["anchor", "bar"])
+    def test_a_read_is_drawn_without_its_anchors(self, drawn_in_front: str) -> None:
+        assert drawn_in_front not in read_a_python_file()
 
     def test_a_read_of_a_file_no_grammar_is_known_for_is_left_uncoloured(self) -> None:
         body = drawn("read", {"path": "notes"}, Returned("success", PYTHON_READ))
@@ -253,13 +297,36 @@ class TestABlocksBatch:
             ("new.txt", 2),
         ]
 
-    def test_a_header_is_drawn_per_file_and_the_marks_are_kept(self) -> None:
+    @pytest.mark.parametrize("path", ["a.py", "new.txt"])
+    def test_each_file_is_headed_by_its_path(self, path: str) -> None:
         body = render(block_diff_element(changes_by_file(GIT_DIFF)))
+        assert f'<span class="line" data-said>{path}\n</span>' in body
 
-        assert '<span class="line" data-said>a.py\n</span>' in body
-        assert '<span class="line" data-said>new.txt\n</span>' in body
-        assert 'data-mark="-">-    return 1\n</span>' in body
-        assert 'data-mark="+">+hello\n</span>' in body
+    @pytest.mark.parametrize("line", ['data-mark="-">-    return 1\n</span>', 'data-mark="+">+hello\n</span>'])
+    def test_each_line_keeps_its_mark(self, line: str) -> None:
+        assert line in render(block_diff_element(changes_by_file(GIT_DIFF)))
+
+    @pytest.mark.parametrize(
+        ("header", "path"),
+        [
+            ("--- a/my b/file.txt\t\n+++ b/my b/file.txt\t", "my b/file.txt"),
+            ('--- "a/caf\\303\\251.txt"\n+++ "b/caf\\303\\251.txt"', "café.txt"),
+            ('--- "a/q\\"t\\\\x.txt"\n+++ "b/q\\"t\\\\x.txt"', 'q"t\\x.txt'),
+            ("--- a/gone.txt\n+++ /dev/null", "gone.txt"),
+            ("--- /dev/null\n+++ b/new.txt", "new.txt"),
+        ],
+        ids=["spaced", "non-ascii", "quote-and-backslash", "removed", "added"],
+    )
+    def test_the_path_is_the_one_git_named_in_the_files_header(self, header: str, path: str) -> None:
+        """Each header is the one git prints for that case, down to the tab after a name with a space."""
+        [(found, _)] = changes_by_file(f"diff --git a/x b/x\nindex 111..222 100644\n{header}\n@@ -1 +1 @@\n-a\n+b\n")
+        assert found == path
+
+    @pytest.mark.parametrize("line", ["-- x", "++ y"])
+    def test_a_line_that_reads_like_a_file_header_is_kept(self, line: str) -> None:
+        diff = f"diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n-{line}\n+{line}\n kept\n"
+        [(_, changes)] = changes_by_file(diff)
+        assert [(change.mark, change.text) for change in changes[1:]] == [("-", line), ("+", line), (" ", "kept")]
 
     def test_a_binary_change_has_no_lines_and_is_left_out(self) -> None:
         binary = "diff --git a/img.png b/img.png\nindex 111..222 100644\nBinary files a/img.png and b/img.png differ\n"

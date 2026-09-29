@@ -1,16 +1,18 @@
 # What a person runs themselves, beside the conversation rather than inside it.
 #
 # **Behind the same sandbox as the model's own `bash`**, and that is forced rather than chosen. A
-# session's checkout owns its `.git`, so its configuration is the model's to write, and several of
+# session's worktree owns its `.git`, so its configuration is the model's to write, and several of
 # its keys name a program git runs: a hook, `core.fsmonitor`, a filter. A person's `git commit` run
 # here unconfined would run whatever the model last put there, as the service user, with everything
-# that user holds. So a command here reaches the checkout, its store read-only and the scratch, under
+# that user holds. So a command here reaches the worktree, its store read-only and the scratch, under
 # the session's own network answer and the environment its setup recorded, exactly as the model's
 # would; what differs is who typed it and that no model is told.
 #
-# What that takes away is the person's credentials, so `git push` in here has nothing to push with.
-# Pushing is `Commands.push`'s instead: the branch crosses into the store as a bundle and the store
-# pushes it, as this console, reading no configuration the session wrote.
+# What that takes away is the person's credentials, so `git push` in here has nothing of theirs to
+# push with; with the network off it reaches nothing, and on exe.dev with it on it reaches the
+# repository as this console does. Pushing is `Commands.push`'s instead: the branch crosses into the
+# store as a bundle and the store pushes it, as this console, reading no configuration the session
+# wrote.
 #
 # Nothing here is ever told to a model. The record exists so the page can draw a run and a reload
 # can find it again; putting it in the history is a message somebody writes. See the key scheme in
@@ -29,7 +31,6 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import timedelta
 from pathlib import Path
-from typing import Final
 
 from without_durability.interfaces import Checkpointer
 
@@ -47,7 +48,7 @@ from mainplate.snapshots import Worktree
 logger = logging.getLogger(__name__)
 
 # How much of what a command said is kept. Enough for a test run's failures and small enough that a
-# runaway loop cannot put a megabyte a second into the store.
+# runaway loop cannot put a megabyte a second into the database.
 MOST_OUTPUT = 200_000
 
 # Read in blocks rather than lines, so a command that writes a progress bar with no newline in it
@@ -55,10 +56,6 @@ MOST_OUTPUT = 200_000
 BLOCK = 64 * 1024
 
 CUT = "[…output above this point was dropped]\n"
-
-# What a push is recorded as, where a command records what was typed: the word the composer answers
-# to, so the panel says what somebody asked for.
-PUSHED: Final = "push"
 
 # What a command that was killed before it could exit is recorded as. Outside the range a process
 # can exit with (0-255) and outside the negatives a signal produces, so it is not mistakable for
@@ -68,7 +65,7 @@ UNFINISHED = 1000
 
 def trimmed(said: bytes) -> str:
     """
-    What a command said, cut to what the store will hold, keeping the **end**.
+    What a command said, cut to what the database will hold, keeping the **end**.
 
     The end rather than the beginning, because the reason to cap at all is a command that ran away
     and what is worth reading about one of those is where it got to. The cost is real and is the
@@ -133,6 +130,7 @@ class Running:
 
     @property
     def where(self) -> Path:
+        """Where a command starts, which is the worktree's root, as it is for the model's `bash`."""
         return self.confinement.worktree.root
 
 
@@ -149,7 +147,7 @@ async def ran(said: str, running: Running, patience: timedelta, into: bytearray)
     they interleave wrongly or not at all, and nobody has ever wanted a build's errors in a second
     column.
 
-    `cwd` is the checkout even though `--chdir` is what puts the command there, so a checkout that
+    `cwd` is the worktree even though `--chdir` is what puts the command there, so a worktree that
     does not exist yet is a `FileNotFoundError` naming it rather than bwrap's own complaint.
 
     A timeout kills the group and records what the command managed to say, rather than raising: a
@@ -250,7 +248,7 @@ class Commands:
     The commands this process currently has running, which is the one place it holds work in flight.
 
     That is a genuine exception to what `Service` otherwise is, and it is stated rather than hidden.
-    Everything else the console does is a read of the store or a write to it, so two processes over
+    Everything else the console does is a read of the database or a write to it, so two processes over
     one file agree by construction. A running command is a *place*: it belongs to this process, it
     does not survive a restart, and nothing else can see it.
 
@@ -294,6 +292,12 @@ class Commands:
         self.scheduled(slot, lambda holding: pushing(worktree, url, branch, holding))
 
     def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
+        """
+        Start one run as a task this holds until it ends, which is what `start` and `push` share.
+
+        Held by slot so `aclose` can say what became of a task that never started, and dropped by the
+        task's own callback so what is held is only ever what is still running.
+        """
         task = asyncio.create_task(self.record(slot, work), name=f"command {slot.session} {slot.entry}")
         self.running[task] = slot
         task.add_done_callback(lambda done: self.running.pop(done, None))
@@ -307,7 +311,7 @@ class Commands:
         output even when the call that was filling it never returned - which is the only reason this
         catches cancellation at all, since `aclose` would otherwise record the same thing without it.
 
-        `shield`, because the write is the point and the store is still open at that moment: the
+        `shield`, because the write is the point and the database is still open at that moment: the
         tasks are cancelled inside `open_store`'s own `finally`, before the connection is closed.
 
         A failure to *run* the command at all - a worktree that is not there, a shell that cannot be
