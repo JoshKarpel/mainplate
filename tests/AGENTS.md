@@ -181,8 +181,6 @@ see.** These are the ones that turn on it:
   back, because the failure is a hairline.
 - `TestTheBoxYouTypeIn` asserts how one box *changes* across what is put in it, since every height
   is a correct rendering of some box.
-- `TestOpeningTheRecordBehindARequest` measures one element's box across a press, within its rule
-  rather than within the window, because the page follows the end.
 - `TestNamingAModeFromTheKeyboard` measures the message box across the press that enters a mode,
   because both layouts are correct markup.
 - `TestShuttingAFoldFromItsFrame` asks where the frame stops and the output starts.

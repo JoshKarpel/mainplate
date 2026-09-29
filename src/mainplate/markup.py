@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Iterator
 from functools import lru_cache
 from typing import Final
@@ -116,19 +117,32 @@ EXTENSION_CONFIGS: Final = {
     }
 }
 
-# One converter per kind of text, for the process. `Markdown` accumulates state across a conversion
-# and must be reset between them, which makes it a place rather than a value; holding one is safe
-# here only because `convert` never awaits, so no second render can interleave with one on this
-# event loop. Neither is safe to share across threads, and this must not become one that is.
-#
-# Two of them, and the whole difference is `nl2br`. A chat box promises that a newline is a newline,
-# because Markdown's own rule - a line break needs two trailing spaces - is a rule about *documents*
-# and nobody typing a message knows it. A guidance file is a document, written by somebody who does:
-# it is soft-wrapped at whatever width its author's editor uses, so honouring those newlines draws a
-# paragraph as a column of ragged lines that says nothing about how it was written.
-MESSAGE = Markdown(extensions=[*EXTENSIONS, "nl2br"], extension_configs=EXTENSION_CONFIGS, output_format="html")
 
-DOCUMENT = Markdown(extensions=EXTENSIONS, extension_configs=EXTENSION_CONFIGS, output_format="html")
+class Converters(threading.local):
+    """
+    One converter per kind of text, for each thread that renders.
+
+    Per thread because `Markdown` accumulates state across a conversion and must be reset between
+    them, which makes it a place rather than a value: a transcript renders on a worker thread while
+    smaller pages render on the event loop, so one shared converter would have two conversions
+    running through it at once. Never await between `reset` and `convert` either, since two renders
+    on the one event loop could then interleave through the same instance.
+
+    Two of them, and the whole difference is `nl2br`. A chat box promises that a newline is a newline,
+    because Markdown's own rule - a line break needs two trailing spaces - is a rule about *documents*
+    and nobody typing a message knows it. A guidance file is a document, written by somebody who does:
+    it is soft-wrapped at whatever width its author's editor uses, so honouring those newlines draws a
+    paragraph as a column of ragged lines that says nothing about how it was written.
+    """
+
+    def __init__(self) -> None:
+        self.message = Markdown(
+            extensions=[*EXTENSIONS, "nl2br"], extension_configs=EXTENSION_CONFIGS, output_format="html"
+        )
+        self.document = Markdown(extensions=EXTENSIONS, extension_configs=EXTENSION_CONFIGS, output_format="html")
+
+
+CONVERTERS = Converters()
 
 
 def converted(converter: Markdown, text: str) -> Markup:
@@ -166,7 +180,7 @@ def as_message(text: str) -> Markup:
     at the boundary that accepts it, and a key is the exact text, so the same message renders once
     however many times it is drawn.
     """
-    return converted(MESSAGE, text)
+    return converted(CONVERTERS.message, text)
 
 
 @lru_cache(maxsize=64)
@@ -177,7 +191,7 @@ def as_document(text: str) -> Markup:
     Cached for the reason a message is, and smaller because there are far fewer of them: one per
     stretch of context, plus whatever a turn was handed on approach.
     """
-    return converted(DOCUMENT, text)
+    return converted(CONVERTERS.document, text)
 
 
 # The lexer a shell command is coloured by. `sh -c` is what runs it, and Pygments' one shell lexer

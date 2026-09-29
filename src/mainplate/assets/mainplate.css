@@ -756,8 +756,8 @@ pre > .copy {
 
    Properties rather than numbers, because each button further in stands at the sum of the widths
    outside it: a width written out in every sum is a width that moves in one of them and not the
-   others, and the buttons then overlap. `--seated-width` is the widest of `draw`, `code` and
-   `focus`, in the same face. */
+   others, and the buttons then overlap. `--seated-width` is the wider of `draw` and `code`, in the
+   same face. */
 pre {
     --copy-width: 3.3rem;
     --seated-width: 2.7rem;
@@ -776,71 +776,6 @@ pre > .draw {
 
 pre > .draw[aria-busy] {
     cursor: progress;
-}
-
-/* --- Focusing: seated by the script ---------------------------------------- */
-
-/* A block whose lines do not fit takes a button that opens it on its own, as wide as the window,
-   standing where `draw` does, and one further in where a fence shown as code carries both. */
-pre > .focus {
-    right: calc(var(--space-3) + var(--copy-width) + var(--seated-gap));
-    min-width: var(--seated-width);
-}
-
-pre:has(> .draw) > .focus {
-    right: calc(var(--space-3) + var(--copy-width) + 2 * var(--seated-gap) + var(--seated-width));
-}
-
-/* As wide as its longest line and no wider than the window, over a dimmed page. The block scrolls
-   inside it on both axes and the dialog itself does not, so the close button keeps its corner; and
-   nothing in the dialog is padding, so a press that lands on the dialog itself is a press on the
-   backdrop. */
-.focused {
-    width: fit-content;
-    max-width: calc(100vw - 2 * var(--space-6));
-    max-height: calc(100dvh - 2 * var(--space-6));
-    padding: 0;
-    border: 1px solid var(--edge);
-    border-radius: var(--radius);
-    background: var(--sunk);
-    color: var(--ink);
-    overflow: hidden;
-}
-
-.focused[open] {
-    display: flex;
-    flex-direction: column;
-}
-
-.focused::backdrop {
-    background: color-mix(in srgb, var(--ground) 70%, transparent);
-}
-
-.focused > form {
-    position: absolute;
-    z-index: 1;
-    top: var(--space-3);
-    right: var(--space-3);
-    margin: 0;
-}
-
-/* The copy keeps the block's classes, so its lines are drawn as they were, and sheds its frame, since
-   the dialog is the frame now. */
-.focused > pre {
-    min-height: 0;
-    margin: 0;
-    padding: var(--space-4) var(--space-5);
-    border: none;
-    border-radius: 0;
-    background: none;
-    font-family: var(--mono);
-    font-size: var(--mono-size);
-    line-height: var(--mono-line);
-    overflow: auto;
-}
-
-.focused > pre > code {
-    overflow: visible;
 }
 
 /* The picture stands where the code stood, scaled to the block and never wider than it. The code
@@ -1661,101 +1596,13 @@ pre.lines > code {
     overflow-wrap: anywhere;
 }
 
-/* --- Tags: the record behind a rule ------------------------------------ */
-
-/* On the rule that stands at the request's own boundary, which is what it is about. In flow there
-   rather than in a margin beside a panel, because the transcript is a scroll container: anything
-   placed outside is either clipped or scrolls the document sideways, and neither is acceptable. */
-.tag > summary {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
+.rule__request {
     white-space: nowrap;
     color: var(--ink-faint);
     font-family: var(--mono);
     font-size: 0.62rem;
-    letter-spacing: 0.03em;
-    cursor: pointer;
-    list-style: none;
-}
-
-.tag > summary::-webkit-details-marker {
-    display: none;
-}
-
-.tag > summary:hover,
-.tag[open] > summary {
-    color: var(--mark);
-}
-
-.tag__at {
     font-weight: 600;
-}
-
-/* Opened, it grows the rule downward and pushes the conversation with it, rather than lying over
-   the panels below. A record read against the reply it came from is worth more than a page that
-   holds still, and an overlay is the one shape where the two cannot be looked at together.
-
-   The record takes a line of the rule to itself: the rule is allowed to wrap and the record asks
-   for the whole of one, so the facts stay on the top line at the width they already had and the
-   record runs the measure underneath them. Sharing the line was tried and is what a phone rules out
-   - a record squeezed into whatever the figures leave is a column six characters wide, and the
-   figures pinned so it is not are a row that runs off the side of the screen.
-
-   **The `r{i}` that opened it does not move**, which is the rule for every control that toggles:
-   what wraps is the record and never the summary above it. See "A control that toggles may not
-   move" in `CLAUDE.md`. The tag makes no box of its own, so the thing carrying the record is a flex
-   item of the rule while the summary stays a flex item in its own place. Both candidates for that
-   item are told the same thing: `::details-content` is the box a browser wraps a disclosure's
-   content in, and the record itself is the item where there is no such box. */
-.rule:has(.tag[open]) {
-    flex-wrap: wrap;
-}
-
-.tag {
-    display: contents;
-}
-
-.tag[open]::details-content,
-.tag[open] > :not(summary) {
-    order: 1;
-    flex: 1 1 100%;
-    min-width: 0;
-}
-
-/* Hidden rather than absent while closed, because htmx swaps into this element and a target that
-   does not exist yet is a swap with nowhere to go. The wrapper is hidden as well as what it holds,
-   since an empty flex item still takes the row gap and would leave every shut rule a line taller. */
-.tag:not([open])::details-content,
-.tag:not([open]) > :not(summary) {
-    display: none;
-}
-
-.record__json {
-    margin: var(--space-2) 0 0;
-    padding: var(--space-3) var(--space-4);
-    border-radius: calc(var(--radius) / 1.5);
-    background: var(--sunk);
-    color: var(--ink-soft);
-    font-size: 0.72rem;
-    /* Bounded, because a turn's parts are longer than anything else on the page and an unbounded
-       one would push the composer off the bottom of a conversation somebody is reading. */
-    max-height: 24rem;
-    overflow: auto;
-    /* Wrapped rather than scrolled sideways, which trades the column alignment for being able to
-       read the thing at all: a `content` field holds the whole of what a model said, so a line
-       here runs thousands of characters and the indentation it would preserve is two levels deep.
-       The same trade a tool call's body already makes, for the same reason. */
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
-
-.record__missing {
-    margin: var(--space-2) 0 0;
-    padding: var(--space-3) var(--space-4);
-    border-radius: calc(var(--radius) / 1.5);
-    color: var(--ink-faint);
-    font-size: 0.72rem;
+    letter-spacing: 0.03em;
 }
 
 /* --- Waiting ---------------------------------------------------------- */
@@ -4825,12 +4672,6 @@ main:has(> .forking) {
         /* Nothing hovers on a phone, so a control revealed by hovering is one that is never reached;
            a session is opened and closed from its rail. */
         .session__archive {
-            display: none;
-        }
-
-        /* A window a phone's width is barely wider than the block already is, so opening it as wide
-           as the window buys a few characters for a dialog to put away again. */
-        pre > .focus {
             display: none;
         }
 

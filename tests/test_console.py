@@ -2087,11 +2087,10 @@ class TestTheClockAPageIsDrawnAgainst:
         """
         session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
-        await service.checkpointer.supply(session, model_key(0, 0), answered_with(ANSWERED[0]))
 
         async with calling(app) as caller:
             page = await caller.get(f"/sessions/{session}")
-            swap = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
+            swap = await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})
 
         assert page.status == 200
         assert swap.status == 200, "the control: a refusal would carry the header too"
@@ -2347,24 +2346,8 @@ class TestWhatARuleSays:
         assert 'id="waiting"' in region
 
 
-class TestShowingWhatWasRecorded:
-    """
-    The rule at each model request's boundary, and the fragment behind it.
-
-    A request is a thing the checkpoint has a key for, unlike a panel, so what these pin is a lookup
-    rather than an agreement between two walks.
-    """
-
-    async def answered_session(self, app: ASGIApp, service: Service) -> str:
-        session = await a_session(app, service)
-        await answered(service, session, *ANSWERED)
-        await service.checkpointer.supply(session, model_key(0, 0), answered_with(ANSWERED[0]))
-        return session
-
-    async def test_a_rule_is_pointed_at_the_request_it_stands_at(self, app: ASGIApp, service: Service) -> None:
-        session = await self.answered_session(app, service)
-        region = await watched(app, session)
-        assert f'hx-get="/fragments/sessions/{session}/requests/0/0"' in region
+class TestTheRuleAtARequest:
+    """The rule at each model request's boundary, and what it says about that request."""
 
     async def test_every_request_of_a_turn_gets_its_own_rule_and_the_turn_gets_one(
         self, app: ASGIApp, service: Service
@@ -2381,7 +2364,7 @@ class TestShowingWhatWasRecorded:
         region = await watched(app, session)
         assert region.count('class="rule rule--turn"') == 1
         assert region.count('class="rule"') == 1, "the second request, which opens no turn"
-        assert '/requests/0/1"' in region
+        assert ">r0.1<" in region
         assert "bbbbbbbb" in region, "the tree the second request was made against"
 
     async def test_a_rule_carries_what_the_request_cost_and_the_tree_it_saw(
@@ -2394,82 +2377,8 @@ class TestShowingWhatWasRecorded:
         region = await watched(app, session)
         assert "aaaaaaaa" in region, "the tree taken before the ask"
         assert "\N{UPWARDS ARROW}5K" in region, "and what the answer cost"
-        assert 'class="tag__at">r0.0<' in region, "and the record behind it, named turn and request"
-
-    async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
-        """
-        Fetched rather than rendered, which is the whole reason it is an endpoint: the transcript
-        is re-rendered whenever the turn in flight records anything, and this is several times the
-        size of the reading of it.
-        """
-        session = await self.answered_session(app, service)
-        region = await watched(app, session)
-        assert "the trigger fires once" in region, "the reading of the response is on the page"
-        assert '"part_kind"' not in region, "the record behind it is not"
-
-    async def test_the_disclosure_survives_the_poll_that_replaces_the_conversation(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        """
-        `hx-preserve` is load-bearing and invisible to a reader of the markup, so it is pinned here.
-
-        The region morphs, and the server renders this closed. Without the attribute a morph takes
-        the `open` attribute back off and shuts the disclosure under the reader's hand once a
-        second, which a driven Chromium confirms and no string assertion can. htmx reads it off the
-        incoming markup, so this response is where it has to be.
-        """
-        session = await self.answered_session(app, service)
-        region = await watched(app, session)
-        assert "hx-preserve" in region
-        assert 'hx-trigger="toggle once"' in region, "settled for good, so asked for once"
-
-    async def test_a_request_answers_with_the_whole_response_the_step_holds(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        """
-        The step and not a slice of the turn's messages, which is the simplification the tag bought:
-        `turn:{n}:model:{i}` is what the provider answered, and a request has a key of its own.
-        """
-        session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
-        assert answered.status == 200
-        assert '"part_kind": "thinking"' in answered.text
-        assert '"the trigger fires once"' in answered.text
-        assert "it is a plate" in answered.text, "the whole response, not one panel's worth of it"
-
-    async def test_a_request_nobody_made_is_refused_rather_than_rendered_empty(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/9")
-        assert answered.status == 404
-        assert "Nothing is recorded" in answered.text
-
-    async def test_a_session_nobody_started_is_refused(self, app: ASGIApp) -> None:
-        async with calling(app) as caller:
-            answered = await caller.get("/fragments/sessions/deadbeef/requests/0/0")
-        assert answered.status == 404
-
-    async def test_markup_inside_a_record_does_not_become_markup(self, app: ASGIApp, service: Service) -> None:
-        """
-        The raw record carries whatever the model said, which is shaped by whatever reached the box.
-
-        Shown as text and not as rendered Markdown, so the sanitiser this page uses elsewhere is not
-        in the path at all: what stands in for it is that a node tree escapes a text child.
-        """
-        session = await a_session(app, service)
-        await service.checkpointer.supply(
-            session,
-            model_key(0, 0),
-            {"kind": "response", "parts": [{"part_kind": "text", "content": "<script>alert(1)</script>"}]},
-        )
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
-        assert answered.status == 200
-        assert "<script" not in answered.text
-        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in answered.text
+        assert 'class="rule__request"' in region, "and which request it was, named turn and request"
+        assert ">r0.0<" in region
 
 
 class TestWhatTheIsolationControlsPost:

@@ -57,7 +57,6 @@ from mainplate.conversation import recorded_push
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
-from mainplate.conversation import requested_at
 from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
@@ -786,21 +785,6 @@ class Service:
         arithmetic anybody may do on it.
         """
         return token_of(await self.attended(session))
-
-    async def requested_at(self, session: str, turn: int, at: int) -> object | None:
-        """
-        What one model request came back with, or nothing at all where there is no such request.
-
-        One answer for "no session" and "no request", because they are the same answer to the reader:
-        the address names nothing. Nothing recorded can itself be `None`, so this is unambiguous.
-
-        The whole checkpoint is loaded to answer it, which is what every read here does and what the
-        one idea costs: there is no second index of what a turn holds.
-        """
-        found = await read_session(self.database, session)
-        if found is None:
-            return None
-        return requested_at(await self.checkpointer.load(session), turn, at)
 
     async def start(self, chosen: Choice, title: str | None = None) -> Session:
         """

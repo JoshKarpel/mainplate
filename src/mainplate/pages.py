@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -87,7 +86,6 @@ from without_web import url_for
 
 from mainplate.agent import Choice
 from mainplate.agent import Listed
-from mainplate.calls import INDENT
 from mainplate.calls import block_diff_element
 from mainplate.calls import call_body
 from mainplate.calls import changes_by_file
@@ -470,7 +468,6 @@ class Links:
     say: Reversible
     stream: Reversible
     seen: Reversible
-    request_record: Reversible
     endpoint_models: Reversible
     workspace_branches: Reversible
     fork_form: Reversible
@@ -564,16 +561,6 @@ class Links:
         a block with nothing to complete.
         """
         return url_for(self.workspace_branches)
-
-    def to_request_record(self, session: str, turn: int, at: int) -> str:
-        """
-        What the checkpoint holds behind one panel, addressed the way the panel itself is.
-
-        Path segments rather than a query string, because a panel's identity *is* the pair: the
-        anchor a permalink is built on is already `turn` and `at`, so this is the same address in
-        another shape rather than a filter over something.
-        """
-        return url_for(self.request_record, {"session": session, "turn": turn, "at": at})
 
     def to_fork_form(self, session: str, at: int) -> str:
         """Where to ask what a branch from this turn should be answered with."""
@@ -2817,63 +2804,19 @@ def block_element(block: Block, panel: Panel, at: int) -> Element:
             assert_never(unreachable)
 
 
-def record_json(held: object) -> Element:
+def request_label(turn: int, at: int) -> Element:
     """
-    One panel's stored value, as the text the checkpoint holds it as.
-
-    `ensure_ascii` off, because a conversation is prose: escaping every non-ASCII character turns a
-    message somebody can read into one they have to decode, and this is served as UTF-8 either way.
-
-    Text and not markup, which is the whole of what makes it safe to show. Everything in here was
-    shaped by whatever reached the message box, and a node tree escapes a text child, so the raw
-    record of a reply that contains a `<script>` renders as those characters.
-    """
-    return pre(cls="record__json", children=code(children=json.dumps(held, indent=INDENT, ensure_ascii=False)))
-
-
-def missing_record(turn: int, at: int) -> Element:
-    """What a request nothing was recorded for says, which is a fragment rather than a refusal page."""
-    return p(cls="record__missing", children=f"Nothing is recorded for request {turn}.{at}.")
-
-
-def record_fold(links: Links, session: str, turn: int, at: int) -> Element:
-    """
-    The `r{turn}.{at}` marker on a rule, and the raw record of that request behind it.
+    The `r{turn}.{at}` marker on a rule, naming the model request the rule stands in front of.
 
     Named the whole way, for `Panel.address`'s reason one level along: a rule inside a turn draws no
-    `#N`, so a bare `r1` said which request without saying of what, and a reader following one
-    permalink out of several had nothing to tell them apart. The `r` is what keeps it from being
-    read as a panel, which numbers a different axis - `#3.1` is turn 3's second *panel* and `r3.1`
-    is its second *request*, and one response becomes as many panels as it has kinds of part.
-
-    Fetched only when opened, because the transcript is re-rendered whenever a running turn records
-    anything and the raw record is several times the size of the reading of it. `hx-preserve` is what
-    keeps it open through those swaps, since the server renders it closed and a morph would otherwise
-    shut it under the reader's hand. htmx reads that attribute off the *incoming* markup, so taking
-    it off the live node proves nothing.
-
-    `once` is safe here in a way it never was under a panel: a step's key is written once and never
-    rewritten, so a request's record is settled the moment it exists, where a panel's record came out
-    of `turn:{n}:messages` and did not exist until the turn ended.
+    `#N`, so a bare `r1` said which request without saying of what. The `r` is what keeps it from
+    being read as a panel, which numbers a different axis - `#3.1` is turn 3's second *panel* and
+    `r3.1` is its second *request*, and one response becomes as many panels as it has kinds of part.
     """
-    return details(
-        cls="tag",
-        attrs={
-            "id": f"tag-{turn}-{at}",
-            "hx-preserve": True,
-            "hx-get": links.to_request_record(session, turn, at),
-            "hx-trigger": "toggle once",
-            "hx-target": "find .record__json",
-            "hx-swap": "outerHTML",
-        },
-        children=[
-            summary(
-                cls="tag__summary",
-                attrs={"title": f"The {ordinal(at)} model request of turn {turn}"},
-                children=span(cls="tag__at", children=f"r{turn}.{at}"),
-            ),
-            pre(cls="record__json", children=code(children="\N{HORIZONTAL ELLIPSIS}")),
-        ],
+    return span(
+        cls="rule__request",
+        attrs={"title": f"The {ordinal(at)} model request of turn {turn}"},
+        children=f"r{turn}.{at}",
     )
 
 
@@ -2987,10 +2930,7 @@ def rule_element(
                 if opens and session
                 else ()
             ),
-            # Only where there is a session to ask, which the gallery's pages are rendered without: a
-            # control pointed at no conversation is a dead button rather than an offer, the same
-            # reason the fork link is conditional.
-            *((record_fold(links, session, turn, asked),) if session and asked is not None else ()),
+            *((request_label(turn, asked),) if asked is not None else ()),
             *(
                 (
                     span(
@@ -3090,7 +3030,7 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
     the browser rather than about this markup, so `TestFoldingAPanel` asks Chromium.
 
     What a panel says is still what is *in* it, and nothing about the turn or the request around it.
-    The worktree, the fork, what was spent and the raw record are all facts about the exchange rather
+    The worktree, the fork, what was spent and which request it was are all facts about the exchange rather
     than about any one run of blocks, so they are on the rules between them. See `rule_element`.
 
     Nothing here draws the copy buttons, and that is not an omission. One of them sits inside a
@@ -3274,8 +3214,7 @@ def system_prompt_panel(turn: int, said: str | None) -> Element:
 
     That does not weaken the claim that this is what was *sent*. What the model was handed is the
     source, and the source is what this hands back: the block carries `data-markdown`, so the panel's
-    copy button gives the characters rather than the rendering, and the raw record on the rule is the
-    same value one step further out.
+    copy button gives the characters rather than the rendering.
 
     It is a `.block` and not bare prose, and that is what puts the copy button on the panel: the
     script seats one against a panel's blocks, and it is the whole prompt somebody reaches for. A

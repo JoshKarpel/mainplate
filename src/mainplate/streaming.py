@@ -29,6 +29,7 @@ from without_html import Node
 from without_html import element
 from without_html import render
 
+from mainplate.forge import Reachable
 from mainplate.pages import CACHE_ID
 from mainplate.pages import LISTED_ID
 from mainplate.pages import LOADED
@@ -45,7 +46,9 @@ from mainplate.pages import settling
 from mainplate.pages import setup_step
 from mainplate.pages import transcript_region
 from mainplate.pages import wanting_region
+from mainplate.service import Conversation
 from mainplate.service import Service
+from mainplate.sessions import Session
 
 
 def partial(target: str, swap: str, children: Node) -> Element:
@@ -131,8 +134,7 @@ async def watching(
     while True:
         now = await token(service, session)
         if now != seen:
-            regions: list[Element] = []
-            on_step = shape is Shape.SETTLING
+            showing: Conversation | None = None
             if session is not None:
                 showing = await service.read(session)
                 if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
@@ -142,43 +144,68 @@ async def watching(
                 # conversation's regions would sit under its spinner for ever with nothing saying
                 # why. Once, and then out, because a page told this reloads and the reload opens a
                 # connection of its own.
-                if on_step != settling(showing):
+                if (shape is Shape.SETTLING) != settling(showing):
                     yield Event(data="", type=LOADED, id=now)
                     return
-                # Whichever regions the page's *shape* has, which `settling` decides for both sides:
-                # a page drawing the settings step has no transcript and no message box on it, and
-                # one past the step has no step. That is the shape and not the checkpoint - a branch
-                # has turns and still draws the step - so it is read from the same predicate the
-                # page is built with rather than from what the session holds. Sending both sets
-                # would name a target that is not there on either page, which is the case the check
-                # above exists for.
-                #
-                # Settled is two regions on one connection, which is what `partial` exists for. The
-                # cache note lives in the composer rather than in the transcript, so nothing else
-                # replaces it, and what it says goes stale on every turn: the context it prices
-                # grows, and when the prefix was last written moves. `outerHTML` rather than the
-                # transcript's morph, because it is one short line with nothing in it worth
-                # preserving across a swap.
-                #
-                # Settling is the one region there is, and it is the only thing that makes the step
-                # resolve: the registration lands in a worker, so a page that did not watch for it
-                # would spin until somebody reloaded.
-                regions.extend(
-                    [partial(SETUP_ID, "outerHTML", setup_step(links, showing))]
-                    if settling(showing)
-                    else [
-                        partial(TRANSCRIPT_ID, SWAP, transcript_region(links, reader, showing)),
-                        partial(CACHE_ID, "outerHTML", cache_note(showing, reader)),
-                    ]
-                )
             seen = now
             listed = await service.listed()
-            # What wants attention on the dashboard is read off the same rows the list is, so it
-            # moves exactly when the list's token does and needs no token of its own.
-            if shape is Shape.DASHBOARD:
-                regions.append(partial(WANTING_ID, SWAP, wanting_region(links, reader, listed, service.reachable)))
-            # The list on every page, morphed like the transcript because a row's archive disclosure
-            # may be open under somebody's pointer when another session moves the list.
-            regions.append(partial(LISTED_ID, SWAP, listed_region(links, reader, listed, session, service.reachable)))
-            yield Event(data=render(regions), id=now)
+            # Off the event loop, and in one hop for the whole message, because a long transcript is
+            # a fraction of a second of pure Python and every other page and stream this console
+            # serves waits behind it on the loop. Everything the render needs is read above, so
+            # nothing in `message` touches the store.
+            rendered = await asyncio.to_thread(
+                message, links, reader, session, shape, showing, listed, service.reachable
+            )
+            yield Event(data=rendered, id=now)
         await asyncio.sleep(every.total_seconds())
+
+
+def message(
+    links: Links,
+    reader: Reader,
+    session: str | None,
+    shape: Shape | None,
+    showing: Conversation | None,
+    listed: tuple[Session, ...],
+    reachable: Reachable,
+) -> str:
+    """
+    One message on the stream: every region the page's shape has, rendered from what was read.
+
+    Pure, so the stream can run it on a worker thread; `showing` is the session the page is looking
+    at, already checked against the page's shape, or nothing for a page looking at none.
+    """
+    regions: list[Element] = []
+    if showing is not None:
+        # Whichever regions the page's *shape* has, which `settling` decides for both sides: a page
+        # drawing the settings step has no transcript and no message box on it, and one past the
+        # step has no step. That is the shape and not the checkpoint - a branch has turns and still
+        # draws the step - so it is read from the same predicate the page is built with rather than
+        # from what the session holds. Sending both sets would name a target that is not there on
+        # either page, which is the case the stream's shape check exists for.
+        #
+        # Settled is two regions on one connection, which is what `partial` exists for. The cache
+        # note lives in the composer rather than in the transcript, so nothing else replaces it, and
+        # what it says goes stale on every turn: the context it prices grows, and when the prefix was
+        # last written moves. `outerHTML` rather than the transcript's morph, because it is one short
+        # line with nothing in it worth preserving across a swap.
+        #
+        # Settling is the one region there is, and it is the only thing that makes the step resolve:
+        # the registration lands in a worker, so a page that did not watch for it would spin until
+        # somebody reloaded.
+        regions.extend(
+            [partial(SETUP_ID, "outerHTML", setup_step(links, showing))]
+            if settling(showing)
+            else [
+                partial(TRANSCRIPT_ID, SWAP, transcript_region(links, reader, showing)),
+                partial(CACHE_ID, "outerHTML", cache_note(showing, reader)),
+            ]
+        )
+    # What wants attention on the dashboard is read off the same rows the list is, so it moves
+    # exactly when the list's token does and needs no token of its own.
+    if shape is Shape.DASHBOARD:
+        regions.append(partial(WANTING_ID, SWAP, wanting_region(links, reader, listed, reachable)))
+    # The list on every page, morphed like the transcript because a row's archive disclosure may be
+    # open under somebody's pointer when another session moves the list.
+    regions.append(partial(LISTED_ID, SWAP, listed_region(links, reader, listed, session, reachable)))
+    return render(regions)

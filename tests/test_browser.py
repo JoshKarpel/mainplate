@@ -1360,8 +1360,7 @@ class TestDrawingAFence:
 
 class TestALineThatDoesNotFit:
     """
-    A block of lines scrolls sideways rather than wrapping, and one whose lines do not fit takes a
-    button that opens it on its own, as wide as the window.
+    A block of lines scrolls sideways rather than wrapping.
 
     A browser because every answer here is a measurement: a wrapped diff and a scrolling one are both
     correct markup, and whether a block overflows is a property of the layout and never of the page.
@@ -1402,68 +1401,6 @@ class TestALineThatDoesNotFit:
             )
             longest, *rows = widths
             assert all(abs(row - longest) < 1 for row in rows), f"every row {longest}px wide, and they were {rows}"
-
-        with subtests.test("a block takes a focus button exactly where its lines do not fit"):
-            await expect(pre.locator("[data-focus]")).to_have_count(1)
-            mismatched = await page.evaluate(
-                """() => [...document.querySelectorAll('.transcript .panel pre')].filter((pre) => {
-                  const code = pre.querySelector(':scope > code');
-                  const overflows = Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
-                  return overflows !== Boolean(pre.querySelector(':scope > [data-focus]'));
-                }).map((pre) => pre.closest('.panel').id)"""
-            )
-            fitting = await page.locator(".transcript .panel pre:not(:has(> [data-focus]))").count()
-            assert fitting > 0, "the gallery has blocks that fit, or the rule is unexercised"
-            assert mismatched == []
-
-    async def test_pressing_focus_opens_the_block(self, page: Page, gallery: str, subtests: pytest.Subtests) -> None:
-        pre = await self.batch(page, gallery)
-        column = await pre.bounding_box()
-        assert column is not None
-        await pre.locator("[data-focus]").click()
-        dialog = page.locator("dialog#focused")
-        await expect(dialog).to_be_visible()
-
-        with subtests.test("wider than its column"):
-            opened = await dialog.bounding_box()
-            assert opened is not None
-            assert opened["width"] > column["width"] + 200, f"{opened['width']}px against a {column['width']}px column"
-
-        with subtests.test("as it was, and none of the buttons seated in it"):
-            shown = await dialog.locator("pre").text_content()
-            assert shown == await pre.locator("code").text_content()
-
-    async def test_escape_puts_it_away(self, page: Page, gallery: str) -> None:
-        pre = await self.batch(page, gallery)
-        await pre.locator("[data-focus]").click()
-        dialog = page.locator("dialog#focused")
-        await expect(dialog).to_be_visible()
-        await page.keyboard.press("Escape")
-        await expect(dialog).to_be_hidden()
-
-    async def test_a_press_on_the_backdrop_puts_it_away(self, page: Page, gallery: str) -> None:
-        pre = await self.batch(page, gallery)
-        await pre.locator("[data-focus]").click()
-        dialog = page.locator("dialog#focused")
-        await expect(dialog).to_be_visible()
-        await page.mouse.click(2, 2)
-        await expect(dialog).to_be_hidden()
-
-    async def test_copying_a_block_that_can_be_focused_hands_over_none_of_the_button(
-        self, page: Page, gallery: str
-    ) -> None:
-        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
-        pre = await self.batch(page, gallery)
-        await expect(pre.locator("[data-focus]")).to_have_count(1)
-        await pre.locator("[data-copy]").click()
-        taken = str(await page.evaluate("() => navigator.clipboard.readText()"))
-        assert taken == await pre.locator("code").text_content()
-
-    async def test_a_phone_is_offered_no_focus_button(self, phone: Page, gallery: str) -> None:
-        """A window a phone's width is barely wider than the block, so the button is not drawn there."""
-        pre = await self.batch(phone, gallery)
-        await expect(pre.locator("[data-focus]")).to_have_count(1)
-        await expect(pre.locator("[data-focus]")).to_be_hidden()
 
 
 SIDES = pytest.mark.parametrize(
@@ -2591,82 +2528,6 @@ class TestFoldingADocumentTheConsoleHandedOver:
         await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] - 2)
 
         await expect(panel).not_to_have_attribute("open", "")
-
-
-class TestOpeningTheRecordBehindARequest:
-    """
-    The `r{i}` on a rule stays exactly where it was when it is pressed.
-
-    A control that moves under the finger that pressed it is a control a reader cannot press twice,
-    and it reads as the page having jumped rather than as something having opened. Invisible to a
-    markup assertion and to a still alike: both states are correct markup and each screenshot is
-    right on its own, so what has to be measured is one element's box across the press.
-    """
-
-    async def opened(self, console: tuple[str, Service], page: Page) -> Locator:
-        """A conversation with one recorded request in it, as the closed tag on that request's rule."""
-        url, service = console
-        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
-        await taking(service, session.id)
-        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
-        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
-        tag = page.locator(".tag").first
-        await expect(tag).to_have_count(1)
-        return tag
-
-    async def where_on_its_rule(self, tag: Locator) -> dict[str, float]:
-        """
-        Where the marker sits within the rule it is on, rather than within the window.
-
-        The window is the wrong frame for this one question: the page follows the end, so a record
-        opening at the bottom of a conversation scrolls the transcript under it, which is the
-        console doing what it is asked and would report as the marker having moved. What the marker
-        must not do is change its place on its own line.
-        """
-        return dict(
-            await tag.evaluate(
-                """(tag) => {
-                    const summary = tag.querySelector('summary').getBoundingClientRect();
-                    const rule = tag.closest('.rule').getBoundingClientRect();
-                    return { x: summary.x - rule.x, y: summary.y - rule.y };
-                }"""
-            )
-        )
-
-    async def test_the_marker_does_not_move_when_it_is_pressed(self, page: Page, console: tuple[str, Service]) -> None:
-        tag = await self.opened(console, page)
-        before = await self.where_on_its_rule(tag)
-        await tag.locator("summary").click()
-        await expect(tag).to_have_attribute("open", "")
-        assert await self.where_on_its_rule(tag) == before
-
-    async def test_the_record_opens_underneath_the_rule_it_belongs_to(
-        self, page: Page, console: tuple[str, Service]
-    ) -> None:
-        """
-        The other half of the same measurement: nothing moving is also what a tag that never opened
-        would report, so the record has to be shown to arrive, below the line and across it.
-        """
-        tag = await self.opened(console, page)
-        summary = tag.locator("summary")
-        record = tag.locator(".record__json")
-        await expect(record).to_be_hidden()
-        await summary.click()
-        await expect(record).to_be_visible()
-        # All three boxes in one go, because the page follows the end: a record opening at the
-        # bottom scrolls the transcript under it, so two measurements taken a call apart are two
-        # measurements of different scroll positions and their difference means nothing.
-        placed = await tag.evaluate(
-            """(tag) => {
-                const box = one => { const {x, y, width, height} = one.getBoundingClientRect();
-                                     return {x, y, width, height}; };
-                return { summary: box(tag.querySelector('summary')),
-                         record: box(tag.querySelector('.record__json')),
-                         rule: box(tag.closest('.rule')) };
-            }"""
-        )
-        assert placed["record"]["y"] >= placed["summary"]["y"] + placed["summary"]["height"]
-        assert placed["record"]["width"] > placed["rule"]["width"] / 2
 
 
 async def landed_on_the_branch(console: tuple[str, Service], page: Page) -> None:

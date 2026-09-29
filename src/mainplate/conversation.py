@@ -2910,23 +2910,6 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     )
 
 
-def requested_at(recorded: Mapping[str, object], turn: int, at: int) -> object | None:
-    """
-    The `at`-th model response of a turn, exactly as the checkpoint holds it.
-
-    One key and one value, which is what replaced showing a *panel's* record. A panel is a run of
-    blocks of one kind and a request is a round trip, and the two cross-cut, so a panel's record was
-    a slice of a stored value reached by indices one walk had to hand to another. A request is a
-    thing the record actually has a key for, so this is a lookup.
-
-    Read straight from `turn:{n}:model:{at}` rather than out of `turn:{n}:messages`, and the two are
-    not the same claim: the step is what the provider answered, where the messages are what the agent
-    concluded the turn was. The step is the earlier and more literal of the two, and it is there
-    while the turn is still running.
-    """
-    return recorded.get(model_key(turn, at))
-
-
 def recording(said: Sequence[ModelMessage]) -> Callable[[], Awaitable[object]]:
     """
     What a finished turn writes into the checkpoint, as the effect `Run.step` takes.

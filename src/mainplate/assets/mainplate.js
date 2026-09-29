@@ -834,8 +834,6 @@
         // the empty string is a control offering to do nothing.
         const says = [...panel.querySelectorAll(":scope > .block")].some((block) => block.textContent.trim());
         if (meta && says) seated(meta, panel.id, meta.querySelector(".panel__anchor"));
-        // Only the code *inside a panel*: the raw record on a rule is a bounded box that scrolls,
-        // and a button pinned in a scroller travels with the content and off its own corner.
         panel.querySelectorAll("pre").forEach((code, at) => seated(code, `${panel.id}:${at}`));
       });
       // The reason a pass failed, which is the one thing on this page somebody is going to paste
@@ -1079,117 +1077,6 @@
       });
     };
 
-    // --- Focusing ----------------------------------------------------------
-    //
-    // A block of lines scrolls sideways rather than wrapping, and the column it scrolls in is the
-    // conversation's (`--column`), which at the measure a diff's gutter and a line of real code
-    // outgrow. So a block whose lines do not fit takes a `focus` button that opens it on its own, as
-    // wide as the window, over everything, in a modal dialog. Over everything rather than into the
-    // room beside the column, because at the widths a laptop has there is none: the transcript
-    // already fills its column between the list and the rail, and it is a scroll container, so a
-    // block let wider than it is clipped. The grip is the other answer, for every block at once.
-    //
-    // What the dialog shows is a copy of the block as it was when pressed. A copy and not the block
-    // moved, because the block is the server's markup and a morph would go looking for it; and a copy
-    // is sound because what overflows is a file, a diff or a fence, which a later render does not
-    // change. The cost, stated: the dialog is modal, so the conversation cannot be scrolled beside
-    // it, and it carries no copy button of its own.
-    //
-    // Only where the block overflows *now*, which is a measurement: it changes as a fold opens, the
-    // column changes width, and the face arrives, so each of those measures again.
-
-    const FOCUSED = "focused";
-
-    const overflows = (pre) => {
-      const code = pre.querySelector(":scope > code");
-      return Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
-    };
-
-    // Every block measured before any is changed, so the walk costs the page one layout rather than
-    // one per block.
-    const paintFocuses = () => {
-      const box = transcript();
-      if (!box) return;
-      const blocks = [...box.querySelectorAll(".panel pre")].map((pre) => [pre, overflows(pre)]);
-      blocks.forEach(([pre, wide]) => {
-        const button = pre.querySelector(":scope > [data-focus]");
-        if (!wide) {
-          if (button) button.remove();
-          return;
-        }
-        if (button) return;
-        const seat = document.createElement("button");
-        seat.type = "button";
-        seat.className = "copy focus";
-        seat.dataset.focus = "";
-        seat.textContent = "focus";
-        seat.title = "Open this block on its own, as wide as the window";
-        pre.insertBefore(seat, pre.querySelector(":scope > code"));
-      });
-    };
-
-    const stripFocuses = () => {
-      const box = transcript();
-      if (!box) return;
-      box.querySelectorAll("[data-focus]").forEach((button) => button.remove());
-    };
-
-    // Made on the first press and found again after that, in the body rather than the transcript so
-    // no swap ever meets it. Shut by the form's own `dialog` method, by Escape, and by a press on the
-    // backdrop, which is the dialog itself as a target because nothing in it is padding.
-    const focusDialog = () => {
-      const found = document.getElementById(FOCUSED);
-      if (found) return found;
-      const dialog = document.createElement("dialog");
-      dialog.id = FOCUSED;
-      dialog.className = FOCUSED;
-      dialog.setAttribute("aria-label", "The block, on its own");
-      const form = document.createElement("form");
-      form.method = "dialog";
-      const shut = document.createElement("button");
-      shut.className = "copy";
-      shut.textContent = "close";
-      shut.title = "Put this away";
-      form.appendChild(shut);
-      dialog.appendChild(form);
-      dialog.addEventListener("click", (event) => {
-        if (event.target === dialog) dialog.close();
-      });
-      document.body.appendChild(dialog);
-      return dialog;
-    };
-
-    const wireFocus = () => {
-      document.addEventListener("click", (event) => {
-        const pressed = event.target;
-        if (!(pressed instanceof HTMLElement)) return;
-        const button = pressed.closest("[data-focus]");
-        if (!button) return;
-        const pre = button.parentElement.closest("pre");
-        if (!pre) return;
-        const shown = pre.cloneNode(true);
-        shown.querySelectorAll("[data-copy], [data-draw], [data-focus], .drawing").forEach((seated) => seated.remove());
-        const dialog = focusDialog();
-        dialog.querySelector(":scope > pre")?.remove();
-        dialog.appendChild(shown);
-        dialog.showModal();
-      });
-      let measuring = null;
-      const measure = () => {
-        if (measuring !== null) return;
-        measuring = requestAnimationFrame(() => {
-          measuring = null;
-          paintFocuses();
-        });
-      };
-      document.addEventListener("toggle", measure, true);
-      // The column changes width with the window, with a side column put away or brought back, and
-      // with the reader dragging its edge, and watching the box it is in covers all three.
-      const place = document.querySelector("main");
-      if (place) new ResizeObserver(measure).observe(place);
-      document.fonts?.ready.then(measure);
-    };
-
     // --- Search ----------------------------------------------------------
 
     const clearHits = () => {
@@ -1385,7 +1272,6 @@
       paintCopies();
       paintCopied();
       paintDrawings();
-      paintFocuses();
       paintCache();
       paintDue();
       paintTyped();
@@ -2140,7 +2026,7 @@
     // summary alone and one button would give two different answers a click apart.
     const wordsOf = (node) => {
       const taken = node.cloneNode(true);
-      taken.querySelectorAll("[data-copy], [data-draw], [data-focus], .drawing").forEach((seated) => seated.remove());
+      taken.querySelectorAll("[data-copy], [data-draw], .drawing").forEach((seated) => seated.remove());
       return taken.textContent;
     };
 
@@ -2348,7 +2234,6 @@
         clearHits();
         stripCopies();
         stripDrawings();
-        stripFocuses();
       });
       document.addEventListener("htmx:after:swap", () => repaint());
     };
@@ -2451,7 +2336,6 @@
     wireSend();
     wireCopy();
     wireDraw();
-    wireFocus();
     wireFresh();
     wireSwaps();
     wireShapes();
