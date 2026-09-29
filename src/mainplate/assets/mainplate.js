@@ -1,0 +1,2462 @@
+// The console's own behaviour: the theme, and everything in the rail.
+//
+// It exists because of one property of this page. The transcript is rendered whole by the server
+// and swapped in again whenever an answer arrives, so nothing a reader does *to* the conversation
+// can be kept in the conversation's own markup: a mark, an unfolded tool call, the panel they
+// landed on, would each be merged away by the next poll a second later.
+//
+// So this holds all of it as values, off to one side, and projects them back onto whatever markup
+// is currently on screen. `repaint()` is that projection and it is idempotent, which is what lets
+// the same function serve the first render, every swap after it, and every press of a control.
+// Nothing here reads state back out of the DOM in order to decide anything.
+//
+// Everything it drives is an enhancement. With this file absent the page still renders, still
+// posts messages, and every tool call is still a `<details>` a reader can open; what they lose is
+// the search, the dock, the key, the theme toggle, the copy buttons on a panel and on the code in
+// it, and the live connection that would have brought an answer without a reload.
+(() => {
+  "use strict";
+  const SERVICE_WORKER = new URL("service-worker.js", document.currentScript.src);
+
+  // --- Values ------------------------------------------------------------
+  //
+  // No document, no storage, no clock: everything below can be reasoned about on its own.
+
+  const THEMES = ["system", "light", "dark"];
+
+  // Everything in the transcript that folds: every panel, and inside one, a tool call and a command
+  // the person ran. Named once because three places act on the set - noting what the reader decided,
+  // putting that back after a swap, and the dock's fold-everything buttons - and a kind added to one
+  // and not the others is a fold that reopens itself on the next render.
+  //
+  // Two levels, and each is named. A *panel's* fold is the reader's own: what they want put away is
+  // theirs to decide, and the server only says where each kind starts. A *call's* is the call's,
+  // because its summary is facts about it - a name, an outcome, how long it ran - rather than the
+  // block restated, and a panel holds a whole batch, so a reader wanting one read out of three needs
+  // a fold per call and not only one per panel. A batch's diff has its own for the same reason: its
+  // rule says how much changed, which the panel's row does not. A stretch of reasoning and a document
+  // have neither and so have no fold of their own: the panel's row already says what they are.
+  const FOLDS = "details.panel, details.tool, details.batch, details.ran";
+
+  // The frames a press can shut a fold from; see `wireShutting`. Written as the *bodies* rather than
+  // as the folds around them, which is what lets one rule survive a fold moving out to the panel: a
+  // document's frame shuts the panel it is in, and a call's shuts the call, because each one shuts
+  // whichever `<details>` it is a body of.
+  //
+  // Stated this way it also says the thing a list of folds could not. A panel's own room is the
+  // whitespace between the blocks of a conversation, and that is in no frame here, so a press that
+  // missed a paragraph cannot fold the reply it missed.
+  const FRAMES = ".tool__body, .batch__body, .ran__body, .block--document";
+
+  // The line at the end of a transcript saying why nothing is happening, which two things here reach
+  // for: the countdown it carries, and the copy button its reason gets. The server's own `ATTENTION_ID`.
+  const ATTENTION = "attention";
+
+  // Storage is arbitrary text, and a value written by an older build or by a hand in the console
+  // must not leave the page in a scheme it has no rules for.
+  const asTheme = (held) => (THEMES.includes(held) ? held : "system");
+
+  // Where a needle falls in a haystack, case-insensitively. Finding the spans is the whole of the
+  // search that does not need a document; cutting the text node at them is the part that does.
+  const spans = (text, needle) => {
+    const found = [];
+    if (!needle) return found;
+    const hay = text.toLowerCase();
+    const query = needle.toLowerCase();
+    let from = hay.indexOf(query);
+    while (from !== -1) {
+      found.push({ from, to: from + needle.length });
+      from = hay.indexOf(query, from + needle.length);
+    }
+    return found;
+  };
+
+  // Which panel the reader is on: the last one whose top has scrolled to or above the threshold.
+  // The threshold clears a panel's own scroll-margin, so the panel just stepped to counts as the
+  // current one rather than as the one before it.
+  const currentIndex = (tops, threshold) => {
+    let current = -1;
+    tops.forEach((top, index) => {
+      if (top <= threshold) current = index;
+    });
+    return current;
+  };
+
+  // Clamped rather than wrapped: an arrow at the end of a conversation is spent, and wrapping
+  // would take a reader who pressed once too often back to the opposite end of what they just read.
+  const stepIndex = (tops, direction, threshold) => {
+    const current = currentIndex(tops, threshold);
+    return Math.min(Math.max(current + direction, 0), tops.length - 1);
+  };
+
+  // What a phone's keyboard leaves of the window, in pixels, or nothing where no keyboard is up. A
+  // visual viewport shorter than the window at scale one is a keyboard laid over the page and
+  // nothing else; at any other scale it is a pinch zoom, which must not shrink the page to the part
+  // being looked at. The pixel of slack is for a fractional height, which is a rounding and not a
+  // keyboard.
+  const keyboardLeaves = (windowHeight, visualHeight, scale) =>
+    scale === 1 && visualHeight < windowHeight - 1 ? Math.round(visualHeight) : null;
+
+  // --- Storage -----------------------------------------------------------
+  //
+  // A privilege the page can be opened without, so every read answers with nothing rather than
+  // throwing and every write is allowed to do nothing at all.
+
+  const held = (key) => {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  };
+
+  const hold = (key, value) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch {}
+  };
+
+  const unhold = (key) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+  };
+
+  // The one thing here the *server* reads back, which is why it is a cookie and not storage: the
+  // zone a page's moments are printed in is decided while the page is being rendered, so the answer
+  // has to ride on the request for the document itself. Everything else in this file is the reader's
+  // and stays in this browser. See `ZONE_COOKIE` in `pages.py`, and `paintClock` below.
+  const ZONE_COOKIE = "zone";
+
+  // A cookie is arbitrary text the way storage is, and this runs before `start` exists, so a value
+  // it cannot decode must be nothing rather than a throw: `decodeURIComponent` raises on a malformed
+  // escape, and raising here unwinds out of the whole file, leaving a page with no folds, no copy
+  // buttons, no live connection and no composer. Nothing at all is also the *right* answer, not only
+  // the safe one - a value this did not write is not a zone this asked for - and the caller writes a
+  // good one over the top of it.
+  const cookieValue = (name) => {
+    for (const pair of document.cookie.split(";")) {
+      const [key, ...rest] = pair.split("=");
+      if (key.trim() !== name) continue;
+      try {
+        return decodeURIComponent(rest.join("="));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  // Whether two zone names are the same clock right now, asked of the browser rather than decided by
+  // comparing the strings. They are frequently not the same string for the same clock: a machine
+  // whose zone database says `Etc/UTC` is a browser that says `UTC`, and `Asia/Calcutta` is
+  // `Asia/Kolkata`, so a string comparison would ask for the page again on every load of a console
+  // that is already printing exactly the right time. A name this browser does not know throws, which
+  // is a difference and is answered as one.
+  //
+  // It compares what a reader would actually see, which is what the page is about: two zones that
+  // agree now and disagree in some past summer are not worth a reload over a transcript's rules.
+  const sameClock = (drawn, named) => {
+    try {
+      const now = Date.now();
+      const said = (zone) =>
+        new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "short", timeStyle: "long" }).format(now);
+      return said(drawn) === said(named);
+    } catch {
+      return false;
+    }
+  };
+
+  // --- Theme and clock ---------------------------------------------------
+  //
+  // The two things that run before the document exists. This script is a blocking tag in the head
+  // precisely so both can: the reader's chosen theme is pinned on <html> before the first paint,
+  // because applied any later a page opened dark flashes light on the way there, and the clock a
+  // page was drawn against is checked here for the same reason one field along.
+
+  const THEME_KEY = "mainplate:theme";
+
+  const applyTheme = (theme) => {
+    if (theme === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+  };
+
+  applyTheme(asTheme(held(THEME_KEY)));
+
+  // --- The columns -------------------------------------------------------
+  //
+  // Which side columns a reader has put away and how wide they read the conversation, pinned before
+  // the first paint for the theme's reason: applied any later, a page opened with the list away
+  // draws it and then takes it back. Per browser rather than per account, because what fits is a
+  // property of the screen and not of the person.
+
+  const COLUMN_KEYS = { list: "mainplate:list", rail: "mainplate:rail" };
+
+  const applyColumn = (column, away) => {
+    if (away) document.documentElement.dataset[column] = "shut";
+    else delete document.documentElement.dataset[column];
+  };
+
+  Object.entries(COLUMN_KEYS).forEach(([column, key]) => applyColumn(column, held(key) === "shut"));
+
+  const READING_KEY = "mainplate:reading";
+
+  // In `rem`, so a width chosen scales with the text it is the width of. Anything that is not a
+  // positive number is nothing, which is the measure: this is storage, and arbitrary text.
+  const asReading = (value) => {
+    const rem = Number.parseFloat(value ?? "");
+    return Number.isFinite(rem) && rem > 0 ? rem : null;
+  };
+
+  const applyReading = (rem) => {
+    if (rem === null) document.documentElement.style.removeProperty("--reading");
+    else document.documentElement.style.setProperty("--reading", `${rem}rem`);
+  };
+
+  applyReading(asReading(held(READING_KEY)));
+
+  const paintClock = () => {
+    // Which zone every moment on this page is printed in is the server's decision, and this is the
+    // whole of how it learns what to decide: the browser knows its reader's zone, the server does
+    // not, and a cookie is the one thing that reaches the request for the document itself. A header
+    // this file added would reach the swaps and not the page they land in, which is a transcript
+    // whose rules disagree with the rows beside them.
+    //
+    // **It formats nothing.** The page arrives with every moment already drawn - in a rule, in a
+    // hover, inside a sentence - so rewriting them here would mean a second implementation of what
+    // a date looks like, in a language that cannot see the first. Asking for the page again costs
+    // one load, once, and keeps the one implementation.
+    //
+    // **Here rather than in `start`**, which is what keeps that load from being seen: the server
+    // says which clock it drew against on <html>, whose open tag the parser has already read by the
+    // time this runs, so a page for the wrong zone is thrown away before it is painted rather than
+    // after. `document.body` does not exist yet, which is exactly why the answer is not on it.
+    const named = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!named) return;
+    const asked = cookieValue(ZONE_COOKIE);
+    if (asked !== named) {
+      // `secure` where the page was served over TLS and not otherwise, since a console reached over
+      // plain http on a machine somebody is sitting at would never see the cookie come back at all.
+      const safely = location.protocol === "https:" ? "; secure" : "";
+      document.cookie = `${ZONE_COOKIE}=${encodeURIComponent(named)}; path=/; max-age=31536000; samesite=lax${safely}`;
+      // **Read back rather than assume it took**, which is what stops the reload below being
+      // infinite. Where the origin's cookies are blocked the write above is a silent no-op: the
+      // request carries no zone, the server keeps drawing in its own, and every load would ask for
+      // the page again having changed nothing about what the next one can say. A console drawn
+      // against the wrong clock is worth one reload and is not worth a loop, so where the answer
+      // cannot reach the server this leaves the page it got.
+      if (cookieValue(ZONE_COOKIE) !== named) return;
+    }
+    // Only where this browser had not already asked for this zone, which is what keeps it from
+    // being a loop: the server writes back the zone it *used*, so a name its own zone database
+    // does not have comes back as the console's own and would otherwise be asked for for ever.
+    // A page with no moment on it says nothing at all and is left alone.
+    const drawn = document.documentElement.dataset.zone;
+    if (drawn !== undefined && !sameClock(drawn, named) && asked !== named) location.reload();
+  };
+
+  paintClock();
+
+  const start = () => {
+    // **There may be no document left to wire.** `paintClock` above can ask for the page again from
+    // the head, which abandons the parse where it stands - and `DOMContentLoaded` still fires on
+    // what was abandoned, with no `<body>` ever built. Everything below is about a page a reader is
+    // going to look at, and this one is already being replaced, so there is nothing here to do.
+    if (document.body === null) return;
+    // The theme is the reader's and holds across every session; everything else below is a fact
+    // about one conversation, so it is stored under that conversation's own id.
+    const session = document.body.dataset.session || "?";
+    const scoped = (name) => `mainplate:${name}:${session}`;
+
+    const transcript = () => document.getElementById("transcript");
+
+    // --- What the reader has decided ------------------------------------
+    //
+    // The whole of the state this file keeps. Everything else is a function of it.
+
+    let muted = new Set(); // kinds the key has switched off
+    let landed = null; // the panel the console last put the reader on
+    let folds = new Map(); // what the reader decided about a fold, where they have decided anything
+    let query = "";
+    let hits = [];
+    let at = -1;
+
+    // Pinned to the end as answers arrive, which is where a page starts and where scrolling back to
+    // the bottom returns it. Not stored, and that is the difference from everything else here: the
+    // rest of this state is a decision the reader made *about a conversation* and should find again
+    // tomorrow, where this one is a mode you fall out of by scrolling up and back into by scrolling
+    // down. Kept across a reload it would be a page that opens somewhere the reader has to notice
+    // and undo, rather than at the end of what was said.
+    let following = true;
+    let signatures = new Map(); // what each panel said, so a change can be told from a repaint
+    let sentFrom = null; // the box a message has just left, so the cursor can be put back in it
+    let copied = null; // the panel whose copy button is saying so
+    let saying = null; // and the timer that stops it saying it
+
+    // The drawable blocks a reader asked to see as text rather than as the picture they are drawn
+    // as by default, by the name their copy button has. Not stored, for `following`'s reason: which
+    // way round a diagram is shown is a mode within a visit.
+    let asCode = new Set();
+
+    let shelf = []; // text kept and not sent, as {name, text}
+
+    // Which of the sending menu's answers the box is in the mode of, by its own word, or nothing for
+    // the default. Not stored, and that is the same line `following` is on: this is a mode within a
+    // visit rather than a decision about a conversation, so carrying it across a reload would be a
+    // page that opens as something the reader has to notice and undo.
+    //
+    // Whether it survives a send is the *answer's* own decision and is read off the button the server
+    // drew for it: `Run` stays, because a command is rarely the only one, and everything else comes
+    // back to `Send`, because it is a thing somebody meant once. What makes staying safe is the same
+    // thing that makes a mode safe at all: the button says `Run`, not `Send`.
+    let leading = null;
+
+    try {
+      const stored = JSON.parse(held(scoped("muted")) || "[]");
+      // What is stored is the kinds *muted*, not the ones in play, so a kind added by a later build
+      // arrives in play rather than silently missing from a reader's stored list.
+      if (Array.isArray(stored)) muted = new Set(stored);
+    } catch {}
+
+    // --- The shelf --------------------------------------------------------
+    //
+    // Unsent text, kept for this conversation. It is the reader's own and the server is never told
+    // any of it, which is what lets it live here at all: a page with this store wiped renders exactly
+    // what one without it does, because none of this is a word of the conversation until it is sent.
+
+    const SHELF = scoped("shelf");
+
+    const slots = (raw) => {
+      try {
+        const stored = JSON.parse(raw || "[]");
+        if (!Array.isArray(stored)) return [];
+        return stored.filter((slot) => slot && typeof slot.text === "string");
+      } catch {
+        return [];
+      }
+    };
+
+    // A branch inherits what its parent kept, which is the copy `Service.fork` cannot make:
+    // the server has never seen a draft, so it says which conversation this one came from and the
+    // page holding both does the rest.
+    //
+    // Only where this session has *no* shelf of its own yet, which is a different thing from an empty
+    // one: a reader who cleared theirs has a stored `[]` and must not have the parent's handed back
+    // on the next load. Copied rather than read through, so the two go their own ways exactly as the
+    // turns they were forked beside do.
+    const inherited = () => {
+      const parent = document.body.dataset.forkedFrom;
+      if (!parent) return [];
+      const taken = slots(held(`mainplate:shelf:${parent}`));
+      if (taken.length) hold(SHELF, JSON.stringify(taken));
+      return taken;
+    };
+
+    shelf = held(SHELF) === null ? inherited() : slots(held(SHELF));
+
+    const keepShelf = () => hold(SHELF, JSON.stringify(shelf));
+
+    // What a slot is called: its first line, the way a session is named after its first message. Cut
+    // short because this is a label in a seventeen-rem column and the whole text is one click away.
+    const labelled = (text) => {
+      const first = text.split("\n").find((line) => line.trim()) || "";
+      const cut = first.trim();
+      return cut.length > 42 ? `${cut.slice(0, 41)}…` : cut;
+    };
+
+    const composerBox = () => document.querySelector('.composer textarea[name="prompt"]');
+    // A phone or tablet, where putting the cursor back in the box brings the keyboard up over the
+    // page. `hover: none` is the browser's own flag for this and no width constant has to be kept in
+    // step with the stylesheet's.
+    const touchScreen = () => window.matchMedia("(hover: none)").matches;
+
+    // --- Reading the conversation ---------------------------------------
+
+    const panelsIn = (side) => {
+      const box = transcript();
+      if (!box) return [];
+      return Array.from(box.querySelectorAll(".panel")).filter(
+        (panel) =>
+          !muted.has(panel.dataset.kind) &&
+          (!side || panel.dataset.side === side) &&
+          panel.getClientRects().length > 0,
+      );
+    };
+
+    const shown = (element) => element.getClientRects().length > 0;
+
+    // What one arrow steps over, which the button says rather than this inferring. Panels are
+    // narrowed by the key and by side; the rules are not, because a turn is not one of the kinds the
+    // key switches off - it is the thing those kinds are inside of.
+    //
+    // `.rule--turn` and not every rule: a rule now stands at every model request, so a turn with
+    // four round trips in it would otherwise give the turn arrows four stops and stop meaning turns.
+    //
+    // A rule declares its own `data-stop`, so the forget column finds its stops in the live
+    // transcript rather than the dock being told which sessions have any. That is why the column can
+    // be drawn in every session and be right in all of them: one that has never forgotten simply has
+    // nothing to step to, and the leap to the top is what "before any forget" already means.
+    const stopsFor = (button) => {
+      const box = transcript();
+      if (!box) return [];
+      const stop = button.dataset.stop;
+      if (stop === "turn") return Array.from(box.querySelectorAll(".rule--turn")).filter(shown);
+      if (stop === "forget") return Array.from(box.querySelectorAll('.rule[data-stop="forget"]')).filter(shown);
+      return panelsIn(button.dataset.side);
+    };
+
+    const atEnd = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+
+    // Ours, so the listener that follows the reader's position can tell a scroll they asked for
+    // from one this file performed. It has to cover both directions, because that listener now
+    // decides following in both: without it, following would switch itself off the instant it
+    // worked, *and* a landing on the last panel would switch it back on the instant it was
+    // deliberately switched off.
+    let ours = false;
+
+    const scrolling = (move) => {
+      ours = true;
+      move();
+      requestAnimationFrame(() => {
+        ours = false;
+      });
+    };
+
+    const toEnd = () => {
+      const box = transcript();
+      if (!box) return;
+      scrolling(() => {
+        box.scrollTop = box.scrollHeight;
+      });
+    };
+
+    // The session being read, brought into the list of them, which is a column long enough to put
+    // the current session below the fold. On a phone that column lies shut off the edge of the
+    // page, and it still scrolls: a hidden box keeps its layout, so the session is in view when the
+    // list slides out. `nearest` does nothing when it is already showing.
+    //
+    // Not through `scrolling`, unlike every other scroll this file performs: the listener that
+    // guard exists for watches the transcript, and this moves a different box entirely.
+    const toCurrentSession = () => {
+      const current = document.querySelector(".sessions .session.current");
+      if (current) current.scrollIntoView({ block: "nearest" });
+    };
+
+    // --- Projection ------------------------------------------------------
+    //
+    // Everything the reader has decided, put back onto the markup currently on screen. Called once
+    // at the start and again after every swap, and safe to call at any other time: it states the
+    // whole of what the transcript should look like rather than the difference from anything.
+
+    const paintMuted = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll(".panel").forEach((panel) => {
+        if (muted.has(panel.dataset.kind)) panel.dataset.muted = "";
+        else delete panel.dataset.muted;
+      });
+      document.querySelectorAll(".key__chip").forEach((chip) => {
+        chip.setAttribute("aria-pressed", String(!muted.has(chip.dataset.kind)));
+      });
+    };
+
+    // The shelf as it stands, rebuilt whole rather than diffed. It is a handful of rows the reader
+    // is not interacting with mid-render, so the simplest correct thing is also the right one, and
+    // it means every path that changes the shelf ends the same way.
+    const paintShelf = () => {
+      const list = document.querySelector('[data-shelf="list"]');
+      const empty = document.querySelector('[data-shelf="empty"]');
+      if (!list) return;
+      if (empty) empty.hidden = shelf.length > 0;
+      list.replaceChildren(
+        ...shelf.map((slot, index) => {
+          const row = document.createElement("li");
+          row.className = "shelf__slot";
+          const take = document.createElement("button");
+          take.type = "button";
+          take.className = "shelf__take";
+          take.dataset.shelfTake = String(index);
+          take.title = "Add this to the box";
+          take.textContent = slot.name || "(blank)";
+          const drop = document.createElement("button");
+          drop.type = "button";
+          drop.className = "shelf__drop";
+          drop.dataset.shelfDrop = String(index);
+          drop.title = "Take this off the shelf";
+          drop.setAttribute("aria-label", `Take "${slot.name}" off the shelf`);
+          drop.textContent = "×";
+          row.append(take, drop);
+          return row;
+        }),
+      );
+    };
+
+    const paintLanded = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-landed]").forEach((panel) => delete panel.dataset.landed);
+      if (!landed) return;
+      const panel = box.querySelector(`#${CSS.escape(landed)}`);
+      if (panel) panel.dataset.landed = "";
+    };
+
+    const paintFolds = () => {
+      const box = transcript();
+      if (!box) return;
+      // Only a fold the reader has actually acted on is forced, and it is forced *either* way. The
+      // server renders a read shut and an edit or a command open, so one set of ids to reopen would
+      // put back every command a reader had put away; what has to survive a swap is the decision,
+      // whichever way it went. A fold nobody has touched is left where the server put it.
+      box.querySelectorAll(FOLDS).forEach((fold) => {
+        const decided = folds.get(fold.id);
+        if (decided !== undefined) fold.open = decided;
+      });
+    };
+
+    // What a panel says, as the one thing worth telling a reader has changed.
+    //
+    // The text of its blocks, and deliberately not its markup. A reader unfolding a call, a search
+    // mark laid over a word, the kinds the key has switched off: all of those change a panel's
+    // markup and none of them is news. Text changes when the model says something, when a call is
+    // made, and when a result comes back, which while a turn is being answered is exactly what a
+    // reader is watching for.
+    //
+    // Blocks rather than the whole panel, which leaves out the header row: an anchor and a role are
+    // the same on every render, so nothing there is ever news.
+    // Encoded rather than joined, so two blocks cannot be split differently and read the same: the
+    // separator that would need is a character rendered text is not allowed to contain, and there
+    // is no such character.
+    //
+    // Through `wordsOf`, so what this file seated in a block is not in the block's signature: the
+    // buttons are taken off before a swap and put back after the signature is read, so a repaint
+    // between swaps would otherwise find every panel changed by the word on its own button, and a
+    // draw button that says `code` once pressed would mark its panel as news for being pressed.
+    const signature = (panel) => JSON.stringify(Array.from(panel.querySelectorAll(":scope > .block"), wordsOf));
+
+    // Worked out here rather than taken from the swap, because morphing reports nothing a listener
+    // can hear: `htmx:before:morph:node` is an extension hook rather than a DOM event, and it fires
+    // before htmx has decided whether the node differs at all.
+    const paintFresh = (announce) => {
+      const box = transcript();
+      if (!box) return;
+      const said = new Map();
+      box.querySelectorAll(".panel").forEach((panel) => {
+        const now = signature(panel);
+        said.set(panel.id, now);
+        if (!announce || signatures.get(panel.id) === now) return;
+        // Cleared and re-set around a reflow, so a panel that changes twice in a row is marked
+        // twice: re-adding an attribute an element already carries restarts no animation.
+        delete panel.dataset.fresh;
+        void panel.offsetWidth;
+        panel.dataset.fresh = "";
+      });
+      signatures = said;
+    };
+
+    const paintFollow = () => {
+      const toggle = document.querySelector('[data-follow="toggle"]');
+      if (toggle) toggle.setAttribute("aria-pressed", String(following));
+    };
+
+    // --- Leaders ------------------------------------------------------------
+    //
+    // `/forget ` typed into an empty box puts the composer into that answer's mode, and Escape puts it
+    // back. `! ` is the same thing for `/run`, which earns a key of its own by being the mode reached
+    // oftenest. A leader is a shortcut to a row of the sending menu and never a second way of saying
+    // it: the server parses no leader out of a message, so a paragraph that opens with `/` is a
+    // paragraph, and with this file absent the menu is still there to be opened.
+    //
+    // The space is what commits it, and until it is pressed the word is ordinary text sitting in the
+    // box with the menu open beside it. That is what makes a leader something a reader *finishes*
+    // rather than something that happens to them: `!` alone is a character, `/fo` alone is two, and
+    // the mode arrives only on a key that says the word is done.
+    //
+    // One attribute is the whole of what this sets. Which button shows, what it is called, what it
+    // posts and the sentence above the box are all in `pages.py` and drawn off `data-leading` by the
+    // stylesheet, so nothing here holds a label, a field name or a disposition. That is also what
+    // makes a mode safe rather than the failure a remembered choice would be: the button a reader is
+    // about to press is one the server rendered, saying what it does.
+    //
+    // *Which* modes exist is the server's answer too, read off the buttons it drew rather than kept
+    // in a list here. A session with no files is offered no `Run`, so there is no run mode to enter,
+    // and the two cannot drift because there is only the one thing that decides it.
+    const composerForm = () => document.querySelector(".composer");
+
+    const leaderButton = (leader) => {
+      const form = composerForm();
+      return form && leader ? form.querySelector(`.sender__leader[data-leader="${leader}"]`) : null;
+    };
+
+    const paintLeading = () => {
+      const form = composerForm();
+      if (!form) return;
+      if (leading) form.dataset.leading = leading;
+      else delete form.dataset.leading;
+      // And the pair the mode leaves standing, marked here rather than matched by a stylesheet rule
+      // that names every answer. CSS cannot ask whether a descendant's attribute matches an
+      // ancestor's, so the rule that did this was a written-out list of leaders - which a *plugin's*
+      // answer can never be added to, since which leaders exist is a fact about one session. Marking
+      // them is the same one-attribute move `data-leading` already is, one level down.
+      for (const each of form.querySelectorAll("[data-leader]")) {
+        each.toggleAttribute("data-showing", leading !== null && each.dataset.leader === leading);
+      }
+    };
+
+    // Into a mode, where the server offered one by that name. The answer is `false` otherwise, so a
+    // caller can leave the key it was pressed for as the ordinary character it also is.
+    const lead = (leader) => {
+      if (!leaderButton(leader)) return false;
+      leading = leader;
+      paintLeading();
+      return true;
+    };
+
+    // Out of one, which every send but a staying answer's ends with. Whether a mode outlives what was
+    // sent from it is the answer's own decision, carried on the button the server drew: `Run` stays
+    // because a command is rarely the only one, and the rest come back to `Send`.
+    const leaveMode = () => {
+      if (leading === null || leaderButton(leading)?.dataset.staying !== undefined) return;
+      leading = null;
+      paintLeading();
+    };
+
+    // Which control a send should be attributed to, which is whichever one the mode leaves standing.
+    // `requestSubmit` with no submitter posts no name at all, so without this the keyboard would
+    // always mean Send however the box was drawn.
+    const submitter = (form) => leaderButton(leading) || form.querySelector(".sender__send");
+
+    // Sending the way the button beside the box would. `Keep` is the one answer that posts nothing at
+    // all - the shelf is this file's and the server has never heard of it - so it is a `type=button`
+    // and cannot be a submitter; the keyboard reaches it the way a finger does.
+    const sendFrom = (box) => {
+      const chosen = submitter(box.form);
+      if (chosen && chosen.type !== "submit") chosen.click();
+      else box.form.requestSubmit(chosen);
+    };
+
+    // --- Naming a mode from the keyboard ------------------------------------
+    //
+    // The sending menu doubles as the palette, which is what keeps this one list: the rows already
+    // say what each answer does and already carry its word, so a second list beside them would be a
+    // copy to keep in step. While a leader is being typed the menu is open, narrowed to what still
+    // fits, and Enter takes the row the keyboard is on.
+    //
+    // Only from an empty box and only in the default mode, and that is the whole of what makes it
+    // safe: mid-message a `/` is an ordinary character, and in a command box it is the front of half
+    // the paths anybody types.
+
+    // What may follow the slash is what a leader may be spelled with: a plugin's name is one path
+    // segment, and a repository's leader is that name, a colon and the word, so `/quality-check:run`
+    // has to match or a repository's answers could only ever be reached from the menu. A second
+    // slash is deliberately not in the class, which is what keeps `/etc/hosts` a path rather than a
+    // leader nobody answers to being looked up on every keystroke.
+    const LEADER = /^\/([A-Za-z0-9._:-]*)$/;
+
+    // The word a box holds while somebody is naming an answer, or nothing where it holds anything
+    // else. `!` is spelled here rather than handled beside the keyboard, because it is not a key that
+    // does something: it is `run` written in one character, so it narrows, commits and is undone by a
+    // backspace exactly as `/run` is.
+    const typedLeader = (value) => {
+      if (value === "!") return "run";
+      const named = LEADER.exec(value);
+      return named ? named[1] : null;
+    };
+
+    const senderMenu = () => document.querySelector(".sender__more");
+
+    let offering = false; // whether the menu is open as a palette rather than because it was pressed
+    let leaderAt = 0; // which of the rows still showing the keyboard is on
+
+    const leaderRows = () => [...(senderMenu()?.querySelectorAll(".sender__option") ?? [])];
+
+    const shutLeaders = () => {
+      const menu = senderMenu();
+      leaderRows().forEach((row) => {
+        row.hidden = false;
+        row.removeAttribute("aria-selected");
+      });
+      // Only a menu this opened, so one the reader opened by its caret is left where they put it.
+      if (offering && menu) menu.open = false;
+      offering = false;
+      leaderAt = 0;
+    };
+
+    // What is on offer for the leader typed so far, as the rows left showing. A prefix rather than
+    // anywhere in the word, which is the opposite of the branch field and for a plain reason: a
+    // leader is a short word typed from the front, where a branch is `feature/the-thing` and is
+    // remembered by its middle.
+    const narrowLeaders = () => {
+      const box = composerBox();
+      const menu = senderMenu();
+      const typed = box && leading === null ? typedLeader(box.value) : null;
+      if (typed === null || !menu) {
+        shutLeaders();
+        return [];
+      }
+      const showing = leaderRows().filter((row) => {
+        const fits = row.dataset.leader.startsWith(typed);
+        row.hidden = !fits;
+        return fits;
+      });
+      // Nothing fits, so this was not a leader after all and the box holds ordinary text.
+      if (!showing.length) {
+        shutLeaders();
+        return [];
+      }
+      menu.open = true;
+      offering = true;
+      if (leaderAt >= showing.length) leaderAt = showing.length - 1;
+      showing.forEach((row, at) => row.setAttribute("aria-selected", String(at === leaderAt)));
+      return showing;
+    };
+
+    // Taking one, which is the whole of what a leader does: the word comes out of the box and the
+    // composer is in that answer's mode, with nothing sent and nothing recorded.
+    const takeLeader = (row) => {
+      const box = composerBox();
+      if (!box || !row) return;
+      shutLeaders();
+      box.value = "";
+      lead(row.dataset.leader);
+      box.focus();
+    };
+
+    // --- Narrowing the branches -------------------------------------------
+    //
+    // The one field in the picker that is a search rather than a set of cards, because a starting
+    // point is an open question: a branch, but also a tag, a hash, or `main~3`. So the branches are
+    // drawn under the box and cut to what matches, and typing anything else is still typing.
+    //
+    // Everything here is an enhancement over a field that already works. With this file absent the
+    // box keeps its `<datalist>` and the browser completes from the same names; what enhancing adds
+    // is a list you can *see* and step through. Taking the `list` attribute off is the other half of
+    // that: two dropdowns over one box is one more than a reader can use.
+
+    const basisBox = () => document.querySelector(".basis__box");
+    const basisFound = () => document.getElementById("branches-found");
+
+    let matching = -1; // which of the shown branches the keyboard is on
+
+    const paintBranches = () => {
+      const box = basisBox();
+      const found = basisFound();
+      if (!box || !found) return;
+      // Only where there is something to narrow. A repository that offered none leaves the field
+      // exactly as it was, rather than declaring itself a combobox with an empty list behind it.
+      if (!found.querySelector("[data-branch]")) return;
+      box.removeAttribute("list");
+      box.setAttribute("role", "combobox");
+      box.setAttribute("aria-controls", found.id);
+      box.setAttribute("aria-expanded", String(!found.hidden));
+    };
+
+    const shutBranches = () => {
+      const found = basisFound();
+      if (!found) return;
+      matching = -1;
+      found.hidden = true;
+      basisBox()?.setAttribute("aria-expanded", "false");
+    };
+
+    // What is on offer for what is typed so far, as the buttons left showing. Case-insensitive and
+    // anywhere in the name rather than a prefix, because a branch is named `feature/the-thing` far
+    // more often than it is named for the word you remember about it.
+    const narrowBranches = () => {
+      const box = basisBox();
+      const found = basisFound();
+      if (!box || !found || box.getAttribute("role") !== "combobox") return [];
+      const wanted = box.value.trim().toLowerCase();
+      const showing = [];
+      found.querySelectorAll("[data-branch]").forEach((one) => {
+        const name = one.dataset.branch;
+        // An exact match is the reader having already answered, so there is nothing left to offer:
+        // a list holding only what is in the box is a menu whose one item changes nothing.
+        const fits = name.toLowerCase().includes(wanted) && name !== box.value.trim();
+        one.parentElement.hidden = !fits;
+        if (fits) showing.push(one);
+      });
+      found.hidden = !showing.length;
+      box.setAttribute("aria-expanded", String(!found.hidden));
+      if (matching >= showing.length) matching = showing.length - 1;
+      showing.forEach((one, at) => one.setAttribute("aria-selected", String(at === matching)));
+      return showing;
+    };
+
+    const takeBranch = (name) => {
+      const box = basisBox();
+      if (!box) return;
+      box.value = name;
+      shutBranches();
+      box.focus();
+    };
+
+    // --- Copying -----------------------------------------------------------
+    //
+    // A button on every panel, and one inside every block of code in it. Two places rather than two
+    // things: one look, one listener, one clipboard, one way of saying it worked, and what each one
+    // copies is decided by where it sits.
+    //
+    // Seated here rather than rendered by the server, which the code button forces: a fence is
+    // markup the Markdown renderer produced, so there is no node for `pages.py` to hang a button on
+    // inside one. Rendering the panel's and seating the code's would be two mechanisms for one
+    // thing, and the seating has to exist either way.
+    //
+    // Named after where they sit - the panel, and where in it - so the confirmation below survives a
+    // swap; see `paintCopied`. Positional within a panel, which is sound for the same reason a
+    // panel's blocks are read that way: they only ever grow at the end.
+
+    // `before` is where in its place the button goes, and `null` is the end: a block of code takes
+    // one in its corner, and a panel takes one in the row of facts just ahead of the permalink,
+    // which is also the order the stylesheet's own rules read in.
+    const seated = (place, name, before = null) => {
+      if (place.querySelector(":scope > [data-copy]")) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "copy";
+      button.dataset.copy = name;
+      button.textContent = "copy";
+      button.title = "Copy this to the clipboard";
+      place.insertBefore(button, before);
+    };
+
+    const paintCopies = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll(".panel").forEach((panel) => {
+        const meta = panel.querySelector(":scope > .panel__meta");
+        // A panel with nothing in it yet is the one being waited on, and a button that would copy
+        // the empty string is a control offering to do nothing.
+        const says = [...panel.querySelectorAll(":scope > .block")].some((block) => block.textContent.trim());
+        if (meta && says) seated(meta, panel.id, meta.querySelector(".panel__anchor"));
+        // Only the code *inside a panel*: the raw record on a rule is a bounded box that scrolls,
+        // and a button pinned in a scroller travels with the content and off its own corner.
+        panel.querySelectorAll("pre").forEach((code, at) => seated(code, `${panel.id}:${at}`));
+      });
+      // The reason a pass failed, which is the one thing on this page somebody is going to paste
+      // into an issue, a search, or a message to whoever wrote the plugin. Seated on its own rather
+      // than by the walk above, because it is not in a panel: it is the line the transcript ends on
+      // when nothing is answering the session. Named rather than numbered, since there is only ever
+      // one, and `wireCopy` needs nothing taught - the button sits inside a `pre` like every other.
+      const reason = box.querySelector(`#${ATTENTION} .attention__reason`);
+      if (reason) seated(reason, ATTENTION);
+    };
+
+    // Taken off again before a swap, for the reason the search marks are: these are elements the
+    // server has never heard of, and morphing merges incoming markup into what is on screen.
+    const stripCopies = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-copy]").forEach((button) => button.remove());
+    };
+
+    // Which button has just been copied from, said on that button. A value projected rather than a
+    // label left on the markup, for the reason everything else here is: while a turn is being
+    // answered the transcript is morphed every time anything is recorded, so a button told it was
+    // copied would be told otherwise a moment later - which is exactly when somebody is most likely
+    // to be lifting a result out of a turn they are watching.
+    const paintCopied = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-copy]").forEach((button) => {
+        const done = button.dataset.copy === copied;
+        button.toggleAttribute("data-copied", done);
+        button.textContent = done ? "copied" : "copy";
+      });
+    };
+
+    // --- Drawings ----------------------------------------------------------
+    //
+    // A fence labelled `mermaid` or `svg` is a picture written as text, drawn as the picture, with
+    // a button in its corner that puts the text back and takes it away again. What is drawn is an
+    // *image*: the text becomes a `data:` URL on an `<img>`, after mermaid has turned a diagram into
+    // SVG, or as written where it already is SVG. An image is the one way to put markup a model
+    // wrote on the page with nothing in it running: SVG loaded as an image executes no script,
+    // follows no link and fetches nothing, which is the browser's own rule rather than any
+    // sanitising done here. The cost, stated: text in a drawing cannot be selected or searched, and
+    // it is set in the browser's faces rather than the page's.
+    //
+    // The library is three and a half megabytes and is fetched the first time a diagram is on the
+    // page, so a page with none pays nothing for it. Where it is served is on `<html>`, put there
+    // by `pages.py`, because an asset's address is the server's to say.
+    //
+    // Which blocks are shown as text is a value here and reapplied after every swap, like the
+    // folds: the morph would otherwise put a diagram back in front of the code somebody had just
+    // asked for. A block is named the way its copy button is, by the panel and the position in it.
+
+    // The class the sanitiser lets through on a fence's `<code>`, and what each is drawn as; see
+    // `DRAWABLE` in `markup.py`, which is the one place a label is allowed onto the page.
+    const DRAWABLE = { "language-mermaid": "mermaid", "language-svg": "svg" };
+
+    // What each text drew, by kind, theme and text: `{ src }`, `{ failed }`, or `{ pending: true }`
+    // while the answer is on its way. Keyed by text rather than by block, so a transcript morphed
+    // twenty times while a turn streams draws each diagram once.
+    const pictures = new Map();
+    let library = null; // the diagram library, once asked for
+    let numbered = 0; // mermaid wants an id per render that nothing on the page already has
+
+    const inTheDark = () => {
+      const chosen = document.documentElement.dataset.theme;
+      if (chosen === "dark" || chosen === "light") return chosen === "dark";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    };
+
+    const mermaidLoaded = () => {
+      if (library) return library;
+      library = new Promise((resolve, reject) => {
+        const tag = document.createElement("script");
+        tag.src = document.documentElement.dataset.mermaid;
+        tag.onload = () => resolve(window.mermaid);
+        tag.onerror = () => {
+          // Let go, so a press after the network comes back asks again rather than failing for ever.
+          library = null;
+          reject(new Error("the diagram library could not be fetched"));
+        };
+        document.head.appendChild(tag);
+      });
+      return library;
+    };
+
+    // A diagram at its own size. The library declares its width as a percentage of whatever holds
+    // it, which inside an image is the whole block, so a three-node flowchart would be drawn as
+    // wide as the code was. Its `viewBox` is the size it drew at, and that is what the image is
+    // told it is; `max-width: 100%` on the image still shrinks a wide one to the block.
+    const sized = (svg) => {
+      const document_ = new DOMParser().parseFromString(svg, "image/svg+xml");
+      const root = document_.documentElement;
+      const box = (root.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
+      if (box.length === 4 && box[2] > 0 && box[3] > 0) {
+        root.setAttribute("width", String(box[2]));
+        root.setAttribute("height", String(box[3]));
+        root.removeAttribute("style");
+      }
+      return new XMLSerializer().serializeToString(root);
+    };
+
+    // The SVG one block's text is: rendered where it is a diagram, and taken as written where it
+    // is SVG already. `strict` has the library escape any markup a label carries, and rendering
+    // errors come back as a rejection rather than as a picture of a bomb put on the page.
+    const rendered = async (kind, text, dark) => {
+      if (kind === "svg") return text;
+      const mermaid = await mermaidLoaded();
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        suppressErrorRendering: true,
+        theme: dark ? "dark" : "default",
+      });
+      const { svg } = await mermaid.render(`drawing-${(numbered += 1)}`, text);
+      return sized(svg);
+    };
+
+    const asImage = (svg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+    // Asked for once per text and repainted when it arrives. Nothing here holds an element across
+    // the await: the whole transcript may be morphed between the ask and the answer, and what the
+    // answer is for is a text, which is still on the page or is not.
+    const picture = (kind, text) => {
+      const dark = inTheDark();
+      const key = `${kind}:${dark}:${text}`;
+      const known = pictures.get(key);
+      if (known) return known;
+      const pending = { pending: true };
+      pictures.set(key, pending);
+      rendered(kind, text, dark)
+        .then((svg) => pictures.set(key, { src: asImage(svg) }))
+        .catch((error) => pictures.set(key, { failed: String(error && error.message ? error.message : error) }))
+        .then(() => paintDrawings());
+      return pending;
+    };
+
+    const drawableKind = (code) => {
+      const found = Object.keys(DRAWABLE).find((named) => code.classList.contains(named));
+      return found ? DRAWABLE[found] : null;
+    };
+
+    // One element in the block's place, replaced only when it has to be another kind: an `<img>` for
+    // a picture and a `<span>` for why there is none, both before the code so the button's position
+    // in its corner is the same whichever is showing.
+    const seatedDrawing = (pre, code, tag) => {
+      let element = pre.querySelector(":scope > .drawing");
+      if (element && element.tagName !== tag) {
+        element.remove();
+        element = null;
+      }
+      if (!element) {
+        element = document.createElement(tag);
+        element.className = "drawing";
+        pre.insertBefore(element, code);
+      }
+      return element;
+    };
+
+    const paintDrawings = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll(".panel").forEach((panel) => {
+        panel.querySelectorAll("pre").forEach((pre, at) => {
+          const code = pre.querySelector(":scope > code");
+          const kind = code && drawableKind(code);
+          if (!kind) return;
+          const name = `${panel.id}:${at}`;
+          let button = pre.querySelector(":scope > [data-draw]");
+          if (!button) {
+            button = document.createElement("button");
+            button.type = "button";
+            button.className = "copy draw";
+            button.dataset.draw = name;
+            pre.insertBefore(button, code);
+          }
+          const drawing = pre.querySelector(":scope > .drawing");
+          if (asCode.has(name)) {
+            code.hidden = false;
+            if (drawing) drawing.remove();
+            button.textContent = "draw";
+            button.title = kind === "svg" ? "Draw this SVG" : "Draw this diagram";
+            button.removeAttribute("aria-busy");
+            return;
+          }
+          const text = code.textContent;
+          const state = picture(kind, text);
+          if (state.pending) {
+            // The code stays while the picture is on its way, and the button says it is.
+            button.setAttribute("aria-busy", "true");
+            button.title = "Drawing";
+            return;
+          }
+          button.removeAttribute("aria-busy");
+          button.textContent = "code";
+          button.title = "Show the text this was drawn from";
+          code.hidden = true;
+          if (state.failed) {
+            const said = seatedDrawing(pre, code, "SPAN");
+            said.classList.add("drawing--failed");
+            said.textContent = `Not drawn: ${state.failed}`;
+            return;
+          }
+          const image = seatedDrawing(pre, code, "IMG");
+          image.alt = kind === "svg" ? "An SVG drawing" : "A diagram";
+          if (image.getAttribute("src") !== state.src) {
+            // An SVG the browser cannot parse loads as nothing, which is the one failure the render
+            // above cannot see: it is reported here, by the image itself, and painted like the rest.
+            image.onerror = () => {
+              pictures.set(`${kind}:${inTheDark()}:${text}`, { failed: "the browser could not draw this as an image" });
+              paintDrawings();
+            };
+            image.src = state.src;
+          }
+        });
+      });
+    };
+
+    // Taken off before a swap, for the copy buttons' reason, and the code shown again so the morph
+    // meets the markup the server sent rather than one this file hid.
+    const stripDrawings = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-draw], .drawing").forEach((element) => element.remove());
+      box.querySelectorAll("pre > code[hidden]").forEach((code) => {
+        code.hidden = false;
+      });
+    };
+
+    const wireDraw = () => {
+      document.addEventListener("click", (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const button = pressed.closest("[data-draw]");
+        if (!button) return;
+        const name = button.dataset.draw;
+        if (asCode.has(name)) asCode.delete(name);
+        else asCode.add(name);
+        paintDrawings();
+      });
+    };
+
+    // --- Focusing ----------------------------------------------------------
+    //
+    // A block of lines scrolls sideways rather than wrapping, and the column it scrolls in is the
+    // reading measure, which a diff's gutter and a line of real code outgrow. So a block whose lines
+    // do not fit takes a `focus` button that opens it on its own, as wide as the window, over
+    // everything, in a modal dialog. Over everything rather than into the room beside the measure, because at the widths a
+    // laptop has there is none: the transcript already fills its column between the list and the
+    // rail, and it is a scroll container, so a block let wider than it is clipped.
+    //
+    // What the dialog shows is a copy of the block as it was when pressed. A copy and not the block
+    // moved, because the block is the server's markup and a morph would go looking for it; and a copy
+    // is sound because what overflows is a file, a diff or a fence, which a later render does not
+    // change. The cost, stated: the dialog is modal, so the conversation cannot be scrolled beside
+    // it, and it carries no copy button of its own.
+    //
+    // Only where the block overflows *now*, which is a measurement: it changes as a fold opens, the
+    // column changes width, and the face arrives, so each of those measures again.
+
+    const FOCUSED = "focused";
+
+    const overflows = (pre) => {
+      const code = pre.querySelector(":scope > code");
+      return Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
+    };
+
+    // Every block measured before any is changed, so the walk costs the page one layout rather than
+    // one per block.
+    const paintFocuses = () => {
+      const box = transcript();
+      if (!box) return;
+      const blocks = [...box.querySelectorAll(".panel pre")].map((pre) => [pre, overflows(pre)]);
+      blocks.forEach(([pre, wide]) => {
+        const button = pre.querySelector(":scope > [data-focus]");
+        if (!wide) {
+          if (button) button.remove();
+          return;
+        }
+        if (button) return;
+        const seat = document.createElement("button");
+        seat.type = "button";
+        seat.className = "copy focus";
+        seat.dataset.focus = "";
+        seat.textContent = "focus";
+        seat.title = "Open this block on its own, as wide as the window";
+        pre.insertBefore(seat, pre.querySelector(":scope > code"));
+      });
+    };
+
+    const stripFocuses = () => {
+      const box = transcript();
+      if (!box) return;
+      box.querySelectorAll("[data-focus]").forEach((button) => button.remove());
+    };
+
+    // Made on the first press and found again after that, in the body rather than the transcript so
+    // no swap ever meets it. Shut by the form's own `dialog` method, by Escape, and by a press on the
+    // backdrop, which is the dialog itself as a target because nothing in it is padding.
+    const focusDialog = () => {
+      const found = document.getElementById(FOCUSED);
+      if (found) return found;
+      const dialog = document.createElement("dialog");
+      dialog.id = FOCUSED;
+      dialog.className = FOCUSED;
+      dialog.setAttribute("aria-label", "The block, on its own");
+      const form = document.createElement("form");
+      form.method = "dialog";
+      const shut = document.createElement("button");
+      shut.className = "copy";
+      shut.textContent = "close";
+      shut.title = "Put this away";
+      form.appendChild(shut);
+      dialog.appendChild(form);
+      dialog.addEventListener("click", (event) => {
+        if (event.target === dialog) dialog.close();
+      });
+      document.body.appendChild(dialog);
+      return dialog;
+    };
+
+    const wireFocus = () => {
+      document.addEventListener("click", (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const button = pressed.closest("[data-focus]");
+        if (!button) return;
+        const pre = button.parentElement.closest("pre");
+        if (!pre) return;
+        const shown = pre.cloneNode(true);
+        shown.querySelectorAll("[data-copy], [data-draw], [data-focus], .drawing").forEach((seated) => seated.remove());
+        const dialog = focusDialog();
+        dialog.querySelector(":scope > pre")?.remove();
+        dialog.appendChild(shown);
+        dialog.showModal();
+      });
+      let measuring = null;
+      const measure = () => {
+        if (measuring !== null) return;
+        measuring = requestAnimationFrame(() => {
+          measuring = null;
+          paintFocuses();
+        });
+      };
+      document.addEventListener("toggle", measure, true);
+      // The column changes width with the window, with a side column put away or brought back, and
+      // with the reader dragging its edge, and watching the box it is in covers all three.
+      const place = document.querySelector("main");
+      if (place) new ResizeObserver(measure).observe(place);
+      document.fonts?.ready.then(measure);
+    };
+
+    // --- Search ----------------------------------------------------------
+
+    const clearHits = () => {
+      const box = transcript();
+      // Nothing marked and nothing asked for is the usual case while a turn is being answered, and
+      // this runs on every render then: `normalize()` walks the whole conversation, so it is worth
+      // not doing when there is provably nothing to undo.
+      if (!box || (!hits.length && !query)) return;
+      box.querySelectorAll("mark.hit").forEach((mark) => {
+        mark.replaceWith(document.createTextNode(mark.textContent));
+      });
+      box.normalize();
+      hits = [];
+    };
+
+    const markHits = () => {
+      const box = transcript();
+      if (!box || !query) return;
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.nodeValue.trim()) continue;
+        const parent = node.parentElement;
+        if (!parent) continue;
+        // A panel's own label and permalink are chrome, not conversation, and so is the word on a
+        // copy button - which is seated inside a fence, where the marks would otherwise reach it.
+        //
+        // A fold's opening line goes with them, and it is the one entry here that is skipped for
+        // being a *second copy* rather than for not being conversation: it stands for the body a few
+        // pixels below it, so a word in the first line of one would be found twice and the dock would
+        // step through the same sentence at two stops.
+        if (parent.closest(".panel__meta, [data-copy], .opening")) continue;
+        // Only the kinds the reader left in play, so the count is of what they are looking at.
+        const panel = parent.closest(".panel");
+        if (panel && muted.has(panel.dataset.kind)) continue;
+        nodes.push(node);
+      }
+      for (const node of nodes) {
+        const text = node.nodeValue;
+        const found = spans(text, query);
+        if (!found.length) continue;
+        const pieces = document.createDocumentFragment();
+        let pos = 0;
+        for (const { from, to } of found) {
+          if (from > pos) pieces.appendChild(document.createTextNode(text.slice(pos, from)));
+          const mark = document.createElement("mark");
+          mark.className = "hit";
+          mark.textContent = text.slice(from, to);
+          pieces.appendChild(mark);
+          hits.push(mark);
+          pos = to;
+        }
+        if (pos < text.length) pieces.appendChild(document.createTextNode(text.slice(pos)));
+        node.parentNode.replaceChild(pieces, node);
+      }
+    };
+
+    const field = document.querySelector(".search__input");
+    const count = document.querySelector(".search__count");
+    const steppers = document.querySelectorAll(".search__nav");
+
+    // `go` is what separates a reader asking for a hit from the page noticing one. Going to a hit
+    // opens the folds around it and scrolls to it; merely re-counting after a swap must do
+    // neither, or an answer arriving would drag a reader halfway down the hit list back to the top.
+    const paintSearch = (go) => {
+      hits.forEach((hit) => hit.classList.remove("current"));
+      steppers.forEach((button) => {
+        button.disabled = hits.length === 0;
+      });
+      if (!count) return;
+      if (!query) {
+        count.textContent = "";
+        return;
+      }
+      if (!hits.length) {
+        count.textContent = "no matches";
+        return;
+      }
+      const hit = hits[at];
+      hit.classList.add("current");
+      if (go) {
+        for (let node = hit.parentElement; node; node = node.parentElement) {
+          if (node.tagName === "DETAILS") node.open = true;
+        }
+        hit.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      count.textContent = `${at + 1}/${hits.length}`;
+    };
+
+    const research = (go) => {
+      const wanted = at;
+      clearHits();
+      markHits();
+      // The reader's place in the count is theirs, so it is kept rather than reset: a conversation
+      // grows at its end, so the hit they were on is the hit at the same ordinal.
+      at = hits.length ? Math.min(Math.max(go ? 0 : wanted, 0), hits.length - 1) : -1;
+      paintSearch(go);
+    };
+
+    // How long ago, in the words the cache note uses. Under an hour is the case that matters, since
+    // the retention this console asks for is one, and the hours branch is here so that a longer one
+    // would read correctly rather than as three digits of minutes.
+    const ago = (seconds) => {
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 1) return "just now";
+      if (minutes < 60) return `${minutes}m`;
+      const spare = minutes % 60;
+      return spare ? `${Math.floor(minutes / 60)}h ${spare}m` : `${Math.floor(minutes / 60)}h`;
+    };
+
+    // Whether the provider still holds this conversation's prefix, said against the clock rather
+    // than against the checkpoint. The server sends this region when the session *records* something,
+    // and the interval that decides the answer is exactly the one where nothing is recorded - somebody
+    // reading, thinking, going for lunch - so a server-rendered state would sit there while the
+    // retention rolled past it.
+    //
+    // **What it adds is a duration to a duration, never one clock to another.** `data-since` is how
+    // long ago the server measured the last response to be, and the rest is measured here from the
+    // moment this element was first seen, so a browser whose clock disagrees with the console's is
+    // still right. The stamp goes on the element because a swap replaces it: a new element carries a
+    // fresh `data-since` and gets a fresh stamp, which is exactly what should happen.
+    //
+    // One-sided, like the server: `cold` is asserted and `warm` never is, because eviction cannot be
+    // observed from here. What is said instead is when the prefix was last written.
+    const paintCache = () => {
+      const note = document.getElementById("cache");
+      const state = note?.querySelector(".cache__state");
+      if (!note || !state || note.dataset.since === undefined) return;
+      if (note.seenAt === undefined) note.seenAt = Date.now();
+      const since = Number(note.dataset.since) + (Date.now() - note.seenAt) / 1000;
+      // The retention is the answering wire's and the server leaves it off where it has none to
+      // give, so an absent one says `warm as of` for ever rather than comparing against a NaN that
+      // happens to fall the right way. Nothing has outlasted a duration nobody knows.
+      const retention = note.dataset.retention;
+      const cold = retention !== undefined && since >= Number(retention);
+      state.textContent = cold ? "cold" : `warm as of ${ago(since)}`;
+    };
+
+    // How long until, in the words the attention line uses. `ago`'s shape with seconds kept, because
+    // what this counts down is a lease rather than a lunch break: a wait of forty seconds reading
+    // `just now` would say the opposite of what it means.
+    const soon = (seconds) => {
+      if (seconds <= 0) return "any moment";
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 1) return `${Math.ceil(seconds)}s`;
+      // Days and hours as well, because what this counts down is no longer only a lease: a provider
+      // deferring a session until its allowance resets is days out, and `6623m` is a figure a reader
+      // has to divide twice.
+      //
+      // **`elapsed` in `pages.py`, unit for unit, including the unit that is zero.** The server
+      // renders the first value of every one of these and this takes over a second later, so a wait
+      // landing on a whole hour drawn as `1h 0m` and repainted as `1h` is a figure that changes
+      // shape while a reader is looking at it, which reads as the countdown having moved. Two units
+      // always, and the width holds still.
+      if (minutes < 60) return `${minutes}m ${Math.floor(seconds % 60)}s`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours}h ${minutes % 60}m`;
+      return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+    };
+
+    // How long until the worker looks at this session again, counted here rather than on the server.
+    // The stream sends this region when the worker's standing *changes*, and counting down is exactly
+    // the interval where it does not, so a server-rendered figure would sit at its first value for the
+    // whole wait - which on a ten minute lease is the difference between a page that is waiting and a
+    // page that is stuck, said wrongly.
+    //
+    // `paintCache`'s bargain, field for field: `data-due` is what the server measured, the rest is
+    // measured from the moment this element was first seen, and the stamp lives on the element so a
+    // swap brings a fresh one. Absent on every arm but the held-back delivery, which is the only one
+    // with a figure to keep.
+    const paintDue = () => {
+      const line = document.getElementById(ATTENTION);
+      const due = line?.querySelector(".attention__due");
+      if (!line || !due || line.dataset.due === undefined) return;
+      if (line.seenAt === undefined) line.seenAt = Date.now();
+      due.textContent = soon(Number(line.dataset.due) - (Date.now() - line.seenAt) / 1000);
+    };
+
+    // `announce` is false exactly once, on the first render: every panel is new to this file then,
+    // and a conversation that flashed itself top to bottom on being opened would be pointing at
+    // everything, which is pointing at nothing.
+    const repaint = (announce = true) => {
+      paintFresh(announce);
+      paintMuted();
+      paintShelf();
+      paintLanded();
+      paintFolds();
+      paintFollow();
+      paintLeading();
+      paintBranches();
+      paintOverride();
+      paintCopies();
+      paintCopied();
+      paintDrawings();
+      paintFocuses();
+      paintCache();
+      paintDue();
+      paintNumbers();
+      research(false);
+      if (following) toEnd();
+    };
+
+    // --- Landing ---------------------------------------------------------
+
+    // Every way of arriving at a panel goes through here, so the URL always names where the reader
+    // is. `replaceState` rather than assigning `location.hash`, so twenty steps do not cost twenty
+    // presses of Back; it performs no scroll of its own, hence the explicit one, which honours the
+    // panel's own `scroll-margin-top`.
+    //
+    // The panel is marked as well as named, because `:target` answers to navigation and
+    // `replaceState` is not navigation. The stylesheet draws the mark and `:target` alike, so a
+    // landing and an arrival by link read the same.
+    const land = (panel) => {
+      if (!panel) return;
+      following = false;
+      paintFollow();
+      landed = panel.id;
+      paintLanded();
+      try {
+        history.replaceState(null, "", `#${panel.id}`);
+      } catch {
+        // A page served from somewhere `replaceState` refuses is still perfectly navigable.
+      }
+      // Through `scrolling`, so landing on the *last* panel does not put the reader at the end and
+      // have the listener below read that as them asking to follow it again.
+      scrolling(() => panel.scrollIntoView({ block: "start", behavior: "auto" }));
+    };
+
+    // Following a panel's own permalink is the one way of arriving that does *not* go through
+    // `land`: the browser moves the hash itself, so `:target` follows along and `landed` does not.
+    // Left unwired the two disagree the moment a second link is clicked, and because the
+    // stylesheet draws them alike, the page shows two panels highlighted with no way to tell which
+    // one the reader is actually on. Syncing here rather than dropping `data-landed` altogether,
+    // because `replaceState` is still not navigation and `:target` still cannot see it.
+    const wireHash = () => {
+      window.addEventListener("hashchange", () => {
+        const named = decodeURIComponent((location.hash || "").replace(/^#/, ""));
+        landed = named || null;
+        if (named) {
+          following = false;
+          paintFollow();
+        }
+        paintLanded();
+      });
+    };
+
+    // --- The controls ----------------------------------------------------
+
+    const wireKey = () => {
+      document.querySelectorAll(".key__chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const kind = chip.dataset.kind;
+          if (muted.has(kind)) muted.delete(kind);
+          else muted.add(kind);
+          hold(scoped("muted"), JSON.stringify([...muted]));
+          paintMuted();
+          research(false);
+        });
+      });
+    };
+
+    // Keeping clears the box, which is what makes this "keep that" rather than "copy that": the
+    // reason to shelve a paragraph is almost always to write a different one next.
+    //
+    // Taking *appends* to the box instead of replacing it, and never the other way round. It cannot
+    // lose what somebody has already typed, and it is what assembles several kept comments into one
+    // message, which is the case the shelf exists for.
+    const wireShelf = () => {
+      document.addEventListener("click", (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const control = pressed.closest("[data-shelf], [data-shelf-take], [data-shelf-drop]");
+        if (!(control instanceof HTMLElement)) return;
+        const box = composerBox();
+
+        if (control.dataset.shelf === "keep") {
+          if (!box || !box.value.trim()) return;
+          shelf = [...shelf, { name: labelled(box.value), text: box.value }];
+          box.value = "";
+          box.focus();
+          // The one answer that sends nothing, so nothing here dispatches the `submit` every other
+          // one leaves a mode from. Said outright rather than through a second path: what decides is
+          // still the answer's own `data-staying`.
+          leaveMode();
+        } else if (control.dataset.shelfTake !== undefined) {
+          const slot = shelf[Number(control.dataset.shelfTake)];
+          if (!box || !slot) return;
+          box.value = box.value.trim() ? `${box.value.replace(/\s+$/, "")}\n\n${slot.text}` : slot.text;
+          box.focus();
+          box.setSelectionRange(box.value.length, box.value.length);
+          return; // Nothing was shelved or dropped, so there is nothing to store or redraw.
+        } else if (control.dataset.shelfDrop !== undefined) {
+          const index = Number(control.dataset.shelfDrop);
+          shelf = shelf.filter((_, at) => at !== index);
+        } else {
+          return;
+        }
+
+        keepShelf();
+        paintShelf();
+      });
+    };
+
+    // A `<details>` closes only when its own summary is pressed again, which is right for a fold in
+    // the transcript and wrong for a menu: a menu left open lies over the conversation until the
+    // reader thinks to dismiss it the one way that works. Both of these are enhancements over a
+    // control that already opens, chooses and submits with the file absent.
+    const wireSender = () => {
+      const shut = (except) => {
+        document.querySelectorAll(".sender__more[open]").forEach((menu) => {
+          if (menu !== except) menu.open = false;
+        });
+      };
+      // Choosing an answer shuts the menu, whichever answer it was. The ones that send navigate or
+      // swap so it hardly shows; `Keep` stays on the page, and a menu left standing over the box it
+      // just emptied is the reader having to dismiss the thing they just used.
+      //
+      // Otherwise the summary's own press has already toggled by the time this runs, so the menu it
+      // belongs to is spared and every other one shuts. A press that closed one leaves nothing open.
+      document.addEventListener("click", (event) => {
+        const within = event.target instanceof Element ? event.target.closest(".sender__more") : null;
+        shut(event.target instanceof Element && event.target.closest(".sender__option") ? null : within);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        // A menu open as a leader palette is the box's to dismiss, and putting the focus on the
+        // caret would take the cursor out of the sentence somebody is in the middle of typing.
+        if (offering) return;
+        const open = document.querySelector(".sender__more[open]");
+        if (!open) return;
+        shut(null);
+        open.querySelector("summary")?.focus();
+      });
+    };
+
+    // The palette is driven from the box: what is typed decides whether the menu is open and what is
+    // left in it. Delegated for the reason `wireSend` is - the composer is rebuilt whenever a page
+    // is - and on `input` rather than `keydown` so that pasting and deleting are read the same way
+    // as typing.
+    const wireLeaders = () => {
+      document.addEventListener("input", (event) => {
+        const box = event.target;
+        if (box instanceof HTMLTextAreaElement && box.name === "prompt") narrowLeaders();
+      });
+      // With a leader in the box the menu's rows are a palette rather than a set of destinations, so
+      // pressing one has to choose the mode instead of posting `/fo` as a message. In the capture
+      // phase, which stops both the row's own submit and the shelf's listener further down: `Keep`
+      // pressed here would otherwise shelve the leader somebody was still typing.
+      document.addEventListener(
+        "click",
+        (event) => {
+          if (!offering) return;
+          const row = event.target instanceof Element ? event.target.closest(".sender__option") : null;
+          if (!row) return;
+          // Said rather than left to the box being emptied a line later, which would also stop the
+          // send and would stop it for a reason nothing here decided: a form without a `required`
+          // box, or a shelf that read what was typed before this ran, and the press is a send again.
+          event.preventDefault();
+          event.stopPropagation();
+          takeLeader(row);
+        },
+        true,
+      );
+    };
+
+    // Delegated for the reason `wireSend` is: this block is swapped in whenever a workspace card is
+    // picked, so wiring the element at load would wire the one the page happened to start with.
+    const wireBranches = () => {
+      document.addEventListener("input", (event) => {
+        if (event.target === basisBox()) narrowBranches();
+      });
+      // Opening on focus is what makes the list a way of *reading* what is on offer rather than only
+      // of completing something already half typed.
+      document.addEventListener("focusin", (event) => {
+        if (event.target === basisBox()) narrowBranches();
+        else if (!(event.target instanceof Element) || !event.target.closest(".basis__found")) shutBranches();
+      });
+      document.addEventListener("keydown", (event) => {
+        const box = basisBox();
+        if (event.target !== box || box.getAttribute("role") !== "combobox") return;
+        if (event.key === "Escape") {
+          const found = basisFound();
+          if (found && !found.hidden) event.stopPropagation();
+          shutBranches();
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          const showing = narrowBranches();
+          if (!showing.length) return;
+          // Preventing the default is what keeps the caret still: an arrow key in a text field
+          // otherwise runs it to one end of what is typed while the selection moves behind it.
+          event.preventDefault();
+          matching = (matching + (event.key === "ArrowDown" ? 1 : -1) + showing.length) % showing.length;
+          narrowBranches();
+          showing[matching]?.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (event.key !== "Enter") return;
+        const showing = narrowBranches();
+        if (matching < 0 || !showing[matching]) return;
+        // Only where the reader is actually on one. Enter in a text field submits its form, and this
+        // field's form is the one that starts the session, so swallowing it whenever the list is
+        // open would make the obvious key do nothing on a page whose whole purpose is that form.
+        event.preventDefault();
+        takeBranch(showing[matching].dataset.branch);
+      });
+      // `mousedown` rather than `click`, and that is the whole of why pressing one works: a click
+      // takes the focus off the box first, and the `focusin` above would shut the list out from
+      // under the press. Preventing the default here means the focus never leaves at all.
+      document.addEventListener("mousedown", (event) => {
+        const pressed = event.target instanceof Element ? event.target.closest("[data-branch]") : null;
+        if (!pressed) {
+          if (event.target instanceof Element && !event.target.closest(".basis__field")) shutBranches();
+          return;
+        }
+        event.preventDefault();
+        takeBranch(pressed.dataset.branch);
+      });
+    };
+
+    const wireSearch = () => {
+      if (!field) return;
+      field.addEventListener("input", () => {
+        query = field.value;
+        research(true);
+      });
+      field.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        step(event.shiftKey ? -1 : 1);
+      });
+      const step = (delta) => {
+        if (!hits.length) return;
+        at = (at + delta + hits.length) % hits.length;
+        paintSearch(true);
+      };
+      steppers.forEach((button) => {
+        button.addEventListener("click", () => step(button.dataset.search === "prev" ? -1 : 1));
+      });
+    };
+
+    const wireDock = () => {
+      document.querySelectorAll("[data-step]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const box = transcript();
+          if (!box) return;
+          const stops = stopsFor(button);
+          const top = box.getBoundingClientRect().top;
+          const tops = stops.map((stop) => stop.getBoundingClientRect().top - top);
+          land(stops[stepIndex(tops, Number(button.dataset.step), 40)]);
+        });
+      });
+
+      // The start of a conversation is the rule that opens its first turn, and not the first panel
+      // under it: a turn rule carries that turn's own facts and its fork link, and where the stretch
+      // has instructions there is a system prompt panel between the two, so a leap to the first
+      // panel left the top of the conversation above the reader with nothing saying so. The end is
+      // still the last panel, because nothing is drawn below one.
+      document.querySelectorAll("[data-leap]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const box = transcript();
+          if (!box) return;
+          const panels = panelsIn(null);
+          land(button.dataset.leap === "start" ? box.querySelector(".rule--turn") : panels[panels.length - 1]);
+        });
+      });
+
+      // Three answers to what is folded, and the third is not a midpoint between the other two: they
+      // set every fold one way, and `default` puts each one back where the console had it, which is
+      // a different answer per fold - a call shut, a reply open, a system prompt away. It is the way
+      // back from either of the others, which without it are one-way presses over a conversation.
+      //
+      // Nothing here records anything: setting `open` dispatches `toggle`, so `wireFolds` takes all
+      // three down the one path every other press already goes down.
+      document.querySelectorAll("[data-fold]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const box = transcript();
+          if (!box) return;
+          const asked = button.dataset.fold;
+          box.querySelectorAll(FOLDS).forEach((fold) => {
+            fold.open = asked === "default" ? fold.dataset.opens === "open" : asked === "open";
+          });
+        });
+      });
+
+      const toggle = document.querySelector('[data-follow="toggle"]');
+      if (toggle) {
+        toggle.addEventListener("click", () => {
+          following = !following;
+          paintFollow();
+          if (following) toEnd();
+        });
+      }
+    };
+
+    // Following *is* being at the end, so where the reader has scrolled to decides it in both
+    // directions: away from the end stops it, back to the end starts it again. One rule rather than
+    // a release and a separate way back, which is what makes it a mode you can leave and return to
+    // by doing the obvious thing, rather than a setting you have to remember you switched off.
+    //
+    // Watching the scroll itself covers the wheel, the keyboard and the scrollbar alike, which
+    // three separate input listeners would not; `ours` is what keeps this file's own scrolls out of
+    // it, and it has to, because every one of those would otherwise answer a question the reader
+    // was not asked.
+    const wireScroll = () => {
+      document.addEventListener(
+        "scroll",
+        (event) => {
+          const box = transcript();
+          if (!box || event.target !== box || ours) return;
+          const now = atEnd(box);
+          if (now === following) return;
+          following = now;
+          paintFollow();
+        },
+        true,
+      );
+    };
+
+    // What the reader decided about each fold they have touched, kept as they press rather than read
+    // back later: a `<details>` closed by the next swap would otherwise look to this file like one
+    // they shut. Every kind that folds, since a command opens by default and a call does not, so
+    // reading a set of ids back off the page could not tell a decision from a default.
+    //
+    // **Every toggle is taken as the reader's, and that is only true because the server never
+    // changes its mind.** Where a fold starts is decided per kind and never per render - a call is
+    // shut whether or not it has come back, a command is open - so a morph
+    // delivering a result adds no `open` and removes none the reader did not set, and the only
+    // toggles left are presses. A server that drew a call open while it was out and shut once it
+    // returned broke exactly this: the morph's own toggle was recorded as a decision, and every
+    // call a reader watched arrive stayed open for good.
+    //
+    // The dock's third button is the way back from any decision, and it is why the *server* still
+    // says where each fold started: see `data-opens` and `opens` in `pages.py`.
+    const wireFolds = () => {
+      document.addEventListener("toggle", (event) => {
+        const fold = event.target;
+        if (!(fold instanceof HTMLDetailsElement) || !fold.matches(FOLDS)) return;
+        folds.set(fold.id, fold.open);
+      }, true);
+    };
+
+    // An open fold's summary is one row at the top of a box that may be several screens of output, so
+    // putting a long one away meant scrolling back up to the single place that would do it. The frame
+    // shuts it too: the body's own padding, the labels in it, the room around the output, anything in
+    // the box that is not the output itself. That room is at the *bottom* as well, which is where a
+    // reader who has just read to the end already is.
+    //
+    // It is one complaint about three boxes: a command is drawn open so shutting is the press made
+    // oftenest there, a call the reader opened to check the work is the one whose return runs to
+    // hundreds of lines, and a system prompt is the longest thing on the page. A rule that held for
+    // one and not the others would be boxes of the same shape answering the same press differently.
+    //
+    // Whose fold it shuts is read off the frame, which is what keeps this one rule now that a
+    // document's fold is the panel around it and a call's is still the call. See `FRAMES`.
+    //
+    // What is *in* the box is the exemption, and it is the whole of what makes this safe. A click in
+    // there is usually the start of lifting a line out, and a panel that folded under somebody
+    // selecting from it would cost more than the scroll it saves. Two selectors because the content
+    // takes two shapes - a `pre` for a command's output and a tool's return, rendered prose for a
+    // system prompt - and the exemption is about the content rather than about either shape. A press
+    // that *ended* a drag is out for the same reason: a browser reports one as a click on whatever
+    // the pointer came to rest over, so a selection still standing is a press that was not aimed at
+    // the frame. `no output` is this console's own sentence rather than the command's, so it stays
+    // part of the frame.
+    //
+    // Shutting only. Opening is the summary's, because a shut panel is a summary and little else, and
+    // this is not the toggle in another place - it is the way out of a box too tall to scroll back up.
+    // Setting `open` dispatches `toggle`, so the decision is recorded by `wireFolds` like any other.
+    const wireShutting = () => {
+      document.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element)) return;
+        const frame = event.target.closest(FRAMES);
+        if (!frame || event.target.closest("summary, pre, .text")) return;
+        const fold = frame.closest(FOLDS);
+        if (!fold || !fold.open) return;
+        if (document.getSelection()?.isCollapsed === false) return;
+        fold.open = false;
+      });
+    };
+
+    const wireTheme = () => {
+      const buttons = document.querySelectorAll("[data-theme-choice]");
+      const paint = (theme) => {
+        buttons.forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.themeChoice === theme));
+        });
+      };
+      paint(asTheme(held(THEME_KEY)));
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const theme = button.dataset.themeChoice;
+          applyTheme(theme);
+          hold(THEME_KEY, theme);
+          paint(theme);
+          // A diagram is drawn in the theme's own palette, so the ones showing are drawn again.
+          paintDrawings();
+        });
+      });
+    };
+
+    // Where the rail has room to stand beside the conversation there is nothing to unclasp, and
+    // the stylesheet does not draw its clasp at all. Where it has not, the rail would lie over the
+    // very text it exists to navigate, so it is held shut and the clasp is the press that lets it
+    // out. The session list is the same thing from the other edge on a phone. Nothing here measures
+    // the window, so the script and the stylesheet cannot disagree about where either fits.
+    //
+    // Opening one shuts the other: a phone has room for one of them across it at a time, and the
+    // two slid out together would cross in the middle.
+    const wireClasps = () => {
+      const folds = [".sessions", ".rail"]
+        .map((selector) => {
+          const box = document.querySelector(selector);
+          return { box, clasp: box && box.querySelector(":scope > [aria-expanded]") };
+        })
+        .filter(({ clasp }) => clasp);
+      const open = (fold, wanted) => {
+        if (wanted) fold.box.dataset.open = "";
+        else delete fold.box.dataset.open;
+        fold.clasp.setAttribute("aria-expanded", String(wanted));
+      };
+      folds.forEach((fold) => {
+        fold.clasp.addEventListener("click", () => {
+          const wanted = fold.clasp.getAttribute("aria-expanded") !== "true";
+          folds.forEach((other) => open(other, other === fold && wanted));
+        });
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") folds.forEach((fold) => open(fold, false));
+      });
+    };
+
+    // On a wide window each side column has a press on its inner edge that puts it away, and the
+    // same press brings it back. What is away was pinned on <html> before the first paint; this says
+    // it on the buttons and keeps it. The stylesheet draws no button on a narrow window, where the
+    // clasps are what put the columns away, so nothing here asks how wide the window is.
+    const wireColumns = () => {
+      document.querySelectorAll("[data-fold-column]").forEach((button) => {
+        const column = button.dataset.foldColumn;
+        const called = button.dataset.called;
+        const paint = () => {
+          const away = document.documentElement.dataset[column] === "shut";
+          button.setAttribute("aria-expanded", String(!away));
+          button.setAttribute("aria-label", away ? `Bring the ${called} back` : `Put the ${called} away`);
+          button.title = button.getAttribute("aria-label");
+        };
+        paint();
+        button.addEventListener("click", () => {
+          const away = document.documentElement.dataset[column] !== "shut";
+          applyColumn(column, away);
+          if (away) hold(COLUMN_KEYS[column], "shut");
+          else unhold(COLUMN_KEYS[column]);
+          paint();
+        });
+      });
+    };
+
+    // The conversation's left edge, dragged, sets how wide it is read; the right edge is the
+    // transcript's scrollbar. Symmetric about the middle, since the column is centred, so the width
+    // is twice the distance from the pointer to the middle. What is kept is the width the column was
+    // actually drawn at, which the stylesheet has already held to the room there is: a drag past the
+    // edge of a wide screen keeps that screen's width rather than a number no screen showed.
+    //
+    // A separator a keyboard can reach, as the pattern for one says: the arrows move it a step, and
+    // a double press or Home puts the measure back.
+    const READING_FLOOR = 30;
+    const READING_STEP = 2;
+
+    const wireReading = () => {
+      const place = document.querySelector("main");
+      const column = place?.querySelector(":scope > .transcript");
+      if (!place || !column) return;
+      const grip = document.createElement("div");
+      grip.className = "reading__grip";
+      grip.tabIndex = 0;
+      grip.setAttribute("role", "separator");
+      grip.setAttribute("aria-orientation", "vertical");
+      grip.setAttribute("aria-label", "How wide the conversation is read");
+      grip.title = "Drag to change how wide the conversation is read; double-click for the default";
+      place.appendChild(grip);
+      const rem = () => Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const drawn = () => Math.round((column.getBoundingClientRect().width / rem()) * 2) / 2;
+      const say = () => grip.setAttribute("aria-valuenow", String(drawn()));
+      const keep = () => {
+        hold(READING_KEY, String(drawn()));
+        say();
+      };
+      const reset = () => {
+        applyReading(null);
+        unhold(READING_KEY);
+        say();
+      };
+      say();
+      // How far the pointer took hold to the left of the edge itself, so the edge follows the
+      // pointer from where it was grabbed rather than jumping to it by the grip's own width.
+      let grabbed = 0;
+      grip.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        grabbed = column.getBoundingClientRect().left - event.clientX;
+        grip.setPointerCapture(event.pointerId);
+        grip.dataset.dragging = "";
+      });
+      grip.addEventListener("pointermove", (event) => {
+        if (!grip.hasPointerCapture(event.pointerId)) return;
+        const box = place.getBoundingClientRect();
+        const middle = box.left + box.width / 2;
+        applyReading(Math.max(READING_FLOOR, (2 * (middle - event.clientX - grabbed)) / rem()));
+      });
+      grip.addEventListener("lostpointercapture", () => {
+        delete grip.dataset.dragging;
+        keep();
+      });
+      grip.addEventListener("dblclick", reset);
+      grip.addEventListener("keydown", (event) => {
+        const step = { ArrowLeft: READING_STEP, ArrowRight: -READING_STEP }[event.key];
+        if (event.key === "Home") {
+          event.preventDefault();
+          reset();
+          return;
+        }
+        if (step === undefined) return;
+        event.preventDefault();
+        applyReading(Math.max(READING_FLOOR, drawn() + step));
+        keep();
+      });
+    };
+
+    // --- The picker ------------------------------------------------------
+    //
+    // Everything this file adds to the picker is an enhancement over markup that already works: the
+    // fold is a checkbox and the folding is a CSS `:has()` rule, so with this absent a group opens,
+    // collapses to what is checked, and posts it. What is added is the two conveniences that need a
+    // script - shutting a group once something in it is picked, and narrowing an open one to what
+    // is typed.
+    //
+    // A card is found structurally, as a label with a radio in it, rather than by a list of the
+    // four classes that happen to be cards today, so a fifth kind of picker needs no edit here.
+
+    const shut = (part) => {
+      const toggle = part.querySelector(":scope > .picker__toggle");
+      if (toggle) toggle.checked = false;
+    };
+
+    // The override box says what leaving it empty sends, which is the picked model's own number, so
+    // it follows the pick. The sentence is copied off the card rather than composed here: the server
+    // renders one per card and the one for the starting model into the box, so this holds no wording
+    // of its own and with the file absent the box is right for the model the page opened on.
+    const paintOverride = () => {
+      const box = document.getElementById("output-override");
+      const picked = document.querySelector(".model__pick:checked")?.closest("[data-override]");
+      if (box && picked) box.placeholder = picked.dataset.override;
+    };
+    // Matching is over a card's whole text, which is why a model answers to its name and to the
+    // routed id under it: both are printed on the card.
+    const narrow = (part, needle) => {
+      part.querySelectorAll("label:has(input[type=radio])").forEach((card) => {
+        card.toggleAttribute("data-away", Boolean(needle) && !card.textContent.toLowerCase().includes(needle));
+      });
+      // A provider heading with nothing left under it is a heading for nothing.
+      part.querySelectorAll(".models__provider").forEach((group) => {
+        group.toggleAttribute("data-away", !group.querySelector("label:has(input[type=radio]):not([data-away])"));
+      });
+    };
+
+    // Delegated, because the model group is replaced wholesale whenever the endpoint changes, so a
+    // listener wired to the radios at load would be pointing at cards that no longer exist.
+    const wireFolding = () => {
+      document.addEventListener("change", (event) => {
+        const pick = event.target;
+        if (!(pick instanceof HTMLInputElement) || pick.type !== "radio") return;
+        const part = pick.closest(".picker__part");
+        if (part) shut(part);
+        paintOverride();
+      });
+    };
+
+    const wireFilter = () => {
+      document.addEventListener("input", (event) => {
+        const field = event.target;
+        if (!(field instanceof HTMLInputElement) || !field.classList.contains("picker__filter-field")) return;
+        const part = field.closest(".picker__part");
+        if (!part) return;
+        const needle = field.value.trim().toLowerCase();
+
+        // Naming one exactly *is* choosing it, which is what taking an entry from the browser's
+        // completion menu produces: leaving the reader to then reach for the single card still
+        // showing is a step they have already taken. Only ever an exact match on the whole name,
+        // so typing toward a longer one cannot pick something on the way past.
+        const named = [...part.querySelectorAll("label[data-name]")].filter(
+          (card) => card.dataset.name.toLowerCase() === needle,
+        );
+        if (named.length !== 1) {
+          narrow(part, needle);
+          return;
+        }
+        field.value = "";
+        narrow(part, "");
+        const pick = named[0].querySelector("input[type=radio]");
+        if (pick && !pick.checked) {
+          pick.checked = true;
+          // A real `change`, so everything already listening hears it: the fold shuts, and an
+          // endpoint's own `hx-get` swaps the model group. Setting `.checked` fires nothing.
+          pick.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          // Already the choice, so nothing changes and no event would fire. Shut it anyway: naming
+          // it is the reader saying they are done here either way.
+          shut(part);
+        }
+      });
+    };
+
+    // Shift-Enter sends, and plain Enter still breaks the line. That way round because a message
+    // here is prose that often wants a second paragraph and a fenced block, and a box where the
+    // obvious key sends is a box you cannot write one in without learning a second key first.
+    //
+    // `requestSubmit` rather than `submit`, and the difference is the whole of why this works on
+    // both pages: `submit()` posts without dispatching a `submit` event, so htmx would never see
+    // the send on a session page and the browser would navigate away from a conversation. It also
+    // runs the form's own validation, so an empty box refuses here exactly as it refuses the
+    // button, rather than posting a message nobody typed.
+    //
+    // Delegated, because the composer is rebuilt whenever a page is: this is one listener for every
+    // box on every page rather than one wired per form at load.
+    const wireSend = () => {
+      document.addEventListener("keydown", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLTextAreaElement) || box.name !== "prompt" || !box.form) return;
+        // While the palette is open the keyboard is choosing a mode rather than writing a message.
+        // Enter is safe to take here where it is not anywhere else in this box, because what it
+        // would otherwise do is break a line in the middle of `/fo`.
+        if (offering) {
+          const showing = narrowLeaders();
+          // The space is what commits a leader, and only where the box names an answer in full:
+          // `/forget ` and `! ` are somebody who has finished the word, where `/fo ` is somebody who
+          // has not, and taking the row the keyboard happens to be on would put the box in a mode
+          // they were still spelling their way towards. Unnamed, the key types itself, which breaks
+          // the pattern and puts the menu away on the next `input`.
+          if (event.key === " ") {
+            const named = showing.find((row) => row.dataset.leader === typedLeader(box.value));
+            if (!named) return;
+            event.preventDefault();
+            takeLeader(named);
+            return;
+          }
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            leaderAt = (leaderAt + (event.key === "ArrowDown" ? 1 : -1) + showing.length) % showing.length;
+            narrowLeaders();
+            return;
+          }
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            takeLeader(showing[leaderAt]);
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            shutLeaders();
+            return;
+          }
+        }
+        if (event.key === "Escape" && leading !== null) {
+          event.preventDefault();
+          leading = null;
+          paintLeading();
+          return;
+        }
+        if (event.key !== "Enter" || !event.shiftKey) return;
+        event.preventDefault();
+        // Attributed rather than left to the browser, because `requestSubmit()` with no submitter
+        // posts no button's pair at all: unattributed, a command typed into a command box would
+        // arrive as an ordinary message and be said to the model.
+        sendFrom(box);
+      });
+      // Sending is a decision to be looking at the end: whatever a reader had scrolled up to check
+      // before typing, what they want to see now is the answer to what they just sent. On `submit`
+      // rather than beside the keyboard path above, so the button, the keyboard, and anything else
+      // that submits the form are one rule; `requestSubmit` is what makes that true of the keyboard,
+      // since `submit()` would post without ever dispatching this.
+      document.addEventListener(
+        "submit",
+        (event) => {
+          const form = event.target;
+          if (!(form instanceof HTMLFormElement)) return;
+          const box = form.querySelector('textarea[name="prompt"]');
+          if (!box) return;
+          // A message that happens to open with `/` is an ordinary message, so sending one is
+          // allowed while the palette is up - but the box is about to be emptied, and a palette left
+          // standing over an empty box is offering to complete something nobody is typing.
+          shutLeaders();
+          sentFrom = box;
+          following = true;
+          paintFollow();
+          // And the mode goes with the message, unless it is one that stays. A turn of the event loop
+          // later, because what leaving a mode does is hide the very button this send is attributed
+          // to: read before that, the submitter is the control the reader pressed, which is the whole
+          // of what makes a mode mean anything.
+          setTimeout(leaveMode, 0);
+        },
+        true,
+      );
+      // And sending takes the focus off the box whichever way it was sent: the button takes it on a
+      // click, and `hx-disable` blurs the box itself while the post is in flight. Either way the
+      // next thing somebody does is type again, so the box is where the cursor belongs. Not on a
+      // touch screen, where putting it back brings the keyboard up over the answer the reader is now
+      // watching for: there the box waits to be touched.
+      //
+      // A turn of the event loop later, because htmx dispatches this event and re-enables what it
+      // disabled immediately afterwards: focused any sooner, the box is still disabled and takes
+      // nothing. Only where nothing else has claimed the focus in the meantime, so a reader who went
+      // to the search box while the message was in flight is left where they went.
+      document.addEventListener("htmx:finally:request", () => {
+        const box = sentFrom;
+        sentFrom = null;
+        if (!box) return;
+        setTimeout(() => {
+          const holding = document.activeElement;
+          if (touchScreen()) return;
+          if (holding === null || holding === document.body) box.focus();
+        }, 0);
+      });
+    };
+
+    // --- What comes out of a copy button -----------------------------------
+
+    // A node's text with this file's own buttons taken back out of it: a button seated inside a
+    // fence is inside the very text that fence would otherwise hand over.
+    //
+    // `textContent` rather than `innerText`, and that is what makes the answer independent of what
+    // the reader has open: `innerText` is what is *rendered*, so a folded call would copy as its
+    // summary alone and one button would give two different answers a click apart.
+    const wordsOf = (node) => {
+      const taken = node.cloneNode(true);
+      taken.querySelectorAll("[data-copy], [data-draw], [data-focus], .drawing").forEach((seated) => seated.remove());
+      return taken.textContent;
+    };
+
+    // What one block says, as it was written rather than as it is drawn.
+    //
+    // A message is rendered Markdown, and the rendering is lossy in exactly the way somebody copying
+    // cares about: the fences, the emphasis, the list markers and the table are gone from the text of
+    // the page. So a block that was Markdown carries its own source and that is what is handed over -
+    // see `written_block` in `pages.py`. A block of code inside one needs no such thing, since a
+    // fence renders as the characters it was written with.
+    //
+    // A tool call is the block that is not simply its own text either: its parts are a name, what it
+    // was handed and what it gave back, and run together they are one unreadable line. So the pairs
+    // are read off the list the server already draws them as, which keeps the labels in one place -
+    // "called with", "returned" and "diff" are written in `calls.py` and nowhere here. A diff's
+    // line numbers are an attribute the stylesheet paints rather than text, so they are not in
+    // what comes out here, which is the point: copying a diff copies the diff. A read's anchors are
+    // not on the page at all.
+    //
+    // A command is the same problem in a smaller shape: the line, the status and the output run
+    // together read as one word followed by a wall. Its line is what somebody copying almost always
+    // wants back, so it leads, and its output follows on a line of its own.
+    const spoken = (block) => {
+      if (block.dataset.markdown !== undefined) return block.dataset.markdown.trim();
+      const line = block.querySelector(".ran__line");
+      if (line) {
+        const output = block.querySelector(".ran__body");
+        return [line.textContent.trim(), output && wordsOf(output).trim()].filter(Boolean).join("\n");
+      }
+      const body = block.querySelector(".tool__body");
+      if (!body) return wordsOf(block).trim();
+      const name = block.querySelector(".tool__name");
+      const said = Array.from(body.children, (part) => wordsOf(part).trim());
+      return [name && name.textContent.trim(), ...said].filter(Boolean).join("\n");
+    };
+
+    // A panel's blocks and nothing else: the role, the permalink and the button itself are chrome,
+    // which is the same cut `signature` makes and the same one the search already skips.
+    const copyable = (panel) =>
+      Array.from(panel.querySelectorAll(":scope > .block"), spoken)
+        .filter(Boolean)
+        .join("\n\n");
+
+    // The clipboard, or a throwaway textarea where the page has none to reach. That second path is
+    // not a fallback around something that failed: `navigator.clipboard` is simply absent outside a
+    // secure context, which a console reached at a bare address on a network is, and what it would
+    // leave there instead is a button that silently does nothing.
+    const copyToClipboard = async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {}
+      const box = document.createElement("textarea");
+      box.value = text;
+      box.style.position = "fixed";
+      box.style.opacity = "0";
+      document.body.appendChild(box);
+      box.select();
+      try {
+        document.execCommand("copy");
+      } catch {}
+      box.remove();
+    };
+
+    // Delegated, because every one of these is seated inside the region that is morphed whenever the
+    // session records anything: wired to the buttons themselves, the listeners would be pointing at
+    // the panels of whatever the conversation looked like when it was opened.
+    //
+    // What a button copies is decided by where it sits: a block of code hands over itself, and a
+    // panel's own hands over what the panel says.
+    const wireCopy = () => {
+      document.addEventListener("click", async (event) => {
+        const pressed = event.target;
+        if (!(pressed instanceof HTMLElement)) return;
+        const button = pressed.closest("[data-copy]");
+        if (!button) return;
+        const code = button.parentElement.closest("pre");
+        const panel = button.closest(".panel");
+        if (!code && !panel) return;
+        await copyToClipboard(code ? wordsOf(code) : copyable(panel));
+        copied = button.dataset.copy;
+        paintCopied();
+        clearTimeout(saying);
+        saying = setTimeout(() => {
+          copied = null;
+          paintCopied();
+        }, 1200);
+      });
+    };
+
+    // The mark comes off when the animation it drives has run, so a panel that changes again is
+    // marked again. Named, because it is not the only animation on the page: the working dots run
+    // forever, and clearing on any animation at all would take the mark off before it was seen.
+    //
+    // The animation is on the panel's `::after` and the event still arrives with the panel as its
+    // target: an animation on a pseudo-element reports the element that originated it, and names
+    // the pseudo separately.
+    const wireFresh = () => {
+      document.addEventListener(
+        "animationend",
+        (event) => {
+          if (event.animationName !== "panel-arriving") return;
+          if (event.target instanceof HTMLElement) delete event.target.dataset.fresh;
+        },
+        true,
+      );
+    };
+
+    // --- Swaps -------------------------------------------------------------
+    //
+    // Everything this file put in the transcript comes out before the swap and goes back after it:
+    // the search marks, and the copy buttons. Taking them off first is not tidiness: morphing merges
+    // the incoming markup into the DOM already on screen, and elements this file put there are not
+    // in that markup, so leaving them would make the merge reconcile nodes the server has never
+    // heard of.
+    // A number on a plugin's card is typed rather than set, so it does not take effect on a keystroke
+    // and the button beside it has to say there is something to press. `defaultValue` is exactly the
+    // `value` attribute the server rendered, so this compares what is in the box against what was
+    // recorded rather than against anything kept here - which is why a swap needs no repaint: the box
+    // that comes back is a new element carrying the new default and no mark.
+    //
+    // Delegated, because that swap replaces the form: a listener wired to the box at load would be
+    // pointing at a box that no longer exists after the first press.
+    //
+    // The mark is on the row rather than on the form, because the button is the row's own: a card
+    // with two numbers shows a mark against the one that changed. A clean row is marked as well as
+    // a dirty one, since a clean row hides its button and a row nothing has marked shows it, which
+    // is what keeps the form working with this file absent.
+    const markNumber = (box) => {
+      const row = box.closest(".plugin__number");
+      if (!row) return;
+      const clean = box.value === box.defaultValue;
+      row.toggleAttribute("data-clean", clean);
+      row.toggleAttribute("data-dirty", !clean);
+    };
+
+    const paintNumbers = () => {
+      document.querySelectorAll(".plugin__number input").forEach(markNumber);
+    };
+
+    const wireNumbers = () => {
+      document.addEventListener("input", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement)) return;
+        markNumber(box);
+      });
+    };
+
+    const SWITCHES = ".plugin__switch input[type=checkbox]";
+
+    // A tier's own switch sets every switch under it and posts nothing of its own: what a session
+    // records is a switch per plugin, so turning a tier off is turning each of its plugins off. A
+    // second answer of its own would be a second place the same question is answered.
+    //
+    // Without this file every plugin's own switch still works, which is the standing bargain every
+    // scripted control here takes: this is the convenience, and the switches are the mechanism.
+    const wireTiers = () => {
+      document.addEventListener("change", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".tier__switch")) return;
+        const group = box.closest(".tier");
+        if (!group) return;
+        // The checkbox and not every input under the label: each switch is drawn with a hidden field
+        // of the same name ahead of it, so that a plugin turned off posts something rather than
+        // nothing. Counted, that field is a second switch that is never on, and a heading could then
+        // never say a full group was full.
+        for (const each of group.querySelectorAll(SWITCHES)) {
+          if (each instanceof HTMLInputElement) each.checked = box.checked;
+        }
+        box.indeterminate = false;
+      });
+      // And back the other way, so a heading says what is actually under it rather than what was
+      // last pressed on it: three states, because "some of them" is a real answer and drawing it as
+      // either of the other two would be a control lying about the thing it controls.
+      document.addEventListener("change", (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLInputElement) || !box.closest(".plugin__switch")) return;
+        const group = box.closest(".tier");
+        const heading = group?.querySelector(".tier__switch input");
+        if (!(heading instanceof HTMLInputElement)) return;
+        const under = [...group.querySelectorAll(SWITCHES)];
+        const on = under.filter((each) => each instanceof HTMLInputElement && each.checked).length;
+        heading.checked = on === under.length;
+        heading.indeterminate = on > 0 && on < under.length;
+      });
+    };
+
+    const wireCache = () => {
+      // On a timer as well as on every swap, because between turns nothing is recorded and so nothing
+      // is sent: the whole point is a state that changes while the page holds still. Finer than the
+      // minute the words move in, so a reader watching does not see one arrive late.
+      setInterval(paintCache, 15_000);
+    };
+
+    const wireDue = () => {
+      // Every second, and not the cache note's fifteen, because this one counts *seconds* under a
+      // minute: a figure that says `40s` and holds still for fifteen of them is a countdown a reader
+      // stops believing. It is one `textContent` on one element that is usually absent.
+      setInterval(paintDue, 1_000);
+    };
+
+    const wireSwaps = () => {
+      document.addEventListener("htmx:before:swap", (event) => {
+        if (event.target !== transcript()) return;
+        clearHits();
+        stripCopies();
+        stripDrawings();
+        stripFocuses();
+      });
+      document.addEventListener("htmx:after:swap", () => repaint());
+    };
+
+    // --- The keyboard on a phone -----------------------------------------
+    //
+    // A phone lays its keyboard over the page: the *visual* viewport shrinks to what is left, and
+    // the layout viewport, which `100dvh` and so the shell are sized by, does not. The viewport meta
+    // asks for the layout viewport to shrink too (`interactive-widget=resizes-content`), and Chrome
+    // and Firefox do, after which the box sits on the keyboard with nothing for this to do. Safari
+    // does not, in any shipped version, and scrolls the page instead so that the box being typed
+    // into is in view - the box, and not the row under it, which is where the one control a phone
+    // can send with is. So where the visual viewport is shorter than the window, the shell is sized
+    // to what can be seen and the page is put back at its top, and the composer is on the keys.
+    //
+    // On the resize and never the scroll of the visual viewport: the shell is then exactly what can
+    // be seen, so there is nothing to scroll, and following the visual viewport as a reader drags it
+    // is what makes the layout jitter under a thumb. It cannot be driven from here or from the
+    // suite, since neither can raise a keyboard, so it is written against what the two viewports are
+    // documented to do and against nothing measured.
+    const wireKeyboard = () => {
+      const viewport = window.visualViewport;
+      if (!viewport) return;
+      const fit = () => {
+        const left = keyboardLeaves(window.innerHeight, viewport.height, viewport.scale);
+        if (left === null) {
+          document.documentElement.style.removeProperty("--visible-height");
+          return;
+        }
+        document.documentElement.style.setProperty("--visible-height", `${left}px`);
+        window.scrollTo(0, 0);
+      };
+      viewport.addEventListener("resize", fit);
+    };
+
+    const wireServiceWorker = () => {
+      if (!("serviceWorker" in navigator)) return;
+      navigator.serviceWorker
+        .register(SERVICE_WORKER, { scope: "/", updateViaCache: "none" })
+        .catch(() => {});
+    };
+
+    // The other direction of the live connection. A message the page has swapped in is a message
+    // somebody was shown, and the page is the only party that knows it: the server learns that a tab
+    // went dark only when a write to it fails, and the first write after that lands in a socket the
+    // browser has already left. So the mark is the page's to make, after the swap and never before
+    // it, and never while hidden - a message cannot arrive then, since the connection is let go, but
+    // the tick between the tab going dark and the connection noticing is exactly the one to refuse.
+    //
+    // Coalesced over a short beat rather than sent per message, because a turn records several times
+    // a second while it runs and each is a message; the mark says "as it now stands", so the last
+    // one is the one that matters. `keepalive` so an acknowledgement in flight survives the page
+    // being left.
+    const wireSeen = () => {
+      const stream = document.getElementById("stream");
+      const where = stream && stream.dataset.seen;
+      if (!where) return;
+      let pending = null;
+      document.addEventListener("htmx:sse:after:message", (event) => {
+        if (event.target !== stream || document.hidden || pending !== null) return;
+        pending = setTimeout(() => {
+          pending = null;
+          if (document.hidden) return;
+          fetch(where, { method: "POST", keepalive: true }).catch(() => {});
+        }, 250);
+      });
+    };
+
+    const wireShapes = () => {
+      // The one thing the stream says that is not a region: the page was drawn as the settings step
+      // and the session has since loaded, so there is nothing on this page for the conversation to
+      // land in. htmx hands a named event to the element holding the connection rather than to a
+      // target, and what a reader needs is the page again. The word is the server's `LOADED`.
+      document.addEventListener("loaded", (event) => {
+        if (!(event.target instanceof Element) || event.target.id !== "stream") return;
+        location.reload();
+      });
+    };
+
+    wireKey();
+    wireShelf();
+    wireSender();
+    wireLeaders();
+    wireBranches();
+    wireSearch();
+    wireDock();
+    wireScroll();
+    wireFolds();
+    wireShutting();
+    wireTheme();
+    wireClasps();
+    wireColumns();
+    wireReading();
+    wireFolding();
+    wireFilter();
+    wireNumbers();
+    wireTiers();
+    wireCache();
+    wireDue();
+    wireSend();
+    wireCopy();
+    wireDraw();
+    wireFocus();
+    wireFresh();
+    wireSwaps();
+    wireShapes();
+    wireSeen();
+    wireKeyboard();
+    wireServiceWorker();
+    wireHash();
+
+    toCurrentSession();
+
+    // A panel named in the URL is where the reader asked to be, and outranks following the end.
+    const named = decodeURIComponent((location.hash || "").replace(/^#/, ""));
+    if (named) {
+      following = false;
+      landed = named;
+    }
+    repaint(false);
+
+    // The box is where a pointer belongs on arrival, since a session opens at the end where the box
+    // is and the next thing somebody with a keyboard does is type. `preventScroll` so taking it does
+    // not move the page the reader has just arrived at; a touch screen is left alone, for the reason
+    // below the sends.
+    if (!touchScreen()) composerBox()?.focus({ preventScroll: true });
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start);
+  } else {
+    start();
+  }
+})();

@@ -1,0 +1,10 @@
+[tools]
+uv = "latest"
+# `just` is here because a mainplate session's setup goes through mise and has nothing of the
+# machine's: `.mainplate/setup` installs mise, `mise install` puts both where the session's commands
+# look, and `just dependencies` runs under them.
+just = "latest"
+
+[settings]
+# Skip brand-new releases when resolving any fuzzy version, as supply-chain defense.
+minimum_release_age = "7d"

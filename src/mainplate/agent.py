@@ -1,0 +1,1089 @@
+# What a declared endpoint becomes once it is something you can run: a wire per endpoint, and the agent
+# built over one for a session that chose it.
+#
+# The wire is what is built once and held for the process, because it carries an SDK provider which
+# carries an HTTP client with a connection pool. The agent is not: every model over one endpoint
+# shares that endpoint's client, and an agent costs tens of microseconds against a model call that
+# costs seconds, so there is nothing to gain by keeping a mapping of them and something to lose,
+# which is that the set of models is discovered and changes while this process runs.
+#
+# So the split is along what varies. An endpoint is written down and fixed, and building its wire
+# eagerly at startup is what makes a malformed `url` or a refused credential a failure that names
+# itself before anything takes traffic. Which models it serves is discovered, lives in
+# `catalogue.py`, and is nobody's business here.
+#
+# **Three words that are easy to run together, kept apart here on purpose.** An *endpoint* is what
+# `config.yaml` declares: a URL, a format, a credential. A *wire* is the built thing that talks one
+# API format, and is what this module is mostly about. A *provider* is whoever made a model
+# (`anthropic`, `fireworks`, `xai`), which is discovered rather than configured and is a property of
+# a model rather than of either of the other two - the same Fireworks model is reachable over both
+# of exe.dev's wires under one id. `AnthropicProvider` and `OpenAIProvider` below are Pydantic AI's
+# own names for SDK clients and are the one place the word means something else.
+#
+# Each format gets one wire class holding the two things that format decides: how to name a model
+# over it, and how to ask it what it serves. They are together because they are the same knowledge,
+# and because a third format should be one class rather than an edit in three files.
+#
+# The tools hang off the agent as toolsets, and they hang off it *per session* rather than once for
+# the process, because what makes a path safe is the root it is resolved inside and every session
+# picks its own. **Which tools a session gets is decided by its `isolation`**, not by what this
+# module happens to be handed: a worktree gets the file tools over it and its scratch, the whole
+# machine gets them over `/`, and reaching nothing gets no toolset at all - a console used to talk
+# rather than to edit is what this was before there were repositories, and tools that can only fail
+# are worse than none. The loop records every model request and tool call through the `Stepping`
+# it is handed by the conversation.
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from collections.abc import Sequence
+from dataclasses import dataclass
+from dataclasses import field
+from dataclasses import replace
+from datetime import timedelta
+from pathlib import Path
+from typing import Final
+from typing import Protocol
+from typing import assert_never
+
+from anthropic import AsyncAnthropic
+from anthropic.types import ModelInfo
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.models import Model
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.anthropic import AnthropicModelSettings
+from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.models.openai import OpenAIResponsesModelSettings
+from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.toolsets import AbstractToolset
+
+from mainplate.config import Config
+from mainplate.config import Endpoint
+from mainplate.config import Format
+from mainplate.loop import Agent
+from mainplate.plugins.asking import Live
+from mainplate.plugins.asking import PluginTools
+from mainplate.plugins.asking import asking_through
+from mainplate.plugins.asking import contributions
+from mainplate.roots import environment_named
+from mainplate.sandbox import Confinement
+from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InAScratch
+from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import Isolation
+from mainplate.sandbox import OverEverything
+from mainplate.snapshots import Worktree
+from mainplate.snapshots import branch_named
+from mainplate.tools import Files
+from mainplate.tools import GitTracked
+from mainplate.tools import Scratch
+from mainplate.tools import System
+from mainplate.tools import bash_tools
+from mainplate.tools import file_tools
+from mainplate.tools import grep_tools
+from mainplate.tools.files.tools import Root
+
+
+@dataclass(frozen=True, slots=True)
+class Choice:
+    """
+    Which endpoint, which model, and how hard to think: recorded at creation and fixed for life.
+
+    Fixed because a conversation that changed model halfway would replay its recorded responses
+    from one and continue on another, so what the transcript shows and what the next turn is
+    reasoning from would have different authors. Forking is how you change your mind: it starts a
+    session from a point in this one's history, so the answer before the branch has one author and
+    the answer after it has another, and both remain readable.
+
+    That is also why `thinking` is here rather than beside a turn. It is not a property of a
+    question, it is a property of the thing answering, and a session whose effort moved mid-way
+    would replay recorded answers reasoned at one budget and continue at a different one.
+
+    The endpoint is what carries the API format, which is why it is recorded rather than looked up:
+    the same model id genuinely does appear behind two formats - every Fireworks model on exe.dev's
+    gateway is listed by both - and the two serialize a conversation differently, so a session that
+    resolved its own format from a list discovered later could resume in the other one.
+    """
+
+    endpoint: str
+    model: str
+
+    repository: str | None = None
+    """
+    Which repository this session works in, as the id a forge gave it, or nothing for none.
+
+    Fixed for life like the rest, and for a plainer reason than the model is: a conversation is
+    *about* the files it is looking at, so one that changed repository halfway would have a
+    transcript whose earlier half discusses code the later half cannot see.
+
+    A fork may **attach** one to a session that had none, and may not **swap** one for another. The
+    two look alike and are not: swapping re-asks a turn against different files, which is a
+    different question wearing the same words, where attaching carries on with files where there
+    were none - and the turns being inherited were not asked against other files, they were asked
+    against no files at all.
+
+    An id rather than a path or a URL, because how to reach a repository is a discovery-time fact
+    and which repository it is is not. Absent means a session with no files at all, which is what a
+    console being used to talk rather than to edit has and what every session had before this.
+    """
+
+    base: str | None = None
+    """
+    What the worktree is checked out at when this session's files are first planted, or nothing at
+    all to begin where the repository is.
+
+    A **commit-ish** and not a commit: a branch name, a tag, a hash, or anything else `git rev-parse`
+    resolves. It is recorded as the words somebody typed rather than as what they resolved to, and
+    that is deliberate - what a session says about itself is the answer it was given, and `main` is a
+    truer record of that intent than the hash `main` happened to be at that minute. The hash it came
+    to is in `turn:0:tree:0` for anybody who wants it.
+
+    Fixed for the session's life like everything else here, and it stops mattering after the first
+    pass: a worktree is planted once, so this is read by exactly one call and is thereafter a fact
+    about where the session began. A fork does not carry it, because a fork plants at a recorded tree
+    and a base beside that would be two claims about one checkout.
+    """
+
+    branch: str | None = None
+    """
+    A branch to start at `base` and leave the worktree on.
+
+    Optional on the *form* and not in the record: `Choice.branching` fills it with a name from the
+    session's id wherever a repository was picked, so every session working in one is on a branch.
+    `None` here therefore means a session with no repository, or a checkpoint written before this
+    existed. What it buys is somewhere for a commit to go, since a commit on a detached `HEAD` is
+    reachable only through the reflog and has no name to push under.
+
+    **Naming a base does not put the checkout on that branch.** Two sessions started at `main` and
+    both committing on a branch called `main` would be two histories under one name, and the second
+    push would be refused against the first. So a base names *where to begin* and this names *what to
+    begin*, which is why they are two fields rather than one that sometimes means both.
+
+    Not carried by a fork, and that is a refusal rather than an oversight: a fork on its parent's
+    branch would be two writers in one history, which is the thing a checkout apiece exists to
+    prevent, and they would meet at the first push. A fork is given one of its **own** instead, by
+    the same call.
+    """
+
+    isolation: Isolation = field(default_factory=Isolation)
+    """
+    How confined this session is: what its tools may reach, and whether they may dial out.
+
+    Not free of `repository` on the filesystem axis: a session that picked one reaches its worktree
+    and can reach nothing else, and a session that picked none cannot reach a worktree there is none
+    of. `Isolation.settled` is what makes that true, applied by `Service.start` and `Service.fork`
+    rather than trusted from a form - the same stance that stops a form with no repository field
+    moving a branch out of its repository. So the pair can never be recorded contradicting itself and
+    nothing downstream reconciles anything.
+
+    The network is off by default, and off rather than allowlisted. An allowlist containing a code
+    forge contains every gist on it, one containing a package registry contains a package anybody can
+    publish, and a DNS query carries whatever you like out through any resolver that is permitted.
+    What it would cost is a proxy in front of every command and a certificate authority inside the
+    sandbox; what it would buy is a defence against a repository's own build script and very little
+    against anything deliberate.
+
+    Defaulted to reaching nothing with no network, because that is what every session had before
+    this existed and what a checkpoint written then must keep reading back as.
+    """
+
+    trusted: bool = True
+    """
+    Whether this session runs code the repository carries, which today means the plugins it declares.
+
+    **Per session and never per repository**, which is the whole shape of it: a repository changes,
+    so an answer recorded against one covers a branch somebody pushed this morning as readily as the
+    one you reviewed last year. Recorded here it is a decision about *this conversation*, settled
+    before its first message and fixed for its life like everything else on a `Choice`, and changing
+    your mind is `fork`.
+
+    **On by default, and the control is the refusal rather than the permission.** A grant defaulting
+    off makes the common case a click nobody reads, which is the failure the whole control exists to
+    avoid. And the honest reading of what picking a repository already means is that its code runs:
+    a session with a shell runs its build, its tests, its `pre-commit` and whatever those shell out
+    to, every one of them unread. A plugin is one more caller of that, not the escalation.
+
+    **What the switch is actually for is the session where that reading does not hold**, and there
+    are two: a repository somebody is reading rather than working in - a stranger's pull request, a
+    dependency being triaged - and a session on `Filesystem.NOTHING`, which picks a repository and
+    hands the model no shell at all. That second one is why this is drawn in the picker rather than
+    inferred from the isolation: the two are near enough to look like one question and are not.
+
+    The cost, stated: a repository's plugin runs unattended at every turn boundary and puts text into
+    the conversation, which is a delivery channel for prompt injection with a guaranteed slot. That
+    is a real difference from a build script, and it is the sentence the picker prints rather than a
+    warning that something may be unsafe.
+
+    Meaningless without a repository, and `settled` clears it there for the reason it clears the base
+    and the branch: a session with no worktree has nothing a repository could carry.
+    """
+
+    thinking: ThinkingLevel | None = None
+    """
+    How hard to think, or nothing at all to leave the setting off the request.
+
+    Absent is the meaning rather than an omission, exactly as `Endpoint.url` is: a request with
+    no thinking setting is answered however the model behaves by default, which for a reasoning
+    model is to reason and for the rest is not to. Defaulted here because most constructions are
+    ours; `parse_choice` supplies it explicitly, so a checkpoint written before this existed reads
+    back as the default rather than as a failure.
+    """
+
+    output_override: int | None = None
+    """
+    The most one request may generate, where somebody typed a number, or nothing to send what the
+    console knows.
+
+    **An override and never a default**, which is the whole of what the name says. Empty is not a
+    number the form copied in for them: it is the session sending whatever the endpoint's listing or
+    the reference says at each turn, read afresh per agent built, so a limit the endpoint raises
+    reaches a running session and a session started while the reference was unreachable is not
+    frozen at a blank. A number here beats both, for the session's life, because it is a thing
+    somebody said; `agent_for` puts the choice's settings over everything else it composes, so the
+    precedence is that rule and not a second one.
+
+    What it is for is the model neither source knows: a resold model on a gateway with no reference
+    configured, which would otherwise run on the adapter's own default and be cut off. What it costs
+    is that a wrong number sticks to the session, and above the endpoint's ceiling that is a refused
+    turn naming the number; the way past is a fork with the field changed, exactly as for a thinking
+    level the endpoint stopped taking. It is not a budget: the model is never told it, so a smaller
+    number buys only a cut-off answer.
+    """
+
+    def branching(self, session: str) -> Choice:
+        """
+        The same choice with a branch of its own, where a repository was picked and nobody named one.
+
+        Every session working in a repository gets one, because the alternative is a detached `HEAD`
+        and committing is something that happens here, by the model or through `Run`, and a commit on
+        a detached `HEAD` is reachable only through the reflog and cannot be pushed by name.
+
+        Taken rather than derived, so a name somebody typed always wins. It is the session's id that
+        makes the generated one usable at all - see `branch_named` - which is why this takes one and
+        why it is not part of `settled`, whose whole subject is the choice on its own.
+        """
+        if self.repository is None or self.branch is not None:
+            return self
+        return replace(self, branch=branch_named(session))
+
+    def settled(self, *, forked: bool = False) -> Choice:
+        """
+        The same choice with everything that depends on the repository made to agree with it.
+
+        **One place that makes a posted choice self-consistent**, rather than a rule per field spread
+        over the two callers. A form is not the only way in - a fork inherits its repository rather
+        than posting one - so the alternative to settling here is every writer reconciling the same
+        three fields and one of them eventually not.
+
+        With no repository there is no worktree, so there is nothing to reach, nothing to check out,
+        no branch to start and nothing whose code could be trusted or not: all of them collapse
+        together because they are answers to one question the picker asks once. The page draws no
+        base and no branch until a repository is picked, so a form cannot express the contradiction in
+        the first place; this is what says the same of every other way in, a fork and
+        `scripts/seed.py` alike.
+
+        `forked` drops the base and the branch whatever the repository is. A fork plants at the tree
+        of the turn it re-asks, so a base would be a second answer to where its files come from, and
+        a branch would be the parent's history under a second writer.
+
+        Trust survives a fork and the base does not, and the two are different questions. A fork
+        reads its repository's declaration again, out of the tree it is planted at, so this is what
+        decides whether it reads one at all: a branch of a session that trusts its repository draws
+        that repository's plugins on its own settings step, and a branch of one that does not draws
+        none, exactly as its parent did.
+        """
+        if self.repository is None:
+            return replace(self, base=None, branch=None, trusted=True, isolation=self.isolation.settled(None))
+        if forked:
+            return replace(self, base=None, branch=None, isolation=self.isolation.settled(self.repository))
+        return replace(self, isolation=self.isolation.settled(self.repository))
+
+    @property
+    def settings(self) -> ModelSettings | None:
+        """
+        What this choice asks of a model: the thinking level and the output override, where each was given.
+
+        `None` rather than an empty mapping, so a choice that asks for nothing builds an agent
+        indistinguishable from one built before this field existed.
+        """
+        asked = ModelSettings()
+        if self.thinking is not None:
+            asked["thinking"] = self.thinking
+        if self.output_override is not None:
+            asked["max_tokens"] = self.output_override
+        return asked or None
+
+
+class UnknownChoice(LookupError):
+    """
+    A session names an endpoint the configuration no longer declares.
+
+    Its own type because the answer is a person's rather than a retry's: the endpoint was there when
+    the session started, so the file was edited, and the fix is to put it back or to start a new
+    session. The console says so on the session's own page rather than leaving it to a worker log.
+
+    Only ever about the endpoint. A *model* an endpoint has stopped listing is not this, because an
+    endpoint routes more ids than it advertises: its own refusal is the authoritative answer about
+    one, and it arrives on the turn rather than here.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Listed:
+    """
+    One model an endpoint says it serves: what a request names it, and what a person reads.
+
+    `provider` is whoever made the model, and what the picker groups by. It is the part of the id
+    before the slash where there is one, because a gateway fronting several vendors prefixes them
+    and that prefix is the only thing that distinguishes a Claude from a Kimi in a list of seventy.
+    Where there is no slash the endpoint fronts one vendor and the format's own name is the honest
+    answer.
+
+    It is deliberately *not* a level of any hierarchy. The same provider appears behind more than
+    one endpoint - every Fireworks model on exe.dev's gateway is listed by both its formats, under
+    one id - so this is a facet of a model rather than a parent of it, and the tree really is
+    `endpoint -> model` with this as a heading.
+
+    This is **identity, and the one number a request cannot be made without**: which model, under
+    which two names, in which group, and how much one request may generate. What a card says *about*
+    a model - what it costs, how much it reads, what it can do - is not here and is not read off a
+    listing at all. It comes from `reference.py`, from one database, for every model alike.
+
+    That is a deliberate refusal rather than an omission, and the reason is what these listings look
+    like. The Anthropic wire describes Claude in detail, forwards a different vendor's record
+    verbatim for the models it resells, and says nothing whatever about GPT; the OpenAI wire answers
+    four fields; neither publishes a price at any point. Reading each of those and filling the gaps
+    from a database would put three shapes of card on one page, where the facts shown depended on
+    which wire happened to answer and two models could not honestly be compared. One source is worth
+    more here than the extra coverage a merge would buy.
+    """
+
+    id: str
+    label: str
+    provider: str
+
+    upstream: str | None = None
+    """
+    What the service actually serving this model calls it, where the endpoint says.
+
+    Identity rather than description, which is why this one field *is* read off the listing. A
+    gateway reselling somebody else's model echoes the original's canonical name beside its own
+    routed id: `fireworks/kimi-k3` is routed here and is `accounts/fireworks/models/kimi-k3` there.
+    It is the second of the two names the reference is looked up under, and the one that finds a
+    model a gateway has renamed into its own namespace - which is most of what a gateway serves.
+    """
+
+    output: int | None = None
+    """
+    The most one request may ask this model to generate, where the endpoint says.
+
+    The other field read off a listing, and it is not a fact for a card: it is what the request
+    *sends*, and the endpoint is the one party guaranteed to agree with itself about what it will
+    accept. Asked for above this number a request is refused outright rather than clamped, and
+    asked for below it a model that thinks at length is cut off mid-thought with the tokens paid for
+    and nothing to show, so a database's guess is the right answer only where the endpoint gives
+    none. The Anthropic wire states it for the models its vendor serves and nothing for the ones it
+    resells; the OpenAI wire never states it. `reference.py` fills the rest, from the same record a
+    card reads, and `Described` still draws the record and never this, so what a page *says* about a
+    model keeps its one source.
+    """
+
+
+class Wire(Protocol):
+    """
+    One built SDK client, and the three questions only its API format can answer about it.
+
+    A protocol rather than a base class because there is no shared implementation to inherit: the
+    arms have a client each, of unrelated types, and everything they do is the part that differs.
+    """
+
+    def model(self, name: str) -> Model:
+        """
+        The named model over this wire's own client, so every model shares one pool.
+
+        **`Streamed`, on every format**: a wire handing back a bare adapter is one some endpoints
+        refuse outright. See that class.
+        """
+        ...
+
+    async def listed(self) -> tuple[Listed, ...]:
+        """Whatever the endpoint currently says it serves, in the order it said it."""
+        ...
+
+    def caching(self) -> ModelSettings:
+        """
+        What this format has to be told to reuse a conversation's prefix, which for one of them is nothing.
+
+        The third format-specific thing, and it belongs here for the reason the other two do: whether
+        caching is opt-in is a fact about an API rather than about a session, and a `Choice` has no
+        way to know which wire will answer it.
+
+        **It is opt-in on the Anthropic wire and automatic on the OpenAI one, and getting that wrong
+        costs real money on every request.** A conversation is re-sent whole each turn, so a session
+        with no breakpoint pays full input price for everything said so far, over and over: on a long
+        turn that is most of the bill. Nothing about the request looks different, which is why this
+        is a method somebody has to answer rather than a setting somebody might forget.
+        """
+        ...
+
+
+class Streamed(WrapperModel):
+    """
+    A model asked over a streaming request and answered with the whole response anyway.
+
+    **Every request this console makes goes out as a stream**, whatever the format, because a
+    non-streamed one is not a request every endpoint will take: exe.dev's OpenAI wire refuses one
+    outright - `{"detail": "Stream must be set to true"}` - and Anthropic's SDK refuses a long
+    generation the same way.
+
+    Collecting it here is the half that will go. The events are drained and thrown away, so nothing
+    above this can tell the difference and an answer is no closer to a reader than it was. Live
+    output means having the loop record those events beside the completed response instead.
+    """
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        """
+        The stream, drained to its end, as the response it came to.
+
+        Both halves are load-bearing: a drain broken off part-way answers `incomplete` rather than
+        `complete`, and `get()` after the block would read a response off a torn-down stream.
+        """
+        async with self.wrapped.request_stream(messages, model_settings, model_request_parameters) as streaming:
+            async for _ in streaming:
+                pass
+            return streaming.get()
+
+
+# An id whose last segment says it is an embedding model. The OpenAI list carries no capability to
+# ask - an entry there is four fields, none of them about what the model does - so this is a rule
+# over names rather than a fact, and it is worth having anyway: an embedding model in a chat picker
+# is an option that can only ever fail. The Anthropic list needs none of this, since it does not
+# carry them at all.
+EMBEDDING: Final = "embedding"
+
+ANTHROPIC_RETENTION: Final = timedelta(hours=1)
+"""
+How long a cached prefix is kept on the Anthropic wire, which is the one this console gets to choose.
+
+An hour rather than the five minutes that is the default, and the trade is stated because it is a
+real one: an hour's retention is written at 2x base input against 1.25x, so it pays only where a
+conversation is picked up again after a pause. That is what a chat console is - somebody reads an
+answer, thinks, and replies - and five minutes barely outlasts one long turn, let alone the walk to
+the kettle.
+
+A duration rather than the string the wire takes, because two things read it: the parameter below,
+and the page saying whether the next request will pay full price.
+"""
+
+OPENAI_RETENTION: Final = timedelta(minutes=30)
+"""
+How long a cached prefix is kept on the OpenAI wire, which is that provider's answer and not this console's.
+
+**Written down because it is published, and asked for nowhere.** `prompt_cache_options.ttl` is the
+only knob this format offers and `30m` is currently the only value it accepts, so unlike
+`ANTHROPIC_RETENTION` this is a fact to read rather than a bet to place: `OpenAIWire.caching` still
+asks for nothing and still gets this. The cost, stated: it is a constant copied out of somebody
+else's documentation, so it goes quietly wrong the day OpenAI publishes a second value, where the
+Anthropic one cannot because this console is what sends it.
+"""
+
+
+def retention_of(format_name: Format) -> timedelta:
+    """
+    How long a prefix answered over this format may still be believed to be held.
+
+    **A question per format rather than one constant, and the half hour between them is why.** One
+    threshold has to be the *longest* of the two for `cold` to stay sound, and every wire retaining
+    less then spends the difference drawing an evicted prefix as one written recently - which on the
+    OpenAI wire was the whole stretch between its thirty minutes and Anthropic's hour, exactly the
+    interval a reader comes back in. Asked per format, each wire goes cold when its own retention
+    runs out and the note is one-sided on both.
+
+    Total over `Format`, so a third one is a case somebody has to answer here rather than a wire
+    quietly inheriting whichever duration happened to be written first.
+    """
+    match format_name:
+        case "anthropic":
+            return ANTHROPIC_RETENTION
+        case "openai":
+            return OPENAI_RETENTION
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+CACHE_FOR: Final = "1h"
+"""
+The same duration as the parameter the Anthropic wire takes, in the vocabulary that wire accepts.
+
+Written out rather than rendered from `ANTHROPIC_RETENTION`, because the SDK types this field as
+`Literal['5m', '1h'] | bool` and a derived string is a `str`: deriving it would trade a checked value
+for an unchecked one to save a line. So the two are one fact in two places with nothing enforcing the
+agreement, which is the bargain `tree_key` and `Stepping.key` already take, and
+`test_the_retention_and_the_wire_parameter_are_one_duration` is what turns a drift into a failure.
+"""
+
+
+def provider_of(model_id: str, format_name: str) -> str:
+    """Whoever made this model, taken from the prefix a gateway puts on it, or the format's own name."""
+    prefix, slash, _ = model_id.partition("/")
+    return prefix if slash else format_name
+
+
+def listing_client(provider: AnthropicProvider) -> AsyncAnthropic:
+    """
+    A provider's client, narrowed to the one kind that has a model list to ask for.
+
+    `AnthropicProvider.client` is a union because the same class also fronts Bedrock, Vertex, and
+    Foundry, none of which serve `/v1/models`. Only `build_wire` constructs one here and it
+    constructs the direct client every time, so this narrows once at the boundary rather than
+    leaving every use to ask again.
+    """
+    if not isinstance(provider.client, AsyncAnthropic):
+        raise TypeError(f"listing models needs a direct Anthropic client, not {type(provider.client).__name__}")
+    return provider.client
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicWire:
+    """
+    An endpoint spoken to over `/v1/messages`.
+
+    Its list is the narrower and the cleaner of the two: every entry is a chat model, every entry
+    carries a name written for a person, and there are no aliases to collapse. On exe.dev it is
+    also not only Claude, because the gateway translates - Fireworks models answer here too.
+    """
+
+    sdk: AnthropicProvider
+
+    def model(self, name: str) -> Model:
+        return Streamed(AnthropicModel(name, provider=self.sdk))
+
+    async def listed(self) -> tuple[Listed, ...]:
+        # `limit` is the page size, and one page is asked for rather than paginated: a gateway
+        # listing more than a thousand chat models is a different problem than this one.
+        page = await listing_client(self.sdk).models.list(limit=1000)
+        return tuple(anthropic_listed(found) for found in page.data)
+
+    def caching(self) -> ModelSettings:
+        """
+        A top-level `cache_control`, which is the one that moves its breakpoint forward as a turn grows.
+
+        The alternative Pydantic AI offers is per-block breakpoints on the instructions, the tool
+        definitions and the last message. Those are for a gateway that takes the Anthropic message
+        format without the automatic parameter; asked for here they would pin breakpoints this
+        console would then have to move itself, which is the server's job and it does it better.
+
+        `CACHE_FOR` rather than the default five minutes, and that is a bet worth stating: an hour's
+        retention is written at 2x base input against 1.25x, so it pays only where a conversation is
+        picked up again after a pause. That is what a chat console *is* - somebody reads an answer,
+        thinks, and replies - where five minutes barely outlasts a single long turn.
+        """
+        return AnthropicModelSettings(anthropic_cache=CACHE_FOR)
+
+
+def anthropic_listed(found: ModelInfo) -> Listed:
+    """One entry of an Anthropic-wire listing, as the two names and the group it belongs to."""
+    passed = passed_through(found.model_extra or {})
+    return Listed(
+        id=found.id,
+        label=found.display_name or passed.label or found.id,
+        provider=provider_of(found.id, "anthropic"),
+        upstream=passed.upstream,
+        output=found.max_tokens,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PassedThrough:
+    """
+    How a gateway names a model it forwarded from the service actually serving it.
+
+    Two fields, and both are identity: what that service calls the model, and what it calls it in
+    front of a person. Everything else in a forwarded record - the context length, the description,
+    the capability flags - is deliberately left unread, because those are the facts `reference.py`
+    answers for every model alike and reading some of them here is what would make one card
+    disagree with the next.
+
+    A value of its own because these keys are neither wire's: they belong to the upstream record, so
+    they arrive in the extras of whichever wire happened to ask and are read the same way on both.
+    Anything absent or of an unexpected type is simply not here, since no SDK validated any of it.
+    """
+
+    upstream: str | None = None
+    label: str | None = None
+
+
+def passed_through(extra: Mapping[str, object]) -> PassedThrough:
+    """The two upstream names, taken out of a forwarded record and type-checked."""
+    upstream = extra.get("name")
+    label = extra.get("displayName")
+    return PassedThrough(
+        upstream=upstream if isinstance(upstream, str) and upstream else None,
+        label=label.strip() if isinstance(label, str) and label.strip() else None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIWire:
+    """
+    An endpoint spoken to over `/v1/responses`.
+
+    The responses API rather than chat completions, because OpenAI's current models will not take
+    function tools with reasoning on over the older one: GPT-5.6 reasons by default and refuses a
+    tool-bearing request there unless reasoning is switched off outright, which for a coding session
+    is every request. The gateway serves the responses API for the models it resells too.
+
+    Its list needs two things thrown out before it is a picker. exe.dev publishes every OpenAI
+    model twice, once bare and once prefixed, so a bare id that some prefixed id ends with is the
+    same model named again; and it publishes embedding models, which this console can do nothing
+    with. Neither is a malformed entry, so neither is refused: what is happening is a general
+    catalogue being read by something that only wants the chat half of it.
+    """
+
+    sdk: OpenAIProvider
+
+    def model(self, name: str) -> Model:
+        """
+        The named model, told never to keep the conversation at the provider and to say what it thought.
+
+        **The checkpoint is the conversation, and this is where that has to be said to this API.**
+        The responses API can hold a conversation server-side and be handed only what is new, by a
+        `previous_response_id` or a conversation id, and that is a second copy of what was said,
+        kept somewhere this console cannot read, replay a fork from, or take a session off. Pydantic
+        AI sends neither unless asked, so the whole recorded history goes with every request; what is
+        set here is `store`, which is OpenAI keeping the exchange on its side regardless, and which
+        that chaining would depend on. Off, and the provider is a function of the request. What it
+        costs is nothing this console wanted: the reasoning across turns still travels, as encrypted
+        items replayed out of the history.
+
+        **A summary is asked for because otherwise this wire reasons in private.** A reasoning item
+        comes back as encrypted content and nothing else unless the request asks for a summary, and
+        Pydantic AI reads one of those into a `ThinkingPart` carrying no text, which is a thinking
+        panel with nothing in it and so is no panel at all: a session on this wire drew none, while
+        the same conversation on the Anthropic one drew the model's thinking throughout. `auto` and
+        not `detailed`, because which summaries a model offers is the provider's answer to give and a
+        model with only the shorter one still answers. The cost, stated: what a panel shows here is a
+        summary of the reasoning rather than the reasoning, so `thinking` means the model's own words
+        on one wire and a precis of them on this one, and the summary is recorded in the checkpoint
+        and replayed back as summary text on later turns, which makes it part of the conversation.
+
+        On the model rather than in the settings a session composes, because both are facts about
+        how this wire may be spoken to rather than anything a session asks for.
+        """
+        return Streamed(
+            OpenAIResponsesModel(
+                name,
+                provider=self.sdk,
+                settings=OpenAIResponsesModelSettings(openai_store=False, openai_reasoning_summary="auto"),
+            )
+        )
+
+    async def listed(self) -> tuple[Listed, ...]:
+        page = await self.sdk.client.models.list()
+        return chat_models(tuple((found.id, found.model_extra or {}) for found in page.data))
+
+    def caching(self) -> ModelSettings:
+        """
+        Nothing, because this format caches a repeated prefix without being asked and cannot be told to.
+
+        An empty answer rather than an absent method: what has to be true is that every wire answers
+        the question, so that a format added later is a `caching` somebody had to write rather than a
+        session quietly paying full price on every request.
+
+        **Nothing to ask for is not the same as nothing to know.** The retention is the provider's,
+        but it is published - `OPENAI_RETENTION` - and `prompt_cache_options.ttl` is a knob with one
+        accepted value, so asking would send back the duration that already applies. What stays the
+        provider's alone is *routing*: on GPT-5.6 and later a request is placed by machine load and a
+        hash of its leading tokens, `prompt_cache_key` having become cache accounting rather than
+        stickiness, so a warm prefix is found or missed on a decision nothing here participates in.
+        That is why whether a prefix is still held can only ever be read one-sidedly, and why a
+        request landing on a cold machine is an unpriced miss rather than a console bug.
+        """
+        return ModelSettings()
+
+
+def chat_models(every: Sequence[tuple[str, Mapping[str, object]]]) -> tuple[Listed, ...]:
+    """
+    An OpenAI-compatible list as the models a chat console can actually pick from.
+
+    Pure, because it is the half of that wire with a decision in it and the half worth testing
+    against a real list: what a client hands back is a page of entries, and everything interesting
+    happens after.
+
+    An id with no slash that some prefixed id ends with is the same model published twice, which
+    exe.dev does for every OpenAI model. `EMBEDDING` is the other exclusion and the softer one.
+
+    This format declares four fields and none of them describe a model, so a card's facts come from
+    the reference database rather than from here. For a model of the format's own vendor the listing
+    carries nothing at all, which is the honest state: an id, a provider heading, and whatever the
+    database knows. For a reselling entry it also carries the upstream names.
+
+    No `display_name` on this format either, so the id is the label unless the forwarded record
+    carries a real name. Grouping by provider is what makes the bare case readable: `gpt-5.5` under
+    an "openai" heading needs no more than its id.
+    """
+    ids = tuple(found for found, _ in every)
+    prefixed = {found for found in ids if "/" in found}
+    aliased = {found for found in ids if any(other.endswith(f"/{found}") for other in prefixed)}
+    return tuple(
+        openai_listed(found, passed_through(extra))
+        for found, extra in every
+        if found not in aliased and EMBEDDING not in found.rpartition("/")[2]
+    )
+
+
+def openai_listed(model_id: str, passed: PassedThrough) -> Listed:
+    return Listed(
+        id=model_id,
+        label=passed.label or model_id,
+        provider=provider_of(model_id, "openai"),
+        upstream=passed.upstream,
+    )
+
+
+def build_wire(endpoint: Endpoint) -> Wire:
+    """
+    One declared endpoint as the thing that talks to it.
+
+    `api_key=None` is deliberately passed through rather than dropped, because that is the value
+    that leaves an SDK reading its own environment variable: an endpoint naming neither a key nor a
+    URL then behaves exactly as a plain `Agent('anthropic:...')` does.
+    """
+    match endpoint.format:
+        case "anthropic":
+            return AnthropicWire(AnthropicProvider(api_key=endpoint.key, base_url=endpoint.url))
+        case "openai":
+            return OpenAIWire(OpenAIProvider(api_key=endpoint.key, base_url=endpoint.url))
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@dataclass(frozen=True, slots=True)
+class Wires:
+    """
+    Every endpoint this process can reach, keyed by the name that declared it.
+
+    A mapping rather than a factory, so what exists is decided once, at startup, from a
+    configuration that has already been parsed. An endpoint that is not in it is a question about
+    configuration and never a construction to attempt.
+    """
+
+    by_endpoint: Mapping[str, Wire]
+
+    def for_endpoint(self, endpoint: str) -> Wire:
+        try:
+            return self.by_endpoint[endpoint]
+        except KeyError:
+            raise UnknownChoice(f"no endpoint {endpoint!r} is configured") from None
+
+
+def build_wires(config: Config) -> Wires:
+    """
+    A wire per declared endpoint, constructed before anything takes traffic.
+
+    Eager rather than on demand, so an endpoint that cannot be built at all - a malformed URL, a
+    credential an SDK refuses - fails at startup naming itself, rather than on whichever session
+    first happened to choose it. It is also what makes the first discovery a request over a client
+    that already exists.
+    """
+    return Wires(by_endpoint={name: build_wire(endpoint) for name, endpoint in config.endpoints.items()})
+
+
+def working_note(scratch: bool) -> str:
+    """
+    What the agent is told about the places its tools reach, by name and never by path.
+
+    How to *use* the tools is on the tools, because that is where it stays true: a description of
+    the anchor scheme written here would be a second copy of what each tool's own description
+    already says, kept in step by hand. What cannot live there is which places this session got,
+    since a toolset is built per session and its own description is not.
+
+    **No absolute path appears here, and both halves of that are decided.** It is what `roots.py`
+    exists for: a worktree sits under 32 hex characters of session id, and a model reproducing those
+    from memory eventually reproduces them wrong, so printing the path invites exactly the failure
+    the root names were built to prevent - and a relative path already lands in the worktree, so
+    there was never anything to do with it.
+
+    The second half is the cache. Instructions are a per-request parameter Pydantic AI renders in
+    front of the whole cached prefix, so a sentence naming one session's directories makes that
+    session's prefix unlike every other's. With the paths out, this is a pure function of the
+    isolation: two sessions of the same shape compose the same string, and a fork's first request
+    reads its parent's prefix from cache instead of paying for the whole conversation again.
+    """
+    said = (
+        "You are working in a git checkout, which is called `worktree`. The file tools take paths "
+        "relative to it and reach nothing outside it. Changes you make there are snapshotted "
+        "automatically, so you never need to commit to keep your work."
+    )
+    if not scratch:
+        return said
+    # The names and the policy both, because both are this session's rather than the tool's. A
+    # `bash` description cannot carry either: one toolset is built per session and its tools'
+    # descriptions are not, so what varies between sessions has to be said here.
+    #
+    # Where a command *starts* is said for a different reason: the tool's own description says a
+    # `cd` does not survive to the next call, which on its own reads as an instruction to put one at
+    # the front of every command. `--chdir` has already done it.
+    #
+    # Git is said because what it can do here is not what a model assumes of a sandbox: it can do
+    # everything but push, and `fetch` works with no network because `origin` is the store.
+    return (
+        f"{said} You also have a scratch directory called `scratch`, outside the worktree and "
+        f"outside every snapshot, which is where anything that is not the repository's belongs. "
+        f'Reach it by passing `root: "scratch"` to `read`, `edit` or `create`; in a command it is '
+        f"`${environment_named('scratch')}`, and the worktree is `${environment_named('worktree')}`. "
+        f"Commands you run start in the worktree, so a relative path means the same thing there as "
+        f"it does to the file tools and you never need to `cd` into it. They reach those two "
+        f"directories and a read-only system, and nothing else: no home directory, no other "
+        f"session's files, and no configuration of the console itself. The checkout's git is yours: "
+        f"`add`, `commit`, `merge` and `rebase` work as they would anywhere, and `git fetch` brings "
+        f"the repository's current branches, but nothing you run can push."
+    )
+
+
+def scratch_note() -> str:
+    """
+    What a session with no repository is told about the one place it reaches.
+
+    The same shape as `working_note` with the worktree taken out, and said separately rather than
+    by a flag on that one: what a relative path means is the whole of what differs, and a sentence
+    saying it means the worktree "except where there is none" is a sentence a model has to resolve
+    on every call. Pure of paths for `working_note`'s reason, so every session of this shape shares
+    one cached prefix.
+    """
+    return (
+        "You are working with no repository and no worktree. You have a scratch directory called "
+        "`scratch`, which is where anything you make or fetch belongs, and it is kept from one turn "
+        'to the next. Reach it by passing `root: "scratch"` to `read`, `edit` or `create`, or by a '
+        f"relative path; in a command it is `${environment_named('scratch')}`, and commands start "
+        f"there, so a relative path means the same thing to a command as to the file tools. Commands "
+        f"reach that directory and a read-only system, and nothing else: no home directory, no other "
+        f"session's files, and no configuration of the console itself. Nothing in it is snapshotted."
+    )
+
+
+def drawing_note() -> str:
+    """
+    What the console draws from a reply, said so a model reaches for it.
+
+    A fact about this console rather than about the session, which is why it is composed here beside
+    the reach note and not left to the operator's standing instructions: an operator who rewrites
+    those should not lose the one sentence that says what the page can show. The same words for every
+    session, so it costs nothing in any cached prefix, and it names the two labels `markup.py`
+    allows onto the page and no others, since a model told `dot` draws too would write one that is
+    shown as code.
+    """
+    return (
+        "A fenced code block labelled `mermaid` or `svg` is drawn as a picture on the page, so when a "
+        "diagram or a figure would say it better than prose, write one: `mermaid` for a flow, a "
+        "sequence, a state machine or a timeline, and `svg` when you need to draw exactly what you "
+        "mean. Every other fence is shown as code."
+    )
+
+
+def network_note(reachable: bool) -> str:
+    """
+    Whether commands can dial out, which is this session's setting rather than the tool's.
+
+    Said either way rather than only when it is off. "There is no network" stops a model wasting
+    a turn on a fetch that cannot work; "there is a network" stops one refusing to try.
+    """
+    if reachable:
+        return "Commands you run can reach the network."
+    return (
+        "Commands you run cannot reach the network: no fetching, no installing, no cloning. "
+        "Something that needs one fails rather than hanging."
+    )
+
+
+def whole_machine_note() -> str:
+    """
+    What a session reaching everything is told, which is the shape of what it has rather than a path.
+
+    No root to name, because the root is `/` and saying so tells a model nothing it cannot see. What
+    it cannot see is that this was *chosen*, and that nothing here is snapshotted: a session on this
+    arm has no worktree, so the record of what it did is the conversation and nothing else.
+    """
+    return (
+        "You are working on this machine directly, with no repository and no worktree. Paths are "
+        "absolute and reach the whole filesystem. Nothing you change is snapshotted, so there is no "
+        "going back to before a change through this console; say what you are about to do to "
+        "anything you cannot undo."
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Reach:
+    """
+    What a session's isolation comes to: the places it reaches, and what it is told about them.
+
+    One value because it is one decision read by two callers. `agent_for` builds the toolsets from
+    the roots and the confinement; `conversing` composes the note into the instructions it records.
+    Decided in two `match` statements those would be two places to keep in step over one answer, and
+    the failure would be quiet - a session told it has a scratch directory whose tools cannot reach
+    one, or told there is no network by a command that can dial out.
+
+    Empty on every arm that affords nothing, so a caller asks what it has rather than which arm it
+    landed on: no roots is no toolset, no confinement is no `bash`, and no note is nothing to say.
+    """
+
+    roots: tuple[Root, ...] = ()
+    confinement: Confinement | None = None
+    note: str = ""
+
+
+def reaching(
+    isolation: Isolation,
+    worktree: Worktree | None = None,
+    scratch: Path | None = None,
+    bwrap: str | None = None,
+) -> Reach:
+    """
+    What one session's isolation affords, given the worktree, the scratch and the sandbox this
+    machine has.
+
+    **Decided by the session's own isolation**, not by what a caller happens to be handed.
+    `Filesystem.NOTHING` reaches nothing of the machine, and that is a scratch directory of the
+    session's own and commands inside it: a conversation that is not about a repository still wants
+    to run a script or keep a note, and what it must not reach is anything that was there before it.
+    Offered only where a command can make the directory exist, for the reason the worktree's scratch
+    is: a `read` naming a directory nothing ever creates is a tool that can only fail, and a tool
+    that can only fail is worse than none, since it spends its description on every request.
+
+    `bwrap` is passed in rather than looked up, because where the sandbox binary is is a fact about
+    the machine. Without it a `WORKTREE` session keeps its file tools and is offered no `bash`, which
+    is what this console was before there was one; a `NOTHING` session reaches nothing, since its
+    scratch is only ever made by a command; and an `EVERYTHING` session reaches nothing at all: what
+    that arm *is* is a sandbox with `/` in it, so without one there is nothing left that anybody
+    chose.
+    """
+    match isolation.filesystem:
+        case Filesystem.NOTHING if scratch is not None and bwrap is not None:
+            return Reach(
+                roots=(Scratch(path=scratch),),
+                confinement=InAScratch(scratch=scratch),
+                note=f"{scratch_note()}\n\n{network_note(isolation.network)}",
+            )
+        case Filesystem.NOTHING:
+            return Reach()
+        case Filesystem.WORKTREE if worktree is not None:
+            # The scratch is reachable by the file tools only where a command can make it exist,
+            # which is the same condition `bash` is offered under. Offered without one, `read` would
+            # name a directory nothing ever creates. The worktree is first, so a relative path still
+            # means the repository however many roots a session ends up with.
+            if scratch is None or bwrap is None:
+                return Reach(roots=(GitTracked(worktree=worktree),), note=working_note(scratch=False))
+            return Reach(
+                roots=(GitTracked(worktree=worktree), Scratch(path=scratch)),
+                confinement=InAWorktree(worktree=worktree, scratch=scratch),
+                note=f"{working_note(scratch=True)}\n\n{network_note(isolation.network)}",
+            )
+        case Filesystem.WORKTREE:
+            # A worktree was chosen and none was supplied, which is the instant before a session's
+            # first pass has planted one. Nothing rather than tools rooted nowhere.
+            return Reach()
+        case Filesystem.EVERYTHING if bwrap is not None:
+            return Reach(
+                roots=(System(path=Path("/")),),
+                confinement=OverEverything(),
+                note=f"{whole_machine_note()}\n\n{network_note(isolation.network)}",
+            )
+        case Filesystem.EVERYTHING:
+            return Reach()
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def agent_for(
+    wires: Wires,
+    chosen: Choice,
+    instructions: str,
+    worktree: Worktree | None = None,
+    scratch: Path | None = None,
+    bwrap: str | None = None,
+    plugins: Live | None = None,
+    environment: Mapping[str, str] | None = None,
+    output_cap: int | None = None,
+) -> Agent:
+    """
+    The agent one session is answered by, built for the pass that is about to run it.
+
+    Built rather than looked up, because the models an endpoint offers are discovered and change
+    while this process runs, so a mapping built at startup would be a snapshot going stale. It
+    costs a few tens of microseconds against a turn that costs seconds, and the connection pool -
+    the part that is genuinely expensive to build - belongs to the endpoint and is not rebuilt.
+
+    The settings come off the choice rather than being passed in, because they are recorded with it
+    and are as fixed as it is: a pass that resumed a session at a different effort would continue a
+    conversation whose earlier answers were reasoned at another.
+
+    **The instructions are spoken exactly as they arrive**, and nothing is composed on top of them
+    here. What a session is answered under is recorded before its first request, so a note added here
+    would be a sentence the model was sent and the record does not hold - which is both a page
+    reporting less than was said, and instructions that change under a conversation whose cached
+    prefix they sit in front of. `reaching` is where the note comes from, and `conversing` composes
+    it into what it records.
+
+    **The plugins' tools are not conditioned on the isolation**, unlike the two below them, because
+    what a plugin reaches is decided by the plugin's own tier rather than by what the *model* may
+    touch: a handoff acts on the conversation, and every session has one of those. They are first in
+    the list and settled for the session's life, which is the point rather than a detail - a tool
+    definition sits above the system prompt in the cached prefix, so one arriving late invalidates
+    the whole conversation beneath it.
+
+    A session with no plugins gets no such toolset at all rather than an empty one, which is the
+    same answer `reaching` gives a session with no roots: an empty toolset costs nothing on the wire
+    and everything in what somebody reading this has to hold in their head.
+
+    `environment` is what the session's own commands run under, on top of what the sandbox sets:
+    what a repository's setup recorded for the session, handed in as the value it was recorded as
+    rather than looked up here. See `Sandbox.argv`.
+
+    `output_cap` is the most one request may generate as the console knows it, and **it is the
+    model's own maximum rather than a budget**: the model is never told the number, so a smaller one
+    buys nothing but a response cut off with its tokens already paid for. It is handed in rather than
+    looked up here because where it comes from is the catalogue and the reference, both reloadable
+    configuration this module does not hold; see `Listed.output` for which says it. `None` sends
+    nothing, which leaves the adapter's own default - 4096 on the Anthropic wire, the provider's on
+    the OpenAI one - and is the honest answer where neither source knows, since a number guessed too
+    high is refused outright. A `Choice.output_override` beats it, by the ordering below and no other
+    rule.
+    """
+    wire = wires.for_endpoint(chosen.endpoint)
+    # The session's own settings over everything else, so a recorded choice always wins: the thing
+    # somebody picked is the thing that happens. The cap the console looked up sits between the
+    # wire's and the choice's, which is exactly its standing - a fact about the model that a number
+    # somebody typed overrides - so the override's precedence is this ordering and not a rule written
+    # somewhere else. A dict display rather than keyword splats, because a key named twice is a
+    # `TypeError` to a call and the later value to a display, and overlap is the point.
+    asked: ModelSettings = {
+        **wire.caching(),
+        **(ModelSettings() if output_cap is None else ModelSettings(max_tokens=output_cap)),
+        **(chosen.settings or ModelSettings()),
+    }
+    reach = reaching(chosen.isolation, worktree, scratch, bwrap)
+    tools: list[AbstractToolset[None]] = []
+    if plugins is not None and (contributed := contributions(plugins)):
+        tools.append(PluginTools(contributed, asking_through(plugins)))
+    if reach.roots:
+        files = Files(roots=reach.roots)
+        tools.extend((file_tools(files), grep_tools(files)))
+    if reach.confinement is not None and bwrap is not None:
+        tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
+    return Agent(
+        model=wire.model(chosen.model),
+        instructions=instructions,
+        settings=asked,
+        toolsets=tuple(tools),
+    )

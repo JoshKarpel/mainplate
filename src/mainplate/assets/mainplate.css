@@ -1,0 +1,4971 @@
+/*
+ * The console's one stylesheet.
+ *
+ * Every colour is a `light-dark()` pair resolved by `color-scheme`, so the dark side is a second
+ * value rather than a second block of rules, and the theme toggle is one property on <html>
+ * (see `[data-theme]` below) rather than a duplicated palette.
+ *
+ * The palette runs on one axis, and it is the axis a reader learns without being told: COOL is
+ * what reached the model, WARM is what the model produced. A person speaks in lapis; the model
+ * answers in its own orange, reasons in that orange drawn back toward the ink (the same voice,
+ * unvoiced), and reaches for a tool in ochre. A kind added later takes its side from that rather
+ * than from a colour picked for it.
+ */
+
+/* JuliaMono, vendored beside this file, upstream unmodified and under the OFL that ships with it.
+ *
+ * Vendored rather than named in a stack, because everything that decides whether a table, a tree or
+ * a read's gutter draws as lines rather than as dashes is a fact about the font, and named in a
+ * stack those are facts about whatever the reader happens to have installed.
+ *
+ * This face rather than a smaller one, because a model draws with more than box drawing and the
+ * gaps in an otherwise good font are what a fallback fills, one character at a time, on its own
+ * cell. Measured over the blocks that get used: JuliaMono carries all of box drawing, block
+ * elements, geometric shapes, arrows, mathematical operators, miscellaneous symbols, dingbats and
+ * braille, every one of them on the cell, where Fira Code carries 2% of dingbats and no braille,
+ * Cascadia Code 8% of arrows, and Roboto Mono no box drawing whatever. It is 1 MB a weight, which
+ * is what completeness costs and is the whole of what is being bought.
+ *
+ * Two weights rather than a variable face, because this one ships statics: 400 and 700, so the 600
+ * a panel role asks for resolves to the bold rather than being synthesised by smearing the regular.
+ *
+ * `block` rather than `swap`, because every metric in `--mono-size` and `--mono-line` is chosen
+ * against this face: swapping would draw the console in a fallback whose grid is a different size
+ * and then reflow it. It is served from the same origin as the page that asks for it. */
+@font-face {
+    font-family: "JuliaMono";
+    src: url("JuliaMono-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: "JuliaMono";
+    src: url("JuliaMono-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+    font-display: block;
+}
+
+:root {
+    color-scheme: light dark;
+
+    --ground: light-dark(#f4f2ee, #131316);
+    --raised: light-dark(#fbfaf8, #1c1c21);
+    --sunk: light-dark(#eceae4, #232329);
+    --ink: light-dark(#22201c, #e6e4e0);
+    --ink-soft: light-dark(#5f5a51, #a8a49c);
+    --ink-faint: light-dark(#8d877c, #7b766d);
+    --edge: light-dark(#dcd8d0, #33333c);
+    --edge-soft: light-dark(#e8e5df, #2a2a31);
+
+    /* The hues themselves, named for what they are rather than for who uses them, so a kind can
+       be pointed at one without the token having to be renamed. */
+    --lapis: light-dark(#274690, #7f9fe6);
+    --claude: light-dark(#c0603d, #e08a6a);
+    --sienna: light-dark(#8a5a10, #cf9a4c);
+    --vermilion: light-dark(#b0281d, #e0715f);
+    --amber: light-dark(#9a7310, #d9ad4e);
+    /* Only a highlighted string is drawn in this, and that is the point: nothing a speaker says is
+       green, so a literal inside a fence is the one thing on the page wearing it. */
+    --moss: light-dark(#41682c, #93c07a);
+
+    /* Which hue each kind of panel is drawn in. One indirection, so the axis above is stated once
+       and every rule that draws an edge, a label, or a chip reads the same token. */
+    --person-edge: var(--lapis);
+    --assistant-edge: var(--claude);
+    --thinking-edge: color-mix(in srgb, var(--claude) 55%, var(--ink-faint));
+    --tool-edge: var(--sienna);
+    --error-edge: var(--vermilion);
+
+    /* Not a speaker's hue, and deliberately so: it marks what the console itself is doing (a
+       search hit, the panel you landed on, following the end) and must never read as somebody
+       talking. */
+    --mark: var(--amber);
+
+    /* The spacing this console is allowed to use. A closed set, and that is the whole of what it
+       buys: a value picked freehand is a value nobody can tell from a mistake later, and half the
+       gaps here were within a pixel of another one for no reason anybody could name.
+
+       The steps are the sizes already in use, deduplicated - not a scale imposed over them - so
+       adopting it moved nothing by more than about two pixels. What it changes is the next value,
+       which now has to be one of these or an argument for a new step. */
+    --space-1: 0.15rem;
+    --space-2: 0.25rem;
+    --space-3: 0.4rem;
+    --space-4: 0.6rem;
+    --space-5: 0.8rem;
+    --space-6: 1.1rem;
+    --space-7: 1.6rem;
+    --space-8: 2.2rem;
+    --space-9: 4rem;
+
+    --gap: var(--space-5);
+    --radius: 0.5rem;
+    /* What lifts a card off the page: the rail's cards, and on a phone the session list's. */
+    --lift: 0 2px 12px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
+    --sidebar: 17rem;
+    /* A side column put away is a strip this wide, which is the button that brings it back. */
+    --folded: 1.5rem;
+    /* One width at every shape, so a card has one layout to be right in, and a wide one, because
+       every card in it is rows of a key at the left and a value or a control at the right, and a
+       row is only a row while the two fit on one line: a repository or a branch beside its key is
+       about twenty-five characters of the monospace face, and the column this was, 11rem, cut every
+       one of them. On a phone it is held short of the far edge, as the session list is. The cost,
+       stated: a wide window's reading measure loses 5rem against the column this was, and at the
+       78rem edge where the rail still stands beside the conversation the transcript is narrower
+       than its measure. */
+    --rail: 16rem;
+    --measure: 46rem;
+    /* What a grid of cards is laid out in, as against `--measure`, which is what prose is read at.
+       A transcript wants a column narrow enough to read a line of; a picker wants room for three
+       cards across, and held to the reading measure it never reaches a third column. */
+    --wide: 68rem;
+
+    /* The vendored face first. The rest is what a reader sees only if it fails to load, so the
+       stack is a fallback rather than a plan: nothing behind the first name draws this console's
+       symbols on one cell. */
+    --mono: "JuliaMono", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+        monospace;
+
+    /* The grid every block of monospace text is drawn on. Both numbers are about box drawing rather
+       than about taste in spacing, because a model answers in tables, in trees and in reads, and a
+       read's gutter is a column of `│` down the whole panel.
+
+       Two rows of box drawing join on two conditions, and missing either draws that column as a
+       dashed line. The pitch must be no more than the glyph's own span, which is why the face is
+       vendored: this one draws `│` over about 1.7 times its size, where the fonts a stack would have
+       reached instead cap out well under that. Measured rather than taken from the outline, since a
+       rendered glyph is hinted: the outline says 1.70em and `measureText` says less again, and what
+       decides is a run drawn into a canvas and read back. And the pitch must be a whole number of
+       pixels, or every row lands on a different subpixel phase and the joins falling between two
+       device rows render as two half-lit ones, which is a hairline on some rows of a figure and not
+       others.
+
+       So the pitch is the loosest box drawing can be given, less the pixel that keeps it from being
+       the boundary itself. What that pixel is for is that the two ways to be wrong are not equal:
+       overlapping ink still draws the line the figure means, and a gap draws a line the figure does
+       not. Anything looser has to come from a larger `--mono-size`, since the span this is measured
+       against is a multiple of it and not a constant.
+
+       Both are stated in pixels, which is what a grid of cells is: a fractional pitch is the
+       subpixel phase problem above, so this is the one pair on the page that cannot be scaled with
+       `rem` and has to be moved by hand when everything else moves - and moved by *measuring*, not
+       by multiplying, since the whole numbers on either side of the answer are a pixel apart. At 14
+       the run joins at a pitch of 23 and breaks at 24, so 22 is that loosest pitch less the safety
+       pixel above. The cost is that a reader who has raised their browser's default font size does
+       not raise this with it. Browser zoom still scales it, being a scale on the pixel rather than
+       on the root.
+
+       `TestTheGridMonospaceIsDrawnOn` is what says whether a pair is a grid, and it is the only
+       thing that can: every one of these renderings is a correct picture of *some* grid, so what is
+       wrong with a broken one is a hairline no still and no markup assertion can see. */
+    --mono-size: 14px;
+    --mono-line: 22px;
+}
+
+/* The toggle forces one side of every pair by pinning `color-scheme`; with no attribute (or
+   `system`) the :root default of `light dark` follows the machine. */
+:root[data-theme="light"] {
+    color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+/* Everything on this page except the monospace grid is sized in `rem`, so this is the one value
+   that scales all of it at once: the text, the spacing steps, the reading measure, the sidebar and
+   the rail, in the proportions they already have. It is here because the console read small - the
+   page was better at a browser zoom of 110%, which is the same scaling asked for by hand on every
+   visit - and a stylesheet that needs a zoom is a stylesheet with a number in the wrong place.
+
+   Deliberately *not* the breakpoint, which resolves `rem` against the browser's own default rather
+   than against this: the two shapes are about how much screen there is, and the shape should change
+   where the window runs out of room and not where the text got bigger. */
+html {
+    font-size: 110%;
+}
+
+body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    /* 15px against the browser's default, which is what this was written at, scaled by the line
+       above with everything else rather than pinned underneath it. */
+    font: 0.9375rem/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.shell {
+    /* Each side column's width is one property, so a column the reader has put away changes that
+       property and never the template: four combinations of two columns out or away, and one rule
+       for each column rather than one per combination. */
+    --list-column: var(--sidebar);
+    --rail-column: var(--rail);
+    display: grid;
+    grid-template-columns: var(--list-column) 1fr;
+    /* The window, less a phone's keyboard. `dvh` is the window less the browser's own bars and
+       nothing else: a keyboard laid over the page leaves it as it was, and the shell would run on
+       under the keys with the message box at the bottom of it. `--visible-height` is what the script
+       sets, from the visual viewport, on the one browser whose keyboard does not shrink the layout
+       viewport when the viewport meta asks; everywhere else it is never set and this is `100dvh`. */
+    height: var(--visible-height, 100dvh);
+}
+
+/* The rail is a column of the page rather than something laid over it, which it can be because
+   the conversation scrolls inside its own box and the page does not: nothing has to be pinned to
+   stay put. It therefore takes room instead of covering the text it exists to navigate, and the
+   start page, which has no rail, simply has no third column. */
+.shell:has(> .rail) {
+    grid-template-columns: var(--list-column) 1fr var(--rail-column);
+}
+
+/* The console has two shapes, and one width decides between them: over 78rem, three columns, with
+   the session list and the rail standing either side of the conversation; under it, one column,
+   with both lying off their edges of the page behind a clasp apiece, the way a phone draws them.
+
+   Two and not three, deliberately. There used to be a shape between, two columns with the rail
+   floating over the page behind a glyph while the list kept its column, and it was a third state to
+   keep right with a folding mechanism of its own; a window too narrow for three columns now goes
+   straight to the shape a phone has, which is one mechanism, one script, and one block to read.
+   Every rule for the narrow shape is in that one block at the end of this file, and this is the
+   only other place the grid is set. */
+
+/* --- The session list ------------------------------------------------- */
+
+.sessions {
+    display: flex;
+    flex-direction: column;
+    /* A grid item's floor is its content, and this one holds a list longer than the window, so
+       without this the column is as tall as the list and the sheet inside has nothing to scroll. */
+    min-height: 0;
+    padding: var(--gap);
+    border-right: 1px solid var(--edge);
+}
+
+/* The sheet is what the list is on: wide, the column's own contents, and on a phone the one box
+   that slides out from under the clasp and takes a finger between two rows. It is the scroller at
+   every width, so `toCurrentSession` in the script moves one box wherever it runs. */
+.sessions__sheet {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    gap: var(--gap);
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* Drawn only where the list lies off the edge of the page, which is the narrow block at the end of
+   this file. Everywhere wider the list is a column of the shell and there is nothing to unclasp. */
+.sessions__clasp {
+    display: none;
+}
+
+/* The console's name, drawn in the narrow shape alone, where it stands in the row the two clasps
+   clear across the top of the page; see the narrow block. A wide window has no such row and no
+   banner. */
+.bar {
+    display: none;
+}
+
+.sessions ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+/* The mark and the name at the head of the list, which is the way back to the dashboard. Drawn as
+   the console's name rather than as a button: it is where you are, and the presses that start
+   something are on the dashboard. */
+.sessions .home {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0.35rem 0.6rem;
+    color: var(--ink);
+    font-weight: 700;
+    font-size: 1.05rem;
+    text-decoration: none;
+}
+
+.home__mark {
+    --plate: var(--ink);
+    --person: var(--person-edge);
+    --assistant: var(--assistant-edge);
+    width: 1.6rem;
+    height: 1.6rem;
+    flex: none;
+}
+
+.sessions .home:hover .home__name,
+.sessions .home:focus-visible .home__name {
+    text-decoration: underline;
+}
+
+.session:hover {
+    border-color: var(--person-edge);
+}
+
+.session {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: 0.45rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.session.current {
+    background: var(--raised);
+    border-color: var(--edge);
+}
+
+.session .name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.session .when {
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+    /* Fixed width and never broken, so the repository beside it is the thing that gives way. A
+       date wrapped onto two lines costs the row a line and reads as a layout that ran out of
+       room; a repository cut at the tail reads as a name that did not fit, which is what it is. */
+    flex: none;
+    white-space: nowrap;
+}
+
+/* --- The conversation ------------------------------------------------- */
+
+main {
+    display: grid;
+    /* Two rows, because a page here is the thing being read and the box you add to it: the
+       conversation (or the choosing, on the page with no conversation yet) takes whatever room is
+       left, and the composer is its own height under it. */
+    grid-template-rows: 1fr auto;
+    min-height: 0;
+    /* A grid item's minimum is its min-content unless this says otherwise, so without it the `1fr`
+       column cannot go narrower than the widest unbreakable thing in here - which is the composer's
+       row, a textarea at its intrinsic twenty columns beside a Send button. On a phone that floors
+       `main` at about 317px next to a 272px sidebar and scrolls the *document* sideways, which is
+       the one thing every page here must never do. */
+    min-width: 0;
+    padding: 0 var(--gap);
+    /* What the conversation is read at: the reader's own width where they have dragged one, which
+       the script pins as `--reading` from `localStorage` before the first paint, and the measure
+       where they have not. Held to the room there is by `width: 100%` on everything that reads it,
+       so a width chosen on a wide screen is simply as wide as a narrower one allows. */
+    --column: var(--reading, var(--measure));
+    position: relative;
+}
+
+/* The edge the reader drags to change `--column`, on the conversation's left, in the gutter `main`
+   keeps either side: the right edge is the transcript's scrollbar. Seated by the script, since a grip
+   that does nothing without it is a control that lies, and only where there is a conversation. A
+   faint mark rather than nothing, because a control drawn only under the pointer is one nobody
+   finds. */
+.reading__grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(50% - min(var(--column), 100% - 2 * var(--gap)) / 2 - var(--gap));
+    width: var(--gap);
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.reading__grip::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 3px;
+    height: 2.5rem;
+    border-radius: 999px;
+    background: var(--edge);
+    translate: -50% -50%;
+}
+
+.reading__grip:hover::after,
+.reading__grip:focus-visible::after,
+.reading__grip[data-dragging]::after {
+    height: 4rem;
+    background: var(--mark);
+}
+
+.reading__grip:focus-visible {
+    outline: none;
+}
+
+/* Not while a fork is being chosen: the picker is laid out at the card measure, wider than the column
+   the grip stands at the edge of, so the grip would stand over the picker's own controls. */
+main:has(> .forking) > .reading__grip {
+    display: none;
+}
+
+/* And again for the rows inside it, because `min-width: auto` applies to every grid item and not
+   just the outermost: `main` shrinking without this leaves the transcript, the setup block and the
+   composer at their own min-content, overflowing the parent that just learned to shrink. The
+   column they sit in is auto-sized, so it is their minimum that decides its width. */
+main > * {
+    min-width: 0;
+}
+
+.transcript {
+    display: flex;
+    flex-direction: column;
+    /* The room between one thing in the conversation and the next is the column's gap, and nothing
+       carries a block margin of its own: a gap stands only *between* children, so the last panel
+       ends where the box begins, where a margin under every panel put one more under the last and
+       left a strip of nothing at the foot of every scroll to the end, a tenth of a phone's screen.
+       It is one value, because it was already one value: the rules' smaller margins were being
+       swallowed by the panels' larger ones on both sides, so every boundary here was this far apart
+       and the "more air above a turn" a rule asked for was never drawn.
+
+       The room above the first thing is padding, since a gap has nothing to stand between there. */
+    gap: var(--space-5);
+    width: 100%;
+    max-width: var(--column);
+    margin: 0 auto;
+    padding-top: var(--space-5);
+    /* The scroll is this element's, not the document's, so the composer stays put while the
+       conversation moves under it. Everything that navigates measures against this box. */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-behavior: auto;
+}
+
+.transcript .empty {
+    margin-top: var(--space-8);
+    color: var(--ink-faint);
+    text-align: center;
+}
+
+/* --- Panels ----------------------------------------------------------- */
+
+/* A panel is a run of one kind of thing, drawn with that kind's edge down its left. Bubbles were
+   the wrong shape once a turn could hold reasoning and a tool call as well as an answer: the
+   speaker is the edge, and everything the model did stands in one column at one measure. */
+.panel {
+    position: relative;
+    /* The right padding is carried by every panel rather than added when one is landed on, so
+       being the target changes only colour. Added on arrival it widened the box past its
+       container, which scrolled the whole document sideways and shifted the text under the
+       reader at the moment they had just navigated to it. */
+    padding: var(--space-1) var(--space-6);
+    border-left: 2px solid var(--edge);
+    /* Clears the sticky nothing above it so a panel navigated to lands with room over it. */
+    scroll-margin-top: var(--space-5);
+}
+
+/* Each kind's own hue, bound to one name on the panel so anything drawing a panel can reach for it
+   without a rule per kind of its own. The edge is what it is for; the arrival flash below is the
+   second reader of it, and a third would be a third `var(--kind)` rather than four more rules. */
+/* A steer takes the person's hue, because the axis is who produced the text and that is the same
+   person. What tells it apart is the label and the key's own chip, not a colour of its own. */
+/* And a command takes it too, for exactly the same reason: the person wrote it. That it is the one
+   kind here no model ever saw is said by the panel's own label and by the key's chip, which is where
+   a fact about who was told belongs - the palette answers who produced it. */
+/* And so do the system prompt and the guidance handed over mid-turn, which the console composed and
+   delivered but nobody here wrote: what is in both is the operator's own guidance and the
+   repository's own, written by people. They are two kinds rather than one because they sit in
+   different places in the request, which is not something a hue can say. */
+/* And a note, which nobody in the conversation typed at all: a plugin asked for it and this console
+   put it in the inbox, so what is in it was composed by this console's own machinery with the model
+   as the party about to be told. That is the person's side of the axis, and the panel's own title is
+   what says a plugin asked. What a plugin gets to vary is the `tone` below, which is weight *within*
+   this side rather than a hue competing with it. */
+.panel[data-kind="prompt"],
+.panel[data-kind="note"],
+.panel[data-kind="steer"],
+.panel[data-kind="command"],
+.panel[data-kind="system-prompt"],
+.panel[data-kind="guidance"] {
+    --kind: var(--person-edge);
+}
+
+/* Which of the console's inks a note takes, named by the plugin and resolved here. Three, because
+   there are three and the set wants settling before the first plugin ships: a tone goes in the
+   record, and the record is the conversation. `quiet` is for something a reader can skim past and
+   `strong` is for something that changes what happens next, which is the same answer the forget rule
+   reached in taking a stronger ink rather than a colour of its own. */
+.panel[data-kind="note"][data-tone="quiet"] .panel__role {
+    color: var(--ink-faint);
+}
+
+.panel[data-kind="note"][data-tone="strong"] {
+    --kind: var(--mark);
+}
+
+.panel[data-kind="note"][data-tone="strong"] .panel__role {
+    color: var(--mark);
+}
+
+.panel[data-kind="assistant"] {
+    --kind: var(--assistant-edge);
+}
+
+.panel[data-kind="thinking"] {
+    --kind: var(--thinking-edge);
+}
+
+.panel[data-kind="tool"] {
+    --kind: var(--tool-edge);
+}
+
+.panel[data-kind] {
+    border-left-color: var(--kind);
+}
+
+/* A panel that has just arrived, or whose blocks have just said something different: washed over in
+   its own kind's hue for a beat, then back. While a turn is being answered the transcript is
+   re-rendered whenever anything is recorded, and a reader watching one fill in needs to be told
+   *which* part of it moved - reasoning appearing, a call being made, a result coming back - rather
+   than left to spot it.
+
+   A layer *over* the panel rather than a tint behind it, and that is what makes one rule enough: a
+   panel's own background is almost entirely covered by the blocks inside it, which have backgrounds
+   of their own, so a tint underneath shows only in the padding around them. Drawn on top, the wash
+   reaches everything the panel holds without a rule per kind of block that paints itself.
+
+   `inset: 0` resolves against the padding box, so the kind's edge down the left is the one thing
+   the wash does not cover, which is right: the edge is what says whose panel this is, and the flash
+   is what says it moved. Inside the box for a second reason as well - anything drawn outside it is
+   outside the container the transcript scrolls, which is how a page acquires a horizontal scrollbar
+   nobody asked for.
+
+   A colour fade and nothing else: no transform, no movement, no repeat, so there is nothing here
+   for `prefers-reduced-motion` to be reducing. Opacity and not a border, because a border has a
+   radius to fade out along with it, and the moment the animation ends is the moment that radius
+   snaps back to the square corners underneath. */
+.panel[data-fresh]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--kind);
+    opacity: 0;
+    pointer-events: none;
+    animation: panel-arriving 1.4s ease-out;
+}
+
+@keyframes panel-arriving {
+    from {
+        opacity: 0.16;
+    }
+
+    to {
+        opacity: 0;
+    }
+}
+
+/* Where the reader is: whether they followed a permalink (`:target`) or the console put them
+   there (`data-landed`, written with `replaceState`, which `:target` does not answer to). The
+   two are drawn identically because they mean the same thing. */
+.panel:target,
+.panel[data-landed] {
+    background: color-mix(in srgb, var(--mark) 10%, transparent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* A kind the key has switched off. Still drawn, and drawn as struck out rather than removed: a
+   conversation with panels silently missing is one a reader cannot trust the shape of. */
+.panel[data-muted] {
+    opacity: 0.4;
+}
+
+/* The row of facts, which is also the summary that folds the panel. It was a `<header>` and the
+   panel was an `<article>`; what changed is which element they are, and every rule below held
+   before the panel folded.
+
+   `gap` on two axes because the row wraps: on a phone the opening line takes a line of its own
+   under the role, and the row gap is what keeps the two off each other.
+
+   `list-style: none` and the WebKit marker together, because the marker this row draws is on the
+   role and sits *between* the role and the opening line, which a disclosure's own marker cannot
+   do - it is always the first thing in the summary. */
+.panel__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-5);
+    margin-bottom: 0.25rem;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+    color: var(--ink-faint);
+    cursor: pointer;
+    list-style: none;
+}
+
+.panel__meta::-webkit-details-marker {
+    display: none;
+}
+
+.panel__role {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--ink-soft);
+}
+
+/* The mark, immediately right of the title, in the title's own ink - so it takes the panel's kind
+   colour for free from the rules below and there is no second list of hues to keep in step.
+
+   On the role rather than as a `::before` on the summary, which is the only place a generated
+   marker can go that is *after* the word and before the line: a summary's own marker leads the row,
+   and so would `::before`. `letter-spacing: normal` because the role is tracked out and the mark
+   would otherwise carry a trailing gap that reads as a wider space than the flex gap beside it. */
+.panel__role::after {
+    content: "\25B8";
+    margin-left: 0.45em;
+    letter-spacing: normal;
+}
+
+.panel[open] > .panel__meta .panel__role::after {
+    content: "\25BE";
+}
+
+/* Every label takes its own panel's edge, so the two read as one mark and a reader scrolling can
+   tell the kinds apart without reading the word. */
+.panel[data-kind="prompt"] .panel__role,
+.panel[data-kind="note"] .panel__role,
+.panel[data-kind="steer"] .panel__role,
+.panel[data-kind="command"] .panel__role,
+.panel[data-kind="system-prompt"] .panel__role,
+.panel[data-kind="guidance"] .panel__role {
+    color: var(--person-edge);
+}
+
+.panel[data-kind="assistant"] .panel__role {
+    color: var(--assistant-edge);
+}
+
+.panel[data-kind="thinking"] .panel__role {
+    color: var(--thinking-edge);
+}
+
+.panel[data-kind="tool"] .panel__role {
+    color: var(--tool-edge);
+}
+
+/* Muted until hovered, so it reads as chrome rather than as prose. The `auto` is what puts it flush
+   right on a row whose opening line is absent or has not been given the free space - a page with no
+   `.opening` at all still reads correctly. */
+.panel__meta .panel__anchor {
+    margin-left: auto;
+    color: var(--ink-faint);
+    text-decoration: none;
+}
+
+.panel__meta .panel__anchor:hover,
+.panel__meta .panel__anchor:focus-visible {
+    color: var(--mark);
+    text-decoration: underline;
+}
+
+/* --- Copy buttons: seated by the script -------------------------------- */
+
+/* Lifting what is on the page off it, on a panel and inside every block of code in one. Two places
+   and one look, because they are one thing: what each copies is decided by where it sits.
+
+   Drawn on every one of them rather than on whatever is under the pointer, and merely quieter until
+   its own panel is: a control revealed by hover does not exist at all on a touch screen, which is
+   the lesson the branch link had to learn.
+
+   The size and family are not inherited - a button takes neither from its container - so both are
+   said here, in the mono the rest of the chrome is set in and a step under it. The uppercase and the
+   tracking are the panel role's, so every small mark on a panel reads as one kind of thing. */
+.copy {
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--edge);
+    border-radius: 3px;
+    background: var(--raised);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.07em;
+    /* Tight, so the one standing in the row of facts costs that row no height of its own. */
+    line-height: 1.2;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.panel:hover .copy,
+.copy:focus-visible {
+    opacity: 1;
+}
+
+/* The panel's own stands in the row of facts, just left of the permalink, and takes the free space
+   the permalink used to take. In the row rather than hung off the text below it, so the panel keeps
+   the spacing it has always had: a button given room of its own costs every panel a strip of empty
+   page between its title and what it says, which is a change to the whole transcript's rhythm bought
+   for one control.
+
+   The permalink gives up its own `margin-left: auto` only where this button is there to take it
+   over, so a page rendered with the script absent still has it flush right. */
+.panel__meta > .copy {
+    margin-left: auto;
+}
+
+.panel__meta > .copy + .panel__anchor {
+    margin-left: 0;
+}
+
+/* A block of code carries its own inside its top right corner, inset on both axes over the padding
+   the block already has, which is the place a reader looks for one. */
+pre > .copy {
+    position: absolute;
+    z-index: 1;
+    top: var(--space-3);
+    right: var(--space-3);
+}
+
+/* Copied, in the ink the console uses for what the console itself is doing. Deliberately not the
+   green a finished thing takes elsewhere: `--moss` is worn by a literal inside a fence and by
+   nothing else, where `--mark` already says "the page is answering you" on a search hit and on the
+   panel you landed on. */
+.copy[data-copied] {
+    border-color: var(--mark);
+    color: var(--mark);
+    opacity: 1;
+}
+
+/* --- Drawings: seated by the script -------------------------------------- */
+
+/* A fence labelled `mermaid` or `svg` takes a second button to the left of its copy button, in the
+   copy button's own face. The copy button stays in its corner, so it sits where it does on every
+   other block on the page; what makes room is this one standing further in. Both widths are pinned
+   rather than measured, so neither button moves when its word changes: `copy` grows to `copied` and
+   `draw` swaps for `code`, and a button that shifted under the pointer on being pressed is one that
+   is missed on the second press. The copy button's width is `copied`'s, and only inside a block,
+   where the panel's own stands in a row that sizes it. */
+pre > .copy {
+    min-width: 3.3rem;
+    text-align: center;
+}
+
+pre > .draw {
+    right: calc(var(--space-3) + 3.3rem + 0.3rem);
+    min-width: 2.7rem;
+}
+
+pre > .draw[aria-busy] {
+    cursor: progress;
+}
+
+/* --- Focusing: seated by the script ---------------------------------------- */
+
+/* A block whose lines do not fit takes a button that opens it on its own, as wide as the window,
+   standing where `draw` does, and one further in where a fence shown as code carries both. */
+pre > .focus {
+    right: calc(var(--space-3) + 3.3rem + 0.3rem);
+    min-width: 2.7rem;
+}
+
+pre:has(> .draw) > .focus {
+    right: calc(var(--space-3) + 3.3rem + 0.3rem + 2.7rem + 0.3rem);
+}
+
+/* As wide as its longest line and no wider than the window, over a dimmed page. The block scrolls
+   inside it on both axes and the dialog itself does not, so the close button keeps its corner; and
+   nothing in the dialog is padding, so a press that lands on the dialog itself is a press on the
+   backdrop. */
+.focused {
+    width: fit-content;
+    max-width: calc(100vw - 2 * var(--space-6));
+    max-height: calc(100dvh - 2 * var(--space-6));
+    padding: 0;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--sunk);
+    color: var(--ink);
+    overflow: hidden;
+}
+
+.focused[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+.focused::backdrop {
+    background: color-mix(in srgb, var(--ground) 70%, transparent);
+}
+
+.focused > form {
+    position: absolute;
+    z-index: 1;
+    top: var(--space-3);
+    right: var(--space-3);
+    margin: 0;
+}
+
+/* The copy keeps the block's classes, so its lines are drawn as they were, and sheds its frame, since
+   the dialog is the frame now. */
+.focused > pre {
+    min-height: 0;
+    margin: 0;
+    padding: var(--space-4) var(--space-5);
+    border: none;
+    border-radius: 0;
+    background: none;
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    overflow: auto;
+}
+
+.focused > pre > code {
+    overflow: visible;
+}
+
+/* The picture stands where the code stood, scaled to the block and never wider than it. The code
+   is hidden with the attribute the script sets, and told so here because `.text pre code`'s own
+   `display: block` outranks the browser's `[hidden]` rule. */
+.text pre code[hidden] {
+    display: none;
+}
+
+.drawing {
+    display: block;
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+/* Why there is no picture, in the block's own face and wrapped, since what mermaid says about a
+   parse error is a sentence and not a line of code. */
+.drawing--failed {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    white-space: pre-wrap;
+}
+
+/* --- The line a shut panel stands for ----------------------------------- */
+
+/* Every panel folds, so every panel needs a line saying what is in it while it is shut: the front
+   of its own prose, or - for a batch of calls or commands, which have no prose to take a front off
+   - what is in it, named. See `panel_opening` in `pages.py`.
+
+   It takes the free space between the role and what sits at the end of the row, which is what makes
+   the permalink's `margin-left: auto` unnecessary on a row that has one of these and why the anchor
+   gives that up. `flex: 1` rather than letting it size to its content, or a short opening would
+   leave the row's own gap doing the spacing and the permalink would sit against the text.
+
+   Clipped by the browser at whatever width the panel has, which is the whole of why there is no
+   length in the markup: the server cannot know the window, and any character count it picked would
+   cut in the wrong place at every other width. `min-width: 0` is what lets a flex item shrink below
+   its content and so is what makes the ellipsis appear at all. */
+.opening {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--ink-soft);
+}
+
+/* Open, it goes: a prefix of the body standing directly above the body says nothing twice. The mark
+   stays, and so do the copy button and the permalink, so nothing on the row moves under the finger
+   that pressed it - which is why this is `visibility` and not `display`. Removed from the flow, the
+   row's free space would collapse and the permalink would slide left across the panel. */
+.panel[open] > .panel__meta > .opening {
+    visibility: hidden;
+}
+
+/* --- Blocks ----------------------------------------------------------- */
+
+.block {
+    margin: 0.6rem 0;
+}
+
+.block:first-child {
+    margin-top: 0;
+}
+
+.block:last-child {
+    margin-bottom: 0;
+}
+
+/* --- What Markdown produces -------------------------------------------- */
+
+/* A message is rendered Markdown, so what lands here is ordinary flow content and is styled as
+   such. There is deliberately no `white-space: pre-wrap`: line breaks are the renderer's job now,
+   and leaving it on would make the newlines *between* the generated elements visible as gaps. */
+
+.text > :first-child {
+    margin-top: 0;
+}
+
+.text > :last-child {
+    margin-bottom: 0;
+}
+
+.text p,
+.text ul,
+.text ol,
+.text blockquote,
+.text table {
+    margin: 0.6rem 0;
+    overflow-wrap: anywhere;
+}
+
+.text h1,
+.text h2,
+.text h3,
+.text h4,
+.text h5,
+.text h6 {
+    margin: 1rem 0 0.4rem;
+    font-size: 1rem;
+    line-height: 1.3;
+}
+
+.text ul,
+.text ol {
+    padding-left: 1.3rem;
+}
+
+.text li {
+    margin: 0.15rem 0;
+}
+
+.text blockquote {
+    padding-left: 0.8rem;
+    border-left: 2px solid var(--edge);
+    color: var(--ink-soft);
+}
+
+.text code {
+    padding: 0.05rem 0.25rem;
+    border-radius: 3px;
+    background: var(--sunk);
+    font-family: var(--mono);
+    font-size: 0.86em;
+}
+
+.text pre {
+    position: relative;
+    margin: var(--space-4) 0;
+    line-height: var(--mono-line);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--edge-soft);
+    border-radius: var(--radius);
+    background: var(--sunk);
+}
+
+/* The code scrolls sideways, not the block around it, so a long line still moves the block and never
+   the page. One level in rather than on the `pre` itself, because a copy button pinned to a scroll
+   container travels with the content: anchored to the block that scrolls, it would slide off its own
+   corner and across the code the moment a reader looked at the end of a long line. */
+.text pre code {
+    display: block;
+    overflow-x: auto;
+    padding: 0;
+    background: none;
+    font-size: var(--mono-size);
+}
+
+/* --- Highlighting ----------------------------------------------------- */
+
+/* Pygments names the spans and `codehilite` names the box; what the colours are is decided here,
+   from the same hues everything else on this page is drawn in. An imported Pygments theme would be
+   a second palette sitting inside the first, with its own opinion about light and dark, so the
+   token groups are mapped onto tokens that already follow the reader's theme.
+
+   Grouped by what a reader is actually distinguishing rather than by Pygments' full tree: a
+   comment from code, a string from a name, a keyword from both. Every short name in a group is
+   listed because the selector has to match exactly, and an unlisted one simply inherits the
+   block's own colour, which is the right failure.
+
+   On any `pre` rather than a fence's alone, because a tool call's body colours the same way: a
+   shell command, a file a read brought back, what a create was handed to write. The token classes
+   only ever reach the page from Pygments, through the sanitiser on a message and through `calls.py`
+   on a call, so there is no `pre` these could match by accident. */
+.codehilite {
+    background: none;
+}
+
+/* Comments, in the same faint ink as everything else the eye is meant to skip. */
+pre .c,
+pre .ch,
+pre .cm,
+pre .cp,
+pre .cpf,
+pre .c1,
+pre .cs {
+    color: var(--ink-faint);
+    font-style: italic;
+}
+
+/* Keywords and operators that are really keywords: the structure of the language. */
+pre .k,
+pre .kc,
+pre .kd,
+pre .kn,
+pre .kp,
+pre .kr,
+pre .kt,
+pre .ow {
+    color: var(--lapis);
+    font-weight: 600;
+}
+
+/* Strings and the pieces of them, in the one hue added for this: nothing else on the page is
+   green, which is exactly why a string reads as a string at a glance. */
+pre .s,
+pre .sa,
+pre .sb,
+pre .sc,
+pre .dl,
+pre .sd,
+pre .s2,
+pre .se,
+pre .sh,
+pre .si,
+pre .sx,
+pre .sr,
+pre .s1,
+pre .ss {
+    color: var(--moss);
+}
+
+/* Numbers, beside strings as the other kind of literal but distinct from them. */
+pre .m,
+pre .mb,
+pre .mf,
+pre .mh,
+pre .mi,
+pre .mo,
+pre .il {
+    color: var(--sienna);
+}
+
+/* What a thing is called, where the name is doing work: a definition, a decorator, a builtin. */
+pre .nf,
+pre .fm,
+pre .nc,
+pre .nd,
+pre .ne {
+    color: var(--claude);
+}
+
+pre .nb,
+pre .bp,
+pre .nt {
+    color: var(--sienna);
+}
+
+/* Errors, in the one hue this console reserves for something being wrong. */
+pre .err {
+    color: var(--vermilion);
+}
+
+/* A diff inside a fence, which is what a coding agent shows most often after code itself. */
+pre .gd {
+    color: var(--vermilion);
+}
+
+pre .gi {
+    color: var(--moss);
+}
+
+pre .gh,
+pre .gu {
+    color: var(--ink-soft);
+    font-weight: 600;
+}
+
+pre .ge {
+    font-style: italic;
+}
+
+pre .gs {
+    font-weight: 600;
+}
+
+.text table {
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.text th,
+.text td {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--edge);
+    text-align: left;
+}
+
+.text a,
+.tool__body pre a,
+.ran__body pre a {
+    color: var(--person-edge);
+}
+
+.text th {
+    background: var(--sunk);
+}
+
+
+.text img {
+    max-width: 100%;
+    height: auto;
+}
+
+.text hr {
+    border: none;
+    border-top: 1px solid var(--edge);
+}
+
+/* Reasoning, in the box the block itself is. It carries no fold of its own: the panel around it is
+   the fold, and a `<details>` in here spent one row on a marker that stood for the very text a few
+   pixels below it. See `.panel__meta`. */
+.block--thinking {
+    padding: 0.5rem 0.9rem;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    background: var(--sunk);
+    color: var(--ink-soft);
+    font-style: italic;
+}
+
+/* Reasoning is set in italic, and code inside it is not. A model reasons *about* code, so a block
+   in there is a quotation of something that exists, and slanting it makes the quotation differ from
+   the thing quoted. It costs alignment as well as honesty: no italic face is vendored, so an
+   oblique is synthesised by shearing every glyph, which leans the gutter of a read and the sides of
+   a box while leaving the horizontals flat. */
+.block--thinking code,
+.block--thinking pre {
+    font-style: normal;
+}
+
+/* --- Tool calls ------------------------------------------------------- */
+
+/* Folded, every one: what a read brought back or a command said is context a reader reaches for,
+   and what the calls that write did is the batch's diff under them. The fold is a real `<details>`,
+   which is what the dock's fold-all works on and what keeps the whole thing usable with no script at
+   all. */
+.tool {
+    margin: 0;
+    border: 1px solid var(--edge-soft);
+    border-radius: var(--radius);
+    background: var(--raised);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+
+/* A batch's calls are one box with a row each, because they are one thing: the calls the model made
+   in one response, run at once, rather than separate cards that happen to be stacked. Drawn from the
+   blocks as they stand, by run: the first of a run keeps the top of the box and the last its foot,
+   and each row between is parted from the one above by a hairline. An open call opens in its row. */
+.block--tool + .block--tool {
+    margin-top: 0;
+}
+
+.block--tool:has(+ .block--tool) {
+    margin-bottom: 0;
+}
+
+.block--tool + .block--tool > .tool {
+    border-top-color: var(--edge-soft);
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.block--tool:has(+ .block--tool) > .tool {
+    border-bottom: none;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.tool > summary {
+    display: flex;
+    /* A tool name and an outcome are two unbreakable words, and on a narrow window they do not fit
+       one line: unwrapped they push the panel, and the transcript is the one thing on this page
+       with nowhere to overflow to but the document. */
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: 0.35rem 0.6rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    list-style: none;
+}
+
+/* The name is the part that can be long, so it is the part that gives way. */
+.tool__name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.tool > summary::-webkit-details-marker {
+    display: none;
+}
+
+.tool > summary::before {
+    content: "\25B8";
+    color: var(--tool-edge);
+    transition: transform 0.12s ease;
+}
+
+.tool[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.tool__name {
+    color: var(--tool-edge);
+    font-weight: 600;
+}
+
+/* What the call was about, on the line a reader scans without opening anything: the path a `read`
+   took, the command `bash` ran. It is the one part of the summary that can be arbitrarily long and
+   the one whose end matters least, so it takes the room the name and the outcome leave and gives
+   way to an ellipsis rather than wrapping; the whole of it is in the `title`, and the body a press
+   away. `flex-basis` rather than `flex: 1`, so that on a narrow window it drops to a line of its own
+   under the name instead of shrinking to nothing beside it. */
+.tool__subject {
+    flex: 1 1 12rem;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* How much of the subject: which lines, how many operations, how deep. Kept whole where the subject
+   is clipped, since it is short and is the half a reader cannot recover from the path. */
+.tool__extent {
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    white-space: nowrap;
+}
+
+/* How long the call ran, beside the name rather than out at the outcome: it is a fact about this
+   call and the outcome is the column a reader scans down a turn, so the two do not share an edge. */
+.tool__took {
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+}
+
+/* What became of the call, as a word rather than a colour alone: an outcome nobody can name is
+   one a screen reader cannot read out either. */
+.tool__outcome {
+    margin-left: auto;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.tool__outcome[data-outcome="success"] {
+    color: var(--ink-faint);
+}
+
+.tool__outcome[data-outcome="failed"],
+.tool__outcome[data-outcome="denied"],
+.tool__outcome[data-outcome="interrupted"] {
+    color: var(--error-edge);
+}
+
+/* The room around the return is the other way to shut the panel, which is what the cursor says. See
+   `.ran__body`, which is the same band for the same reason: a return that runs to hundreds of lines
+   is one a reader would otherwise scroll back up to the summary to put away. */
+.tool__body {
+    margin: 0;
+    padding: 0 var(--space-4) var(--space-4);
+    cursor: pointer;
+}
+
+.tool__body dt {
+    margin-top: 0.4rem;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.tool__body dd {
+    margin: 0.15rem 0 0;
+}
+
+.tool__body pre {
+    position: relative;
+    margin: 0;
+    /* What the call returned is not part of the band that shuts the panel, because a press here is
+       usually the start of lifting a line out. The cursor is where the frame stops saying so. */
+    cursor: auto;
+    /* On the same grid as a fenced block, because a command's output is where box drawing and
+       aligned columns turn up outside a fence, and a listing is a tree. The family is said again
+       rather than inherited from `.tool`: a browser's own sheet sets `pre` to `monospace`
+       directly, and a rule on the element beats a value inherited from an ancestor. */
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* One argument to a row: its name in the gutter's ink, and its value beside it, or under it where
+   the value runs to lines. The rows replace the JSON a call used to be shown as, which put the
+   argument a reader came for behind a brace and a quoted key; see `arguments_element` in
+   `calls.py`. */
+.argument {
+    margin: 0.15rem 0;
+}
+
+.argument__name {
+    color: var(--ink-faint);
+}
+
+.argument pre {
+    margin-top: 0.15rem;
+}
+
+/* A block of lines with something the console drew in front of each: the anchor a read put there,
+   which is a diff's line numbers. The gutter is an attribute the stylesheet paints rather than
+   text, which is what makes copying the block copy the diff: the numbers are the console's and
+   are not in the change. A line is a block with its newline inside it, so it paints its whole row
+   and the text of the block still reads as lines; see `line_element` in `calls.py`.
+
+   A read's anchors are not drawn at all. They are the model's names for lines and mean nothing to
+   a person, so what is left to tell a file's lines from the tool's own - the header saying which
+   file and which lines - is tone. */
+.line {
+    display: block;
+}
+
+.line[data-gutter]::before {
+    content: attr(data-gutter);
+    color: var(--ink-faint);
+}
+
+.line[data-said] {
+    color: var(--ink-soft);
+}
+
+/* A diff's lines, in the two hues a fence's own diff already uses, with a wash behind each so a
+   changed line reads as a row rather than as coloured words. The hunk header is the console's own
+   line and takes the gutter's ink. */
+.line[data-mark="+"] {
+    color: var(--moss);
+    background: color-mix(in srgb, var(--moss) 12%, transparent);
+}
+
+.line[data-mark="-"] {
+    color: var(--vermilion);
+    background: color-mix(in srgb, var(--vermilion) 12%, transparent);
+}
+
+.line[data-mark="@"] {
+    color: var(--ink-faint);
+}
+
+/* A block of lines is a file, a diff or a command, where a line is a line: wrapped, a diff's row
+   breaks in two under its own gutter and an indented block loses its shape. So it scrolls sideways
+   instead, one level in rather than on the `pre` for the reason a fence does, so the copy button
+   keeps its corner. The code is a grid whose one column is the longest line's width and stretches to
+   the block's where every line is shorter, so a changed line's wash runs to the end of the longest
+   line rather than stopping where the block's edge was before it was scrolled. The other way round,
+   `minmax(100%, max-content)`, never grows: a grid of definite width has no free space to grow a
+   track into. */
+pre.lines {
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+pre.lines > code {
+    display: grid;
+    grid-template-columns: minmax(max-content, 1fr);
+    overflow-x: auto;
+}
+
+/* The net change a batch made, under its calls: a labelled rule that is the fold's summary, and the
+   diff bare beneath it. Not a card, because it is not a call - it is what the calls came to, and a
+   card like theirs read as a fourth one. The rule runs out to the panel's edge after the counts, so
+   it reads as the end of the batch rather than as one more row of it. */
+.batch {
+    font-family: var(--mono);
+}
+
+.batch > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: var(--space-2) 0;
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    cursor: pointer;
+    list-style: none;
+}
+
+.batch > summary::-webkit-details-marker {
+    display: none;
+}
+
+.batch > summary::before {
+    content: "\25B8";
+    color: var(--tool-edge);
+    transition: transform 0.12s ease;
+}
+
+.batch[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.batch > summary::after {
+    content: "";
+    flex: 1 1 2rem;
+    align-self: center;
+    border-top: 1px solid var(--edge);
+}
+
+.batch__word {
+    font-size: 0.66rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+.batch__files {
+    color: var(--ink-soft);
+}
+
+.batch__lines {
+    white-space: nowrap;
+}
+
+.batch__body {
+    padding-top: var(--space-2);
+    cursor: pointer;
+}
+
+.batch__body pre {
+    position: relative;
+    margin: 0;
+    cursor: auto;
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+}
+
+.batch__added {
+    color: var(--moss);
+}
+
+.batch__removed {
+    color: var(--vermilion);
+}
+
+/* An edit whose diff is empty, said rather than drawn as a box with nothing in it, the way a
+   command with no output is. */
+.tool__silent {
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    font-style: italic;
+}
+
+/* --- Commands the person ran ------------------------------------------- */
+
+/* The same shape as a tool call - a line to scan and a body under it - drawn open where a call is
+   drawn shut, because the person asked for this one and a call is the model reaching for context.
+   Its own rules rather than a second class on `.tool`, since what is inside differs - a command has
+   a status a program chose where a call has one of four words - and sharing the block would have
+   meant a selector list growing every time either moved.
+
+   The hue is the person's throughout. What says no model was told is the panel's label and the
+   sentence under the box, not a colour: the palette answers who wrote it. */
+/* A Markdown file the console handed the model: the session's standing system prompt, and the
+   guidance a turn is handed when it reaches into a part of the repository carrying its own. One set
+   of rules because on the page they are the same thing; what separates them is where each sits in
+   the request, which the panel's own kind says.
+
+   It carries no fold of its own. The panel is the fold - which is where its opening line and its
+   character count now are, on the one row - so what is left here is the sunk box the prose sits in
+   and the band around it.
+
+   That band is the room a press shuts the panel from, which is the same band `.tool__body` and
+   `.ran__body` carry and is why it is spaced like them: this is the longest thing on the page, so
+   the reader who wants it put away is at the *bottom* of it rather than back up at the row that
+   opened it. No padding on top, because the panel's row is directly above and the box wants to sit
+   under it. */
+.block--document {
+    padding: 0 var(--space-3) var(--space-3);
+    cursor: pointer;
+}
+
+/* Every rule Markdown already has on this page applies to `.text`, so there is nothing here to keep
+   in step with them. Only the two things the *fold* decides: that the prose is out of the band that
+   shuts it, exactly as a command's output is, and that it is sunk so the box reads as one thing
+   rather than as a page inside a panel.
+
+   Deliberately uncapped and it does not scroll: a reader who opened this asked for all of it, and a
+   box that scrolls has no still corner for a copy button to pin to. */
+.block--document .text {
+    cursor: auto;
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+}
+
+.ran {
+    margin: 0.5rem 0;
+    border: 1px solid color-mix(in srgb, var(--person-edge) 35%, var(--edge-soft));
+    border-radius: var(--radius);
+    background: var(--raised);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+
+.ran > summary {
+    display: flex;
+    /* A command line and a status are two unbreakable runs, and on a narrow window they do not fit
+       one line. Unwrapped they push the panel, and the transcript has nowhere to overflow to but the
+       document. */
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: 0.35rem 0.6rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    list-style: none;
+}
+
+.ran > summary::-webkit-details-marker {
+    display: none;
+}
+
+/* `$` and not a triangle, which is the one place this block deliberately departs from `.tool`: what
+   a reader needs to know at a glance is that this line is a shell command and not a tool call, and
+   the prompt character is the mark every terminal already uses to say so. It turns with the fold all
+   the same, so the affordance is not lost. */
+.ran > summary::before {
+    content: "$";
+    color: var(--person-edge);
+    font-weight: 700;
+    opacity: 0.7;
+}
+
+.ran[open] > summary::before {
+    opacity: 1;
+}
+
+/* The line is the part that can be long, so it is the part that gives way. */
+.ran__line {
+    min-width: 0;
+    color: var(--person-edge);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.ran__took {
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+}
+
+/* A command that had the network in a session that otherwise does not, marked in the status's own
+   shape so it reads as a fact about the run rather than as part of what was typed. */
+.ran__online {
+    color: var(--error-edge);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* The status as words, out at the edge where a reader scans down a turn. `exit 0` and `exit 2`
+   rather than a colour alone, because a status nobody can name is one a screen reader cannot read
+   out; one shape for every status, so the colour is the whole of what sets the non-zero ones apart. */
+.ran__status {
+    margin-left: auto;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.ran__status[data-status="ok"] {
+    color: var(--ink-faint);
+}
+
+/* Anything but zero, drawn to be spotted while scanning a turn, because usually it wants looking at.
+   What it deliberately does *not* claim is that the command failed: `git diff --quiet` exits 1 to say
+   there are changes and `grep` exits 1 to say no match, so the number is printed beside the colour
+   and reading it is the reader's. That is why there is no word for this state. */
+.ran__status[data-status="other"] {
+    color: var(--error-edge);
+}
+
+/* Never learned, because the console was stopped before the command exited. Faint rather than red:
+   nothing went wrong with the command, we simply stopped watching. */
+.ran__status[data-status="unfinished"] {
+    color: var(--ink-faint);
+    font-style: italic;
+}
+
+/* The room around the output is the other way to shut the panel, which is what the cursor says, and
+   it is `.tool__body`'s rule as much as this one. A command is drawn open and its output can be a
+   screen and a half, so the summary - one row, at the top - was the only way out of a box a reader
+   had just scrolled to the bottom of. This band is at the bottom, which is where they are. */
+.ran__body {
+    padding: 0 var(--space-4) var(--space-4);
+    cursor: pointer;
+}
+
+/* A command whose whole answer was its exit status. Faint and italic, which is how `unfinished`
+   beside it already says a thing this console knows rather than a thing the command said. */
+.ran__silent {
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    font-style: italic;
+}
+
+.ran__body pre {
+    position: relative;
+    margin: 0;
+    /* What the command said is not part of the band that shuts the panel, because a press here is
+       usually the start of lifting a line out. The cursor is where the frame stops saying so. */
+    cursor: auto;
+    /* On the console's own monospace grid, exactly as a tool's body is, and for the same reason: a
+       command's output is where box drawing and aligned columns actually turn up. The family is said
+       again rather than inherited, since a browser's own sheet sets `pre` to `monospace` directly and
+       a rule on the element beats a value inherited from an ancestor. */
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* --- Tags: the record behind a rule ------------------------------------ */
+
+/* On the rule that stands at the request's own boundary, which is what it is about. In flow there
+   rather than in a margin beside a panel, because the transcript is a scroll container: anything
+   placed outside is either clipped or scrolls the document sideways, and neither is acceptable. */
+.tag > summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    white-space: nowrap;
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    list-style: none;
+}
+
+.tag > summary::-webkit-details-marker {
+    display: none;
+}
+
+.tag > summary:hover,
+.tag[open] > summary {
+    color: var(--mark);
+}
+
+.tag__at {
+    font-weight: 600;
+}
+
+/* Opened, it grows the rule downward and pushes the conversation with it, rather than lying over
+   the panels below. A record read against the reply it came from is worth more than a page that
+   holds still, and an overlay is the one shape where the two cannot be looked at together.
+
+   The record takes a line of the rule to itself: the rule is allowed to wrap and the record asks
+   for the whole of one, so the facts stay on the top line at the width they already had and the
+   record runs the measure underneath them. Sharing the line was tried and is what a phone rules out
+   - a record squeezed into whatever the figures leave is a column six characters wide, and the
+   figures pinned so it is not are a row that runs off the side of the screen.
+
+   **The `r{i}` that opened it does not move**, which is the rule for every control that toggles:
+   what wraps is the record and never the summary above it. See "A control that toggles may not
+   move" in `CLAUDE.md`. The tag makes no box of its own, so the thing carrying the record is a flex
+   item of the rule while the summary stays a flex item in its own place. Both candidates for that
+   item are told the same thing: `::details-content` is the box a browser wraps a disclosure's
+   content in, and the record itself is the item where there is no such box. */
+.rule:has(.tag[open]) {
+    flex-wrap: wrap;
+}
+
+.tag {
+    display: contents;
+}
+
+.tag[open]::details-content,
+.tag[open] > :not(summary) {
+    order: 1;
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+/* Hidden rather than absent while closed, because htmx swaps into this element and a target that
+   does not exist yet is a swap with nowhere to go. The wrapper is hidden as well as what it holds,
+   since an empty flex item still takes the row gap and would leave every shut rule a line taller. */
+.tag:not([open])::details-content,
+.tag:not([open]) > :not(summary) {
+    display: none;
+}
+
+.record__json {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    background: var(--sunk);
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    /* Bounded, because a turn's parts are longer than anything else on the page and an unbounded
+       one would push the composer off the bottom of a conversation somebody is reading. */
+    max-height: 24rem;
+    overflow: auto;
+    /* Wrapped rather than scrolled sideways, which trades the column alignment for being able to
+       read the thing at all: a `content` field holds the whole of what a model said, so a line
+       here runs thousands of characters and the indentation it would preserve is two levels deep.
+       The same trade a tool call's body already makes, for the same reason. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.record__missing {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: calc(var(--radius) / 1.5);
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+}
+
+/* --- Waiting ---------------------------------------------------------- */
+
+/* A turn with a message and no answer, and a call that has gone out and not come back: two
+   different facts, drawn the same way, because to a reader they are the same thing. Neither is a
+   request in flight, so neither can be an `hx-indicator`; both are read off the checkpoint. */
+.waiting {
+    display: inline-flex;
+    gap: 0.25rem;
+    align-items: center;
+    color: var(--ink-faint);
+}
+
+.waiting span {
+    width: 0.32rem;
+    height: 0.32rem;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+.waiting span:nth-child(2) {
+    animation-delay: 0.15s;
+}
+
+.waiting span:nth-child(3) {
+    animation-delay: 0.3s;
+}
+
+@keyframes pulse {
+    0%,
+    80%,
+    100% {
+        opacity: 0.25;
+    }
+
+    40% {
+        opacity: 1;
+    }
+}
+
+/* Shown by `display` and not by the opacity htmx's own indicator rules toggle, for the reason the
+   branch dots are: an element hidden by opacity still holds its row, and this one stands above the
+   box, where a row held open for a word shown for a second is a strip of nothing between the
+   conversation and the box. Hidden by `display` it costs the layout nothing until the post leaves,
+   and what its appearing moves is the composer's top edge, never the box. */
+.sending {
+    display: none;
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+}
+
+.sending.htmx-request {
+    display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .waiting span,
+    .tool > summary::before {
+        animation: none;
+        transition: none;
+    }
+}
+
+/* A session whose endpoint is no longer configured: readable, and honest about being stuck. */
+.stalled {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--error-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--ink-soft);
+    text-align: center;
+}
+
+/* On an archived session nothing follows the transcript, so the notice is the last thing on the
+   page and would end flush with its bottom edge. The room under it is the composer's own bottom
+   padding, so the page ends the way every page with a box ends. Only where there is no box: a
+   session stalled on a missing endpoint keeps its box under the notice, and the box's padding is the
+   room there. */
+.transcript:last-child .stalled {
+    margin-bottom: var(--gap);
+}
+
+/* Why nothing is happening, where nothing is and something should be. Every state that draws this is
+   a fault - a pass that fell over, or a session nothing is coming for - so it is in the error's own
+   hue, on a ground faint enough to read as a tint rather than as a filled block.
+
+   **Dashed where `.stalled` is solid, and that is the whole difference between them.** Both say the
+   session has stopped; this one says it will be tried again, so the same red in a broken line rather
+   than a second hue nobody has to learn. Mixed against `--raised` rather than given a value apiece,
+   so both halves follow the theme the tokens already switch. */
+.attention {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 0.55rem 0.85rem;
+    border: 1px dashed var(--error-edge);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--vermilion) 8%, var(--raised));
+    color: var(--ink-soft);
+    text-align: center;
+}
+
+/* The one thing this line says where nothing has gone wrong: a provider named a moment to come back
+   in, and the session is waiting it out. Drawn in the ordinary edge and ground rather than the red
+   one, because the red one means a fault and this is the console doing exactly what it should. The
+   shape stays, since what a reader needs is the same - a statement, the provider's own words, and
+   when - and a second box would be a second thing to keep in step with this one. */
+.attention--waiting {
+    border-color: var(--edge);
+    background: var(--raised);
+}
+
+.attention--waiting .attention__reason {
+    background: var(--sunk);
+}
+
+.attention__said,
+.attention__then {
+    margin: 0;
+}
+
+/* The reason, set apart from the prose either side of it. An exception's `repr` is the one thing in
+   the box a reader has to work through, and it is neither a sentence nor centred text: it gets the
+   monospace face, its own ground, the left margin a wrapped line needs, and room to scroll sideways
+   rather than pushing the document along with it. */
+.attention__reason {
+    position: relative;
+    margin: 0.55rem 0;
+    /* Room on the right for the copy button the script seats in the corner, so the first line of a
+       `repr` does not run under it. */
+    padding: 0.45rem 3.4rem 0.45rem 0.6rem;
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--vermilion) 10%, var(--ground));
+    color: var(--ink);
+    font-size: 0.8rem;
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* The reason is not in a panel, so the panel's own hover rule cannot reach its button. */
+.attention:hover .copy,
+.attention .copy:focus-visible {
+    opacity: 1;
+}
+
+/* --- The box you type in ---------------------------------------------- */
+
+.composer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 100%;
+    max-width: var(--column);
+    margin: 0 auto;
+    /* The transcript's column ends flush with its last child, so this is the whole of the room
+       between the conversation and the box: less than the gap between two panels, since the box is
+       not a panel, and enough that the two do not touch. */
+    padding: var(--space-4) 0 var(--gap);
+}
+
+/* One card: the text, and under it the row of what to do with it. The edge and the ground are the
+   card's rather than the textarea's, so Send and its menu read as the box's own tools rather than as
+   a button beside a field, and a phone and a wide window draw the same shape: the row used to be a
+   phone rule that wrapped the buttons under a box they no longer fitted beside, and buttons that
+   wrapped read as buttons that fell off. It is also the shape every chat composer a reader already
+   knows takes, a box with its controls along the bottom, so nothing has to be learned.
+
+   The person's own hue for the edge, which is the edge every panel of theirs is drawn down and the
+   ground Send is painted in. The palette runs on one axis - cool is what reached the model - so the
+   box a message is written in belongs on the same side of it as the message itself, rather than
+   reading as one more field in the neutral edge every other input takes.
+
+   The focus ring is the card's too, drawn while anything in it has the focus, because a ring around
+   the textarea alone would cut the card in two at the moment it is being used; the textarea's own
+   ring is switched off below for that reason and no other. */
+.composer__box {
+    /* The room above and below a line of text in the box, named once because the tools row is
+       sized from it: one line of the box, and the row under it, are the same height. */
+    --inset: 0.55rem;
+
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+}
+
+.composer__box:focus-within {
+    outline: 2px solid var(--mark);
+    outline-offset: 1px;
+}
+
+.composer textarea {
+    /* A textarea's minimum is its intrinsic `cols` width; without this it cannot shrink with the
+       card, and the card is what shrinks with the window. */
+    min-width: 0;
+    padding: var(--inset) 0.7rem;
+    border: 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+}
+
+.composer textarea:focus-visible {
+    outline: none;
+}
+
+/* Send at the right, where a thumb and a pointer both already are, and room to its left for whatever
+   else a message may one day be sent with. No line between it and the text and no ground of its
+   own: the card's edge is what holds the two together, and a rule across the card would make the
+   row a second box under the first.
+
+   Exactly as tall as one line of the box, so a box at rest is two equal rows: `1lh` here is the
+   same line the textarea draws, since both inherit one font, and the inset is the textarea's own.
+   The buttons stretch to the row rather than sizing the row, which is what makes the row's height a
+   decision rather than a sum; what they keep is a hair of room above and below, so Send does not
+   touch the card's edge. On a phone that row is about forty-five pixels, a thumb's target, which is
+   why the composer's buttons are not on the narrow block's minimum-height list. */
+.composer__tools {
+    display: flex;
+    box-sizing: border-box;
+    height: calc(1lh + 2 * var(--inset));
+    justify-content: flex-end;
+    align-items: stretch;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-2);
+    /* The row is the box's label, so its empty part puts the cursor in the box; the cursor says so
+       before the press does. */
+    cursor: text;
+}
+
+/* A box you write a message in starts at one line, grows with what is typed, and scrolls inside
+   itself once it reaches the cap. `field-sizing: content` is the whole of the mechanism: no script,
+   and no height held anywhere a swap could take it back from. The `rows` in the markup is the floor
+   only where `field-sizing` is not supported, because a browser that has it sizes from the content
+   and ignores `rows` entirely.
+
+   The cap is whichever of fourteen lines and two fifths of the window is smaller, so a tall window
+   is bounded by lines and a short one by the room the conversation above it still needs. `lh` is the
+   box's own line height, and `border-box` means the padding comes out of the cap rather than adding
+   to it.
+
+   `resize: none` is said rather than left off, and the difference is the whole of it: a textarea's
+   own default is `resize: both`, so dropping the declaration puts the handle back rather than taking
+   it away. It goes because dragging writes an inline height that outranks the content, so the box
+   would stop growing *and* stop shrinking from the moment it was touched, and stay tall after the
+   message had gone. */
+.composer textarea,
+.forking textarea {
+    field-sizing: content;
+    max-height: min(40vh, 14lh);
+    overflow-y: auto;
+    resize: none;
+}
+
+.composer button {
+    padding: 0 var(--space-5);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: var(--person-edge);
+    color: var(--ground);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* --- Send, and everything else to do with what you typed ------------- */
+
+/* One control: the button, and a caret opening onto everywhere else. Joined rather than spaced, so
+   the pair reads as one thing with a second half rather than as two buttons that happen to touch.
+
+   It takes its own height and the row's `flex-end` puts it level with the bottom of the box, which
+   is where the menu hangs from anyway. Stretched, it would be exactly as tall as a box that now
+   grows to fourteen lines, and a slab of person-hue that size reads as a panel rather than a
+   button. */
+.sender {
+    display: flex;
+}
+
+.composer .sender > button {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+/* --- The box in one of the menu's own modes ---------------------------- */
+
+/* `/fork ` typed into an empty box - or `! `, which is `/run`'s own key - puts the composer into that
+   answer's mode, and these are the whole of what says so: the button beside the box, and the
+   sentence above it.
+
+   Exactly one primary button is ever shown, which is the point rather than a saving: every one of
+   them is rendered by the server carrying its own label and its own posted value, so what a reader
+   is about to press is a control that says what it does. A single button whose text and name the
+   script rewrote would be the "Send that forks" this console refuses everywhere else.
+
+   Hidden is not out of reach - `requestSubmit` can still be handed a hidden submit button, which is
+   how Shift-Enter posts the right pair. */
+.composer :is(.sender__leader, .leading) {
+    display: none;
+}
+
+.composer[data-leading] .sender__send {
+    display: none;
+}
+
+/* Whichever pair the mode leaves standing, marked by the script rather than matched here.
+
+   This used to be a written-out list of every leader, because CSS cannot ask whether a descendant's
+   attribute matches an ancestor's and the pairing is exactly that question. A plugin's answer can
+   never be added to such a list: which leaders a composer offers is a fact about one session, read
+   off what that session registered, so the stylesheet cannot know them. So the script marks the pair
+   when it sets the mode, which is the same one-attribute move `data-leading` already is.
+
+   An answer that never gets the mark would be worse than one drawn plainly - the rule above has
+   already taken Send away, so what is left is a composer with no primary button and no sentence
+   saying where the text is about to go. `TestNamingAModeFromTheKeyboard` asks it of every button the
+   server drew rather than of a chosen one, which is what makes that a failing build. */
+.composer :is(.sender__leader, .leading)[data-showing] {
+    display: revert;
+}
+
+/* Above the box rather than under it, and that is the composer being the bottom of the page: a row
+   appearing anywhere in this column pushes everything above that row upward, so a sentence under the
+   box moved the box itself out from under the cursor at the moment somebody entered the mode. Above
+   it, what grows is the composer's top edge. */
+.leading {
+    margin: 0;
+    color: var(--person-edge);
+    font-size: 0.72rem;
+}
+
+/* Whether the provider still holds this conversation's prefix, and what the next request pays if it
+   does not. A figure rather than a warning, so it takes the faint ink every other figure on this page
+   takes and never a colour of its own: the palette's one red is spent on how full the window is, and
+   a second one here would read as a second kind of trouble.
+
+   Above the mode sentence, which is above the box: this is a standing fact about the conversation and
+   that is what the next press does, so the transient one sits closest to the thing it describes.
+
+   `:empty` goes away entirely, because a conversation nothing has answered yet has no prefix to have
+   cached and an empty row above the box would be a line of nothing. It is still in the document, as
+   the anchor the page's own connection swaps. */
+.cache {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    /* What puts the space in front of each `·`, which is the rule's own arrangement rather than a
+       second one: the separator rides on the figure that follows it and the gap holds them apart. */
+    gap: var(--space-2) var(--space-3);
+    margin: 0;
+    min-width: 0;
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.cache:empty {
+    display: none;
+}
+
+/* `Run` is the one mode that changes what you are *writing* rather than only where it goes, so the
+   box takes the terminal's monospace and a heavier edge. A command is a shell line, so setting it in
+   the face the output will come back in is the box telling the truth about what it holds. `Online`
+   is the same shell line with the network on. */
+.composer:is([data-leading="run"], [data-leading="online"]) .composer__box {
+    border-width: 2px;
+}
+
+.composer:is([data-leading="run"], [data-leading="online"]) textarea {
+    font-family: var(--mono);
+    font-size: var(--mono-size);
+    line-height: var(--mono-line);
+}
+
+.sender__more {
+    position: relative;
+    display: flex;
+}
+
+/* The fold is a `<details>`, so the menu opens with no script at all. The marker goes because the
+   caret *is* the marker. */
+.sender__caret {
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    border: 1px solid transparent;
+    border-left: 1px solid color-mix(in srgb, var(--ground) 35%, transparent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    background: var(--person-edge);
+    color: var(--ground);
+    font-size: 0.7rem;
+    list-style: none;
+    cursor: pointer;
+}
+
+.sender__caret::-webkit-details-marker {
+    display: none;
+}
+
+.sender__caret:hover,
+.sender__more[open] .sender__caret {
+    background: color-mix(in srgb, var(--person-edge), var(--ink) 20%);
+}
+
+/* Above the box rather than below it, because the composer sits at the bottom of the page and a menu
+   opening downward would be off the screen. Right-aligned to the control it hangs from. */
+.sender__menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--space-2));
+    z-index: 5;
+    display: flex;
+    width: max-content;
+    max-width: min(22rem, 80vw);
+    flex-direction: column;
+    padding: var(--space-2);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    box-shadow: 0 6px 20px light-dark(rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.5));
+}
+
+.composer .sender__option {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    color: inherit;
+    font-weight: 500;
+    text-align: left;
+}
+
+/* Narrowed to what a leader typed into the box still fits. `display: flex` above beats the browser's
+   own `[hidden]` rule, so the row has to be told again. */
+.composer .sender__option[hidden] {
+    display: none;
+}
+
+/* `aria-selected` is the row the keyboard is on while the box holds a leader, drawn the same as the
+   one under the pointer: there is one place to look either way. */
+.composer .sender__option:hover:not(:disabled),
+.composer .sender__option:focus-visible,
+.composer .sender__option[aria-selected="true"] {
+    background: var(--sunk);
+}
+
+.sender__option-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+/* The word that reaches this row from the keyboard, printed on it for the reason Send names
+   Shift-Enter: a shortcut nothing on the page mentions is one nobody uses. In the face it is typed
+   in, so it reads as something to type rather than as a second name for the row. */
+.sender__option-leader {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 400;
+}
+
+/* The rule separates what *sends* the text from what does not. `Keep` is last because it is the only
+   answer that leaves the message where it is, and a line says that without a heading. */
+.composer .sender__option[data-shelf] {
+    margin-top: var(--space-2);
+    border-top: 1px solid var(--edge-soft);
+    border-radius: 0 0 var(--radius) var(--radius);
+    padding-top: var(--space-3);
+}
+
+.sender__option-name {
+    font-weight: 600;
+}
+
+/* What the destination does, in the menu rather than in a `title`: a control a reader opens a menu
+   to find is one they have not used before, and a tooltip is not where somebody looks first. */
+.sender__option-said {
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+    font-weight: 400;
+    white-space: normal;
+}
+
+.composer button:disabled,
+.composer textarea:disabled {
+    opacity: 0.5;
+    cursor: progress;
+}
+
+/* On the page where the picker is, the box takes the picker's measure rather than the reading one.
+   Both are centred in the column, so at different widths their left edges do not line up and the
+   box reads as belonging to something other than the cards above it. A session page keeps the
+   reading measure, because there the box sits under a transcript and should line up with that. */
+.setup + .composer {
+    max-width: var(--wide);
+}
+
+/* The name a session is given before it has one, above the box that would otherwise name it. */
+/* Not a `.picker__part`, and that is what keeps the counting honest: every part on this page is a
+   folding group whose head says how many answers it holds, and a name has no answers to count. It
+   takes the field's own rules and the legend above it, which is the whole of what makes it look like
+   the rest.
+   */
+.naming {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* The name is one more of the picker's questions and takes its legend, and the box takes the *message
+   box's* rules rather than a setting's. That is the palette's own axis: cool is what reached the
+   model, and a name is text the person writes, where a base, a branch and a filter are settings that
+   narrow a choice. It is also the widest thing they type on this page, so it takes the width the way
+   the composer's box does rather than sitting in a settings-sized field.
+
+   The placeholder is quieter than the label above it, because this is the optional half of the form:
+   something you may fill in, not something you came here to do. */
+.naming input {
+    width: 100%;
+    /* An `<input>` carries an intrinsic width from its `size` attribute, and `width: 100%` does not
+       override it: the element still reports that width as its minimum, so a flex or grid parent
+       sizes itself to fit and the page grows to hold it. `min-width: 0` is what actually lets it
+       shrink, and without it this one field widens `main` on a narrow window. */
+    min-width: 0;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: inherit;
+    font: inherit;
+}
+
+.naming input::placeholder {
+    color: var(--ink-faint);
+}
+
+/* What starts a session, and the one primary action on this page. It reads as the picker's own
+   rather than as the composer's Send: the same mono, the same uppercase and the same letter spacing
+   every legend and card name on this page takes, in the person's hue because starting a session is
+   the person's act.
+
+   The last thing in the picker rather than a band pinned under it: left-aligned on the edge every
+   legend, card and field above it starts at, so a reader's eye comes down one line rather than
+   crossing the page to find the thing that acts. Pinned it cost `main` a row held open for it and
+   put a gap between the last question and the button that answers all of them. */
+.starting {
+    display: flex;
+}
+
+/* The one press that acts on a page of choices, and the fork page's `Fork and ask` is that same
+   press on a page that is a picker over a conversation, so it wears the same clothes. */
+.starting button,
+.forking__act button {
+    padding: var(--space-3) var(--space-6);
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.starting button:hover,
+.starting button:focus-visible,
+.forking__act button:hover,
+.forking__act button:focus-visible {
+    border-color: var(--mark);
+    color: var(--mark);
+}
+
+/* --- The dashboard ------------------------------------------------------ */
+
+/* In `main`'s growing row and the scroller there, as `.setup` is on the page it replaced: the
+   repositories are a grid of cards that can outgrow any window, and the list beside it scrolls on
+   its own. Wide like the picker, because these are cards in a grid rather than prose. */
+.dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+    padding-block: var(--gap);
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.dashboard__attention,
+.dashboard__places,
+.dashboard__group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.dashboard__attention {
+    gap: var(--space-5);
+}
+
+.dashboard__rows,
+.dashboard__sessions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+/* A row here is the list's own row, so it takes the list's shape; the frame is what sets it apart
+   from the column beside it, which has one of its own. */
+.dashboard__rows .session {
+    border-color: var(--edge);
+    background: var(--raised);
+}
+
+.dashboard__quiet,
+.dashboard__none,
+.dashboard__more {
+    margin: 0;
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+}
+
+/* One card to a row at every width, so the repositories read down the page as a list does rather
+   than across it, and a card's sessions have the whole width to be named in. */
+.dashboard__grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.dashboard__note {
+    margin: 0;
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+}
+
+/* The name is the link to the repository's own page, drawn as the name until it is pointed at. */
+.dashboard__name a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.dashboard__name a:hover,
+.dashboard__name a:focus-visible {
+    text-decoration: underline;
+}
+
+.dashboard__card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+}
+
+/* The name and the press that starts a session there, the press pushed to the corner so it is in
+   the same place on every card. */
+.dashboard__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+}
+
+.dashboard__head .dashboard__start {
+    margin-left: auto;
+    flex: none;
+}
+
+.dashboard__foot {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* `break-word` rather than `anywhere`, so the `<wbr>` after each `/` is where a long name breaks and a
+   word is cut only when it cannot fit on a line of its own. */
+.dashboard__name {
+    margin: 0;
+    min-width: 0;
+    font-size: 1rem;
+    overflow-wrap: break-word;
+}
+
+.fetch {
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+/* Drawn to be spotted, for the non-zero status's reason: usually it wants looking at. What git said
+   is in the title, since it is often several lines. */
+.fetch--failed {
+    color: var(--error-edge);
+}
+
+.dashboard__sessions a {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.dashboard__sessions a:hover .name {
+    text-decoration: underline;
+}
+
+.dashboard__sessions .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.dashboard__sessions .when {
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+    flex: none;
+    white-space: nowrap;
+}
+
+/* The picker's own press, because it is the same act one page earlier: starting a session. */
+.dashboard__start {
+    padding: var(--space-2) var(--space-5);
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    text-decoration: none;
+}
+
+.dashboard__start:hover,
+.dashboard__start:focus-visible {
+    border-color: var(--mark);
+    color: var(--mark);
+}
+
+/* --- The workspace a new session is in --------------------------------- */
+
+.arriving {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.arriving__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+}
+
+.arriving__name {
+    margin: 0;
+    font-size: 1.15rem;
+    overflow-wrap: anywhere;
+}
+
+.arriving__back {
+    margin-left: auto;
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+}
+
+/* --- Choosing what a session runs on ----------------------------------- */
+
+/* The form the start page posts, and the only thing in `main` on it. It passes `main`'s growing row
+   straight through to the choosing rather than sitting between them as a plain block, because a
+   block here is floored at its own content: the row then sizes to the whole picker, the page
+   overflows `100dvh`, and `.setup` never becomes the scroller it is written to be. The symptom that
+   shows is a dead zone - `.models` stays at its full height, so it is a scroll container with
+   nothing to scroll, and a wheel over the model list moves neither it nor the page under it. */
+.choosing {
+    display: grid;
+    /* `main > *` sets only `min-width`, and a grid item's minimum is its min-content on both axes:
+       without this the row this sits in grows to the picker and the bound above is never taken. */
+    min-height: 0;
+}
+
+/* The body of the two pages with no conversation on them yet: the choosing on the start page, and
+   what a session loaded on the settings step. Both put it in `main`'s growing row, which is where a
+   session page puts the transcript and right for the same reason - it is the thing being read, and
+   what is under it is a row of its own height. On the settings step that row is the message box; on
+   the start page there is nothing in it, because the button that acts is the last question's
+   neighbour rather than a band pinned below the lot. See `.starting`. */
+.setup {
+    display: flex;
+    flex-direction: column;
+    /* Pinned to the top, and that is what folding the groups bought. Centred, the picker's height
+       is a function of which group is open, so opening one moved every other group under the
+       reader's hand - and shut, all four are short enough that centring puts them adrift in the
+       middle of the page anyway. The cost is a gap between the last group and the message box on a
+       tall window, which is a page with room to spare rather than one that failed to load.
+
+       It still scrolls, as a last resort: with a group open the models are longer than any window,
+       and the list inside gives up its height first. */
+    justify-content: flex-start;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.picker {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    /* Wider than the reading measure, because these are cards in a grid rather than prose: at
+       `--measure` the grid never reaches a third column and the facts on a card wrap. */
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+    /* Inside the scroller rather than on it, and that is what keeps the sticky provider heading
+       flush with the top of the box. A sticky `top: 0` is measured from the scroll container's
+       *content* edge, so padding on `.setup` parks the heading that far down and leaves a strip
+       above it with model cards sliding through - which is what a phone shows, where `.setup` is
+       the box that scrolls. Here the padding scrolls away with the content, as it should. */
+    padding-block: var(--gap);
+    /* And inline, because a scroller clips: `overflow-y: auto` on `.setup` computes `overflow-x` to
+       `auto` as well, so a control flush with its edge has its focus ring cut off on that side -
+       the base and the branch boxes, which fill their grid columns, and every card when its group is
+       open. This is the room that ring reaches into, so it is the widest of them: 4px against a
+       card's 2px outline at a 2px offset, and an input's 2px at 1px. */
+    padding-inline: var(--space-2);
+}
+
+.picker__part {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-width: 0;
+}
+
+/* --- Folding a group down to what is picked ----------------------------- */
+
+/* The fold is a checkbox and every rule below reads it with `:has()`, so opening a group is the
+   browser's own behaviour and what a shut group draws is decided by the radio that is actually
+   checked. Nothing keeps a copy of the choice, so nothing can go stale: a summary line naming the
+   model would have been that copy, and with scripting off it would have named the wrong one from
+   the first pick onwards. */
+
+/* Off the page rather than `display: none`, for the reason the card radios are: hidden that way it
+   is unreachable by keyboard and unannounced. `.picker__more` below is what draws its focus. */
+.picker__toggle {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.picker__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+}
+
+/* What says a group is a picker rather than a statement. A shut group is one card, and a card with
+   nothing beside it reads as a fact about the session; the count of what else is on offer is what
+   makes it read as a choice. In the person's own hue, because opening it is the reader acting. */
+/* Beside the legend rather than pinned to the far edge. Pushed right it belonged to nothing: on a
+   wide window it sat a whole screen away from the word it qualifies, reading as page furniture
+   rather than as the control that opens the group under it. */
+.picker__more {
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.picker__more::after {
+    content: " \25BE";
+}
+
+.picker__part:has(> .picker__toggle:checked) .picker__more::after {
+    content: " \25B4";
+}
+
+/* One word or the other. `done` while open, because `27 options` beside the twenty-seven of them
+   is saying what the reader is already looking at. */
+.picker__part:has(> .picker__toggle:checked) .picker__more--shut,
+.picker__part:not(:has(> .picker__toggle:checked)) .picker__more--open {
+    display: none;
+}
+
+/* The control is what the reader sees, so it is what the focus ring has to land on: the checkbox
+   carrying the focus is parked off the page. */
+.picker__part:has(> .picker__toggle:focus-visible) .picker__more {
+    outline: 2px solid var(--mark);
+    outline-offset: 2px;
+}
+
+/* Shut: everything not picked is gone, and so is the provider heading over it - a lone card under
+   `ANTHROPIC` is a group of one, which is not what a settled choice looks like - and so is the box
+   for narrowing a list that is not being shown. */
+.picker__part:not(:has(> .picker__toggle:checked)) :is(.endpoint, .model, .network, .repo, .think):not(:has(:checked)),
+.picker__part:not(:has(> .picker__toggle:checked)) .models__provider:not(:has(.model__pick:checked)),
+.picker__part:not(:has(> .picker__toggle:checked)) .models__heading,
+.picker__part:not(:has(> .picker__toggle:checked)) .picker__filter {
+    display: none;
+}
+
+/* --- Narrowing an open group ------------------------------------------- */
+
+/* One box per group, drawn only while the group is open. What it suggests is the browser's own
+   completion from the `<datalist>` beside it, which needs no script; what it hides is the script's,
+   so with the file absent this suggests and does not filter and every card is still there. */
+.picker__filter-field {
+    width: min(22rem, 100%);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--raised);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.8rem;
+}
+
+.picker__filter-field::placeholder {
+    color: var(--ink-faint);
+}
+
+/* Narrowed out. An attribute rather than a class, so it reads as a state the script put there
+   rather than as something the page was rendered with. */
+.picker [data-away] {
+    display: none;
+}
+
+/* --- Where a session works, and how hard it thinks ---------------------- */
+
+/* Both are rows rather than a grid of cards with facts on them: a repository is a name and where it
+   came from, and a thinking level is one word. Cards all the same, so the fold, the count and the
+   narrowing are one mechanism across every question this page asks. */
+.repos__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(20rem, 100%), 1fr));
+    gap: var(--space-3);
+}
+
+/* Where in the repository the worktree starts, under the cards that say which repository. Two text
+   boxes rather than cards, because neither has a closed set to draw; laid out on the same grid as
+   the cards above so the group reads as one question with its details under it. */
+.basis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+}
+
+/* The dots while the forge is being asked what branches it has, on a row of their own above the
+   fields they stand in for.
+
+   `display` and not the `opacity` htmx's own indicator rules toggle, which is the one place here
+   that reaches for `htmx-request` directly: an element hidden by `opacity` still holds its row, so
+   the block would carry a permanent gap above the two fields for the sake of dots that are shown
+   for a second. Hidden by `display` it costs the layout nothing until the request starts. */
+.basis__loading {
+    display: none;
+    grid-column: 1 / -1;
+}
+
+.basis__loading.htmx-request {
+    display: inline-flex;
+}
+
+/* Alone, it is standing in a block that has no fields yet - picking a repository from `only scratch` -
+   so it carries the space the arriving block will have rather than sitting flush under the cards. */
+.basis__loading:only-child {
+    margin-top: var(--space-3);
+}
+
+/* `relative`, because the branches are drawn *over* whatever is under the field rather than pushing
+   it down: the network group and the endpoint below it would otherwise jump every time somebody
+   typed a letter, which on a page of folded groups reads as the whole picker moving. */
+.basis__field,
+.override__field {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+/* The output override is the base's shape with one field and no list behind it: a number somebody
+   may type, under the thinking level, drawn as the base is so the two boxes on this page match. */
+.override {
+    margin-top: var(--space-3);
+}
+
+/* The same row a group's legend and its count sit in, because it is the same pair: what the field is
+   called, and how many answers there are to complete it from. */
+.basis__label,
+.override__label {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* In the person's own hue, for the reason a group's count is: it is what says the field is a choice
+   with answers behind it rather than a box to be filled in from memory. */
+.basis__count {
+    color: var(--person-edge);
+}
+
+.basis input,
+.override input {
+    /* The neutral edge every other input takes, and deliberately not the person's hue: that one is
+       reserved for the box a message is written in, which is the thing on the person's side of the
+       palette. This is a setting, not something said. */
+    min-width: 0;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: inherit;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+
+/* A sentence rather than a ref, so it is set in the page's own face and not the input's: the
+   monospace above is for the value somebody types, and a whole sentence in it does not fit the box.
+   Named rather than `inherit`, which would inherit the monospace from the input itself. */
+.basis input::placeholder,
+.override input::placeholder {
+    color: var(--ink-faint);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.72rem;
+}
+
+/* The branches, narrowed to what is typed. Over the page rather than in the flow, and bounded, so a
+   repository with fifty of them is a list you scroll rather than a group that pushes the endpoint
+   and the model off the screen while you type.
+
+   `hidden` is the server's initial state and the script's afterwards, so this is `display: none`
+   until something narrows it - which with the file absent is never, leaving the `<datalist>` beside
+   it as the whole of what the field offers. */
+.basis__found {
+    position: absolute;
+    z-index: 2;
+    top: 100%;
+    right: 0;
+    left: 0;
+    max-height: 14rem;
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2);
+    overflow-y: auto;
+    list-style: none;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.basis__found[hidden],
+.basis__found li[hidden] {
+    display: none;
+}
+
+.basis__found-one {
+    display: block;
+    width: 100%;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid transparent;
+    border-radius: calc(var(--radius) / 1.5);
+    background: none;
+    color: inherit;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+/* Hover and the keyboard's own position drawn alike, because they are the same thing said two ways:
+   which branch pressing now would take. */
+.basis__found-one:hover,
+.basis__found-one[aria-selected="true"] {
+    border-color: var(--person-edge);
+    background: color-mix(in srgb, var(--person-edge) 12%, transparent);
+}
+
+.networks__grid,
+.thinks__grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+}
+
+.repo,
+.network,
+.think {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    cursor: pointer;
+}
+
+.repo:hover,
+.network:hover,
+.think:hover {
+    border-color: color-mix(in srgb, var(--person-edge) 45%, var(--edge));
+}
+
+.repo__pick,
+.network__pick,
+.think__pick {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.repo:has(.repo__pick:checked),
+.network:has(.network__pick:checked),
+.think:has(.think__pick:checked) {
+    border-color: var(--person-edge);
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--raised));
+}
+
+.repo:has(.repo__pick:focus-visible),
+.network:has(.network__pick:focus-visible),
+.think:has(.think__pick:focus-visible) {
+    outline: 2px solid var(--mark);
+    outline-offset: 2px;
+}
+
+.repo__name {
+    min-width: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* Which forge reached it, which is the fact that tells two rows apart once there is more than one
+   place repositories come from. Last in the row and quiet, like the endpoint's format. */
+.repo__forge {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tool-edge);
+}
+
+/* Whole, and never broken mid-word, which is where this differs from a repository's name: those are
+   `owner/some-very-long-repository` and genuinely have to break somewhere, where every name in this
+   group is one or two short words. Given the room to shrink it wrapped `trusted` as `truste` / `d`
+   on a phone, which reads as a rendering fault. The note beside it is what gives up width instead. */
+.network__name {
+    flex: none;
+    font-weight: 600;
+}
+
+/* What the level actually means, in the quiet voice the forge uses on a repository row: the name is
+   what you pick by, and this is what stops you picking the wrong one. */
+.network__note {
+    margin-left: auto;
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+}
+
+
+.think__name {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+}
+
+/* The picker sits on a raised card on the fork page, so its own cards need a ground to stand out
+   from rather than the one they are already on - the same trade the endpoints and models make. */
+.forking .repo,
+.forking .network,
+.forking .think {
+    background: var(--ground);
+}
+
+.forking .repo:has(.repo__pick:checked),
+.forking .network:has(.network__pick:checked),
+.forking .think:has(.think__pick:checked) {
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--ground));
+}
+
+/* The word naming each group, at the head of its row and drawn as the same faint chrome the panel
+   roles are: it labels the choice without competing with the thing being chosen. */
+.picker__legend {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+}
+
+/* --- Which endpoint answers -------------------------------------------- */
+
+/* `min(15rem, 100%)` and not a bare `15rem`, which is the whole of why this grid does not push a
+   phone sideways: a bare minimum is a floor the track keeps even when the container is narrower
+   than it, so the grid stays 15rem wide inside a 390px viewport and takes the document with it.
+   Bounding the minimum by the container's own width lets the last column collapse instead. */
+.endpoints {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
+    gap: var(--space-4);
+}
+
+/* A whole card is the hit target, because the thing being chosen is the card and a radio beside it
+   would be a five-pixel target next to a five-centimetre one. The input is still really there and
+   still does the choosing; see `.endpoint__pick`. */
+.endpoint,
+.model {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    cursor: pointer;
+}
+
+.endpoint:hover,
+.model:hover {
+    border-color: color-mix(in srgb, var(--person-edge) 45%, var(--edge));
+}
+
+/* Off the page but not out of the accessibility tree, and deliberately not `display: none`: a
+   hidden radio is one a screen reader cannot announce and a keyboard cannot reach, which would
+   make this grid unusable by anyone not pointing at it. `:focus-visible` below is what draws the
+   focus ring back onto the card, since the ring would otherwise land on something invisible. */
+.endpoint__pick,
+.model__pick {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* The chosen one, marked with the person's own hue, because picking a model is the reader saying
+   what they want rather than the console reporting something. */
+.endpoint:has(.endpoint__pick:checked),
+.model:has(.model__pick:checked) {
+    border-color: var(--person-edge);
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--raised));
+}
+
+.endpoint:has(.endpoint__pick:focus-visible),
+.model:has(.model__pick:focus-visible) {
+    outline: 2px solid var(--mark);
+    outline-offset: 2px;
+}
+
+.endpoint__name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* Which API format is spoken to it, which is the fact that tells two endpoints on one hostname
+   apart: the same gateway answers both, and each reaches models the other does not. */
+.endpoint__format {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tool-edge);
+}
+
+/* Where it actually points. A URL is long and is not read left to right, so it breaks anywhere
+   rather than pushing the card - and therefore the grid, and therefore the page - wider. */
+.endpoint__url {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+    overflow-wrap: anywhere;
+}
+
+.endpoint__count {
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+}
+
+/* --- Which model answers ------------------------------------------------ */
+
+.models {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    /* As tall as its cards on the start page, where `.setup` scrolls the whole choosing as one box.
+       It used to be the one part of the picker that gave up height, scrolling inside a block that
+       scrolled inside the page, so that the questions under it stayed put however long the list ran;
+       what that bought was a list two lines of card tall behind a scrollbar on a short window, and
+       a group allowed to shrink drawing its content over the questions under it whenever the floor
+       and the shrinking disagreed. The fold is what makes the plain answer cheap: the list is only
+       long while it is open, a pick shuts it, and the box above it narrows it, so nothing has to
+       give and one box scrolls, which is what a phone does and what every other page here does.
+
+       A scroller all the same, for the fork page, which bounds it (`.forking .models`): that page has
+       a transcript under the picker that a reader has to see to choose a turn at all. Unbounded, as
+       here, `auto` draws nothing.
+
+       And it chains, deliberately: `overscroll-behavior: contain` here made the end of the list a
+       wall, so a wheel that started over the models could not reach the rest of the page it sits in
+       - on the fork page, seventeen pixels of list and then nothing, with five hundred left below.
+       `contain` belongs on a scroller that *is* the reading surface, which the transcript is and a
+       bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on
+       into the block around it, which is what a reader who kept flicking asked for. */
+    overflow-y: auto;
+}
+
+.models__provider {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+/* The vendor a run of models comes from. Sticky, so the heading of the group being scrolled
+   through stays legible: with seventy models the group you are in is the thing most easily lost. */
+.models__heading {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0;
+    padding: var(--space-2) 0;
+    background: var(--ground);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+
+/* Bounded by the container for the reason `.endpoints` is, and it matters more here: this grid is
+   the widest thing on the start page, so a floor it cannot go under is a floor the document takes. */
+.models__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
+    gap: var(--space-4);
+}
+
+.model__name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* What the request will actually name, which is not always what the name above suggests: a gateway
+   routes `anthropic/claude-opus-5` and calls it "Claude Opus 5". Worth showing because it is the
+   string that ends up recorded on the session for life. */
+.model__id {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--ink-faint);
+    overflow-wrap: anywhere;
+}
+
+/* Clamped rather than truncated with an ellipsis, so a card stays a card: descriptions run to
+   several sentences and one long one would set the row height for every model beside it. The whole
+   text is on the `title`, which is where somebody who wants it will look. */
+.model__about {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    color: var(--ink-soft);
+}
+
+/* The numbers, pushed to the bottom of the card so they line up across a row whatever length the
+   name and the description above them ran to. */
+.model__facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+    margin-top: auto;
+    padding-top: var(--space-3);
+}
+
+.model__fact {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+}
+
+.model__figure {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    color: var(--ink);
+}
+
+/* What the figure above it means, in the same faint ink every other label on this console uses. */
+.model__unit {
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+}
+
+/* The price reads in the tool's ochre rather than the ink, because it is the one number on the
+   card somebody is weighing rather than reading. Never green: nothing anybody said is green here,
+   and money is not a speaker. */
+.model__fact--cost .model__figure {
+    color: var(--sienna);
+}
+
+.model__traits {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+/* Positive badges only, so a card claims what a model does and stays silent about the rest. */
+.model__trait {
+    padding: 0 var(--space-2);
+    border: 1px solid var(--edge);
+    border-radius: 0.75rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+
+/* Shown only where a reference was configured and had no record, which is why it reads as a fact
+   about the lookup rather than as a warning about the model: the model is fine, and picking it
+   works exactly as picking any other does. */
+.model__unknown {
+    font-size: 0.66rem;
+    font-style: italic;
+    color: var(--ink-faint);
+}
+
+/* --- The rail: search, key, and dock ---------------------------------- */
+
+/* One column down the right, mirroring the session list down the left. Everything that navigates
+   the conversation stands in it, so a reader says once what they are looking through rather than
+   once per control that looks. */
+.rail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    /* The session list's reason: the column's floor is otherwise the cards, and the sheet inside
+       would have nothing to scroll. */
+    min-height: 0;
+    padding: var(--gap) var(--gap) var(--gap) 0;
+}
+
+/* The sheet the cards are on, and the box that scrolls them at every width. Wide it is the whole
+   of the column; below the width the rail can stand beside the conversation it is the one thing
+   that slides out from under the clasp, with a ground of its own, so a finger between two cards
+   lands on it rather than on the conversation under it. */
+.rail__sheet {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    flex: 1;
+    gap: var(--space-3);
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* What is put on the sheet is a card by being put there, so each rule below carries only its own
+   layout. */
+.rail__sheet > * {
+    flex: none;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.75rem;
+    background: var(--raised);
+    box-shadow: var(--lift);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+}
+
+/* Drawn only where the rail lies off the edge of the page, which is the narrow block at the end of
+   this file, for the session list's clasp's reason: everywhere wider the rail is a column of the
+   shell and there is nothing to unclasp. */
+.rail__clasp {
+    display: none;
+}
+
+/* --- Putting a side column away ------------------------------------------ */
+
+/* On a wide window: a strip as wide as the button that brings it back, and the conversation takes the
+   rest. The reader's, per browser, so the script pins it on `<html>` from `localStorage` before the
+   first paint, the way the theme is. After both columns' own rules and through `:where()`, so each
+   rule here weighs what the rule it changes weighs and wins on order, and the narrow block, which is
+   later still and draws both columns as sheets behind clasps whatever this says, wins the same way. */
+:where(:root[data-list="shut"]) .shell {
+    --list-column: var(--folded);
+}
+
+:where(:root[data-rail="shut"]) .shell {
+    --rail-column: var(--folded);
+}
+
+:where(:root[data-list="shut"]) .sessions__sheet,
+:where(:root[data-rail="shut"]) .rail__sheet {
+    display: none;
+}
+
+:where(:root[data-list="shut"]) .sessions,
+:where(:root[data-rail="shut"]) .rail {
+    padding-inline: 0;
+}
+
+/* The press stands at the column's inner edge at the height of the first thing in it, which is the
+   column's edge whether the column is out or away. Its arrow points the way the column will go. */
+.sessions,
+.rail {
+    position: relative;
+}
+
+.fold {
+    position: absolute;
+    z-index: 2;
+    top: var(--gap);
+    display: grid;
+    place-items: center;
+    width: var(--folded);
+    height: var(--folded);
+    padding: 0;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--raised);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.fold:hover,
+.fold:focus-visible {
+    color: var(--ink);
+}
+
+/* Half over the list's border, which is a line the button can stand on. */
+.sessions > .fold {
+    right: calc(var(--folded) / -2);
+}
+
+/* Wholly outside the rail rather than half over it, since the rail has no padding on that side and
+   its first card starts at the edge: half over it, the button stood on the card's own corner. */
+.rail > .fold {
+    right: calc(100% + 2px);
+}
+
+:where(:root[data-rail="shut"]) .rail > .fold {
+    right: auto;
+    left: 0;
+}
+
+.sessions > .fold::before {
+    content: "\2039";
+}
+
+.rail > .fold::before {
+    content: "\203A";
+}
+
+:where(:root[data-list="shut"]) .sessions > .fold::before {
+    content: "\203A";
+}
+
+:where(:root[data-rail="shut"]) .rail > .fold::before {
+    content: "\2039";
+}
+
+/* Everything that reads the conversation, on one card: the search, the key and the dock, as
+   sections parted by a rule rather than three cards, so the rail is three kinds of card - reading,
+   a plugin's, the session's - rather than eight things with the same edge. */
+.navigate {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.navigate > * + * {
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--edge);
+}
+
+.search {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.search__input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    outline: none;
+}
+
+.search__input::placeholder {
+    color: var(--ink-faint);
+}
+
+.search__bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.search__count {
+    flex: 1;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.search__nav {
+    padding: 0 0.25rem;
+    border: none;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.search__nav:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+mark.hit {
+    color: inherit;
+    background: color-mix(in srgb, var(--mark) 34%, transparent);
+    border-radius: 2px;
+}
+
+mark.hit.current {
+    background: color-mix(in srgb, var(--mark) 68%, transparent);
+    outline: 1px solid var(--mark);
+}
+
+/* The key: which kinds are in play, and the legend for every edge in the margin at the same time.
+   A column per side of the exchange, so a reader who has learnt the edges already knows which
+   column a kind will be in. */
+.key {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-2);
+}
+
+/* --- The shelf: what is written and not sent -------------------------- */
+
+.shelf {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+/* Under the shelf, which is the boundary in this column: everything above reads the conversation and
+   these are the first things that change how it is run. One per running plugin that declared a card,
+   drawn by the console from what the plugin said - which is what keeps somebody else's card in step
+   with this console's own controls, where a card a plugin drew would drift the first time anything
+   was restyled. */
+.plugin {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.plugin__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* One control to a row, the words at the left and the control at the right, which is the shape of
+   every row in the rail: the facts on the session's card are a key and a value the same way, so a
+   reader scans one column of words and one of values down the whole sheet, and every switch and
+   every box lines up with the others whatever its label's length. */
+.plugin__settings {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+}
+
+/* `min-width: 0` on the label as well as on the box inside it, and both are load-bearing: a flex
+   item's own floor is its content, so without it a number's row refuses to shrink and pushes its
+   box out of the card rather than cutting its label. */
+.plugin__switch,
+.plugin__number {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-width: 0;
+    color: var(--ink-soft);
+    cursor: pointer;
+}
+
+/* The box comes first in the markup, so a reader with the file absent still gets the browser's own
+   `[x] words` row; here it is drawn at the right, after its words. */
+.plugin__settings .plugin__switch > input {
+    order: 1;
+    margin-left: auto;
+}
+
+/* A checkbox and not a sliding switch, drawn in the page's own chrome: a box with a mark in it says
+   on or off at a glance, where a slider says which end the knob is at. The same box on the settings
+   step, where a tier's switch also has the third state, some of them, drawn as a dash. */
+.plugin__switch > input[type="checkbox"],
+.tier__switch > input[type="checkbox"] {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 1.1em;
+    height: 1.1em;
+    margin: 0;
+    border: 1px solid var(--edge);
+    border-radius: 0.25em;
+    background: var(--sunk);
+    color: var(--ink);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+    appearance: none;
+}
+
+.plugin__switch > input[type="checkbox"]::before,
+.tier__switch > input[type="checkbox"]::before {
+    content: "";
+}
+
+.plugin__switch > input[type="checkbox"]:checked,
+.tier__switch > input[type="checkbox"]:checked,
+.tier__switch > input[type="checkbox"]:indeterminate {
+    border-color: var(--mark);
+    background: color-mix(in srgb, var(--mark) 30%, var(--sunk));
+}
+
+.plugin__switch > input[type="checkbox"]:checked::before,
+.tier__switch > input[type="checkbox"]:checked::before {
+    content: "\2713";
+    font-size: 0.85em;
+    font-weight: 700;
+}
+
+.tier__switch > input[type="checkbox"]:indeterminate::before {
+    content: "";
+    width: 0.55em;
+    height: 2px;
+    background: var(--ink);
+}
+
+/* Where the row does not fit on one line, which `attempts per turn` does not at the phone's size,
+   the box and its unit drop to the line under, still at the right, so a long label costs a line
+   rather than pushing the box out of the card or breaking into two lines of its own beside it. The
+   label is held to one line and cut only where it alone is wider than the row, which no label a
+   card should carry is. */
+.plugin__number {
+    flex-wrap: wrap;
+}
+
+.plugin__number > span:first-child {
+    flex: none;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The box, its unit and its own `Set`, as one item at the right, so they drop together. */
+.plugin__value {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: none;
+    margin-left: auto;
+}
+
+/* Four digits and no more, which is a bound rather than a guess: a control declared in units is
+   chosen in round ones, and a box sized for six is one nobody can read at a glance. Sized rather
+   than stretched, so the box says how much it expects and `Set` sits against it instead of across
+   the card. */
+.plugin__number input {
+    flex: none;
+    inline-size: calc(4ch + 1.2rem);
+    min-width: 0;
+    padding: 0.2rem 0.35rem;
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--sunk);
+    color: var(--ink);
+    font: inherit;
+
+    /* No spinner, because there is no increment that is right: a step of 1 is a hundred presses to
+       move a number anywhere worth moving it, and any larger one is a value this console would have
+       to invent on a plugin's behalf. What the arrows cost is real - they sit inside the box and take
+       the room a further digit needs - so the type stays `number`, for the keypad it asks for on a
+       phone and the bounds it validates against, and the arrows go. */
+    appearance: textfield;
+}
+
+.plugin__number input::-webkit-outer-spin-button,
+.plugin__number input::-webkit-inner-spin-button {
+    appearance: none;
+    margin: 0;
+}
+
+/* The unit reads as part of the figure rather than as a word beside it, so it takes the ink the
+   number does and sits tight against the box. */
+.plugin__unit {
+    flex: none;
+    color: var(--ink);
+}
+
+/* A number's own `Set`, a mark against its box, and drawn only while there is something in the box
+   that has not been recorded: a switch takes effect on the press and a number does not, so a row
+   at rest has nothing to press and shows nothing, and a row somebody has typed in shows the one
+   press that records it, against the figure it records. A `Set` on a row of its own was tried and
+   spent a line on every card whether anything was pending or not.
+
+   The script marks every number row clean or dirty, and a clean row hides its mark. With
+   `mainplate.js` absent nothing marks anything, so the mark is simply always drawn, plain, which is
+   the form working: the tick is the form's submit, and Enter in the box is the same press. */
+.plugin__set {
+    display: inline-grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.plugin__number[data-clean] .plugin__set {
+    display: none;
+}
+
+.plugin__set:hover,
+.plugin__set:focus-visible {
+    background: var(--sunk);
+    color: var(--mark);
+}
+
+/* `--mark` is the same gold every control on this page draws its focus ring in, which is what makes
+   it read as "this wants a press" rather than as a warning; the border alone, since filling it would
+   make an unpressed button look pressed. */
+.plugin__number[data-dirty] .plugin__set {
+    border-color: var(--mark);
+    color: var(--mark);
+}
+
+/* What this session is, and the control that ends it, on one card: which model, where its files
+   are, what it holds on disk, in the faint ink every figure on this page takes, and archiving as
+   the last section under a rule. In the rail rather than under the message box, where the facts
+   were read as being about the act of sending and took a row on every window and three on a
+   phone. A plugin card's shape, since it sits among them. */
+.about {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.about > .archive {
+    margin-top: var(--space-1);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--edge);
+}
+
+.about__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* A card of facts: a key and a value to a row, the key in the head's own faint chrome and the value
+   at the right in the ink every figure here takes. The value is one line, never wrapped: a value
+   broken mid-word across two lines is what made this card read as a mess where the dock beside it
+   reads as a grid.
+
+   What gives way is where the value stands. Beside its key where the two fit on one line, which is
+   most of them; on the line under it, still at the right, where they do not, which is a model id
+   or a repository. Only then, longer than the whole row, is it cut with an ellipsis, and it is whole
+   in its title. A key column sized to its widest word was tried and cut every value on the card to
+   make room for `thinking`. The cost, stated: the values do not line up down the card, since which
+   line each is on depends on its length. */
+.facts {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+}
+
+.fact {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    column-gap: var(--space-3);
+}
+
+.fact dt {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.fact dd {
+    max-width: 100%;
+    margin: 0 0 0 auto;
+    overflow: hidden;
+    color: var(--ink-soft);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The card that closes a session, and the fact that somebody did. A plugin card's shape, since it
+   sits among them; a disclosure rather than a bare button, so the press is under a sentence saying
+   what it takes off the disk. Closed, it is one row of facts, the date, in the shape of the card
+   above it. */
+.archive {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.archive__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+summary.archive__head {
+    cursor: pointer;
+}
+
+.archive__says {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+}
+
+.archive__set {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--error-edge);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    cursor: pointer;
+}
+
+.archive__set:hover,
+.archive__set:focus-visible {
+    background: var(--sunk);
+    color: var(--mark);
+}
+
+/* Under the settings step, which has no rail to hold it: a session stuck on the step is exactly one
+   somebody may want to close. The step's own measure, so the two read as one column. */
+.setup + .archive {
+    max-width: var(--wide);
+    margin: var(--gap) auto 0;
+}
+
+/* The step between creating a session and typing into it: which of the plugins it declares to run.
+   It stands alone in `main`, because a session being set up has no transcript to read, nothing to
+   type into and nothing to navigate.
+
+   The column `.picker` is on the start page, and deliberately the same one: these are the two pages
+   with no conversation on them, they are consecutive, and a reader crossing from one to the other
+   should not watch the measure move under them. The padding is inside the scroller rather than on
+   it, for `.picker`'s own reason - `.setup` computes `overflow-x` to `auto`, so a focus ring flush
+   with its edge is clipped, and this is the room that ring reaches into. */
+.settling {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+    min-height: 0;
+    padding-block: var(--gap);
+    padding-inline: var(--space-2);
+}
+
+.setup__plugins {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    align-items: start;
+}
+
+.setup__working {
+    margin: 0;
+}
+
+.setup__says {
+    margin: 0;
+    color: var(--ink-soft);
+    max-inline-size: 60ch;
+}
+
+/* Why the last press did not load, above the switches rather than beside the plugin it names: what a
+   reader does about a plugin that will not describe is turn it off, and the switch is a line down.
+   The refusal ink, because this is the same kind of sentence a stalled session's is. */
+.setup__failed {
+    margin: 0;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--error-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--ink-soft);
+    max-inline-size: 60ch;
+    overflow-wrap: anywhere;
+}
+
+/* Grouped by where a plugin came from rather than by what it does, which is the whole point: the
+   three are not equally trusted, and a reader deciding what to leave on is deciding about
+   provenance. */
+.tier {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.tier__head {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.tier__switch {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+}
+
+.tier__says {
+    margin: 0;
+    color: var(--ink-faint);
+    max-inline-size: 46ch;
+}
+
+.tier__none {
+    margin: 0;
+    color: var(--ink-faint);
+    font-style: italic;
+}
+
+.tier__plugins {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding-inline-start: var(--space-3);
+}
+
+.plugin__name {
+    color: var(--ink);
+}
+
+/* The file a plugin is, beside the name it was installed under. Nothing has been run at this point,
+   so there is no card and no heading to print: what a reader is deciding is whether that program
+   runs, and the path is the whole of what there is to go on. */
+.plugin__says {
+    color: var(--ink-faint);
+}
+
+/* What loads them, and the one primary action on this page. It takes `.starting button`'s rules
+   rather than a settings control's, because it is the same kind of press one page earlier: the last
+   thing in the column, on the edge every heading above it starts at, so a reader's eye comes down one
+   line rather than crossing the page to find the thing that acts. */
+.setup__set,
+.setup__again button {
+    padding: var(--space-3) var(--space-6);
+    border: 1px solid var(--person-edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+    color: var(--person-edge);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.setup__set:hover,
+.setup__set:focus-visible,
+.setup__again button:hover,
+.setup__again button:focus-visible {
+    border-color: var(--mark);
+    color: var(--mark);
+}
+
+.shelf__title {
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.shelf__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.shelf__slot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+/* The label takes the room and the text is cut with an ellipsis rather than wrapped: a slot is a
+   line to recognise, and the whole of it is one press away. `min-width: 0` is what actually lets it
+   shrink, since a flex item's floor is its content. */
+.shelf__take {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.1rem 0.3rem;
+    border: 0;
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.shelf__take:hover,
+.shelf__take:focus-visible {
+    background: var(--sunk);
+    color: var(--mark);
+}
+
+.shelf__drop {
+    flex: none;
+    padding: 0 0.25rem;
+    border: 0;
+    background: transparent;
+    color: var(--ink-faint);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.shelf__drop:hover,
+.shelf__drop:focus-visible {
+    color: var(--tool-edge);
+}
+
+.shelf__empty {
+    margin: 0;
+    color: var(--ink-faint);
+}
+
+.key__chip {
+    padding: 0.1rem 0.35rem;
+    border: 1px solid color-mix(in srgb, var(--kind-hue) 45%, transparent);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--kind-hue);
+    font: inherit;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.key__chip {
+    --kind-hue: var(--ink-soft);
+}
+
+.key__chip[data-kind="prompt"],
+.key__chip[data-kind="note"],
+.key__chip[data-kind="steer"],
+.key__chip[data-kind="command"],
+.key__chip[data-kind="system-prompt"],
+.key__chip[data-kind="guidance"] {
+    --kind-hue: var(--person-edge);
+}
+
+.key__chip[data-kind="assistant"] {
+    --kind-hue: var(--assistant-edge);
+}
+
+.key__chip[data-kind="thinking"] {
+    --kind-hue: var(--thinking-edge);
+}
+
+.key__chip[data-kind="tool"] {
+    --kind-hue: var(--tool-edge);
+}
+
+.key__chip[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--kind-hue) 20%, transparent);
+    border-color: var(--kind-hue);
+}
+
+/* Off reads as struck out: dimmed, and no longer searched or stepped through. */
+.key__chip[aria-pressed="false"] {
+    opacity: 0.5;
+    text-decoration: line-through;
+}
+
+/* --- The dock: jump, leap, fold, follow -------------------------------- */
+
+.dock {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+/* Four columns of up/down arrows, widest first, which is the picker's own ordering: where the
+   model's history starts again, then whole exchanges, then every panel in play, then one side of
+   them. */
+.dock__nav {
+    display: grid;
+    grid-template-columns: repeat(4, 2.1rem);
+    gap: var(--space-1);
+}
+
+.dock__leap,
+.dock__fold {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-1);
+}
+
+.dock__btn {
+    --dock-hue: var(--ink-soft);
+    display: grid;
+    place-items: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--dock-hue);
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+/* Each arrow takes the hue of the side it seeks. */
+/* A turn opens with what the person said, so the coarse column keeps that hue: what it steps is the
+   boundary above each message rather than the message, and the two read as the same move. */
+.dock__btn--turn {
+    --dock-hue: var(--person-edge);
+}
+
+.dock__btn--assistant {
+    --dock-hue: var(--assistant-edge);
+}
+
+/* The one column that takes no side's hue, because what it steps belongs to neither: a boundary is
+   not something the person said or the model produced. The rule ink it steps to is the same. */
+.dock__btn--forget {
+    --dock-hue: var(--ink-soft);
+}
+
+/* Following lights up, so a live "tailing" reads at a glance and is told apart from the plain
+   leap-to-end beside it. */
+.dock__btn--follow[aria-pressed="true"] {
+    --dock-hue: var(--mark);
+    background: var(--sunk);
+}
+
+.dock__btn:hover,
+.dock__btn:focus-visible {
+    background: var(--sunk);
+    color: color-mix(in srgb, var(--dock-hue), var(--ink) 35%);
+}
+
+.dock__btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+/* --- The theme toggle -------------------------------------------------- */
+
+/* Pinned to the bottom of the rail, because it is the one card here that is not about this
+   conversation: the theme is the reader's, across every session, so it is what somebody scanning the
+   column for something about *this* session can skip. `margin-top: auto` is the whole of the pinning
+   and needs no rule about where the cards above it go. */
+.theme {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-1);
+    margin-top: auto;
+}
+
+.theme button {
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-faint);
+    font: inherit;
+    cursor: pointer;
+}
+
+.theme button[aria-pressed="true"] {
+    border-color: var(--edge);
+    background: var(--sunk);
+    color: var(--ink);
+}
+
+/* --- Focus ------------------------------------------------------------- */
+
+:where(a, button, select, textarea, input, summary):focus-visible {
+    outline: 2px solid var(--mark);
+    outline-offset: 1px;
+}
+
+/* --- Branching ---------------------------------------------------------- */
+
+/* --- The rule between turns ------------------------------------------- */
+
+/* The line at a round trip's boundary, carrying everything true of the request rather than of any
+   panel in it: the worktree it was made against, what it cost, and the record behind it. The first
+   rule of a turn carries the turn's own facts too, which is where the fork link lives. Always drawn,
+   never revealed by hover: these are facts to scan down a conversation for, and the fork is the only
+   way a session changes its mind, so a pointer-only control would take it off every phone.
+
+   The right inset is the panels' own, so what a turn spent lines up with the `#1.0` anchors down the
+   conversation. It is a margin rather than padding, so the *line* stops there too: the hairline used
+   to cross the whole column and run under the transcript's scrollbar, which on a browser that draws
+   one over the content is a rule ending in a grey band, and now that the line is also a gauge that is
+   a gauge whose last few percent are behind something. Ending where the figures do costs nothing:
+   what a rule separates is panels whose own text stops at the same place. No block margin, because
+   the room above and below is the transcript's gap. */
+.rule {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    margin: 0 var(--space-6) 0 0;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--edge);
+    font-family: var(--mono);
+    /* A figure has to be read rather than noticed, and a rule now carries seven of them where it
+       carried three. Under about this the digits stop being legible at a glance, which for a line
+       whose whole job is figures is the wrong economy: what a rule saves by being small is a couple
+       of pixels of height. Still well under the transcript's own size, since these are facts about
+       the conversation and not part of it. */
+    font-size: 0.74rem;
+    letter-spacing: 0.03em;
+    color: var(--ink-faint);
+
+    /* Where the gauge starts, which is the line's own colour, so a conversation with room left
+       looks exactly like a conversation with no gauge at all. Restated by the rules below that
+       colour the line differently, so the gauge always grows out of whatever the rule is drawn in
+       rather than out of a colour it only has by default. */
+    --gauge-from: var(--edge);
+}
+
+/* How full the model's context window is at this request, drawn along the rule that already stands
+   at that request's boundary. The one figure a long conversation ends up asking about, for no row,
+   no control and no colour of its own that a panel could be confused with.
+
+   Two things make it readable rather than decorative. The scale is the *whole* width of the rule, so
+   a point along the line means the same fraction on every rule of every session, and the fill is
+   clipped to how far the context reaches rather than the gradient being squeezed into it - a bar
+   ending in red would say every conversation is in trouble. And the far end is `--vermilion`, which
+   is the palette's red already: reaching for a new one would put a second red on a page whose only
+   other one means a fault. It shades rather than steps, because a threshold is a number somebody
+   would have to invent and defend, where the whole point is that this gets worse gradually.
+
+   The server computes `--filled` and nothing else. The colours, the scale, the height and the cap
+   are decisions, so they live here; the fraction is a fact about one request, and there is nowhere
+   else it could come from. */
+.rule::before {
+    content: "";
+    position: absolute;
+    inset-block-start: -1px;
+    inset-inline: 0;
+    block-size: 1px;
+    background-image: linear-gradient(to right, var(--gauge-from), var(--vermilion));
+    clip-path: inset(0 calc(100% - var(--filled, 0%)) 0 0);
+}
+
+/* Where the model's history starts again. Drawn in a stronger ink rather than a hue of its own,
+   because the palette runs on one axis - cool for what the person produced, warm for what the model
+   did - and a boundary belongs to neither side of it. The colour and not the width, so a rule
+   carrying one sits on the same baseline as every rule above and below it.
+
+   It wraps, and it is the only rule that does so unprompted: it is the only one that says something
+   in words, and a phrase this long would otherwise squeeze the figures beside it on a narrow window.
+   What wraps is the phrase and the figures after it, never the `#N` and the fork link a reader
+   presses - the rule every control that toggles already follows. */
+.rule--forget {
+    flex-wrap: wrap;
+    border-top-color: var(--ink-soft);
+    --gauge-from: var(--ink-soft);
+}
+
+/* The one thing on any rule that is a sentence rather than a figure, so it takes the full ink and
+   the bold face while everything around it stays faint. A boundary is the rarest and most
+   consequential thing this transcript draws, and set in the same weight as a tree hash it reads as
+   one more piece of chrome to skip. */
+.rule__forget {
+    color: var(--ink);
+    font-weight: 600;
+}
+
+/* The gaps that hold a rule's parts apart: what the turn is and what it is forked from at one end,
+   what it spent at the other, and on a boundary the phrase saying so between them. Equal shares of
+   whatever is left over, so the counts line up down the page whatever is on the left of them and a
+   boundary sits in the middle of the line rather than against either side. */
+.rule__span {
+    flex: 1;
+}
+
+/* Which turn this opens, against the `#1.0` on the panels below it. Muted like the panel anchors it
+   answers to, because it is chrome to navigate by rather than something to read. */
+.rule__at,
+.rule__fork {
+    color: var(--ink-faint);
+    text-decoration: none;
+    letter-spacing: 0.04em;
+}
+
+.rule__fork {
+    text-transform: uppercase;
+}
+
+.rule__at:hover,
+.rule__at:focus-visible,
+.rule__fork:hover,
+.rule__fork:focus-visible {
+    color: var(--mark);
+    text-decoration: underline;
+}
+
+/* Every figure on a rule is drawn in the rule's own ink, and none of them is picked out. The cost
+   used to take a stronger one, which read as the figure to look at, and there are seven of them
+   now: when the answer landed, how long it took, how much context there is, how full the window is,
+   what came out of the cache, what came back, and what it cost. None is more the point than the
+   others - which one somebody is reading changes with what they are doing - so picking one is
+   deciding that for them. What emphasis this line has left is the gauge, which is about the
+   conversation rather than about any figure on it. */
+
+/* Marked the same way a panel is, because a rule is landed on by the same arrows and the same
+   permalink machinery. Drawn on the line rather than as a filled block: a rule is a hairline and a
+   background wash over one reads as a gap rather than as a place. */
+.rule:target,
+.rule[data-landed] {
+    border-top-color: var(--mark);
+    color: var(--ink-soft);
+    --gauge-from: var(--mark);
+}
+
+/* `main` is a grid whose first row grows, because on a session page that child is the transcript
+   and the transcript is what should take the room. This page puts the fork card there instead, so
+   the rows are restated: the card is its own height and the conversation beneath it grows. Stated
+   as a rule on the page rather than a property on the card, because which row grows is a fact
+   about the layout and not about the thing that happens to sit in it. */
+main:has(> .forking) {
+    grid-template-rows: auto 1fr;
+}
+
+.forking {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    /* The card measure rather than the reading one, because this holds the same picker the start
+       page does and a grid of model cards needs the room to reach a third column. */
+    max-width: var(--wide);
+    padding: var(--space-6);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--raised);
+}
+
+/* The picker sits inside a raised card here and directly on the page on the start page, so its own
+   cards need a ground to stand out from rather than the one they are already on. */
+.forking .endpoint,
+.forking .model {
+    background: var(--ground);
+}
+
+.forking .endpoint:has(.endpoint__pick:checked),
+.forking .model:has(.model__pick:checked) {
+    background: color-mix(in srgb, var(--person-edge) 8%, var(--ground));
+}
+
+.forking .models__heading {
+    background: var(--raised);
+}
+
+/* Bounded here, where on the start page the list simply takes whatever room is left. This page has
+   a transcript under it that a reader has to be able to see in order to choose a turn at all, so
+   the models take a fixed slice rather than as much as they can get. */
+.forking .models {
+    max-height: 22rem;
+}
+
+.forking h1 {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.forking textarea {
+    width: 100%;
+    padding: var(--space-4);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--ground);
+    color: var(--ink);
+    font: inherit;
+}
+
+.forking__kept {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+}
+
+/* What the branch does to the files, under what it does to the turns. Fainter than the turns line
+   because it is a reassurance rather than the answer somebody came here for: nothing is destroyed,
+   and the sentence exists so that is known before the button rather than after it. */
+.forking__files {
+    margin: 0;
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+}
+
+.forking__act {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+}
+
+.forking__back {
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+}
+
+/* What the fork would carry, drawn as the conversation it is rather than as a summary of one.
+   Dimmed, because it is the past being shown for confirmation and not the thing being acted on. */
+.forking + .transcript {
+    opacity: 0.75;
+}
+
+/* A fork in the sidebar, stepped in under what it came from. The rule rather than a margin on
+   the anchor, so the whole row moves and the hit target does not shrink with depth. */
+.sessions li[data-depth="1"] {
+    padding-left: var(--space-4);
+}
+
+.sessions li[data-depth="2"] {
+    padding-left: var(--space-6);
+}
+
+.sessions li[data-depth="3"] {
+    padding-left: var(--space-8);
+}
+
+.sessions li[data-depth]:not([data-depth="0"]) > .session {
+    border-left: 2px solid var(--edge);
+    padding-left: var(--space-3);
+}
+
+.session .meta {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    /* A flex item's minimum is its min-content, so without this the repository name floors the row
+       at its own unbreakable width and the sidebar pushes the document sideways rather than
+       cutting the name. */
+    min-width: 0;
+}
+
+/* Which repository the session works in, which is what tells two conversations apart once a
+   console is used to work in more than one. Last in the row and the only thing that shrinks, so a
+   long `owner/repo` is cut rather than the date it sits beside. */
+.session .where {
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+}
+
+/* What the session takes on disk. Between the date and the repository, in the repository's face and
+   size because it is the same kind of fact, and never wrapped or cut: a figure cut to `46` is a
+   different figure, where a repository name cut short is still that name. */
+.session .footprint {
+    flex: none;
+    white-space: nowrap;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+}
+
+/* A closed session: the name in the faint ink and the word beside the date, because a muted row on
+   its own reads as a styling accident. The row stays a link, since the conversation is still there
+   to read and to fork. */
+.session.archived .name {
+    color: var(--ink-faint);
+}
+
+.session .archived {
+    flex: none;
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* Something recorded since anybody looked: the word in the console's own mark, first in the row so a
+   reader scanning the left edge of the dates finds it, and in the archived word's face so the two
+   read as the same kind of fact about the row. The mark's hue and not a speaker's, because what it
+   says is about the console's bookkeeping and not about who said what. */
+.session .unseen,
+.dashboard__sessions .unseen {
+    flex: none;
+    color: var(--mark);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* Something still coming: a pass answering the session now, or one that will. The same face and
+   the same ink as `unread`, since both are the console's bookkeeping about the row, and the regular
+   weight beside `unread`'s bold because what has already arrived is the one to go and read. */
+.session .working,
+.dashboard__sessions .working {
+    flex: none;
+    color: var(--mark);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* Which turn the fork left its parent at, which is the one fact that distinguishes two forks of
+   the same conversation from each other. */
+.session .from {
+    flex: none;
+    color: var(--mark);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+}
+
+/* An aside is a digression rather than a direction, so it is marked in the quieter ink: what a
+   reader scanning the tree wants to pick out is where the conversation actually went. */
+.session .from--aside {
+    color: var(--ink-faint);
+}
+
+/* Archiving, from the row. The summary lies over the row's top-right corner and is invisible until
+   the pointer is on the row or the focus is in it, so a list of sessions is not a list of buttons
+   and nothing under the pointer moves as it passes down the list: a control that took a line of its
+   own would shift every row beneath it on every hover. It covers the tail of a long name while it
+   shows, which is the corner every row action lives in and the name is in the title anyway.
+
+   Opened, it is the rail's own card drawn under the row - the sentence, then the press - and the
+   row grows to hold it, which is a change somebody asked for. `visibility` rather than `display`
+   so the summary keeps its box and the row's `:focus-within` can reach it from the keyboard. */
+.sessions li {
+    position: relative;
+}
+
+.session__archive {
+    visibility: hidden;
+}
+
+.sessions li:hover > .session__archive,
+.sessions li:focus-within > .session__archive,
+.session__archive[open] {
+    visibility: visible;
+}
+
+.session__archive-head {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--edge);
+    border-radius: 0.35rem;
+    background: var(--raised);
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    list-style: none;
+}
+
+.session__archive-head::-webkit-details-marker {
+    display: none;
+}
+
+.session__archive-head:hover,
+.session__archive-head:focus-visible {
+    color: var(--mark);
+}
+
+.session__archive[open] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) 0.6rem var(--space-3);
+    font-size: 0.7rem;
+    font-family: var(--mono);
+}
+
+/* --- A page nothing could answer --------------------------------------- */
+
+.refusal {
+    max-width: var(--measure);
+    margin: var(--space-9) auto;
+    padding: 0 var(--gap);
+}
+
+.refusal h1 {
+    margin: 0;
+    font-size: 3rem;
+    color: var(--ink-faint);
+}
+
+.refusal a {
+    color: var(--person-edge);
+}
+
+/* --- On a phone --------------------------------------------------------- */
+
+/* One block rather than a rule beside each thing it changes, and the reason is the cascade rather
+   than taste: every rule here replaces one written above it, so being last is what makes it win.
+   Split up, the rail's own breakpoint put the sidebar column back under the narrow one and left
+   the conversation about a hundred pixels wide - a bug that is invisible in any one place and
+   obvious in one list. The rail's overlay rules are the exception and stay with the rail, because
+   they apply at two widths rather than this one.
+
+   Three things this is trying to do, in order:
+
+   - Give the conversation the screen. A phone has one column of room and everything that is not
+     what somebody is reading is spending it.
+   - Scroll on one axis at a time, in one box. Nested scrollers on the same axis are what actually
+     feels broken under a thumb, and this console had three of them stacked on the start page.
+   - Be touchable. A 16px field is what stops a phone zooming the page as it is focused, and an
+     arrow under about 44px square is one that gets missed. */
+/* The narrow shape: everything under 78rem, which is every window too narrow to stand the session
+   list and the rail either side of the conversation, a phone included. One block, so there is no
+   second query for the order of the two to matter between; see the shell, at the top. What a phone
+   needs beyond the fold is a query nested at the end of it, for the reason given there. */
+@media (max-width: 78rem) {
+    :root {
+        /* A clasp here is pressed rather than pointed at, so it is about 44px tall. Named once,
+           because the row across the top of the page is this tall for the two clasps standing in
+           it, and the three cannot be allowed to disagree. */
+        --clasp: 2.8rem;
+    }
+
+    /* The sidebar's 17rem is two thirds of a phone, spent on navigation somebody reaches for once
+       a session, and on a window between a phone and three columns it is room the conversation
+       wants more. So the list lies off the left edge of the page and is drawn shut, exactly as the
+       rail lies off the right: the clasp is left at the top-left corner and the rest slides out
+       from under it when pressed. One mechanism, one script, and the two shut each other, since
+       there is room for one of them across the page at a time.
+
+       A drawer rather than the strip of chips this was, and what decided against the strip is
+       what a chip had given up to fit in one: the date, the repository, the tree's indentation and
+       the archive control, which are the facts a list of sessions is for. Slid out, this is the
+       column a wide window draws, facts and all, and a swipe down it reads the way every other
+       list on a phone does.
+
+       The cost, stated: the two clasps stand in a row at the top of the page that everything else
+       starts under, which is about the height the strip took. Floating them over the corners
+       instead would put this one over the picker's first legend and the role of whichever panel
+       scrolled under it - text, where the corner the rail's would cover is a copy button. Since the
+       row is spent either way, the clasps say their words rather than a glyph apiece, and the
+       console's name stands between them. */
+    .shell,
+    .shell:has(> .rail) {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    /* Both columns are already away here, behind their clasps, so a wide window's choice to put one
+       away is not this shape's to act on: no fold button, and a sheet the wide window hid is still
+       the sheet a clasp slides out. Nor is there a grip, since the conversation already has the
+       whole width. */
+    .fold,
+    .reading__grip {
+        display: none;
+    }
+
+    .sessions__sheet,
+    .rail__sheet {
+        display: flex;
+    }
+
+    /* The row itself, laid out rather than reserved: `main` starts under it because it is a track
+       of the shell, and the clasps, which are fixed to the viewport, are placed to stand in it. Its
+       content box is exactly the clasps' own height at the clasps' own inset, which is what keeps
+       the three on one line without any of them measuring the others. */
+    .bar {
+        display: grid;
+        place-items: center;
+        padding: var(--space-5) 0 var(--space-3);
+    }
+
+    .brand {
+        display: grid;
+        place-items: center;
+        height: var(--clasp);
+        color: var(--ink-faint);
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-decoration: none;
+    }
+
+    .sessions {
+        position: fixed;
+        top: var(--space-5);
+        left: var(--space-5);
+        bottom: var(--space-5);
+        z-index: 10;
+        /* The column a wide window draws, held short of the far edge on a phone narrower than that
+           so a list slid out still leaves the page it lies over showing at the side. */
+        width: min(var(--sidebar), calc(100vw - 3.5rem));
+        gap: var(--space-3);
+        padding: 0;
+        border-right: none;
+        /* For the rail's reason: what is parked off the edge by a transform still contributes
+           scrollable overflow, and `clip` says past this box there is nothing. */
+        overflow-x: clip;
+        overflow-y: visible;
+        /* The clasp and the sheet are what a reader presses; the box around them is nothing, and
+           a fixed box with no background still swallows every press over it. */
+        pointer-events: none;
+    }
+
+    .sessions > * {
+        pointer-events: auto;
+    }
+
+    /* Both clasps, as one kind of thing: a word in a pill about 44px tall, which is a thumb's
+       target and is also a pointer's. Neither is drawn at all on a wide window. */
+    .sessions__clasp,
+    .rail__clasp {
+        display: grid;
+        place-items: center;
+        width: auto;
+        height: var(--clasp);
+        padding: 0 var(--space-5);
+        border: 1px solid var(--edge);
+        border-radius: 999px;
+        background: var(--raised);
+        box-shadow: var(--lift);
+        color: var(--ink-soft);
+        font: inherit;
+        font-size: 0.85rem;
+        font-weight: 600;
+        line-height: 1;
+        cursor: pointer;
+    }
+
+    /* Each at its own edge of the box it heads, and neither stretched to the box's width, which is
+       what a flex column does to a child left to itself: the box is the width of the sheet under
+       it, and a clasp that wide is a bar and not a button. */
+    .sessions__clasp {
+        flex: none;
+        align-self: flex-start;
+    }
+
+    .rail__clasp {
+        flex: none;
+        align-self: flex-end;
+    }
+
+    .sessions__clasp[aria-expanded="true"],
+    .rail__clasp[aria-expanded="true"] {
+        background: var(--sunk);
+        color: var(--mark);
+    }
+
+    /* The sheet, on the page's own ground rather than raised, so a row looks exactly as it does in
+       the wide column: the current one is the raised row, and raised on raised would be no row at
+       all. Lifted, since it lies over the page rather than beside it. It scrolls, and the box
+       around it does not, so a thumb anywhere on it - a row, the gap between two rows, the margin
+       down the side - moves the list and never the conversation under it. */
+    .sessions__sheet {
+        gap: var(--space-3);
+        padding: var(--space-3);
+        border: 1px solid var(--edge);
+        border-radius: 0.75rem;
+        background: var(--ground);
+        box-shadow: var(--lift);
+        visibility: hidden;
+        transform: translateX(calc(-100% - 1.6rem));
+        transition:
+            transform 0.2s ease,
+            visibility 0.2s;
+    }
+
+    .sessions[data-open] > .sessions__sheet {
+        visibility: visible;
+        transform: none;
+    }
+
+    /* --- The conversation --- */
+
+    /* Under the row, which is a track of the shell, so the only room above the first panel is the
+       transcript's own. */
+    main {
+        padding: 0 var(--space-4);
+    }
+
+    /* --- The rail --- */
+
+    /* The session list's mechanism from the other edge: fixed to the viewport, the box around the
+       clasp and the sheet nothing to a press, and the sheet parked off the right-hand edge by a
+       transform until the clasp is pressed. Giving the rail a column here would take that width
+       from the reading measure, and a reading control lying over the text it navigates is the one
+       place it must never be, so it is drawn shut. Its clasp stands in the row across the top of
+       the page, opposite the session list's; what it looks like is above, with that one.
+       Bottom-anchoring it would put the clasp under a thumb, which is the better place for it on a
+       phone and is taken: that corner is the Send button's. */
+    .rail {
+        position: fixed;
+        top: var(--space-5);
+        right: var(--space-5);
+        bottom: 0.8rem;
+        z-index: 10;
+        /* The column a wide window draws, held short of the far edge on a phone narrower than that
+           so a sheet slid out still leaves the page it lies over showing at the side. */
+        width: min(var(--rail), calc(100vw - 3.5rem));
+        padding: 0;
+        /* `clip` on the inline axis, and `visible` still on the block axis, because the sheet is
+           parked off the right-hand edge by a transform when the rail is shut. Off-screen by
+           design, but a transform still contributes scrollable overflow, so the parked sheet
+           would scroll the document sideways on every session page - the one thing every page
+           here must never do. Clipping says what was already meant: past this box, nothing.
+           `clip` rather than `hidden` because `hidden` would make this a scroll container. */
+        overflow-x: clip;
+        overflow-y: visible;
+        /* The clasp and the sheet are what a reader presses; the box around them is nothing, and
+           a fixed box with no background still swallows every click over it. */
+        pointer-events: none;
+    }
+
+    .rail > * {
+        pointer-events: auto;
+    }
+
+    /* One sheet rather than loose cards, and the difference is what is *between* them: cards over
+       a bare box left the conversation showing through the gaps and taking every touch that landed
+       in one, so a thumb scrolling the rail scrolled the transcript under it instead. On the page's
+       own ground, so the cards stand off it exactly as they stand off the column on a wide window,
+       and lifted, since it lies over the page rather than beside it. Scrolling itself, because a
+       fixed box is scrolled by nothing else and a session with a few plugins' cards is taller than a
+       short window. */
+    .rail__sheet {
+        padding: var(--space-3);
+        border: 1px solid var(--edge);
+        border-radius: 0.75rem;
+        background: var(--ground);
+        box-shadow: var(--lift);
+        visibility: hidden;
+        transform: translateX(calc(100% + 1.6rem));
+        transition:
+            transform 0.2s ease,
+            visibility 0.2s;
+    }
+
+    .rail[data-open] > .rail__sheet {
+        visibility: visible;
+        transform: none;
+    }
+
+    /* --- A phone --- */
+
+    /* Everything above is about the fold, which a window too narrow for three columns needs whether
+       it is a phone or half a laptop. Everything in here is about what a phone lacks beyond that
+       width: room on a line, a pointer that hovers, a height a whole picker fits in, and a finger
+       rather than a pointer to press with. Nested rather than a block of its own, so it is inside the
+       one narrow block and comes after every rule it refines with no second query to order against;
+       a laptop window in the narrow shape reads its rules and its lines exactly as a wide one does. */
+    @media (max-width: 48rem) {
+        /* Nothing hovers on a phone, so a control revealed by hovering is one that is never reached;
+           a session is opened and closed from its rail. */
+        .session__archive {
+            display: none;
+        }
+
+        /* A window a phone's width is barely wider than the block already is, so opening it as wide
+           as the window buys a few characters for a dialog to put away again. */
+        pre > .focus {
+            display: none;
+        }
+
+        .sessions .home {
+            padding: var(--space-3) var(--space-5);
+        }
+
+        .panel {
+            padding: var(--space-1) var(--space-4);
+        }
+
+        /* --- What you type in --- */
+
+        /* Under 16px is what makes a phone zoom the page as the reader focuses a field, and it does
+           not zoom back out: every control that takes text or a choice is held at it, rather than
+           the search alone, because the box you write a message in is the one that matters most. */
+        .composer textarea,
+        .naming input,
+        .basis input,
+        .override input,
+        .plugin__number input,
+        .forking textarea,
+        .picker__filter-field,
+        .search__input {
+            font-size: 16px;
+        }
+
+        /* The tools row is one line of the box tall, measured in its own font, so it takes the
+           box's size here too or the two rows come apart by the difference. */
+        .composer__tools {
+            font-size: 16px;
+        }
+
+        .composer {
+            padding: var(--space-3) 0 var(--space-4);
+        }
+
+        .forking__act button,
+        .starting button,
+        .setup__set,
+        .picker__filter-field,
+        .repo,
+        .think {
+            min-height: 2.75rem;
+        }
+
+        /* A card is a row here, so it wants its text centred in the height a thumb needs rather
+           than sitting at the top of it. */
+        .repo,
+        .think {
+            align-items: center;
+        }
+
+        /* --- Choosing what a session runs on --- */
+
+        /* One scroller for the whole choosing on every page, which the start page already has at
+           any width: the fork page bounds its list so the transcript under it stays reachable, and
+           on a phone that bound bought a list about thirty pixels tall. So the bound comes off and
+           `.setup` carries the lot, which is one box scrolling inside a document that does not - the
+           property that mattered, and the same one every other page here has. */
+        .forking .models {
+            max-height: none;
+            overflow-y: visible;
+        }
+
+        /* --- Forking --- */
+
+        /* The fork card holds a whole picker, so on a phone it is taller than the screen on its
+           own and the transcript beneath it has nothing left to be. Pinning rows is what a session
+           page wants, where the transcript is the content; here the page is one thing to read
+           down, so it scrolls as one. */
+        main:has(> .forking) {
+            grid-template-rows: auto auto;
+            overflow-y: auto;
+        }
+
+        main:has(> .forking) .transcript {
+            overflow-y: visible;
+        }
+
+        .forking {
+            padding: var(--space-5);
+        }
+
+        /* --- The rail --- */
+
+        /* Everything in here is pressed rather than read, so it is sized for a thumb: the cards
+           keep their proportions and the targets in them grow. */
+        .rail__sheet > * {
+            padding: var(--space-3) var(--space-4);
+            font-size: 0.78rem;
+        }
+
+        .dock__nav {
+            grid-template-columns: repeat(4, 2.6rem);
+        }
+
+        .dock__btn {
+            width: 2.6rem;
+            height: 2.6rem;
+            font-size: 1rem;
+        }
+
+        .key__chip {
+            padding: var(--space-2) var(--space-3);
+        }
+
+        .search__nav {
+            padding: var(--space-2) var(--space-3);
+        }
+
+        .theme button {
+            padding: var(--space-2) var(--space-4);
+        }
+
+        /* --- The rules --- */
+
+        /* A rule is one line that must not wrap, and a phone has room for about half of what it
+           says. These three are the ones a reader can do without: what was cached is a fact about
+           how a request was billed rather than about the conversation, the running total is on the
+           line under the message box as the session's own, and the fraction of the window is the
+           one figure here that is already drawn twice - the gauge along the rule itself says it as
+           a picture, for no room at all. What stays is when the answer landed and how long it was
+           waited on, how much context there is, what came back, and what this turn cost. The cached
+           count is inside the context figure rather than beside it, so what goes here is the
+           bracket and the count it qualifies stays.
+
+           The fraction went when the moment arrived, and that is the trade said out loud: the row
+           holds six cells at this width and the seventh dropped `Δ` to a line of its own. Of the
+           two, the moment is the one a reader on a phone actually came for, and the one the gauge
+           cannot say. */
+        .rule__cached,
+        .rule__running,
+        .rule__full {
+            display: none;
+        }
+
+        /* And what is left still does not fit beside the turn's own controls, so a rule's parts
+           stack instead of sharing a line: which turn it is and what it forks from, then the
+           boundary where there is one, then the figures. Each keeps its own row and starts at the
+           left margin, which is where a narrow column is read from.
+
+           The break is the spacers themselves rather than a wrapper element per part. A flex item
+           given a whole line's basis takes a line on its own, so the two gaps that pushed the parts
+           apart across a wide rule are the two that separate them down a narrow one - one
+           mechanism at both widths, and no markup that exists only for one of them. They are drawn
+           no taller than the row gap either side, since what they are here is the break and not a
+           row. */
+        .rule {
+            flex-wrap: wrap;
+            row-gap: 0;
+        }
+
+        .rule__span {
+            flex-basis: 100%;
+            height: 0;
+        }
+
+        /* A call's subject takes a line of its own under the name, whole and wrapped, rather than
+           the room the name and the outcome leave: on a phone that room is a path clipped to its
+           first directory, and there is no hover to read the rest off. `order` puts it after the
+           duration and the outcome so that those stay on the name's line rather than being pushed
+           under the subject one at a time. */
+        .tool__subject {
+            order: 1;
+            flex-basis: 100%;
+            overflow: visible;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+    }
+}

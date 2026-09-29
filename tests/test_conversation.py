@@ -1,0 +1,2171 @@
+from __future__ import annotations
+
+from collections.abc import Awaitable
+from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
+from decimal import Decimal
+from itertools import pairwise
+from typing import get_args
+
+import pytest
+from conftest import DEFAULT_CHOICE
+from conftest import FIXTURE
+from conftest import INSTRUCTIONS
+from conftest import WHEN
+from conftest import Deferring
+from conftest import Provider
+from conftest import Refusing
+from conftest import Scripted
+from conftest import answered_with
+from conftest import calls
+from conftest import came_back
+from conftest import read_to
+from conftest import recorded_turn
+from conftest import said_at
+from conftest import started
+from conftest import steered_at
+from conftest import usage_limit_reached
+from pydantic import ValidationError
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import BinaryContent
+from pydantic_ai.messages import FilePart
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelRequest
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import SystemPromptPart
+from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ThinkingPart
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.messages import UserPromptPart
+from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.usage import RequestUsage
+from without_durability.interfaces import INBOX
+from without_durability.interfaces import claimed
+from without_durability.interfaces import inbox_key
+from without_durability.stepwise import Blocked
+from without_durability.stepwise import Completed
+from without_durability.stepwise import Run
+from without_durability.stepwise import Sleeping
+from without_durability.stepwise import extending
+from without_durability.stepwise import resume
+
+from mainplate import records
+from mainplate.agent import Choice
+from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import Ended
+from mainplate.conversation import Guidance
+from mainplate.conversation import NeverStarted
+from mainplate.conversation import Panel
+from mainplate.conversation import Progressed
+from mainplate.conversation import Prose
+from mainplate.conversation import Reached
+from mainplate.conversation import Reasoning
+from mainplate.conversation import Request
+from mainplate.conversation import Returned
+from mainplate.conversation import Spent
+from mainplate.conversation import Stalled
+from mainplate.conversation import Steering
+from mainplate.conversation import ToolUse
+from mainplate.conversation import Transcript
+from mainplate.conversation import altogether
+from mainplate.conversation import blocks_of
+from mainplate.conversation import conversing
+from mainplate.conversation import deferred_in
+from mainplate.conversation import deferred_key
+from mainplate.conversation import failed_key
+from mainplate.conversation import failure_in
+from mainplate.conversation import heard_key
+from mainplate.conversation import instructions_key
+from mainplate.conversation import messages_key
+from mainplate.conversation import model_key
+from mainplate.conversation import opened_key
+from mainplate.conversation import panelled
+from mainplate.conversation import parse_choice
+from mainplate.conversation import parse_deferred
+from mainplate.conversation import parse_delivered
+from mainplate.conversation import parse_instructions
+from mainplate.conversation import parse_messages
+from mainplate.conversation import parted
+from mainplate.conversation import progress_in
+from mainplate.conversation import reached
+from mainplate.conversation import recorded_choice
+from mainplate.conversation import recorded_instructions
+from mainplate.conversation import refusal_in
+from mainplate.conversation import refused_key
+from mainplate.conversation import requested_at
+from mainplate.conversation import responded
+from mainplate.conversation import so_far
+from mainplate.conversation import spent_on
+from mainplate.conversation import system_prompt_in
+from mainplate.conversation import tooks_in
+from mainplate.conversation import tool_key
+from mainplate.conversation import transcript
+from mainplate.conversation import tree_key
+from mainplate.conversation import turn_prefix
+from mainplate.conversation import with_diffs
+from mainplate.conversation import wrote_in
+from mainplate.conversation import wrote_key
+from mainplate.durability import TOOK
+from mainplate.durability import ModelResponseTypeAdapter
+from mainplate.durability import deferred_until
+from mainplate.durability import parse_refused
+from mainplate.durability import stepping
+from mainplate.durability import terminally
+from mainplate.forge import Workspaces
+from mainplate.sandbox import Filesystem
+from mainplate.service import Service
+
+SESSION = "a-session"
+
+
+def spoken(said: Transcript) -> list[tuple[str, str]]:
+    """
+    A transcript as who said what, in order.
+
+    The tests below are about a session being answered rather than about how a panel is cut, so
+    they assert on this rather than on whole `Panel` values; the cutting has its own tests above.
+    """
+    return [
+        (panel.kind, block.text)
+        for panel in said.panels
+        for block in panel.blocks
+        if isinstance(block, Prose | Reasoning | Steering)
+    ]
+
+
+async def waiting(service: Service, said: str, session: str = SESSION) -> None:
+    """
+    A session recorded on the default choice, with its first message waiting.
+
+    The choice before the prompt, in the order `Service.start` writes them: the prompt is what
+    queues a session, so a worker taking it before the choice landed would find nothing to answer
+    on.
+    """
+    await service.checkpointer.supply(session, CHOICE_KEY, recorded_choice(DEFAULT_CHOICE))
+    await service.say(session, said)
+
+
+async def pass_at(
+    service: Service, body: Callable[[Run], Awaitable[Ended]], session: str = SESSION
+) -> Completed[Ended] | Sleeping | Blocked:
+    """One pass at a session, claimed and released the way the worker does it."""
+    holder = await claimed(service.checkpointer, session)
+    try:
+        return await resume(holder, service.checkpointer, body)
+    finally:
+        await service.checkpointer.release(holder)
+
+
+async def passes_at(
+    service: Service, body: Callable[[Run], Awaitable[Ended]], session: str = SESSION
+) -> tuple[Completed[Ended] | Sleeping | Blocked, ...]:
+    """
+    Every pass it takes to reach a stop, which is what the worker does with `Progressed`.
+
+    A pass that comes back `Completed` has spent its allowance mid-turn and is owed another at once,
+    so this is `readying` in `app.py` with the queue taken out: the same loop, driven by hand, so a
+    test can count the passes and say what each one did.
+    """
+    made: list[Completed[Ended] | Sleeping | Blocked] = []
+    while True:
+        made.append(await pass_at(service, body, session))
+        if not isinstance(made[-1], Completed):
+            return tuple(made)
+
+
+class TestReadingACheckpoint:
+    def test_an_untouched_session_starts_at_the_first_turn(self) -> None:
+        assert reached({}) == Reached(turn=0, history=())
+
+    def test_a_turn_with_a_message_but_no_answer_is_still_the_turn_to_run(self) -> None:
+        assert reached(said_at(0, "hello")) == Reached(turn=0, history=())
+
+    def test_history_is_every_answered_turn_in_order(self) -> None:
+        recorded = {
+            messages_key(0): recorded_turn(
+                {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "first"}]},
+                {"kind": "response", "parts": [{"part_kind": "text", "content": "one"}]},
+            ),
+            messages_key(1): recorded_turn(
+                {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "second"}]},
+                {"kind": "response", "parts": [{"part_kind": "text", "content": "two"}]},
+            ),
+        }
+        at = reached(recorded)
+        assert at.turn == 2
+        assert [type(message) for message in at.history] == [ModelRequest, ModelResponse, ModelRequest, ModelResponse]
+
+    def test_an_empty_checkpoint_is_an_empty_transcript(self) -> None:
+        assert transcript({}) == Transcript(panels=(), awaiting=False, turns=0)
+
+
+@dataclass(frozen=True, slots=True)
+class Turn:
+    """One settled turn, so a history can be built several turns deep without repetition."""
+
+    said: str
+    forget: bool = False
+
+
+def answered_turn(said: str, forget: bool = False) -> Turn:
+    return Turn(said=said, forget=forget)
+
+
+def conversation_of(*turns: Turn) -> dict[str, object]:
+    """Several settled turns as one checkpoint, each opening on an entry of its own."""
+    return {
+        key: value
+        for turn, held in enumerate(turns)
+        for key, value in (
+            *said_at(turn, held.said, forget=held.forget).items(),
+            (
+                messages_key(turn),
+                recorded_turn(
+                    {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": held.said}]},
+                    {"kind": "response", "parts": [{"part_kind": "text", "content": f"answering {held.said}"}]},
+                ),
+            ),
+        )
+    }
+
+
+# One of every record this console writes, which is what the round trip below is parametrised over
+# and what the completeness check holds against `records.Step`. A constant rather than a literal
+# inside the parametrise, because two tests want it: one asks whether each survives the codec, and
+# the other whether there is one for every arm.
+EVERY_RECORD: tuple[records.Step, ...] = (
+    records.Prompt(said="go", forget=True),
+    records.Note(
+        said="where the work got to",
+        plugin="bundled:handoff",
+        forget=True,
+        label="handoff",
+        title="This is where the conversation's context starts again.",
+        tone="strong",
+    ),
+    records.Steer(said="be brief"),
+    records.Command(said="git status"),
+    records.Result(status=1, output="", took=timedelta(seconds=0.08)),
+    records.Tree(tree="a" * 40),
+    records.Wrote(diff="--- a.py\n+++ a.py\n@@ -1 +1 @@\n-old\n+new"),
+    records.Response(response={"kind": "response", "parts": []}),
+    records.Refused(why="prompt is too long", status=400),
+    records.Deferred(until=WHEN + timedelta(days=3), why="429: the usage limit has been reached"),
+    records.Failed(why="OSError('the store went away')", at=9),
+    records.Returned(returned={"lines": [1, 2]}, took=timedelta(seconds=0.25)),
+    records.Messages(messages=[]),
+    records.Instructions(said="answer as a fixture would"),
+    records.Declared(plugins=(records.Named(name="handoff", tier="bundled", path="/opt/mainplate/plugins/handoff"),)),
+    records.Registered(
+        plugins=(
+            records.Enrolled(
+                name="handoff",
+                tier="bundled",
+                path="/opt/mainplate/plugins/handoff",
+                described={"events": ["after_turn"]},
+            ),
+        )
+    ),
+    records.Confirmed(),
+    records.Injected(said=("`apps/web/AGENTS.md`, guidance for this part of the repository:",)),
+    records.End(said=("the quality checks are failing:",), at=2),
+    records.Environment(values={"PATH": "/opt/mise/shims:/usr/bin"}),
+    records.Archived(at=WHEN + timedelta(hours=5)),
+)
+
+
+class TestWhatAStepHolds:
+    """
+    Every checkpoint value as a record, told apart by its own tag.
+
+    `records.Step` has no caller yet - readers parse by key, where they already know what they asked
+    for - so without these a missing arm or a tag two records shared would go unnoticed until the
+    first dump or migration needed it.
+    """
+
+    @pytest.mark.parametrize("held", EVERY_RECORD, ids=lambda each: str(each.kind))
+    def test_a_record_comes_back_as_itself_through_the_union(self, held: records.Step) -> None:
+        """The round trip the codec makes, read back by tag rather than by the key it was under."""
+        assert records.STEP.validate_python(held.recorded()) == held
+
+    def test_every_arm_of_the_union_is_one_of_them(self) -> None:
+        """
+        The check that keeps the list above honest, because nothing else was making it complete.
+
+        An arm added without a case here is not a failing test but a *silent* one: the suite goes on
+        passing and the record nobody round-tripped is the one a dump or a migration finds out about.
+
+        Asked of `Step` itself rather than against a written-down count, so adding an arm is one line
+        here and adding a number somewhere is never the fix.
+        """
+        arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
+
+        assert {type(each).__name__ for each in EVERY_RECORD} == arms
+
+    def test_every_record_there_is_is_an_arm(self) -> None:
+        """
+        **The half the check above cannot do**, and the reason it has to be asked of the hierarchy.
+        That one holds two hand-written lists against each other, so a record missing from *both* is
+        invisible to it, and four had arrived that way: a `Deferred`, a `Failed`, an `Environment`
+        and an `Archived` were written to checkpoints that `Step` could not read, with the suite
+        green throughout.
+
+        Subclassing `Record` is what nobody can forget, because it is how a record is declared at
+        all. So the list nothing may leave out is derived from that, and what is stated here is only
+        the exception: `Named` and `Enrolled` are members of `Declared` and `Registered` and are
+        never a checkpoint value on their own, which is a thing no schema says and this has to.
+        """
+        arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
+        nested = {"Named", "Enrolled"}
+
+        assert {each.__name__ for each in records.Record.__subclasses__()} - arms == nested
+
+    def test_a_choice_is_deliberately_not_an_arm(self) -> None:
+        """
+        The one exception, and a decision rather than an oversight: its parser encodes defaulting an
+        absent isolation and re-parsing a base and a branch, which no schema here says. It carries the
+        tag all the same, so a bag holding one still says what it is.
+        """
+        assert recorded_choice(DEFAULT_CHOICE)["kind"] == "choice"
+        with pytest.raises(ValidationError):
+            records.STEP.validate_python(recorded_choice(DEFAULT_CHOICE))
+
+    def test_an_unknown_kind_is_refused_where_an_unknown_field_is_ignored(self) -> None:
+        """
+        The asymmetry worth knowing before relying on the rollback story: a newer build's *field* is
+        survivable and a newer build's *kind* is not, which is why readers parse by key.
+        """
+        assert records.Prompt.model_validate({"kind": "prompt", "said": "go", "invented_later": 1}).said == "go"
+        with pytest.raises(ValidationError):
+            records.STEP.validate_python({"kind": "approval", "said": "go"})
+
+
+class TestReadingABatchsDiff:
+    """The net change a batch recorded, read back by request and attached to the panel that drew it."""
+
+    def test_wrote_in_reads_each_batchs_diff_by_request(self) -> None:
+        recorded = {
+            wrote_key(1, 0): records.Wrote(diff="--- a\n+++ a").recorded(),
+            wrote_key(1, 1): records.Wrote(diff="--- b\n+++ b").recorded(),
+            wrote_key(2, 0): records.Wrote(diff="--- c\n+++ c").recorded(),
+        }
+
+        assert wrote_in(recorded, 1) == {0: "--- a\n+++ a", 1: "--- b\n+++ b"}
+
+    def test_a_turn_with_no_diff_yet_reads_nothing(self) -> None:
+        assert wrote_in({}, 1) == {}
+
+    def test_with_diffs_puts_a_tool_panels_diff_on_it_and_touches_nothing_else(self) -> None:
+        tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
+        other = Panel(turn=1, at=2, kind="assistant", blocks=(), asked=0)
+
+        got_tool, got_other = with_diffs((tool, other), {0: "--- a\n+++ a"})
+
+        assert got_tool.diff == "--- a\n+++ a"
+        assert got_other.diff is None
+
+    def test_a_batch_that_changed_nothing_is_drawn_same_as_one_that_never_differed(self) -> None:
+        tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
+
+        (got,) = with_diffs((tool,), {0: ""})
+
+        assert got.diff == "", "an empty diff is a diff, and the page draws nothing for either"
+
+
+class TestForgettingWhatCameBefore:
+    """
+    A turn that opens on a clean history, which is what `/forget` records.
+
+    The property worth pinning is the split: the checkpoint keeps everything and the *model* is told
+    nothing above the boundary. A test that only checked one of those would pass on a console that
+    deleted the backlog, which is the one thing this must never do.
+    """
+
+    def test_a_turn_that_forgets_is_answered_on_nothing_before_it(self) -> None:
+        recorded = conversation_of(answered_turn("first"), answered_turn("second", forget=True))
+        at = reached(recorded)
+
+        assert at.turn == 2
+        # The second turn's own exchange and nothing from the first.
+        assert [block.content for message in at.history for block in message.parts] == [  # type: ignore[union-attr]
+            "second",
+            "answering second",
+        ]
+
+    def test_the_turn_about_to_run_is_asked_too_rather_than_only_the_ones_behind_it(self) -> None:
+        """
+        The half this can be quietly wrong about, and the one a resumed pass would disagree with.
+
+        The walk is conditioned on a turn having answered, so a forget on the turn *about to run* is
+        never reached by it: missed, the first pass answers on the whole conversation and the pass
+        that resumes it answers on nothing, which is two passes asking different questions and pairing
+        one of the answers with the other.
+        """
+        recorded = {
+            **conversation_of(answered_turn("first")),
+            **said_at(1, "second", forget=True),
+        }
+        assert reached(recorded) == Reached(turn=1, history=())
+
+    def test_a_fresh_pass_and_a_resumed_one_build_the_same_history(self) -> None:
+        """
+        Stated as the equality it is, because the two are reached by different routes: the turn about
+        to run is asked outside the walk and every turn behind it inside it.
+        """
+        unanswered = {
+            **conversation_of(answered_turn("first")),
+            **said_at(1, "second", forget=True),
+        }
+        settled = conversation_of(answered_turn("first"), answered_turn("second", forget=True))
+
+        # Compared by what was said rather than by whole messages, because a `UserPromptPart` with no
+        # recorded timestamp is stamped afresh on every parse: two readings of one record are equal
+        # in everything this is about and unequal in a field neither reading chose.
+        said = [block.content for message in reached(settled).history for block in message.parts]  # type: ignore[union-attr]
+
+        assert reached(unanswered).history == ()
+        assert said == ["second", "answering second"]
+
+    def test_a_turn_before_the_boundary_is_still_in_the_checkpoint_and_still_drawn(self) -> None:
+        """
+        The whole point of the word being `forget` rather than `clear`: nothing is deleted, and the
+        page still shows the conversation that the model is no longer being told about.
+        """
+        recorded = conversation_of(answered_turn("first"), answered_turn("second", forget=True))
+        said = transcript(recorded)
+
+        assert [(panel.turn, panel.kind) for panel in said.panels if panel.kind == "prompt"] == [
+            (0, "prompt"),
+            (1, "prompt"),
+        ]
+        assert said.turns == 2
+
+    def test_the_turn_that_forgets_says_so_on_the_panel_that_opens_it(self) -> None:
+        """Where the rule reads it from, beside the tree, because both are facts about the turn."""
+        recorded = conversation_of(answered_turn("first"), answered_turn("second", forget=True))
+        opening = [panel for panel in transcript(recorded).panels if panel.kind == "prompt"]
+
+        assert [panel.forget for panel in opening] == [False, True]
+
+    def test_a_second_boundary_starts_the_history_again_from_there(self) -> None:
+        """The last one wins, because each empties what the ones before it left."""
+        recorded = conversation_of(
+            answered_turn("first"),
+            answered_turn("second", forget=True),
+            answered_turn("third", forget=True),
+        )
+        at = reached(recorded)
+
+        assert [block.content for message in at.history for block in message.parts] == [  # type: ignore[union-attr]
+            "third",
+            "answering third",
+        ]
+
+    def test_a_turn_that_forgets_nothing_is_what_every_older_session_records(self) -> None:
+        """An absent field is an ordinary optional, which is what keeps every message already written readable."""
+        said = parse_delivered({"kind": "prompt", "said": "written before there was a boundary"})
+        assert isinstance(said, records.Prompt)
+        assert said.forget is False
+
+    def test_a_prompt_with_no_answer_yet_is_the_persons_panel_and_a_turn_still_awaited(self) -> None:
+        assert transcript(said_at(0, "what is it")) == Transcript(
+            panels=(Panel(turn=0, at=0, kind="prompt", blocks=(Prose(text="what is it"),)),),
+            awaiting=True,
+            turns=1,
+            # The turn a steer would reach: the first one unanswered, which here is the only one.
+            answering=0,
+            # Nothing has composed this stretch's instructions yet, which is a message queued ahead of
+            # the pass that will. The page draws the panel with nothing in it rather than nothing at
+            # all, so what is coming is visible from the moment the message is.
+            system_prompts={0: None},
+        )
+
+    def test_an_answered_turn_is_the_question_and_the_answer_as_two_panels(self) -> None:
+        recorded = {
+            **said_at(0, "what is it"),
+            messages_key(0): recorded_turn(
+                {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "what is it"}]},
+                {"kind": "response", "parts": [{"part_kind": "text", "content": "a mainplate"}]},
+            ),
+        }
+        assert transcript(recorded) == Transcript(
+            panels=(
+                Panel(turn=0, at=0, kind="prompt", blocks=(Prose(text="what is it"),)),
+                # The answer came out of the turn's one model request, which is what the rule above
+                # it stands at.
+                Panel(turn=0, at=1, kind="assistant", blocks=(Prose(text="a mainplate"),), asked=0),
+            ),
+            awaiting=False,
+            turns=1,
+            # An answered turn always has a spend, even where every count on it is zero: what makes
+            # it absent is a turn that has recorded no response at all, not one that cost nothing.
+            spent={0: Spent(asked=0, answered=0, cost=None)},
+            requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None), when=WHEN),)},
+            # When the last response landed, which is what the composer reads to say whether the
+            # provider still holds this conversation's prefix.
+            answered_at=WHEN,
+        )
+
+    def test_a_panel_is_a_run_of_one_kind_in_the_order_the_model_worked(self) -> None:
+        """Reasoning, then a call, then the answer: three panels in that sequence, not one of each hoisted."""
+        turn: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="go")]),
+            ModelResponse(parts=[ThinkingPart(content="have a look"), ToolCallPart("read", {"path": "x"}, "c1")]),
+            ModelRequest(parts=[ToolReturnPart("read", "the body", "c1")]),
+            ModelResponse(parts=[TextPart("it says hello")]),
+        ]
+        assert tuple(panelled(3, parted(turn, {}))) == (
+            Panel(turn=3, at=1, kind="thinking", blocks=(Reasoning(text="have a look"),), asked=0),
+            Panel(
+                turn=3,
+                at=2,
+                kind="tool",
+                blocks=(
+                    ToolUse(
+                        tool="read",
+                        arguments='{"path":"x"}',
+                        returned=Returned(outcome="success", content="the body"),
+                    ),
+                ),
+                asked=0,
+            ),
+            Panel(turn=3, at=3, kind="assistant", blocks=(Prose(text="it says hello"),), asked=1),
+        )
+
+    def test_a_steer_is_drawn_below_the_results_it_travelled_with_and_above_the_answer_it_shaped(
+        self,
+    ) -> None:
+        """
+        Where a steer belongs, which is what the capability appending it to the request buys.
+
+        A person types while a batch of tool calls runs, so their message travels up with those
+        results and the answer *after* it is the first one that could have been shaped by it. Drawn
+        below that answer instead, the transcript would say the model had already replied when it
+        arrived, which is the opposite of what happened.
+        """
+        turn: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="go")]),
+            ModelResponse(parts=[ToolCallPart("read", {"path": "x"}, "c1")]),
+            ModelRequest(parts=[ToolReturnPart("read", "the body", "c1")]),
+            ModelRequest(parts=[UserPromptPart(content="be brief")]),
+            ModelResponse(parts=[TextPart("hello")]),
+        ]
+        assert [(panel.kind, panel.asked) for panel in panelled(0, parted(turn, {}))] == [
+            ("tool", 0),
+            ("steer", None),
+            ("assistant", 1),
+        ]
+
+    def test_a_call_with_no_result_recorded_is_still_out(self) -> None:
+        """The run ended between the call and its return, which is what a reader has to be able to see."""
+        turn: list[ModelMessage] = [ModelResponse(parts=[ToolCallPart("grep", {"q": "z"}, "c9")])]
+        assert blocks_of(turn, {}) == (ToolUse(tool="grep", arguments='{"q":"z"}', returned=None),)
+
+    def test_a_failed_call_carries_why_rather_than_a_bare_flag(self) -> None:
+        """
+        What the *model* was handed, which for a failure is the error wrapped as Pydantic AI wraps
+        it. A transcript showing something the model never saw would be a second account of the
+        turn rather than a reading of it.
+        """
+        turn: list[ModelMessage] = [
+            ModelResponse(parts=[ToolCallPart("write", {}, "c2")]),
+            ModelRequest(parts=[ToolReturnPart("write", "no such directory", "c2", outcome="failed")]),
+        ]
+        assert blocks_of(turn, {}) == (
+            ToolUse(
+                tool="write",
+                arguments="{}",
+                returned=Returned(outcome="failed", content='{"error":"no such directory"}'),
+            ),
+        )
+
+    def test_a_part_this_console_cannot_draw_is_passed_over_rather_than_refused(self) -> None:
+        """A provider adding a part kind must not break a console that never asked for one."""
+        turn: list[ModelMessage] = [
+            ModelResponse(parts=[FilePart(content=BinaryContent(b"\x00", media_type="image/png")), TextPart("and")])
+        ]
+        assert blocks_of(turn, {}) == (Prose(text="and"),)
+
+    def test_reasoning_a_gateway_handed_back_as_tagged_text_is_read_as_reasoning(self) -> None:
+        """
+        Some OpenAI-compatible gateways return a reasoning summary as a text part wrapped in the
+        tags a model thinks inside, one bold title on a line of its own between them. Read as it
+        arrived that is an assistant panel saying `<think>`, with the tags' newlines drawn as breaks
+        above and below the title.
+        """
+        turn: list[ModelMessage] = [ModelResponse(parts=[TextPart("<think>\n**Updating archive logic**\n</think>")])]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Updating archive logic**"),)
+
+    def test_prose_after_the_closing_tag_is_still_the_answer(self) -> None:
+        turn: list[ModelMessage] = [
+            ModelResponse(parts=[TextPart("<think>\n**Planning the fix**\n</think>\n\nAn interval, not a load.")])
+        ]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Planning the fix**"), Prose(text="An interval, not a load."))
+
+    def test_a_tag_mentioned_mid_sentence_is_a_word_and_not_a_wrapper(self) -> None:
+        turn: list[ModelMessage] = [ModelResponse(parts=[TextPart("The wire wraps a summary in <think> tags.")])]
+        assert blocks_of(turn, {}) == (Prose(text="The wire wraps a summary in <think> tags."),)
+
+    def test_a_thinking_part_that_arrived_with_its_tags_on_is_unwrapped_too(self) -> None:
+        turn: list[ModelMessage] = [ModelResponse(parts=[ThinkingPart("<think>\n**Locating imports**\n</think>")])]
+        assert blocks_of(turn, {}) == (Reasoning(text="**Locating imports**"),)
+
+    def test_a_message_that_is_not_text_is_refused_rather_than_rendered(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_delivered({"kind": "prompt", "content": "nice try"})
+
+    def test_something_that_is_not_a_message_at_all_is_refused_rather_than_reinterpreted(self) -> None:
+        """
+        What the tag buys, and why it is load-bearing here rather than a second copy of the key: the
+        store names an entry, so nothing else says whether what is in it may be told to a model.
+        """
+        with pytest.raises(ValidationError):
+            parse_delivered(records.Tree(tree="a" * 40).recorded())
+
+
+# One turn holding a panel of every kind, so the pairing below is asked against a checkpoint whose
+# panels are known: the person at 0, reasoning at 1, the call at 2, and the answer at 3.
+FOUR_PANELS: dict[str, object] = {
+    **said_at(0, "go"),
+    messages_key(0): recorded_turn(
+        {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "go"}]},
+        {
+            "kind": "response",
+            "parts": [
+                {"part_kind": "thinking", "content": "have a look"},
+                {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"},
+            ],
+        },
+        {
+            "kind": "request",
+            "parts": [{"part_kind": "tool-return", "tool_name": "read", "content": "b", "tool_call_id": "c1"}],
+        },
+        {"kind": "response", "parts": [{"part_kind": "text", "content": "it says hello"}]},
+    ),
+}
+
+
+class TestWhatASessionIsAnsweredUnder:
+    """
+    The system prompt a page draws, which it reads from `instructions:{n}` and not from any turn.
+
+    That is what puts the panel on the page before a turn has landed: the record is written by a pass
+    before it makes the stretch's first request, where a turn's messages do not exist until it ends.
+    """
+
+    def test_a_stretch_shows_what_it_is_answered_under_before_its_turn_has_landed(self) -> None:
+        recorded = {
+            **said_at(0, "what is it"),
+            instructions_key(0): recorded_instructions("what this session is answered under"),
+        }
+        said = transcript(recorded)
+
+        assert said.awaiting, "the control: nothing has answered, so this is the state being pinned"
+        assert said.system_prompts == {0: "what this session is answered under"}
+
+    def test_a_stretch_nothing_has_composed_for_yet_is_pending_rather_than_absent(self) -> None:
+        """
+        A message is queued before the pass that composes for it has planted a worktree to read, so
+        the page draws the panel with nothing in it rather than nothing at all.
+        """
+        assert transcript(said_at(0, "what is it")).system_prompts == {0: None}
+
+    def test_a_turn_answered_under_instructions_nobody_recorded_draws_no_panel(self) -> None:
+        """
+        Every session written before this console recorded them, which is the loss taken knowingly.
+
+        Absent rather than pending, and that is the distinction worth pinning: a turn that has landed
+        will never compose anything now, so a panel waiting for ever on a record nobody will write is
+        the one state a reader cannot diagnose.
+        """
+        assert transcript(conversation_of(answered_turn("first"))).system_prompts == {}
+
+    def test_each_stretch_of_context_carries_its_own(self) -> None:
+        """
+        A forget composes again, so there is one per stretch under the rule that opens it. Asserted as
+        the whole mapping, because what a single panel at the top of the page would do is stand the
+        newest instructions over turns answered under the older ones.
+        """
+        recorded = {
+            **conversation_of(answered_turn("first"), answered_turn("second", forget=True)),
+            instructions_key(0): recorded_instructions("told this to begin with"),
+            instructions_key(1): recorded_instructions("told this from the boundary on"),
+        }
+        assert transcript(recorded).system_prompts == {
+            0: "told this to begin with",
+            1: "told this from the boundary on",
+        }
+
+    def test_a_turn_that_continues_a_stretch_carries_none_of_its_own(self) -> None:
+        """
+        One per stretch and not one per turn, which is what keeps the panel out of every rule.
+
+        The second turn is left unanswered on purpose: read per turn it would be a stretch with
+        nothing composed for it yet, so the pending panel this draws elsewhere would appear in the
+        middle of a conversation that is answering perfectly well under what turn 0 recorded.
+        """
+        recorded = {
+            **conversation_of(answered_turn("first")),
+            **said_at(1, "and another thing"),
+            instructions_key(0): recorded_instructions("told this to begin with"),
+        }
+        assert transcript(recorded).system_prompts == {0: "told this to begin with"}
+
+
+class TestWhereARequestBeganAndWhatItHeld:
+    """
+    Which round trip each panel came out of, and what that round trip came back with.
+
+    A request is the unit the checkpoint has keys for, where a panel is a reading. That is the whole
+    point of hanging the record on the rule at a request's boundary rather than under a panel - it is
+    a lookup rather than a slice of a stored value reached by indices one walk had to hand to another.
+    """
+
+    def test_a_request_is_the_step_the_checkpoint_holds_for_it(self) -> None:
+        recorded = {
+            **FOUR_PANELS,
+            model_key(0, 0): answered_with(THINKING_AND_CALL),
+            model_key(0, 1): answered_with(THE_ANSWER),
+        }
+        assert requested_at(recorded, 0, 0) == answered_with(THINKING_AND_CALL)
+        assert requested_at(recorded, 0, 1) == answered_with(THE_ANSWER)
+
+    def test_a_request_nobody_made_is_nothing(self) -> None:
+        assert requested_at(FOUR_PANELS, 0, 0) is None
+        assert requested_at(FOUR_PANELS, 7, 0) is None
+
+    def test_each_panel_says_which_request_it_came_out_of(self) -> None:
+        """
+        Two responses here, and three panels of them: the reasoning and the call are the first
+        response, and the answer is the second.
+        """
+        drawn = [panel for panel in transcript(FOUR_PANELS).panels if panel.kind != "prompt"]
+        assert [panel.asked for panel in drawn] == [0, 0, 1]
+
+    def test_two_requests_never_share_a_panel_even_answering_the_same_way(self) -> None:
+        """
+        A response ending in prose and the next beginning in prose would merge into one run of one
+        kind, and did. Cut by the request as well, they are two panels, which is what leaves a gap
+        between them for the second request's rule to stand in.
+        """
+        recorded: dict[str, object] = {
+            **said_at(0, "go"),
+            messages_key(0): recorded_turn(
+                {"kind": "response", "parts": [{"part_kind": "text", "content": "first"}]},
+                {"kind": "response", "parts": [{"part_kind": "text", "content": "second"}]},
+            ),
+        }
+        drawn = [panel for panel in transcript(recorded).panels if panel.kind == "assistant"]
+        assert [panel.asked for panel in drawn] == [0, 1]
+        assert [panel.blocks for panel in drawn] == [(Prose(text="first"),), (Prose(text="second"),)]
+
+
+# The same exchange `FOUR_PANELS` holds, as the steps written while it was still running: the two
+# model responses one at a time, and the call's result between them. Written out rather than derived
+# from the messages above, because what these tests are for is that two independent recordings of
+# one turn read the same way, and deriving either from the other would assume the answer.
+THINKING_AND_CALL: dict[str, object] = {
+    "kind": "response",
+    "parts": [
+        {"part_kind": "thinking", "content": "have a look"},
+        {"part_kind": "tool-call", "tool_name": "read", "args": {"path": "x"}, "tool_call_id": "c1"},
+    ],
+}
+THE_ANSWER: dict[str, object] = {"kind": "response", "parts": [{"part_kind": "text", "content": "it says hello"}]}
+
+# Usage as the store holds it, which is where the cost is a *string*: a `Decimal` dumped through
+# `mode="json"` is written that way, and reading it back as one is what keeps a recorded price exact.
+SPENDING: dict[str, object] = {"input_tokens": 1_200, "output_tokens": 64, "cost": "0.004"}
+
+# What the turn looked like at each moment, from nothing recorded to every step in. The person's
+# message is in every one of them, because it is what queues the turn in the first place.
+ASKED: dict[str, object] = said_at(0, "go")
+REASONED: dict[str, object] = {**ASKED, model_key(0, 0): answered_with(THINKING_AND_CALL)}
+READ: dict[str, object] = {**REASONED, tool_key(0, "c1"): came_back("b")}
+ANSWERED: dict[str, object] = {**READ, model_key(0, 1): answered_with(THE_ANSWER)}
+
+
+def answering(asked: int, answered: int, cost: str | None, took: float | None = None, cached: int = 0) -> ModelResponse:
+    """One response with the usage a wire reported for it, as the two summing rules are fed."""
+    return ModelResponse(
+        parts=[TextPart("said")],
+        usage=RequestUsage(
+            input_tokens=asked,
+            output_tokens=answered,
+            cache_read_tokens=cached,
+            cost=None if cost is None else Decimal(cost),
+        ),
+        metadata=None if took is None else {TOOK: took},
+    )
+
+
+class TestWhatATurnSpent:
+    """
+    Summing a turn's requests, and a session's turns, under one rule about not knowing.
+
+    A turn is several requests and a session is several turns, so the same question is asked twice
+    at two scales, and the interesting half of it is what happens when one part is unpriced.
+    """
+
+    def test_a_turn_is_the_sum_of_the_requests_it_took(self) -> None:
+        """One exchange to a reader is one request per batch of tool calls to a provider."""
+        spent = spent_on([answering(100, 20, "0.001"), answering(300, 40, "0.002")])
+        assert spent == Spent(asked=400, answered=60, cost=Decimal("0.003"), context=300)
+
+    def test_the_context_is_the_last_request_rather_than_the_sum_of_them(self) -> None:
+        """
+        The one figure here that is a level and not a total, and the difference is the window.
+
+        Every request of a turn carries the whole conversation again, so summing them says what the
+        provider charged for and says it several times over about the same tokens. What a reader
+        wants off a rule is how much of the window is gone, which is where the *last* request left
+        it - and a summed figure would draw a turn of four round trips as four times as full as it
+        is, which is a gauge that lies in the direction that matters.
+        """
+        spent = spent_on(
+            [answering(100, 20, "0.001", cached=40), answering(300, 40, "0.002", cached=120)],
+        )
+        assert (spent.context, spent.cached) == (300, 120)
+        assert spent.asked == 400, "what was charged for is still the sum, because every request paid"
+
+    def test_a_turn_with_no_responses_yet_has_spent_nothing(self) -> None:
+        assert spent_on([]) == Spent(asked=0, answered=0, cost=None)
+
+    def test_one_unpriced_request_leaves_the_whole_turn_unpriced(self) -> None:
+        """
+        Not the sum of the ones that were priced, which is the failure worth a test.
+
+        A partial total reads as the whole of what a turn cost and understates it, and nothing on
+        the page could say it was doing that. The counts still add up, because those are on every
+        response whatever the database knows.
+        """
+        spent = spent_on([answering(100, 20, "0.001"), answering(300, 40, None)])
+        assert spent == Spent(asked=400, answered=60, cost=None, context=300)
+
+    def test_a_session_is_the_sum_of_its_turns(self) -> None:
+        total = altogether([Spent(asked=100, answered=20, cost=Decimal("0.5")), Spent(1, 2, Decimal("0.25"))])
+        assert total == Spent(asked=101, answered=22, cost=Decimal("0.75"))
+
+    def test_a_session_is_as_full_as_its_most_recent_turn_left_it(self) -> None:
+        """
+        The window carries forward rather than adding up, by `spent_on`'s own rule one scale up.
+
+        A turn that made no request knows nothing about the window rather than knowing it is empty,
+        so it is passed over: what a session's figure says is where the last request that actually
+        happened left the context, which is what makes it fall after a forget instead of climbing
+        through one.
+        """
+        total = altogether(
+            [
+                Spent(asked=100, answered=20, cost=Decimal("0.5"), context=900, cached=400),
+                Spent(asked=200, answered=30, cost=Decimal("0.25"), context=300, cached=100),
+                Spent(asked=0, answered=0, cost=None),
+            ]
+        )
+        assert (total.context, total.cached) == (300, 100)
+
+    def test_one_unpriced_turn_leaves_the_session_total_unknown(self) -> None:
+        """The same rule one scale up: a total quietly missing a turn is worse than no total."""
+        total = altogether([Spent(asked=100, answered=20, cost=Decimal("0.5")), Spent(1, 2, None)])
+        assert total == Spent(asked=101, answered=22, cost=None)
+
+    def test_a_conversation_with_nothing_in_it_has_no_total(self) -> None:
+        assert altogether([]) == Spent(asked=0, answered=0, cost=None)
+
+    def test_a_turn_took_as_long_as_the_round_trips_it_made(self) -> None:
+        """What a turn spent waiting on the provider, which is one duration per request summed."""
+        spent = spent_on([answering(100, 20, "0.001", took=1.5), answering(300, 40, "0.002", took=0.25)])
+        assert spent.took == timedelta(milliseconds=1_750)
+
+    def test_one_untimed_request_leaves_the_whole_turn_untimed(self) -> None:
+        """
+        The rule the cost follows, for the reason the cost follows it.
+
+        Every response recorded before this console timed anything is untimed, so a turn reporting
+        the sum of the ones it could time would say a long turn was quick and nothing on the page
+        could say otherwise.
+        """
+        assert spent_on([answering(100, 20, "0.001", took=1.5), answering(300, 40, "0.002")]).took is None
+
+    def test_a_session_took_as_long_as_its_turns(self) -> None:
+        total = altogether([Spent(1, 2, None, timedelta(seconds=3)), Spent(3, 4, None, timedelta(seconds=1.5))])
+        assert total.took == timedelta(milliseconds=4_500)
+
+    def test_one_untimed_turn_leaves_the_session_untimed(self) -> None:
+        assert altogether([Spent(1, 2, None, timedelta(seconds=3)), Spent(3, 4, None)]).took is None
+
+
+class TestWatchingATurnHappen:
+    """
+    The turn being answered, read from the steps behind it rather than from messages it has not
+    written yet.
+
+    The risk here is two readings of one turn drifting apart. The page morphs one into the other as
+    the turn lands, so a disagreement is not a wrong render but a render that silently rewrites
+    itself under whoever is reading it.
+    """
+
+    def test_the_keys_are_the_ones_the_capability_writes(self) -> None:
+        """
+        Asserted against the literal strings rather than built with `Stepping`, which is the whole
+        point: these names are built at both ends and nothing makes the two agree, so a test that
+        round-tripped through the writer would pass while the reader looked in the wrong place.
+        """
+        assert model_key(3, 1) == "turn:3:model:1"
+        assert tool_key(3, "toolu_017") == "turn:3:tool:toolu_017"
+        assert heard_key(3, 1) == "turn:3:heard:1"
+        assert opened_key(3) == "turn:3:opened"
+
+    def test_a_steer_nothing_has_been_told_yet_is_drawn_at_the_end_of_what_there_is(self) -> None:
+        """
+        A message must not disappear between being sent and being answered, which is what Send
+        deciding to steer would otherwise do: it lands in `turn:{n}:messages` only when the turn ends.
+        """
+        waiting = {**REASONED, **steered_at(1, "be brief")}
+        assert so_far(waiting, 0)[-1] == Steering(text="be brief")
+
+    def test_a_steer_already_told_is_drawn_above_the_response_it_was_appended_to(self) -> None:
+        """
+        The cursor is what says which request took it, so a running turn puts it where the settled
+        reading will rather than at the end of what there happens to be.
+        """
+        told = {**REASONED, **steered_at(1, "be brief"), **read_to(0, 0, 1)}
+        assert so_far(told, 0)[0] == Steering(text="be brief")
+
+    def test_a_steer_the_request_in_flight_took_is_drawn_at_the_end_until_that_answer_lands(self) -> None:
+        """
+        The cursor is written before the request and the response when it comes back, so between them
+        a steer belongs to a request that has said nothing. Drawn only above answers that exist, it
+        would vanish from the page for as long as that request ran, which is the disappearance the
+        cursors are read for happening in the middle of the turn instead of at the end of it.
+        """
+        in_flight = {**REASONED, **steered_at(1, "be brief"), **read_to(0, 0, 0), **read_to(0, 1, 1)}
+        assert so_far(in_flight, 0)[-1] == Steering(text="be brief")
+
+    def test_a_steer_is_drawn_once_whether_it_has_been_told_or_not(self) -> None:
+        """The two halves of the walk cannot both claim it, or the page shows one message twice."""
+        told = {**REASONED, **steered_at(1, "be brief"), **read_to(0, 0, 1)}
+        assert [block for block in so_far(told, 0) if isinstance(block, Steering)] == [Steering(text="be brief")]
+
+    def test_a_turn_nothing_has_been_recorded_for_yet_has_produced_nothing(self) -> None:
+        assert so_far(ASKED, 0) == ()
+
+    def test_a_response_is_readable_as_soon_as_it_is_recorded(self) -> None:
+        assert so_far(REASONED, 0) == (
+            Reasoning(text="have a look"),
+            ToolUse(tool="read", arguments='{"path":"x"}', returned=None),
+        )
+
+    def test_a_call_carries_its_result_as_soon_as_that_lands(self) -> None:
+        assert so_far(READ, 0) == (
+            Reasoning(text="have a look"),
+            ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned(outcome="success", content="b")),
+        )
+
+    def test_a_call_that_returned_nothing_is_finished_rather_than_still_out(self) -> None:
+        """
+        A step holding `None` is a step that ran, which the store keeps distinguishable from a key
+        that was never written. Read together, a tool that answers with nothing would show a spinner
+        for as long as the turn lasted.
+        """
+        returned = so_far({**REASONED, tool_key(0, "c1"): came_back(None)}, 0)[1]
+        assert returned == ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned("success", ""))
+
+    def test_a_structured_result_reads_as_the_model_was_handed_it(self) -> None:
+        """
+        The same text `ToolReturnPart.model_response_str` produces, down to the spacing, because the
+        settled reading of this call uses that and this one has to agree with it.
+        """
+        found = so_far({**REASONED, tool_key(0, "c1"): came_back({"lines": [1, 2]})}, 0)[1]
+        assert found == ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned("success", '{"lines":[1,2]}'))
+
+    def test_the_two_readings_of_a_finished_turn_agree(self) -> None:
+        """
+        The property the whole thing rests on. Once every step is in, reading the turn from its
+        steps and reading it from its messages produce the same blocks, so the moment the messages
+        land the page morphs into markup it is already showing.
+        """
+        assert so_far(ANSWERED, 0) == blocks_of(parse_messages(FOUR_PANELS[messages_key(0)]), {})
+
+    def test_a_call_carries_how_long_it_took_in_both_readings(self) -> None:
+        """
+        A duration is in neither reading's own source - not in the model steps and not in the turn's
+        messages - so it comes from a key beside both, and both have to be handed it. Read from one
+        and not the other, a call's time would appear or vanish at the moment the turn landed.
+        """
+        timed = {**ANSWERED, tool_key(0, "c1"): came_back("b", took=0.25)}
+        called = ToolUse(
+            tool="read",
+            arguments='{"path":"x"}',
+            returned=Returned(outcome="success", content="b"),
+            took=timedelta(milliseconds=250),
+        )
+        assert so_far(timed, 0)[1] == called
+        settled = blocks_of(parse_messages(FOUR_PANELS[messages_key(0)]), tooks_in(timed, 0, responded(timed, 0)))
+        assert settled[1] == called
+
+    def test_a_call_nothing_timed_carries_no_duration_rather_than_none_of_one(self) -> None:
+        """A call recorded before durations existed, which must read as unknown and not as instant."""
+        assert so_far(ANSWERED, 0)[1] == ToolUse(
+            tool="read", arguments='{"path":"x"}', returned=Returned(outcome="success", content="b"), took=None
+        )
+
+    def test_a_turn_grows_at_the_end_and_never_in_the_middle(self) -> None:
+        """
+        What makes the morph safe: a panel keeps its position for the life of the turn, so nothing a
+        reader has unfolded or scrolled to moves under them. Only the last block ever changes, and
+        only by a call gaining the result it was waiting for.
+        """
+        stages = [so_far(recorded, 0) for recorded in (ASKED, REASONED, READ, ANSWERED)]
+        assert [len(blocks) for blocks in stages] == [0, 2, 2, 3]
+        for earlier, later in pairwise(stages):
+            settled = max(len(earlier) - 1, 0)
+            assert earlier[:settled] == later[:settled]
+
+    def test_a_turn_is_priced_while_it_is_still_being_answered(self) -> None:
+        """
+        The half of the pricing decision that is visible on the page rather than in the store.
+
+        A response is priced before the step records it, so what a turn has spent is readable from
+        the same steps its blocks are, and a rule fills in as the turn runs instead of appearing
+        whole at the end. Priced afterwards - which is where Pydantic AI does it - this would be
+        nothing until `turn:0:messages` landed.
+        """
+        priced = {**ASKED, model_key(0, 0): answered_with({**THINKING_AND_CALL, "usage": SPENDING})}
+        assert transcript(priced).spent == {0: Spent(asked=1_200, answered=64, cost=Decimal("0.004"), context=1_200)}
+
+    def test_the_turn_in_flight_is_drawn_and_the_ones_queued_behind_it_are_not(self) -> None:
+        """
+        One reply is actually being written. A message typed while it runs has been said and not yet
+        started, so it is a person's panel and nothing else until its own turn comes up.
+        """
+        said = transcript({**READ, inbox_key(1): records.Prompt(said="and another thing").recorded()})
+        assert [(panel.turn, panel.kind) for panel in said.panels] == [
+            (0, "prompt"),
+            (0, "thinking"),
+            (0, "tool"),
+            (1, "prompt"),
+        ]
+        assert said.awaiting is True
+
+    def test_a_running_turn_says_which_request_each_panel_came_out_of(self) -> None:
+        """
+        A rule and its record are offered mid-turn, unlike the panel record they replaced. A step's
+        key is written once and never rewritten, so the response behind a rule is settled the moment
+        it exists - where a panel's record came out of `turn:{n}:messages`, which is not written
+        until the turn ends.
+        """
+        drawn = [panel for panel in transcript(READ).panels if panel.kind != "prompt"]
+        assert [panel.asked for panel in drawn] == [0, 0]
+
+
+class TestCountingTheTurns:
+    def test_a_session_nobody_has_written_to_has_no_turns(self) -> None:
+        assert transcript({}).turns == 0
+
+    def test_an_answered_turn_is_one_turn(self) -> None:
+        recorded = {
+            **said_at(0, "a"),
+            messages_key(0): recorded_turn({"kind": "response", "parts": [{"part_kind": "text", "content": "b"}]}),
+        }
+        assert transcript(recorded).turns == 1
+
+    def test_a_message_nobody_has_opened_a_turn_on_is_counted_as_one(self) -> None:
+        """
+        A queued message has no turn of its own until a pass takes it, and the page draws one anyway:
+        what a reader must never see is a message they sent going missing until a worker gets to it.
+        """
+        recorded = {
+            **said_at(0, "a"),
+            messages_key(0): recorded_turn({"kind": "response", "parts": [{"part_kind": "text", "content": "b"}]}),
+            inbox_key(1): records.Prompt(said="c").recorded(),
+            inbox_key(2): records.Prompt(said="d").recorded(),
+        }
+        assert transcript(recorded).turns == 3
+
+
+class TestTheRecordedChoice:
+    """
+    The written shape, asserted against literals rather than round-tripped through the writer.
+
+    A round trip through `recorded_choice` would agree with itself however the scheme moved, which
+    is exactly what these exist to catch: a session on disk was written by an older version of this
+    file and has to keep reading back as the same choice.
+    """
+
+    def test_a_choice_is_recorded_as_the_things_it_is(self) -> None:
+        chosen = Choice(
+            endpoint="gateway",
+            model="wide/steady",
+            repository="exe-github:blog",
+            base="release/2.1",
+            branch="try-the-other-way",
+            thinking="high",
+            output_override=20_000,
+        )
+        assert recorded_choice(chosen) == {
+            "kind": "choice",
+            "endpoint": "gateway",
+            "model": "wide/steady",
+            "repository": "exe-github:blog",
+            "base": "release/2.1",
+            "branch": "try-the-other-way",
+            "isolation": {"filesystem": "nothing", "network": False},
+            "trusted": True,
+            "thinking": "high",
+            "output_override": 20_000,
+        }
+
+    def test_what_a_session_did_not_choose_is_recorded_rather_than_left_out(self) -> None:
+        """Stated, so a reader can tell "asked for nothing" from "written before there was a knob"."""
+        recorded = recorded_choice(Choice(endpoint="here", model="ripe/fast"))
+        assert recorded == {
+            "kind": "choice",
+            "endpoint": "here",
+            "model": "ripe/fast",
+            "repository": None,
+            "base": None,
+            "branch": None,
+            "isolation": {"filesystem": "nothing", "network": False},
+            "trusted": True,
+            "thinking": None,
+            "output_override": None,
+        }
+
+    def test_a_choice_written_before_repositories_existed_still_parses(self) -> None:
+        """A session started when this console could only talk works in no repository, not a broken one."""
+        parsed = parse_choice({"endpoint": "here", "model": "ripe/fast", "thinking": "low"})
+
+        assert parsed == Choice(endpoint="here", model="ripe/fast", repository=None, thinking="low")
+
+    def test_a_repository_survives_the_checkpoint(self) -> None:
+        chosen = Choice(endpoint="here", model="ripe/fast", repository="exe-github:mainplate")
+
+        assert parse_choice(recorded_choice(chosen)) == chosen
+
+    def test_a_repository_the_checkpoint_should_not_hold_is_refused_loudly(self) -> None:
+        with pytest.raises(TypeError, match="not 17"):
+            parse_choice({"endpoint": "here", "model": "ripe/fast", "repository": 17})
+
+    def test_a_choice_written_before_thinking_existed_still_parses(self) -> None:
+        """The compatibility that matters: no `thinking` key at all is the level that asks nothing."""
+        assert parse_choice({"endpoint": "here", "model": "ripe/fast"}) == Choice(endpoint="here", model="ripe/fast")
+
+    @pytest.mark.parametrize("level", [False, True, "minimal", "low", "medium", "high", "xhigh"])
+    def test_every_level_survives_the_checkpoint(self, level: ThinkingLevel) -> None:
+        chosen = Choice(endpoint="gateway", model="wide/steady", thinking=level)
+        assert parse_choice(recorded_choice(chosen)) == chosen
+
+    def test_a_level_the_checkpoint_should_not_hold_is_refused_loudly(self) -> None:
+        with pytest.raises(TypeError, match="not 'ferocious'"):
+            parse_choice({"endpoint": "here", "model": "ripe/fast", "thinking": "ferocious"})
+
+    def test_an_output_override_survives_the_checkpoint(self) -> None:
+        chosen = Choice(endpoint="gateway", model="wide/steady", output_override=20_000)
+        assert parse_choice(recorded_choice(chosen)) == chosen
+
+    def test_a_choice_written_before_the_override_existed_sends_what_the_console_knows(self) -> None:
+        """No key at all is no override, which is what every session before the box had and still means."""
+        assert parse_choice({"endpoint": "here", "model": "ripe/fast"}).output_override is None
+
+    @pytest.mark.parametrize("held", ["20000", 0, -5, True, 2.5])
+    def test_an_override_the_checkpoint_should_not_hold_is_refused_loudly(self, held: object) -> None:
+        with pytest.raises(TypeError, match="output override"):
+            parse_choice({"endpoint": "here", "model": "ripe/fast", "output_override": held})
+
+
+class TestAnsweringASession:
+    async def test_a_started_session_waits_to_be_told_something(self, service: Service, provider: Provider) -> None:
+        await service.checkpointer.supply(SESSION, CHOICE_KEY, recorded_choice(DEFAULT_CHOICE))
+        assert await pass_at(service, provider.body()) == Blocked(listening=frozenset({opened_key(0)}))
+        assert provider.asked == 0
+
+    async def test_a_workflow_with_no_recorded_choice_is_refused_rather_than_guessed_at(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """`Service.start` writes the choice first, so reaching this means something else queued it."""
+        with pytest.raises(NeverStarted):
+            await pass_at(service, provider.body())
+
+    async def test_a_message_is_answered_and_the_session_waits_again(
+        self, service: Service, provider: Provider
+    ) -> None:
+        await waiting(service, said="hello")
+        assert await pass_at(service, provider.body()) == Blocked(listening=frozenset({opened_key(1)}))
+        said = transcript(await service.checkpointer.load(SESSION))
+        assert spoken(said) == [("prompt", "hello"), ("assistant", "answer 1")]
+        assert not said.awaiting
+
+    async def test_a_later_pass_replays_the_recorded_answer_rather_than_asking_again(
+        self, service: Service, provider: Provider
+    ) -> None:
+        body = provider.body()
+        await waiting(service, said="hello")
+        await pass_at(service, body)
+        await pass_at(service, body)
+        await pass_at(service, body)
+        assert provider.asked == 1
+
+    async def test_a_second_message_is_answered_without_re_asking_the_first(
+        self, service: Service, provider: Provider
+    ) -> None:
+        body = provider.body()
+        await waiting(service, said="hello")
+        await pass_at(service, body)
+        await service.say(SESSION, "again")
+        await pass_at(service, body)
+        assert provider.asked == 2
+        assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
+            ("prompt", "hello"),
+            ("assistant", "answer 1"),
+            ("prompt", "again"),
+            ("assistant", "answer 2"),
+        ]
+
+    async def test_a_turn_that_forgets_is_asked_with_nothing_behind_it(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The worker's own half of the boundary, which `reached` does not cover.
+
+        A pass carries its history forward between turns rather than reading it again, so a turn that
+        forgets has to empty what the pass is holding at the moment it takes the prompt. `carried`
+        counts the messages each request brought, which is the only way to see it: the turn is
+        answered either way, and what differs is what the model was handed.
+
+        **Both messages are written before the single pass runs**, which is what makes this about the
+        loop rather than about `reached`. Answered by two passes, the second would re-read the
+        checkpoint from the top and get the boundary right whatever the loop did.
+        """
+        body = provider.body()
+        await waiting(service, said="hello")
+        await service.say(SESSION, "start again", forget=True)
+        await pass_at(service, body)
+
+        assert provider.carried == [1, 1], "the second request carried its own message and nothing else"
+        # And the conversation is all still there, which is the half that says nothing was deleted.
+        assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
+            ("prompt", "hello"),
+            ("assistant", "answer 1"),
+            ("prompt", "start again"),
+            ("assistant", "answer 2"),
+        ]
+
+    async def test_a_turn_after_a_boundary_carries_only_what_came_after_it(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The boundary holds for the turns that follow it, rather than only for the one that set it.
+
+        One pass again, and three turns, so the history the loop carries has to grow from the
+        boundary rather than from the start of the conversation.
+        """
+        body = provider.body()
+        await waiting(service, said="hello")
+        await service.say(SESSION, "start again", forget=True)
+        await service.say(SESSION, "and then")
+        await pass_at(service, body)
+
+        assert provider.carried == [1, 1, 3], "the third request carried the two messages since the boundary"
+
+    async def test_a_pass_that_died_after_the_model_answered_does_not_ask_it_again(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The window the capability exists for: recorded by the model step, not by the turn's own.
+
+        A pass that reaches the provider and dies before recording the turn leaves `turn:0:model:0`
+        written and `turn:0:messages` absent, so the next pass re-runs the agent for real. Without
+        the capability that second run is a second call to the provider, and a paid one.
+        """
+        agent = provider.agent()
+        await waiting(service, said="hello")
+        holder = await claimed(service.checkpointer, SESSION)
+        run = Run(
+            holder=holder,
+            checkpointer=service.checkpointer,
+            recorded=await service.checkpointer.load(SESSION),
+            extend=extending(service.checkpointer),
+        )
+        with stepping(run, turn_prefix(0)) as scope:
+            await agent.run("hello", (), scope)
+        await service.checkpointer.release(holder)
+        recorded = await service.checkpointer.load(SESSION)
+        assert messages_key(0) not in recorded
+
+        assert await pass_at(service, provider.body()) == Blocked(listening=frozenset({opened_key(1)}))
+        assert provider.asked == 1
+
+    async def test_a_turn_carries_the_conversation_so_far_to_the_model(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """A second turn must reach the model with the first exchange behind it, or it is a fresh chat."""
+        body = provider.body()
+        await waiting(service, said="hello")
+        await pass_at(service, body)
+        await service.say(SESSION, "again")
+        await pass_at(service, body)
+        assert provider.carried == [1, 3]
+
+    async def test_a_steer_written_before_the_pass_reaches_the_model_and_the_transcript(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The whole of steering, end to end: written from outside the pass, appended to the request
+        being made, and read back out of the turn's own messages as a panel of its own.
+
+        Written before the pass here rather than during one, because what a test can control is the
+        store and not the instant a model is asked. What it proves is the same either way: the queue
+        is read at the request rather than when the turn started.
+        """
+        await waiting(service, said="hello")
+        await service.send(SESSION, "actually, be brief")
+        await pass_at(service, provider.body())
+
+        said = spoken(transcript(await service.checkpointer.load(SESSION)))
+        assert ("steer", "actually, be brief") in said
+
+    async def test_a_steer_is_drawn_as_the_person_and_not_as_the_model(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        `Steering` is its own block for exactly this: a panel's kind is read off its blocks, so a
+        steer arriving as `Prose` would be drawn as the model answering itself.
+        """
+        await waiting(service, said="hello")
+        await service.send(SESSION, "one more thing")
+        await pass_at(service, provider.body())
+
+        drawn = transcript(await service.checkpointer.load(SESSION)).panels
+        steering = [panel for panel in drawn if panel.kind == "steer"]
+        assert len(steering) == 1
+        assert steering[0].blocks == (Steering(text="one more thing"),)
+
+    async def test_guidance_handed_over_mid_turn_is_its_own_panel_and_not_a_steer(self) -> None:
+        """
+        The two things a request can carry that nobody in the conversation said, told apart.
+
+        A steer is a `UserPromptPart` and guidance is a `SystemPromptPart`, which is the whole of why
+        the delivery uses one: read as a steer it would be drawn as the person having typed what the
+        console handed over, and read as prose it would be drawn as the model saying it.
+
+        Its own kind rather than the standing prompt's, because the two sit in different places in the
+        request: `instructions` in front of the cached prefix, against a part at a position here.
+        """
+        said: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="what is it")]),
+            ModelResponse(parts=[TextPart(content="looking")]),
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content="`apps/web/AGENTS.md`, guidance for this part of the repository:"),
+                    UserPromptPart(content="one more thing"),
+                ]
+            ),
+            ModelResponse(parts=[TextPart(content="right")]),
+        ]
+
+        drawn = tuple(panelled(0, parted(said, {})))
+
+        assert [panel.kind for panel in drawn] == ["assistant", "guidance", "steer", "assistant"]
+        assert drawn[1].blocks == (Guidance(text="`apps/web/AGENTS.md`, guidance for this part of the repository:"),)
+
+    async def test_two_messages_sent_at_once_keep_their_order_and_neither_is_lost(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        What the queue removed the need to check: the store names each entry, so two writers cannot
+        pick one key and lose the loser's message. There is nothing to claim and nothing to re-try.
+        """
+        await waiting(service, said="hello")
+        await service.send(SESSION, "first")
+        await service.send(SESSION, "second")
+        await pass_at(service, provider.body())
+
+        assert [said for kind, said in spoken(transcript(await service.checkpointer.load(SESSION)))][:3] == [
+            "hello",
+            "first",
+            "second",
+        ]
+
+    async def test_a_message_sent_after_a_turn_ended_opens_one_of_its_own(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The race this whole shape removes, played out in the order that used to lose the message.
+
+        Somebody reads a checkpoint that says turn 0 is being answered, the pass finishes while they
+        are typing, and the write lands afterwards. That used to be a slot the pass had shut, so the
+        message had to be refused and said again somewhere else. In a queue it is simply the next
+        thing nobody has read, and the next turn opens on it.
+        """
+        await waiting(service, said="hello")
+        await pass_at(service, provider.body())
+
+        await service.send(SESSION, "actually, be brief")
+        assert spoken(transcript(await service.checkpointer.load(SESSION))) == [
+            ("prompt", "hello"),
+            ("assistant", "answer 1"),
+            ("prompt", "actually, be brief"),
+        ]
+
+    async def test_a_message_sent_before_the_pass_reaches_the_model_is_carried_by_it(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """The other side of the same fact: nothing was listening yet, so the turn takes it."""
+        await waiting(service, said="hello")
+        await service.send(SESSION, "actually, be brief")
+        await pass_at(service, provider.body())
+
+        assert ("steer", "actually, be brief") in spoken(transcript(await service.checkpointer.load(SESSION)))
+
+    async def test_two_sessions_do_not_see_each_other(self, service: Service, provider: Provider) -> None:
+        body = provider.body()
+        await waiting(service, said="first session", session="one")
+        await waiting(service, said="second session", session="two")
+        await pass_at(service, body, session="one")
+        await pass_at(service, body, session="two")
+        assert spoken(transcript(await service.checkpointer.load("one"))) == [
+            ("prompt", "first session"),
+            ("assistant", "answer 1"),
+        ]
+        assert spoken(transcript(await service.checkpointer.load("two"))) == [
+            ("prompt", "second session"),
+            ("assistant", "answer 2"),
+        ]
+
+
+class TestWhatOnePassDoes:
+    """
+    How a turn of several round trips is cut into passes, and what that must not change.
+
+    A pass is one live model request and the tool batch behind it, so a turn is answered by as many
+    passes as it has requests. What has to hold across that is everything: the provider is asked
+    once per request whatever the cut, and the conversation the store ends up holding is the same
+    one either way. The fixture repository is here because a turn needs a *tool* to be worth more
+    than one request, and a tool needs a worktree to run in.
+    """
+
+    def scripted(self) -> Scripted:
+        """A turn of two requests: a tool call, then the answer once its result comes back."""
+        return Scripted(
+            script=(
+                calls(("create", {"path": "src/added.txt", "content": "written by a tool\n"})),
+                ModelResponse(parts=[TextPart("made it")]),
+            )
+        )
+
+    async def test_a_turn_of_two_requests_takes_a_pass_each(self, service: Service, workspaces: Workspaces) -> None:
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        body = conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces, allowance=1)
+
+        made = await passes_at(planting, body, session.id)
+
+        assert made == (
+            Completed(Progressed()),
+            Blocked(listening=frozenset({opened_key(1)})),
+        ), "the first pass handed the rest of the turn back; the second finished it and waited"
+
+    async def test_a_turn_may_make_as_many_requests_as_it_takes(self, service: Service, workspaces: Workspaces) -> None:
+        """
+        No cap on round trips per turn, which is a bound Pydantic AI supplies by default and this
+        console turns off: fifty, counted over replayed requests as well as live ones, raised as
+        something no arm of the pass catches. Sixty is past it by enough that a count off by a few
+        would still fail.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        # Each call under its own id rather than through `calls`, which numbers a batch from zero:
+        # a tool step is keyed by the call's id, so sixty calls sharing one would collide as a step
+        # written twice in one pass, long before anything counted them.
+        readings = (
+            ModelResponse(
+                parts=[ToolCallPart(tool_name="read", args={"path": "src/kept.txt"}, tool_call_id=f"call-{at}")]
+            )
+            for at in range(60)
+        )
+        scripted = Scripted(script=(*readings, ModelResponse(parts=[TextPart("read it")])))
+
+        made = await passes_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        assert made == (Blocked(listening=frozenset({opened_key(1)})),)
+        assert scripted.asked == 61
+
+    async def test_what_a_stretch_records_is_exactly_what_its_requests_carried(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        The claim the page rests on, since it draws the panel from the record and never from a turn.
+
+        The two ends of one fact, held against each other: `agent_for` speaks the recorded string
+        verbatim, so anything composed on top of it out there would be a sentence the model was sent
+        that no record holds - a page reporting less than was said, and instructions moving under a
+        conversation whose cached prefix they sit in front of.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = system_prompt_in(parse_messages(recorded[messages_key(0)]))
+        assert told is not None, "the control: nothing carried means nothing to differ over"
+        assert "You are working in a git checkout" in told, (
+            "the other control: the note about this session's places is the part that used to be "
+            "composed after the record was written, so without it the two agree by having no "
+            "chance to disagree"
+        )
+        assert str(workspaces.root / session.id) not in told, (
+            "and it names those places rather than pathing them, which is what lets two sessions of "
+            "one shape compose the same string and share a cached prefix"
+        )
+        assert parse_instructions(recorded[instructions_key(0)]) == told
+
+    async def test_what_the_page_draws_from_a_reply_is_said_in_every_session(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        The console's to say rather than the operator's, so it is composed beside the note about the
+        session's places and reaches the record the same way: an operator who rewrites the standing
+        instructions keeps the one sentence saying what the page can show.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = parse_instructions(recorded[instructions_key(0)])
+        assert "labelled `mermaid` or `svg` is drawn as a picture" in told
+        assert told.index(INSTRUCTIONS) < told.index("`mermaid`"), "after the operator's own, whose word it never takes"
+
+    async def test_the_system_prompt_is_settled_before_the_first_answer_and_never_recomposed(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        Instructions sit in front of the cached prefix, so a session must be answered under one.
+
+        The case that says it: the repository's own `AGENTS.md` changes mid-session, which is what a
+        session working on a repository's guidance does constantly and what the *model* is the most
+        likely thing to have done. Recomposed on the next turn, every later request would re-price
+        the whole conversation, and re-reading buys nothing against that because the model already
+        knows what it wrote.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]), ModelResponse(parts=[TextPart("two")])))
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1)
+        await pass_at(planting, body, session.id)
+
+        planted = workspaces.root / session.id
+        (planted / "AGENTS.md").write_text("guidance nobody had when this session opened\n", encoding="utf-8")
+        await planting.say(session.id, "again")
+        await pass_at(planting, body, session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        told = [system_prompt_in(parse_messages(recorded[messages_key(turn)])) for turn in (0, 1)]
+        assert told[0] is not None, "the control: a session with no system prompt would pass either way"
+        assert told[1] == told[0], "the second turn carried what the first was answered under"
+        assert "guidance nobody had when this session opened" not in told[0]
+
+    async def test_a_forget_composes_the_system_prompt_again(self, service: Service, workspaces: Workspaces) -> None:
+        """
+        The unit is a stretch of context rather than a session, and a forget is what ends one.
+
+        Recomposing costs the requests that would have read the prefix from cache, and a forget has
+        just thrown the whole prefix away, so composing again exactly there is free.
+
+        Asked of the *records* rather than of what changed inside them, and that is the shape the
+        plugin protocol left behind: what a session is answered under is now every running plugin's
+        `describe` contribution, which is settled at registration, so the two stretches compose the
+        same string. What is still worth pinning is that there are two of them, keyed by where each
+        stretch begins, since a single record at the top of a session would be one system prompt
+        standing over turns answered under another the day a plugin's contribution can differ.
+
+        The cost of that, stated: **a forget no longer picks up a repository's edited guidance**,
+        because reading it is the bundled `guidance` plugin's and a plugin describes once. Forking is
+        what picks up an edited one, which is the answer this console gives to every other question
+        about a session's terms.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]), ModelResponse(parts=[TextPart("two")])))
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1)
+        await pass_at(planting, body, session.id)
+
+        await planting.say(session.id, "again", forget=True)
+        await pass_at(planting, body, session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        assert instructions_key(0) in recorded, "the first stretch composed one"
+        assert instructions_key(1) in recorded, "and the forget began a second stretch that composed its own"
+        told = [system_prompt_in(parse_messages(recorded[messages_key(turn)])) for turn in (0, 1)]
+        assert told[0] is not None
+        assert told[1] == told[0], "which says the same thing, since nothing under it moved"
+
+    async def test_a_request_the_pass_handed_back_is_made_once_by_the_next_one(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """The unwind must not cost a provider call, which is the one way this could be expensive."""
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = self.scripted()
+
+        await passes_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1), session.id)
+
+        assert scripted.asked == 2, "two requests, one per pass, and neither asked twice"
+
+    async def test_a_turn_is_recorded_the_same_however_the_passes_fall(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        The claim the whole change rests on: the allowance decides how much one pass does and
+        nothing about what the conversation comes to. Two sessions, the same script, cut two ways.
+        """
+        planting = replace(service, workspaces=workspaces)
+        cut = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        whole = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        await passes_at(
+            planting, conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces, allowance=1), cut.id
+        )
+        await passes_at(planting, conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces), whole.id)
+
+        one = await planting.checkpointer.load(cut.id)
+        other = await planting.checkpointer.load(whole.id)
+        # The store mints inbox keys from one sequence across every session, so two sessions never
+        # hold the same ones. What compares is the shape either side of that: every key this console
+        # names for itself, and the entries in the order they arrived.
+        assert [key for key in one if not key.startswith(INBOX)] == [
+            key for key in other if not key.startswith(INBOX)
+        ], "the same keys in the same order, so nothing was written that the other did not write"
+        assert [one[key] for key in one if key.startswith(INBOX)] == [
+            other[key] for key in other if key.startswith(INBOX)
+        ]
+        assert spoken(transcript(one)) == spoken(transcript(other))
+        assert [panel.kind for panel in transcript(one).panels] == [panel.kind for panel in transcript(other).panels]
+        # The trees are the values that can be compared outright, holding neither a duration nor a
+        # timestamp nor a key from the store's own space. A tool that ran again and wrote something
+        # else shows here; so does a snapshot taken at a different point.
+        settled = (tree_key(0, 0), tree_key(0, 1))
+        assert {key: one[key] for key in settled} == {key: other[key] for key in settled}
+        # And the cursors say the same thing in each session's own terms: nothing was steered into
+        # either turn, so every request read no further than the message the turn opened on.
+        for held in (one, other):
+            assert held[heard_key(0, 0)] == held[heard_key(0, 1)] == held[opened_key(0)]
+
+
+class TestReadingBackWhatWasAlreadyRecorded:
+    """
+    A field that did not exist reads back as what the sessions written without it already had.
+
+    Ordinary parsing of an absent optional, the same way `thinking` is read, and deliberately not a
+    place where retired *values* accumulate: a recorded string this console has stopped writing is a
+    migration's problem at startup, not a branch on the read path that never goes away.
+    """
+
+    def test_a_session_recorded_before_isolation_existed_reads_as_what_it_had(self) -> None:
+        with_repository = parse_choice({"endpoint": "here", "model": "ripe/fast", "repository": "test:fixture"})
+        without = parse_choice({"endpoint": "here", "model": "ripe/fast"})
+
+        assert with_repository.isolation.filesystem is Filesystem.WORKTREE
+        assert without.isolation.filesystem is Filesystem.NOTHING
+        assert not without.isolation.network, "there was no way to reach a network then, so it reads as off"
+
+    def test_a_value_this_console_has_never_written_is_still_a_loud_failure(self) -> None:
+        """Reading a retired name back is not the same as accepting anything at all."""
+        with pytest.raises(TypeError, match="is not a filesystem this console knows"):
+            parse_choice({"endpoint": "here", "model": "m", "isolation": {"filesystem": "everywhere"}})
+
+
+class TestAPassThatFellOver:
+    """
+    What a session holds about a pass that raised, which is a different thing from one that was
+    refused and is read differently for that reason.
+
+    A refusal is settled and stops the session; this is a fault somebody can fix, so it is recorded
+    *and* re-raised, and the worker's redelivery is what resumes the session once they have. What the
+    record has to be good for is two questions the page asks: what fell over, and whether that is why
+    the session is stopped right now.
+    """
+
+    def test_how_far_a_session_has_got_counts_every_record_but_the_failures(self) -> None:
+        """
+        Which is what keeps a retried failure to one record instead of one per lease.
+
+        Counted with them in, the record a failing pass writes would move the number it was just
+        keyed by, so the next delivery at the same point would find a different key free and write
+        again, for ever.
+        """
+        recorded: dict[str, object] = {CHOICE_KEY: {}, inbox_key(0): {}, failed_key(2): {}}
+
+        assert progress_in(recorded) == 2
+        assert failed_key(2) == "failed:2", "the literal, so a drift in the builder fails here"
+
+    def test_a_failure_is_why_the_session_is_stopped_only_while_nothing_has_happened_since(self) -> None:
+        """
+        `refusal_in`'s rule against a count rather than against a turn, and it has to be a count
+        because a pass can fall over somewhere no turn names: planting a worktree, reading a
+        declaration, running a setup.
+        """
+        fell = records.Failed(why="PluginFailed('checks exited 1')", at=2).recorded()
+        stopped = {CHOICE_KEY: {}, inbox_key(0): {}, failed_key(2): fell}
+        moved = {**stopped, messages_key(0): {}}
+
+        current = failure_in(stopped)
+        assert current is not None
+        assert "checks exited 1" in current.why
+        assert failure_in(moved) is None, "something got past it, so it is history and the transcript has it"
+
+    def test_the_newest_failure_is_the_one_read(self) -> None:
+        """
+        A session that got further and fell over again has two, and only the second says why it is
+        stopped now. Read by walking the records in store order, which is the order `load` promises.
+        """
+        recorded = {
+            CHOICE_KEY: {},
+            failed_key(1): records.Failed(why="the first thing", at=1).recorded(),
+            inbox_key(0): {},
+            failed_key(2): records.Failed(why="the second thing", at=2).recorded(),
+        }
+
+        current = failure_in(recorded)
+        assert current is not None
+        assert current.why == "the second thing"
+
+    def test_nothing_is_read_where_no_pass_has_fallen_over(self) -> None:
+        """The control, and the ordinary case: the page says nothing where there is nothing to say."""
+        assert failure_in({CHOICE_KEY: {}, inbox_key(0): {}}) is None
+
+
+class TestARequestTheProviderWillNotTake:
+    """
+    What happens to a session asking something no pass can ever get an answer to.
+
+    The failure this closes is invisible rather than loud. `without-durability`'s worker leaves a
+    delivery unanswered when a pass raises, because it cannot tell a workflow's own failure from a
+    store that was briefly unreachable, so a deterministic refusal is retried once per lease for as
+    long as anybody keeps the session around - and its own docstring says the count belongs in the
+    checkpoint. This is that count, in the only form a refusal needs.
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "settled"),
+        [
+            (400, True),
+            (404, True),
+            (413, True),
+            (422, True),
+            (408, False),
+            (429, False),
+            (500, False),
+            (503, False),
+        ],
+    )
+    def test_a_4xx_is_the_request_and_a_5xx_is_the_moment(self, status: int, settled: bool) -> None:
+        """
+        The split, said as the codes themselves: what is wrong with the request, or what is wrong now.
+
+        `408`, `409`, `425` and `429` are the 4xx codes that describe the moment rather than the
+        request, and a redelivery is exactly what each of them asks for.
+        """
+        refused = terminally(ModelHTTPError(status_code=status, model_name="fixture", body="no"))
+
+        assert (refused is not None) is settled
+        assert refused is None or refused.status == status
+
+    def test_anything_that_is_not_the_provider_refusing_is_left_to_be_retried(self) -> None:
+        """
+        The default is transient, which is the safe way round.
+
+        A transient error read as terminal stalls a session that would have recovered on its own,
+        where a terminal one read as transient costs a redelivery per lease until somebody looks.
+        """
+        assert terminally(TimeoutError("the socket went away")) is None
+
+    async def test_a_refused_turn_stalls_the_session_rather_than_asking_to_be_woken(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        The whole point: a pass that cannot go on must not come back asking for another one.
+
+        `Progressed` is what `readying` turns into `make_ready`, so a refusal reported as one is the
+        retry loop with extra steps. The control is the same session answered by a provider that
+        works, which comes back `Blocked` on the next message.
+        """
+        await waiting(service, "hello")
+        await waiting(service, "hello", session="answerable")
+
+        stalled = await pass_at(service, Refusing(status=400).body())
+        working = await pass_at(service, provider.body(), session="answerable")
+
+        assert stalled == Completed(Stalled()), "nothing is owed, so nothing wakes it"
+        assert working == Blocked(listening=frozenset({opened_key(1)})), (
+            "the control: the same message answered by a provider that takes it waits for the next one"
+        )
+
+    async def test_the_reason_is_written_down_under_the_refused_requests_own_key(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """
+        Recorded, because a session that stopped with nothing saying so is the one nobody can diagnose.
+
+        The literal key rather than a round trip through the writer, which is what turns a drift
+        between `refused_key` and `Stepping.identified("refused", ...)` into a failure here rather
+        than a record nothing can find.
+        """
+        await waiting(service, "hello")
+
+        await pass_at(service, Refusing(status=400).body())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert refused_key(0, 0) == "turn:0:refused:0"
+        assert model_key(0, 0) not in recorded, "there is no answer, so nothing pretends there is one"
+        refused = parse_refused(recorded[refused_key(0, 0)])
+        assert refused.status == 400
+        assert "prompt is too long" in refused.why, "the provider's own words, not a code standing in for them"
+
+    async def test_it_is_named_after_the_request_that_hit_it_and_not_after_the_turn(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        A turn's second request being refused must record against the second request.
+
+        Numbered by the turn instead, a pass that reached further than the one before it would write
+        its refusal over an earlier request's answer - or, under a write-once store, fail to write it
+        at all and report the wrong reason for ever.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        refusing = Refusing(status=400, after=1)
+
+        ended = await pass_at(planting, conversing(refusing.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        assert ended == Completed(Stalled())
+        assert model_key(0, 0) in recorded, "the request that was answered is recorded as answered"
+        assert refused_key(0, 0) not in recorded, "and is not also recorded as refused"
+        assert parse_refused(recorded[refused_key(0, 1)]).status == 400
+
+    async def test_a_later_pass_does_not_ask_the_question_again(self, service: Service) -> None:
+        """
+        The saving that makes the record worth keeping, and the reason it is read before the request.
+
+        A person writing into a stalled session queues it, so a second pass happens whatever the
+        worker does. What it must not do is put the identical question - same recorded history, same
+        recorded message - back to the provider and pay for the identical refusal.
+        """
+        await waiting(service, "hello")
+        refusing = Refusing(status=400)
+
+        first = await pass_at(service, refusing.body())
+        asked_once = refusing.asked
+        second = await pass_at(service, refusing.body())
+
+        assert asked_once == 1, "the control: the first pass really did reach the provider"
+        assert first == Completed(Stalled())
+        assert second == Completed(Stalled()), "and comes to the same answer"
+        assert refusing.asked == 1, "off the record the second time, so the provider was never asked again"
+
+    async def test_the_page_is_told_which_turn_stopped_and_why(self, service: Service) -> None:
+        """
+        What `Service.read` asks, and the two states it has to tell apart.
+
+        A conversation nobody refused reports nothing, so the sentence is drawn only where there is
+        something to say - which is the same bargain the missing-endpoint sentence takes.
+        """
+        await waiting(service, "hello")
+        assert refusal_in(await service.checkpointer.load(SESSION)) is None, "the control: nothing has stopped"
+
+        await pass_at(service, Refusing(status=400).body())
+
+        refused = refusal_in(await service.checkpointer.load(SESSION))
+        assert refused is not None
+        assert refused.status == 400
+
+
+class TestAnAnswerCutOffAtTheOutputLimit:
+    """
+    The other request no pass can ever get past: one the provider answered, and cut off.
+
+    The loop raises over an answer stopped at its output limit with nothing in it it can act on, and
+    it raises *after* the answer is recorded, so no provider refusal is anywhere in it. Left as an
+    ordinary failure it would be replayed into the same exception once per lease for ever, which is
+    the loop the refusal record exists to close, so it is written where a refusal is. What the reason
+    says is pinned in `test_durability.py`, where the loop is driven directly.
+    """
+
+    CUT_OFF = ModelResponse(parts=[ThinkingPart(content="let me think about")], finish_reason="length", timestamp=WHEN)
+
+    async def test_it_stalls_the_session_and_says_so_where_a_refusal_would(self, service: Service) -> None:
+        await waiting(service, "hello")
+        scripted = Scripted(script=(self.CUT_OFF,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert ended == Completed(Stalled()), "nothing is owed, so nothing wakes it"
+        assert model_key(0, 0) in recorded, "the answer was paid for and is kept"
+        assert refused_key(0, 0) not in recorded, "and is not recorded as refused, because it was answered"
+        refused = parse_refused(recorded[refused_key(0, 1)])
+        assert refused.status is None, "no provider turned anything down"
+        assert "output limit" in refused.why
+        assert refusal_in(recorded) == refused, "which is exactly where the page looks"
+
+    async def test_a_later_pass_replays_the_answer_and_asks_nothing_again(self, service: Service) -> None:
+        """
+        A person writing into the stalled session queues it, so a second pass happens whatever the
+        worker does. It replays the recorded answer into the same exception and must come to the same
+        settled answer, off the record, with the provider never reached.
+        """
+        await waiting(service, "hello")
+        scripted = Scripted(script=(self.CUT_OFF,))
+        body = conversing(scripted.endpoints(), INSTRUCTIONS)
+
+        first = await pass_at(service, body)
+        second = await pass_at(service, body)
+
+        assert first == Completed(Stalled())
+        assert second == Completed(Stalled())
+        assert scripted.asked == 1, "the second pass replayed the answer rather than asking for it"
+
+    async def test_an_answer_cut_off_with_words_in_it_is_an_answer(self, service: Service) -> None:
+        """
+        The control, and the line this stays on the right side of: Pydantic AI hands a truncated text
+        back as the turn's answer rather than raising, so the turn ends and the session waits for the
+        next message like any other.
+        """
+        await waiting(service, "hello")
+        half = ModelResponse(parts=[TextPart("the answer is, in short,")], finish_reason="length", timestamp=WHEN)
+        scripted = Scripted(script=(half,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        assert ended == Blocked(listening=frozenset({opened_key(1)}))
+        assert refusal_in(await service.checkpointer.load(SESSION)) is None
+
+    async def test_a_tool_call_cut_off_stalls_the_session_and_is_said_to_be_one(self, service: Service) -> None:
+        """
+        The other shape of the same cut-off: the model ran out of room writing a call's arguments.
+        Left to the retry path the loop would tell the model its arguments were malformed and ask
+        again, which spends a request on an answer that was never wrong. It stalls like the
+        thinking-only case and the reason says which of the two it was.
+        """
+        await waiting(service, "hello")
+        cut_off = ModelResponse(
+            parts=[ToolCallPart("read", '{"path": "READ', "call-read-0")], finish_reason="length", timestamp=WHEN
+        )
+        scripted = Scripted(script=(cut_off,))
+
+        ended = await pass_at(service, conversing(scripted.endpoints(), INSTRUCTIONS))
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert ended == Completed(Stalled())
+        assert scripted.asked == 1, "the model was not asked to try again"
+        refused = parse_refused(recorded[refused_key(0, 1)])
+        assert refused.status is None
+        assert "tool call" in refused.why
+
+
+def kept(answered: ModelResponse) -> object:
+    """One answer as `Stepping.request` records it, so a reading is tested against the real shape."""
+    return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()
+
+
+def in_a_while(hours: int = 3) -> datetime:
+    """
+    A moment ahead of the clock a pass actually reads, to the second a provider would name one in.
+
+    The *real* clock, which is the one thing in this suite that is not the 2031 fixture: `resume`
+    takes `now_utc` unless a driver says otherwise, so what a deferral is compared against is now.
+    Whole seconds because that is what `resets_at` carries, and a moment that did not survive the
+    round trip would be a test failing on the microseconds it invented.
+    """
+    return datetime.fromtimestamp(int((datetime.now(UTC) + timedelta(hours=hours)).timestamp()), UTC)
+
+
+class TestARequestTheProviderWillNotTakeYet:
+    """
+    A session told to come back later, which is `Refused`'s opposite: the request is fine.
+
+    What it closes is the loop `RequestRefused` closes one answer along, and at a much larger scale.
+    A pass that raises is redelivered when its lease elapses, so a session against a subscription
+    whose allowance resets next week asks a provider that is already saying no once a minute for
+    days. The provider said when it would take the request; this is the console believing it.
+    """
+
+    async def test_a_deferred_request_suspends_the_pass_until_the_moment_the_provider_named(
+        self, service: Service
+    ) -> None:
+        """
+        `Sleeping` and not `Completed`, which is the whole of what the worker needs: it schedules the
+        delivery for exactly that moment rather than redelivering onto the lease.
+        """
+        await waiting(service, "hello")
+        until = in_a_while()
+        deferring = Deferring(body=usage_limit_reached(until))
+
+        ended = await pass_at(service, deferring.body_of())
+
+        assert ended == Sleeping(key=deferred_key(0, 0), due=until)
+        assert deferring.asked == 1, "the control: the provider really was asked once"
+
+    async def test_the_wait_is_written_down_where_the_page_reads_it(self, service: Service) -> None:
+        """
+        Recorded as well as scheduled, because a session waiting four days must not draw three dots
+        for four days. The provider's own words come across, so the page can say a plan's limit was
+        reached rather than that something went wrong.
+        """
+        await waiting(service, "hello")
+        until = in_a_while()
+
+        await pass_at(service, Deferring(body=usage_limit_reached(until)).body_of())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert deferred_key(0, 0) == "turn:0:deferred:0"
+        held = deferred_in(recorded)
+        assert held is not None
+        assert held.until == until
+        assert "usage_limit_reached" in held.why, "the provider's own words, not a code standing in for them"
+        assert model_key(0, 0) not in recorded, "there is no answer, so nothing pretends there is one"
+
+    async def test_being_deferred_again_records_a_new_moment_rather_than_keeping_the_old_one(
+        self, service: Service
+    ) -> None:
+        """
+        **The reason a wait is keyed by how many there have been and not by the request that caused
+        it.** The pass that comes back asks the same request again, so a second deferral keyed by the
+        request would land on a key already holding the first moment, the store would keep that one,
+        and the session would wake onto a deadline already past - which is the hot loop the wait
+        exists to close, reached through the back door.
+        """
+        await waiting(service, "hello")
+        first, second = in_a_while(1), in_a_while(5)
+
+        await pass_at(service, Deferring(body=usage_limit_reached(first)).body_of())
+        again = await pass_at(service, Deferring(body=usage_limit_reached(second)).body_of())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert again == Sleeping(key=deferred_key(0, 1), due=second)
+        assert parse_deferred(recorded[deferred_key(0, 0)]).until == first, "and the first one is left as it was"
+        assert deferred_in(recorded).until == second  # type: ignore[union-attr]
+
+    async def test_a_retry_after_header_is_the_same_statement_in_the_other_spelling(self, service: Service) -> None:
+        """
+        The standard way a provider says it, which Pydantic AI already parses into seconds from now.
+
+        Read as a moment rather than kept as a duration, for `Run.sleep`'s reason: a deadline
+        survives the pass that heard it and seconds from a moment nobody recorded do not.
+        """
+        await waiting(service, "hello")
+
+        ended = await pass_at(service, Deferring(headers={"retry-after": "90"}).body_of())
+
+        assert isinstance(ended, Sleeping)
+        assert timedelta(seconds=80) < ended.due - datetime.now(UTC) <= timedelta(seconds=90)
+
+    async def test_an_error_that_names_no_moment_is_left_exactly_as_it_was(self, service: Service) -> None:
+        """
+        The default, and the safe way round: a 429 with nothing in it to wait for is a pass that
+        raises, which the worker redelivers on the lease exactly as it did before there were waits.
+        """
+        await waiting(service, "hello")
+
+        with pytest.raises(ModelHTTPError):
+            await pass_at(service, Deferring(body="slow down").body_of())
+
+        assert deferred_in(await service.checkpointer.load(SESSION)) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(None, id="nothing"),
+            pytest.param("slow down", id="prose"),
+            pytest.param({"type": "usage_limit_reached"}, id="no moment in it"),
+            pytest.param({"resets_at": "soon"}, id="not a number"),
+            pytest.param({"resets_at": True}, id="a boolean, which is a number in Python and not here"),
+            pytest.param({"resets_at": 1e30}, id="past what a clock can hold"),
+        ],
+    )
+    def test_a_body_with_no_moment_in_it_is_no_moment(self, body: object) -> None:
+        """
+        Somebody else's shape, read for one field and trusted for nothing: every way of not saying
+        when is the same answer, which is the answer that changes nothing.
+        """
+        now = datetime.now(UTC)
+        assert deferred_until(ModelHTTPError(status_code=429, model_name="fixture", body=body), now) is None
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            pytest.param(503, id="a provider that failed and guessed when it would be back"),
+            pytest.param(500, id="a provider that failed and said nothing about why"),
+            pytest.param(408, id="a request that timed out"),
+        ],
+    )
+    def test_only_a_rate_limit_parks_a_session_however_honest_the_header(self, status: int) -> None:
+        """
+        **The difference is whether the provider knows.** A `429` is a window it is keeping itself,
+        so the moment it names is a fact; every other code that reaches here is transient, and a
+        header on one is a guess about when something outside its control will be fixed. Believed,
+        a `503` with a day in it turns a blip into a day of silence at the moment the ordinary
+        redelivery would have got an answer on its next attempt.
+        """
+        now = datetime.now(UTC)
+        honest = ModelHTTPError(status_code=status, model_name="fixture", headers={"retry-after": "86400"})
+
+        assert deferred_until(honest, now) is None
+
+    def test_a_moment_already_past_is_not_a_wait(self) -> None:
+        """
+        Honoured, it would schedule a wakeup for the past, be redelivered at once, and ask the same
+        question as fast as the queue could turn it around - which is worse than the retry it
+        replaces.
+        """
+        now = datetime.now(UTC)
+        behind = ModelHTTPError(status_code=429, model_name="fixture", body={"resets_at": (now.timestamp() - 60)})
+
+        assert deferred_until(behind, now) is None
+
+    def test_a_header_is_still_read_where_the_body_names_a_moment_already_gone(self) -> None:
+        """
+        Both spellings held against the clock on their own, because a provider echoing the window
+        that has just closed would otherwise take the answer and throw away a usable header on the
+        same response - which puts the session back on the redelivery the wait exists to end.
+        """
+        now = datetime.now(UTC)
+        both = ModelHTTPError(
+            status_code=429,
+            model_name="fixture",
+            body={"resets_at": (now - timedelta(minutes=1)).timestamp()},
+            headers={"retry-after": "90"},
+        )
+
+        named = deferred_until(both, now)
+
+        assert named is not None
+        assert timedelta(seconds=80) < named - now <= timedelta(seconds=90)
+
+    async def test_a_wait_the_turn_that_took_it_got_past_is_history(self, service: Service) -> None:
+        """
+        **The wait belongs to a turn, and a turn reaches its messages by getting past every wait it
+        took.** Any message a person sends makes the delivery ready at once, so a short wait is
+        routinely outlived by the turn that took it: read on the clock alone, the moment would keep
+        the page saying the provider will not take another request for the rest of its window, of a
+        session that has already been answered.
+        """
+        await waiting(service, "hello")
+        await pass_at(service, Deferring(body=usage_limit_reached(in_a_while())).body_of())
+
+        assert deferred_in(await service.checkpointer.load(SESSION)) is not None, "the control: the turn is owed one"
+
+        await pass_at(service, Provider().body())
+
+        recorded = await service.checkpointer.load(SESSION)
+        assert messages_key(0) in recorded, "the turn this waited under has answered"
+        assert deferred_in(recorded) is None

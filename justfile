@@ -1,0 +1,148 @@
+#!/usr/bin/env just --justfile
+
+set ignore-comments
+
+# Not the default port, so a console started for a quick look never takes down one already
+# serving on this machine, and a `just serve` can run beside a `just shots`.
+DEV_PORT := "8101"
+
+GALLERY := "build/gallery"
+SHOTS := "build/shots"
+
+# Not `mainplate.db`, so seeding fixtures can never reach a database holding real conversations.
+DEMO_DATABASE := "mainplate-demo.db"
+
+[default]
+[doc('List available recipes')]
+list:
+    just --list
+
+alias l := list
+
+# One Chromium, fetched by Playwright's Python binding, which the suite and `shots` both drive.
+#
+# Split from `setup` because a mainplate session runs this half and cannot run the other: git's
+# hooks live in the clone's *common* directory, shared by every worktree of it and bound read-only
+# in a session, so `pre-commit install` there is both refused and wrong. `.mainplate/setup` is what
+# runs this in a session, and the split is what keeps the two callers on one definition.
+[doc('Fetch the dependencies and the browser, which is the half of setup a session can run')]
+dependencies:
+    uv sync
+    uv run playwright install chromium
+
+[doc('Prepare a fresh clone: dependencies, the browser, and pre-commit as a git hook')]
+setup: dependencies
+    uv run pre-commit install
+
+# Every script this console serves that somebody else wrote, fetched from where it was published
+# and checked against the digest `scripts/vendored.toml` records before any of it is written. One
+# recipe and one table rather than a download apiece, so the check is applied to every one of them
+# and a script nobody checked has nowhere to land. Bumping one is editing the version in its `url`,
+# running this, and recording the digest it refuses on once the file has been looked at.
+[doc('Fetch the vendored scripts named in scripts/vendored.toml, each checked against its recorded digest')]
+vendor:
+    uv run python -m scripts.vendor
+
+# The stylesheet is a deliverable, and no string assertion checks one. These render every page from
+# fixture checkpoints and drive a real Chromium over them, so a styling change can be *looked at*.
+#
+# No server, no database, no provider and no `config.toml`: a page is a pure function of
+# already-answered questions, so the whole of what this needs is to answer them with fixtures. The
+# assets are copied beside the pages, which is why a static server renders them identically to the
+# real console.
+
+[doc('Render every page to build/gallery, as files a browser can open')]
+gallery:
+    uv run python -m scripts.gallery {{ GALLERY }}
+
+# Extra arguments are pages to shoot, each `file.html` or `file.html#anchor`, defaulting to all of
+# them: `just shots 'session.html#panel-0-1'`.
+[doc('Screenshot every page, wide and phone, into build/shots')]
+shots *args: gallery
+    uv run python -m scripts.shoot {{ GALLERY }} {{ SHOTS }} {{ args }}
+
+# Neither a test nor a gate: it prints numbers, fails nothing, and reaches no provider. Run it
+# before and after a change to `loop.py` or `durability.py`, and put the figures in
+# `docs/design/durability.md`, which is where the claim about what replay costs is written down.
+#
+# Extra arguments go straight to the script: `just replay --requests 40 --profile build/replay.prof`.
+[doc('Measure what replaying a turn costs, at several turn sizes')]
+replay *args:
+    uv run python -m scripts.replay {{ args }}
+
+# Behaviour rather than appearance is a different question and gets a different check, and those are
+# in the suite rather than here: what a still cannot show is that *two* panels are drawn as where the
+# reader is, or that a form posts the controls sitting outside it, and `tests/test_browser.py` drives
+# a real Chromium over this same gallery to ask. A check nobody runs is a check that catches nothing,
+# so they run wherever `just test` does.
+[doc('Run type checking and tests')]
+test *args:
+    uv run mypy
+    uv run pytest {{ args }}
+
+alias t := test
+
+[doc('Format and lint')]
+check:
+    uv run pre-commit run --all-files
+    uv run mypy
+
+[doc('Serve the documentation site with live reload')]
+docs *args:
+    uv run mkdocs serve {{ args }}
+
+alias d := docs
+
+# `--strict` so a link to a page that does not exist, or a page nothing in the nav points at, fails
+# the build rather than shipping. CI runs this same recipe.
+[doc('Build the documentation site into ./site')]
+docs-build *args:
+    uv run mkdocs build --strict {{ args }}
+
+# Both of these restart the console whenever anything under `src/mainplate` changes, which covers
+# the stylesheet and the script as well as the Python. The assets are inventoried once at startup,
+# deliberately, so a CSS edit is only visible to a *new* process: without a watcher, looking at a
+# styling change means stopping and starting the server by hand every time.
+#
+# It restarts the server, and does not reload the browser. A page has to be refreshed to be seen
+# again, which is one keystroke and is the whole of what this trades for needing no dev-only
+# script injected into a page that ships.
+#
+# `exec` so Ctrl-C reaches the watcher rather than the shell just spawned to run it, and the
+# default filter rather than `--filter python`, which would watch the code and ignore the
+# stylesheet that is the more common thing to be iterating on.
+WATCH := "uv run watchfiles --filter default"
+
+[doc('Run the console in the foreground, on a database of its own, restarting on any change')]
+serve *args:
+    exec {{ WATCH }} 'mainplate serve --port {{ DEV_PORT }} {{ args }}' src/mainplate
+
+[doc('Run it on a throwaway database, for poking at a page without touching real sessions')]
+demo *args:
+    exec {{ WATCH }} 'mainplate serve --port {{ DEV_PORT }} --database {{ DEMO_DATABASE }} {{ args }}' src/mainplate
+
+# The same conversations the gallery renders, written into a real store so the console can be
+# driven rather than looked at: the sidebar reordering between branches, a fork actually being
+# made, the rail projecting onto a transcript that came out of SQLite.
+#
+# It replaces the fixtures' own sessions from scratch and touches no other, so a changed fixture
+# reaches a running `just demo` on the next page load, with nothing restarted.
+[doc('Put the gallery fixtures into the demo database, replacing any seeded before')]
+seed *args:
+    uv run python -m scripts.seed {{ if args == "" { DEMO_DATABASE } else { args } }}
+
+# `uv sync` first, and it is not a convenience: the unit names this checkout's interpreter, so an
+# install from a stale environment points systemd at a venv missing whatever was just added. Run
+# it again after any change to put the new code in front of the browser.
+[doc('Install this checkout as a user systemd service, on the default port')]
+install *args:
+    uv sync
+    uv run mainplate install {{ args }}
+
+[doc('Stop and remove the user systemd service, keeping its settings and its sessions')]
+uninstall *args:
+    uv run mainplate uninstall {{ args }}
+
+[doc('Follow the service log')]
+logs *args:
+    journalctl --user -u mainplate -f {{ args }}

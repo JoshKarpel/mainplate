@@ -1,0 +1,270 @@
+# Endpoints and models
+
+Where an answer comes from: what a session records about who answers it, how the set of models is
+discovered, and where a model's price and context window are looked up.
+
+## Endpoints, discovery, and per-session auth
+
+An **endpoint** is a URL, an API format, and a credential. The models are separate and are not in
+the file at all: `catalogue.py` asks each endpoint's own model-list API what it serves. A session
+records an endpoint, a model and a thinking level, and is bound to all three for life.
+
+**Three words, kept apart deliberately.** An *endpoint* is what `config.yaml` declares. A *wire*
+(`agent.py`) is the built thing that speaks one API format. A *provider* is whoever made a model,
+which is discovered and is a facet rather than a level: the same provider appears under more than
+one endpoint, because every Fireworks model on exe.dev's gateway is listed by both formats under one
+id. `grouped` therefore groups *within* an endpoint's list and never across.
+
+The thinking level lives in `thinking.py` rather than beside `Choice`, and the reason is a cycle:
+`config.py` has to validate a configured name and `agent.py` already imports `config.py`. What is
+left is a small shared vocabulary three layers read. Its effort names are recovered from Pydantic
+AI's `ThinkingEffort` rather than restated, so a level that library adds reaches the picker without
+an edit. The three that are not efforts are spelled out because they are not gradations of one
+thing: `None` leaves the setting off the request, `False` asks for thinking off, and `True` asks for
+it at the provider's own budget, which on the Anthropic wire is no parameter, an omitted block, and
+ten thousand tokens.
+
+`format` names the API shape rather than the vendor, because one hostname often answers both and
+each reaches models the other does not. It also decides what `url` means: the Anthropic SDK appends
+`/v1/messages`, so it wants the host; the OpenAI SDK appends `/responses`, so it wants the host and
+`/v1`. On exe.dev that is why `install` writes two endpoints for one gateway.
+
+`agent.py` holds one `Wire` class per format, and it holds *all three* format-specific things: how
+to name a model over it, how to ask it what it serves, and what it has to be told to reuse a
+conversation's prefix. A third format is one class, not an edit in three files. On exe.dev
+`install` writes the OpenAI endpoint first and defaults to it; the Anthropic one is a line below,
+and its model list is the cleaner of the two.
+
+**The OpenAI wire speaks the responses API, and is told to keep nothing.** Chat completions was the
+wire until OpenAI's current models stopped taking function tools with reasoning on over it: GPT-5.6
+reasons by default and refuses a tool-bearing request there unless reasoning is switched off, which
+for a coding session is every request, and the provider's own message says to use the responses API
+instead. The gateway serves that one for the models it resells as well. What the responses API adds
+that this console must refuse is a conversation held at the provider: handed a `previous_response_id`
+or a conversation id it reconstructs the history on its side and takes only what is new, which is a
+second copy of what was said, kept where no page can render it, no fork can replay it, and no
+archive can take it off the disk. So the wire never chains, the whole recorded history goes with
+every request, and `store` is off so the exchange is not kept on OpenAI's side either; reasoning
+still carries across turns, as encrypted items replayed out of the history. The cost, stated: a
+gateway model that only speaks chat completions stops working on this wire, and the provider's own
+refusal is what says so.
+
+**It also asks for a reasoning summary, because unasked this API reasons in private.** A reasoning
+item comes back as encrypted content and nothing else unless the request asks for a summary, and
+Pydantic AI reads one of those into a `ThinkingPart` carrying no text, which `blocks_in` passes over
+for the same reason it passes over an empty reply. So a session here drew no thinking at all while
+the same conversation on the Anthropic wire drew it throughout, and the panel was not missing: there
+was nothing in the checkpoint to put in it. `auto` rather than `detailed`, because which summaries a
+model offers is the provider's answer to give and a model with only the shorter one still answers.
+The cost, stated twice over: `thinking` means the model's own words on one wire and a precis of them
+on this one, which is a kind that does not mean quite the same thing depending on the endpoint above
+it; and the summary is recorded and replayed back as summary text on later turns, so it is part of
+the conversation rather than a note about it, which is the right side of the line to be on but it
+does mean the wire's own reading of what was said now includes text the model never wrote.
+
+**Every wire streams, and no wire chooses.** `Wire.model` hands back a `Streamed`, whose `request`
+opens a streaming request, drains every event, and returns the finished `ModelResponse` for
+`Stepping.request` to record. A plain request is not one every endpoint takes: exe.dev's OpenAI wire
+refuses every model with `{"detail": "Stream must be set to true"}`, and Anthropic's SDK refuses a
+request asking for a model's whole output limit the same way. The cost, stated: nothing reaches a
+reader any sooner because the events are thrown away as they arrive. Live output means recording
+those events from the model loop rather than adding a second request path.
+
+**`caching` is the third, and it exists because getting it wrong is invisible and expensive.** A
+conversation is re-sent whole on every turn, so a session with no cache breakpoint pays full input
+price for everything said so far, over and over: on a long turn that is most of the bill, and
+nothing about the request looks any different. It is opt-in on the Anthropic wire
+(`anthropic_cache`, a top-level `cache_control` whose breakpoint the server moves forward as the
+conversation grows) and automatic on the OpenAI one, which answers with an empty `ModelSettings`.
+Empty rather than absent, because what has to be true is that every wire *answers*: a format added
+later is then a `caching` somebody had to write rather than a session quietly paying full price.
+
+**Nothing to ask for there is not the same as nothing to know.** That format's breakpoint is placed
+for you and its `prompt_cache_options.ttl` accepts one value, so asking would send the duration that
+already applies; what stays out of reach is *routing*, since on GPT-5.6 and later a request is
+placed by machine load and a hash of its leading tokens. So a warm prefix is found or missed on a
+decision nothing here takes part in, which is why a miss between two requests seconds apart is the
+provider's placement rather than a prefix this console broke.
+
+`CACHE_FOR` is `1h` rather than the default five minutes, and the trade is stated because it is
+real: an hour's retention is written at 2x base input against 1.25x, so it pays only where a
+conversation is picked up again after a pause. That is what a chat console *is*, somebody reads an
+answer, thinks, and replies, where five minutes barely outlasts one long turn. The OpenAI wire's
+thirty minutes is read rather than asked for, and what both durations are for is [the line above the
+message box](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth).
+
+`agent_for` merges the wire's answer under the session's own, so a recorded choice always wins. The
+two do not overlap today; if they ever do, the thing somebody picked should be the thing that
+happens. `test_what_a_wire_asks_for_reaches_the_request` is what fails when the merge goes, because
+a setting built and never passed on looks exactly like one that was.
+
+`chat_models` is the pure half of the OpenAI side and is where its two exclusions live: exe.dev
+publishes every OpenAI model twice (bare and prefixed) and mixes embedding models in with chat ones.
+The embedding rule is a rule over names because that list carries no capability to ask;
+`test_catalogue.py` pins both against the shapes a live gateway actually returns.
+
+## Configuration
+
+`config.py` parses `config.yaml` into `Config`, once, at startup. Two things there are easy to undo
+by accident:
+
+- **Credentials are `SecretStr` and come from the file, not the environment.** A key handed to
+  `AnthropicProvider(api_key=...)` never becomes an environment variable. `Endpoint.key` is the one
+  place that decides between a configured key, the `KEYLESS` placeholder for a gateway that
+  authenticates at its edge, and `None`, which is what leaves the SDK reading its own environment
+  variable for itself. Do not "simplify" that `None` away.
+- **`build_wires` is eager**, so an endpoint that cannot be built fails at startup naming itself
+  rather than on whichever session first chose it. It builds the *provider* and not a model per
+  name, which loses nothing: an SDK validates neither, so the eager build was only ever buying
+  endpoint validation. That is [the refusal](../philosophy.md#refusing-at-startup-or-promising-not-to-raise),
+  and it is also why `discover` refuses an endpoint that lists nothing.
+
+The agent itself is built **per turn** rather than held in a startup mapping, because the model set
+is discovered and changes while the process runs, and because what a session is told includes the
+repository's own guidance and the worktree holding it is planted inside the loop. That costs tens of
+microseconds against a turn that costs seconds, and the connection pool, the expensive part, belongs
+to the endpoint and is shared by every model over it.
+
+The endpoint is still asked for *before* the loop, and that split is the point rather than a
+leftover: `endpoints.for_endpoint` raising `UnknownChoice` there is what keeps a missing endpoint a
+failure the console can explain rather than one discovered mid-turn. Built any earlier than the
+loop, a session's first turn would be answered having been told nothing the project says about
+itself, since the clone and the worktree do not exist until `planting` has run.
+
+## Advertised is narrower than routable
+
+**A discovered catalogue says what an endpoint advertises, which is narrower than what it will
+route**, and conflating the two is the mistake to avoid. exe.dev's gateway answers
+`claude-sonnet-4-6` while listing it as `anthropic/claude-sonnet-4-6`, so every session recorded
+before that prefix appeared names a model discovery will never return. So the two questions are kept
+apart:
+
+- **Starting** a session asks `Catalogue.offers(endpoint, model)`. That is form validation: what the
+  picker drew is a suggestion the page made, not a constraint on what can be posted, so a new
+  session may only be created on a pair the picker actually offered.
+- **Answering** one asks only whether the *endpoint* exists, in the worker (`agent_for` raising
+  `UnknownChoice`) and in `Conversation.answerable` (`models_of(...) is not None`), which are
+  deliberately the same question so the page and the worker cannot disagree. The model is not
+  checked: the provider's own refusal is the authoritative answer about a model and it arrives on
+  the turn, where gating here would strand a conversation nobody broke.
+
+A session whose endpoint is gone renders with a sentence naming it and no spinner, because a spinner
+that will never resolve is the one state a person cannot diagnose. `test_console.py` pins both
+halves, including that a session on an unlisted-but-routable model keeps its spinner. The connection
+stays open either way, which is a different question: it is the page's rather than the turn's, so
+what a stalled session must not do is claim something is coming.
+
+`exe.py` is the exe.dev half, and it answers reflection twice over: which LLM gateways are attached
+(so `mainplate install` writes keyless endpoints) and which GitHub repositories are (so a session
+has somewhere to work). A VM reaches both with no credential at all. Every failure there returns
+`()` rather than raising: "you are not on exe.dev" must not be a failed install or a console that
+will not start. Gateway discovery is passed *into* `converge` rather than done inside it, so the
+suite does not behave differently depending on which machine it runs on.
+
+## Keeping the catalogue current
+
+`catalogue.py` is [configuration that changes under a
+reader](../philosophy.md#configuration-that-changes-under-a-reader) and takes the whole of that
+stance: `open_console` calls `discover` before the store is opened, a background task re-asks on
+`Settings.refresh`, `Catalogues.current` is rebound rather than edited, and a failed refresh keeps
+the last good value with no staleness bound.
+
+It does not contradict the checkpoint being the conversation: nothing in it is anything anybody
+said.
+
+## What a model card says, and where it comes from
+
+`reference.py` is a second piece of reloadable configuration beside the catalogue, and the split
+between them is the thing to keep straight. The **catalogue** says which models exist and is asked
+of the endpoints. The **reference** says what they cost and what they do, and is asked of one
+database, because no endpoint reached so far answers that question at all.
+
+**`Listed` is identity, and the one number a request cannot be made without**: id, label, family,
+`upstream`, and `output`. Keeping description off it is a refusal rather than an omission. A
+gateway's list holds three shapes at once: a Claude arrives fully typed with a capability block and
+token limits, a resold model arrives with all of that empty and the upstream service's record
+forwarded in the extras, and GPT and Grok arrive as four fields saying nothing. Reading each of those
+and filling the gaps from a database would put three kinds of card on one page, where the facts shown
+depended on which wire answered. One source is worth more than the coverage a merge would buy, so
+`Described` reads facts only from the reference.
+
+`upstream` is identity too: it is what the service actually serving a model calls it
+(`accounts/fireworks/models/kimi-k3`), and it is the second of the two keys a record is found under.
+It is not optional in practice, since most of what a gateway serves is resold and the
+provider-and-model split alone finds none of it.
+
+## What a request may generate
+
+`output` is the other field read off a listing, and it is not a fact for a card: it is what the
+request *sends* as its output limit, and the endpoint is the one party guaranteed to agree with
+itself about what it will accept. The Anthropic wire states it (`max_tokens` on the models API) for
+the models its vendor serves and leaves it empty for the ones it resells; the OpenAI wire never
+states it. `output_cap_of` in `reference.py` reads the listing first and the same record a card
+reads second, and `Prices.output_cap` asks it per agent built, so an endpoint that raises the
+number reaches a running session on its next turn. `Described` still draws the record and never the
+listing, so what a page *says* about a model keeps its one source; what a request sends is a
+different question with a different right answer.
+
+**The number sent is the model's whole maximum and not a budget**, and the reasoning is worth
+keeping because every other default in the field is lower. The model is never told the number, so a
+smaller one cannot make it terser; it can only cut a response off, with every token already paid
+for and nothing to act on. The one thing a low cap insures against is a runaway generation, which on
+the frontier models costs a few dollars once and almost never happens, and on the small open models
+where it does happen costs cents. Pacing is a different feature (`effort`, and Anthropic's task
+budget, which the model *is* told), and a per-request cost bound belongs beside the allowance as a
+visible setting if it is ever wanted. The default it replaces was Pydantic AI's 4096 on the
+Anthropic wire, which a model thinking at length ran into on ordinary coding turns.
+
+What it costs: sent above the endpoint's ceiling a request is refused outright rather than clamped,
+so a wrong record is a refused turn where a missing one was a card without a number. That is why the
+listing wins where it speaks, and why nothing is sent where neither source knows. And a request
+asking for the whole limit is one Anthropic's SDK will only make as a stream, which Pydantic AI
+falls back to on its own; the pass budget is sized for it
+([durability](durability.md#what-one-pass-does)).
+
+**Where neither source knows, the picker has a box.** `Choice.output_override` is a number somebody
+typed, recorded with the choice and fixed for the session's life like the thinking level beside it,
+and it beats whatever the console looks up: `agent_for` composes the wire's settings, then the cap it
+was handed, then the choice's own, so the precedence is the ordering that already says a recorded
+choice wins and not a second rule. The name is the rule said in one word. Empty is *not an override*
+rather than a zero or an unknown, and it is deliberately never the looked-up number copied into the
+record: that would be a second copy of reloadable configuration, frozen at whatever the reference
+happened to say the minute the session started, or at a blank if it was unreachable then. Left
+empty, a session sends what the catalogue and the reference say at each turn and follows them when
+they move.
+
+What it is for is the model the console has no number for - a resold model behind a gateway on a
+console with no reference configured - and the model somebody knows better about than the record
+does. What it costs is that a wrong number sticks to the session: above the ceiling that is a
+refused turn naming the number, below it a cut-off the page names the same way, and the way past
+either is a fork with the box changed. It is not a budget, for the reason above: the model is never
+told it.
+
+Three rules there are load-bearing:
+
+- **The routed id wins over the upstream name.** A gateway that has taken a model over under its own
+  key sets the terms the session is actually billed and limited by, so its record is the truer of
+  the two.
+- **A name two providers claim resolves to neither.** An aggregator republishes other people's
+  models under its own key at its own markup, so a flat index over every id collides in the
+  hundreds. Demanding uniqueness turns a wrong price into no price, which is the only safe way to be
+  wrong here. `test_reference.py` pins this against a fixture where the collision costs 15x.
+- **It can never stop the console starting.** This is [the
+  promise](../philosophy.md#refusing-at-startup-or-promising-not-to-raise) and not the refusal,
+  because nothing here can leave somebody holding a choice they cannot use. A reference that will
+  not load costs a card its numbers.
+
+`facts_of` is the same lookup asked from the other end: a card starts with a listing, and a session
+starts with a recorded choice, so the endpoint's own listing has to be found first. One function
+rather than two, because what prices a turn and how big that model's window is are the same record
+read for two fields, and two lookups could come to disagree about which record that is.
+`Prices.pricer` reads it for the cost, and `Service.read` reads it for `Conversation.window`, which
+is what every rule's gauge is drawn against.
+
+`Described.consulted` is what decides whether a card with no record says so. With
+`[model_reference]` absent nothing was looked up, so nothing is missing, and a marker there would
+report the absence of a feature nobody turned on.
+
+`format` in the config table exists so a second database is one more `ReferenceFormat` member and
+one more arm in `parse_reference`, which `assert_never` makes the type checker demand. It stays a
+value rather than becoming a plugin point.

@@ -1,0 +1,919 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- **The front page is a dashboard.** It lists the sessions that are unread and the ones still
+  working, both redrawn live, then a card for only scratch, the whole machine and each
+  repository, with its sessions, a **New session** press, a link to the repository on GitHub, and
+  when this console last fetched it or that the fetch failed. The press opens the questions about a
+  new session with that workspace already answered, where to start in a repository first.
+- **The session list and the rail can each be put away on a wide window**, from a chevron on the
+  column's inner edge, leaving a strip to bring it back; the list's choice holds on the dashboard
+  too. **And the conversation's width can be dragged** from its left edge, wider for a diff or
+  narrower for prose, with the arrow keys as well and Home or a double press putting it back. Both
+  are kept per browser, and the width is never more than the window has room for.
+- **`/commit` commits what is staged, with what you typed as the message.** A shortcut for the
+  `git commit` you would type into `Run`, run the same way in the session's sandbox and drawn as
+  that command. It stages nothing: what goes in a commit is yours, the model's or a plugin's to
+  stage.
+- **`/push` sends a session's branch to its repository.** It takes nothing from the box, pushes the
+  session's own branch, the one named above the box, under the same name with this console's
+  credentials, never forced, and draws what git said the way a command's result is drawn. What the
+  worktree has checked out does not change which branch moves. It reads nothing the session
+  configured: the commit crosses into the console's own clone of the repository and is pushed from
+  there.
+- **`/online` runs one command with the network on** in a session whose commands otherwise have it
+  off, for the `npm install` or the fetch a confined session still needs now and then. Its panel
+  says `online`. On exe.dev a command with the network can push to the repository without `/push`,
+  and so can a session started with the network on; the security notes say so.
+- **A batch of tool calls is drawn with its diff below the panel.** The net change the whole batch
+  made, as a `git diff` between the snapshots around it, so an `edit`, a `create` and a `bash` that
+  ran at once read as one change rather than three or none. It stands under a rule saying how many
+  files and lines it touched, which folds it, and one past 150 lines starts folded, so a merge does
+  not fill the page. The batch's calls above it are drawn as one box with a row each. An `edit`'s own diff and a `create`'s new file are still a press away inside their
+  calls, which are now drawn shut like every other. Nothing is drawn where the batch changed no
+  file, and a scratch-only session, with no worktree to snapshot, shows none, as before.
+- **A diff, a file and a shell command scroll sideways rather than wrapping**, as a fence already
+  did, and a block whose lines do not fit gets a `focus` button that opens it on its own, as wide as
+  the window. Escape or a press outside puts it away. Not on a phone, where the window is barely
+  wider than the block.
+- **A fence labelled `mermaid` or `svg` is drawn.** The picture it describes stands where the code
+  would, SVG as it was written or the diagram as the mermaid library renders it in your theme, and a
+  button to the left of `copy` puts the text back and takes it away again. The picture is an image,
+  so nothing a model wrote runs on the page, and the library is fetched only for a page with a
+  diagram on it.
+- **The session list says `working`** on a row while a pass is answering its session or one is
+  scheduled to, beside `unread` where both are true, so a row that says something arrived and a row
+  that says something is still coming can be told apart without opening either.
+- **A session with no repository gets a scratch directory and `bash` inside it.** Somewhere to run a
+  script or keep a note across turns, reaching nothing else on the machine; `read`, `edit` and
+  `create` reach it too. Where there is no sandbox to run a command in, such a session reaches
+  nothing, as before.
+- **A new mark.** A watch movement's mainplate, on the tab, the dashboard and the installed app's
+  icon. On the tab and the dashboard its two holes are the person's blue and the assistant's orange,
+  and the dashboard's follows the theme; the installed app's is one colour on the dark ground.
+- **Every session is told what the page draws.** One sentence of the console's own, composed beside
+  the note about what its tools reach, says that a `mermaid` or `svg` fence is drawn as a picture, so
+  a model with a flow or a figure to show writes one. The operator's standing instructions are left
+  alone, so rewriting those keeps it.
+- **A call opens on what it did rather than on JSON.** `bash` shows its command coloured as shell
+  above what came back; `edit` shows the diff of the change, with line numbers, in place of its
+  operations and its reply; `read` and `create` show the file coloured by its own grammar, with the
+  anchors the model was sent left out, so what is drawn and what the copy button hands over are
+  both the file, and a `create` that wrote its file shows the tool's reply alone rather than the
+  file twice. An `edit` and a `create` are drawn open, since what they did is what a reader
+  watching a turn is watching for; every other call is drawn shut as before, and the dock's
+  fold-all puts the open ones away at once. Every other tool, a plugin's included, shows its arguments one to
+  a row and its return as it was. The diff is recorded by the tool beside its reply, so an edit made
+  before this release opens as it always did.
+
+### Fixed
+- **A reasoning summary a gateway hands back as text is read as reasoning.** Some OpenAI-compatible
+  gateways return one wrapped in `<think>` tags as an ordinary text part, which the console drew as
+  an assistant panel saying `<think>` with a blank line above and below the title. The tags and
+  their newlines come off and the title goes to a reasoning panel; anything after the closing tag is
+  still the answer.
+- **The composer no longer grabs the keyboard on a phone.** It took the focus when its page arrived
+  and again once a message had gone, which on a phone puts the keyboard up over the conversation
+  somebody had come to read; it now waits to be touched. Forking still puts the cursor in the box
+  holding the message to edit, and a pointer still finds the cursor in the box on arrival and back
+  after a send.
+
+### Changed
+- **A session's worktree is a checkout of its own, and git works in it.** It has its own `.git`, so
+  `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
+  nobody else's, and `git fetch` brings the repository's current branches with no network, since
+  `origin` is the console's own clone, which is fetched every five minutes (`MAINPLATE_FETCH_EVERY`)
+  while any session not archived works in it. Its objects are borrowed from that clone, read-only,
+  rather than copied. Snapshots move into the clone under refs of the session's own, so a rebase in
+  the session rewrites nothing a fork plants from. Every git against a worktree, the console's own
+  snapshots and `list` included, now runs behind the same sandbox as `bash`, because a worktree's git
+  configuration is the session's to write; a command typed into the composer runs there too. A
+  session that deletes its own `.git` keeps its files and stops at its next turn, saying why. A
+  console without `bubblewrap` offers no repository at all. Sessions working in a repository from
+  before this release are not carried over.
+- **A command's status reads `exit 0` rather than `ok`**, one shape down the column with the colour
+  alone picking out the statuses that are not zero, and a command with no output says `no output`
+  where it said `said nothing`, folded, since its line, its time and its status are all there is.
+- **`just seed` plants what the stills show.** The gallery and the seeder read one table of fixture
+  sessions, so the demo database now carries the commands a person ran, the boundary a `forget`
+  draws, the diagram and SVG fences, and a different model per branch, exactly as the screenshots
+  do. A command still running moved to the in-flight page, since a command that never finishes is
+  honest under a pass and not in a settled session.
+- **The vendored htmx is the published 4.0.0 build**, where it was a build of the same version
+  with one byte's difference, and every vendored script and face is now recorded with its release
+  and digest in `scripts/vendored.toml`.
+- **Every rule says when its answer came back**, leading the figures it already carried, so a
+  conversation reads as a timeline rather than as a pile of counts: `09:32 · 3.4s · ↑96K …`. The
+  turn's own rule says when its first answer landed, so the moments read down the page in the order
+  they happened, and the whole moment down to the second is in the hover. Nothing new is recorded
+  for it, since a response has always carried its own timestamp. On a phone the fraction of the
+  window goes to make room, because the gauge along the rule already says it.
+- **Moments are printed in your own timezone.** Everything stays recorded in UTC; the browser tells
+  the console which clock it keeps, in a cookie, and the console draws every moment against it - the
+  rules, the session list's dates, the cache note and the archived sentence alike. Without the
+  script a page is drawn against the console's own zone, which for a unit on your own machine is the
+  same answer. A reader in another timezone pays one reload on their first visit.
+- **A session told to come back later waits for exactly that long.** A provider that rate limits a
+  request and says when it will take one - a subscription's usage limit with its `resets_at`, or a
+  standard `Retry-After` - parks the session until that moment instead of being retried every lease
+  for however many days that is, and the page says which limit was reached and when the next attempt
+  goes out. A 429 that names no moment is retried as it was before, and so is every other failure
+  that carries a moment: what the provider knows about its own limit, it does not know about an
+  outage.
+- **An anchored `grep` tool** searches Git-known repository text with a line-oriented regular
+  expression and returns bounded matching regions carrying the same anchors as `read`, so a match can
+  go straight to `edit` without a second call solely to acquire its address. An optional glob narrows
+  files, context and result counts are bounded, ignored trees stay out, and shell search remains for
+  multiline, structural and unusually configured queries.
+- **A live pass renews its durability lease.** The lease is a short liveness window, so a session
+  whose worker dies is available again quickly, while a separate one-hour budget still covers the
+  longest model request and stops a live pass that never finishes.
+
+- **A max output tokens override on the picker**, under the thinking level, for the model the
+  console has no number for: a resold model behind a gateway with no reference configured, or one
+  you know better about than the record does. A number there beats what the console looks up, for
+  the session's life, and is named on the session's card in the rail. Empty is not an override, and
+  it is deliberately not the looked-up number copied in: a session that leaves it empty sends what
+  the endpoint and the reference say at each turn and follows them when they move. The empty box
+  says what that is for the model picked above it, `max (128K)` or that nobody knows.
+- **An open model list is shown whole, and the start page scrolls as one box.** The list used to
+  give up height down to a couple of lines of card behind a scrollbar on a short window, so that
+  the questions under it stayed put; now nothing in the picker shrinks, and the fold is what keeps
+  that cheap, since the list is only long while it is open and a pick shuts it.
+
+- **A row in the session list says `unread`** when its session has recorded something since anybody
+  looked at it: an answer, a refusal, a command's result, a plugin setting itself up, and never a
+  message of your own. Opening the session clears it, and so does watching the answer arrive on a
+  page already open, which the page reports itself once it has drawn it. The mark is the console's
+  rather than any one browser's, so reading an answer on a phone clears it on the laptop too. A
+  console upgraded onto this starts with nothing marked.
+- **The session list is live.** It rides the same connection the transcript does, on every page
+  including the dashboard, so a session answered while you were reading another one shows `unread` in
+  the list at once and a session written to moves up it without a reload. A tab in the background
+  lets the connection go and picks it up again when shown, so a hidden page costs nothing and is
+  current the moment you come back to it.
+- **Archiving a session**, from a card in the rail, under the settings step, or from its row in the
+  session list, where the control shows as the pointer or the focus reaches the row: nothing more is
+  said in it, the message box is gone from its page and the row is muted at once, and a reconciler
+  takes its worktree, scratch and plugins' scratches off the disk in the background, once no pass or
+  command holds it. The conversation stays, and the rule under its last turn forks from the end, so
+  an archived session comes back as a live one with every turn and a fresh worktree at the files it
+  ended with.
+- **What a session is on stands in the rail**, on the session's own card: the endpoint and model,
+  the thinking level where one was chosen, the repository and the branch it is on, and what it takes
+  on disk, a key and a value to a row, with a value that does not fit beside its key dropped whole
+  to the line under it rather than broken mid-word. An archived session says so in one such row,
+  the date, where it was a paragraph. Nothing sits under the message box any more, and what
+  sits above it is only what the next press depends on: whether the cache is warm and what
+  re-sending costs, and the sentence saying what the press will do. The sentence over a command box
+  names the repository and branch a command runs in, which is where somebody about to commit or push
+  reads it. The session's total is no longer drawn beside the box, since the running total on the
+  last rule is the same figure and moves with the transcript.
+- **The message box is one card**, the text with a row of tools along its bottom and Send at the
+  right of that row, on a phone and a wide window alike; the buttons used to stand beside the box
+  and wrap under it on a phone. The row is one line of the box tall and a press on its empty part
+  puts the cursor in the box. The transcript spaces its panels and rules with a gap rather than a
+  margin on each, and a tighter one, so the last panel ends where the box begins, where a margin
+  under every panel put one more under the last and left a strip of nothing at the foot of every
+  scroll to the end.
+- **The shell makes room for a phone's keyboard.** The viewport meta asks the browser to shrink the
+  page under the keyboard (`interactive-widget=resizes-content`), which Chrome and Firefox do, and on
+  Safari, which does not, the script sizes the shell to the visual viewport when a keyboard is up, so
+  the box and its Send button sit on the keys rather than under them. Untested on a device.
+- A fork from the end of a conversation plants at the newest tree the parent recorded, which for an
+  archived session is the worktree as the reconciler found it; it used to plant at the repository's
+  head, which is files the conversation never saw.
+- What a session takes on disk, on its row in the sidebar and on its card in the rail:
+  its worktree, `.git` included, its scratch and its plugins' scratches, counted as `du`
+  counts them. Measured by a sweep on a timer (`measure_every`, five minutes by default) rather than
+  when a page is drawn, since a session that fetched a toolchain holds tens of thousands of files;
+  the figure's title says when it was measured. `Places.of` is the one list of which directories are
+  a session's, which is what taking a session off the disk will read.
+- `just shots` drives the same Python Playwright the suite does, so a checkout pins one Chromium and
+  needs no Node: `package.json` and `scripts/shoot.mjs` are gone, `scripts/shoot.py` is the driver,
+  and it shoots whatever `gallery.pages()` renders rather than a list of its own.
+- **Plugins**: somebody adds to this console without editing it. A plugin is a single executable,
+  spoken to with a JSON payload naming an event and answering with JSON naming effects, so it may be
+  written in any language, brings its own dependencies, is testable with an `echo` and a pipe, and
+  reaches nothing it was not handed. It may contribute a tool, instructions, a card of settings, an
+  answer in the composer, and a message put into the conversation, and it may end the turn one of its
+  tools was called in, for a call whose effect leaves the rest of that turn with nothing to do; it
+  may be shipped with the
+  console, installed by the operator in `config.yaml`, or carried by the repository a session works
+  in. Handoff and the guidance below are both plugins, which is what makes the pair a test of the
+  protocol rather than two examples of it - and what makes either replaceable.
+- A repository's own plugins, declared in `.mainplate/mainplate.yaml` and run behind the same mount
+  namespace `bash` uses, reaching the worktree they were handed and nothing else. Trusted by default,
+  per session, settled before the first message: choosing to work in a repository is already choosing
+  to run its build, its tests and its hooks, so the control is the *refusal* - a session reading a
+  stranger's pull request says so in the picker and none of that repository's code runs unattended.
+- A step between creating a session and typing into it, which is where somebody says which programs
+  this console may run. Creating a session records the choices and asks for a pass; that pass plants
+  the worktree and reads what each tier *declares* out of files, running nothing; the step then lists
+  every declared plugin with its path, grouped by where it came from, with a switch apiece and one on
+  each group's heading. `Load plugins` records the switches and asks for another pass, and *that*
+  pass runs `setup` on exactly the ones left on, all at once, before the conversation opens. So a
+  plugin somebody switched off is not merely contributing nothing, it was never launched, and a
+  session nobody confirms has executed nothing at all. One that will not set up puts you back on the
+  step with the reason above the switches, rather than stalling the conversation. Which plugins a
+  session runs is then settled for its life, because a tool definition leaving the cached prefix
+  invalidates everything under it exactly as one arriving late does, and forking is how it changes: a
+  branch carries its parent's turns and none of its plugins, so it lands on this same step with the
+  parent's switches as its defaults and declares, sets up and confirms afresh. That is what makes
+  editing a repository's `.mainplate/` and forking the way to iterate on a plugin, and it is why the
+  press is asked for again rather than inherited - a branch is planted at a tree the model wrote, so
+  what licenses running it is the decision to fork plus the confirmation in the branch. The real
+  cost: creating a session no longer carries the first message, so you create, wait, confirm, and
+  come back to type, and a fork stops at that screen before it answers anything - the step standing
+  in the transcript's place, so a branch will not show what its parent said until it is set up. The
+  step is watched over the same connection the conversation is, and becomes the conversation the
+  moment the session has loaded, without a reload by hand.
+- **A plugin sets itself up**, in one event that both gets it ready and asks what it contributes. It
+  is the one event with a network and the one with a directory of its own that survives the session,
+  which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an
+  interpreter and its dependencies there, and a plugin that wants a toolchain in the worktree fetches
+  it there. That directory is one plugin's alone in one session, named on every payload as `scratch`
+  and in the environment as `$MAINPLATE_PLUGIN_SCRATCH`, and it is `$HOME` inside the namespace at
+  every event - never the session's own scratch, which the model writes, because a plugin must not
+  execute out of a path the model can rewrite. Every event after it runs with the network shut, because what makes a connected run safe
+  is that it happens before the first message - over the commit the repository supplied, with nothing
+  the model wrote in the tree yet. It runs in a pass rather than in the press, so a repository whose
+  plugin builds a toolchain shows a page that says it is working instead of a button that hangs; a
+  setup that will not finish is recorded against that attempt, so turning the plugin off and pressing
+  again is a fresh one.
+- **A repository gets itself ready with a plugin of its own.** Every command in a session now runs
+  with the session's own scratch as its `$HOME`, and a repository's plugin has two things at `setup`
+  that it has at no other event: that scratch bound read-write, so what it installs is where those
+  commands look for it, and `$MAINPLATE_ENV`, a file whose `KEY=value` lines are then set for those
+  commands and for nothing else. So `uv sync` in a three-line script that prints nothing is what it
+  takes for a session to be able to run `just test`, nothing in the console knows what a Python is,
+  and a `PATH` written there is the `PATH`. It is an ordinary repository-tier plugin in every other
+  respect, with a switch on the settings step, so a session reading a repository rather than working
+  in it can leave it off and open exactly as it would over a repository carrying no such plugin. This
+  repository carries one, which installs mise, the tools `mise.toml` pins, and `just dependencies` -
+  the half of `just setup` that belongs to every session, split out because the other half installs
+  a git hook, which is a session's own choice to make.
+- **A plugin may stand in front of a turn ending.** A plugin that asks for `before_turn_end` is told each
+  time the model has answered and would stop, and an `inject` from it keeps the turn going: what it
+  said is put to the model in the console's voice and the model is asked again inside the same turn,
+  until it tries to stop and nothing sends it back. That is what a Claude Code `Stop` hook is, and it
+  is the event a check the model has to satisfy wants, where a delivery after the turn would open a
+  new one to say the same thing late. The payload carries `attempt`, how many times the turn has already
+  been sent back, so a plugin can bound itself; what was said is recorded per attempt and drawn
+  above the answer it shaped. The cost: every time the model is sent back is a model request, on the
+  largest context the turn has had, and the console sets no bound of its own.
+- **A plugin may refuse a tool call.** A plugin that asks for `before_tool` is told every call the
+  model makes, of any toolset, before it runs, and may answer `refuse` with a reason; the call then
+  does not run and the model is handed the reason in its place, naming the plugin, so that what a
+  refusal is for - `edit` rather than `sed -i`, this repository's own tool rather than a `bash` that
+  cannot reach it - is an answer the model can act on rather than a call that silently went nowhere.
+  A refusal is the call's return and not a retry, because nothing about the call was malformed, and
+  it is recorded in the call's own step, so a resumed pass replays it without asking the plugin
+  again. The cost: a process per tool call, per plugin that asked.
+- Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
+  `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
+  guidance** is the project's own Git-tracked `AGENTS.md`, read out of the worktree the session works
+  in.
+  The repository is concatenated last and so wins where the two disagree, because a repository is
+  right about itself. `AGENTS.md` rather than a name this console invented, with `CLAUDE.md` as the
+  fallback where a directory has no `AGENTS.md`: a file only mainplate can read is knowledge that
+  does not survive turning mainplate off, which is the whole reason to write it in the repository
+  rather than in a prompt. A leading YAML block is taken off, so a `paths:` list never reaches a
+  context window.
+- An index of the guidance elsewhere in the repository, one row per directory with the `description`
+  from that file's own frontmatter, carried in the instructions on every request. That a directory
+  *has* conventions is one line and what they are is a page, so the line rides in the prompt and the
+  page is read when it is wanted. The Git index is the ownership boundary: ignored and other
+  untracked files are never read as guidance. A directory holding both names is indexed once, under
+  the same first-name-wins rule that decides which one is read: a repository pairing an `AGENTS.md`
+  with a `CLAUDE.md` importing it would otherwise get a second row pointing at a file whose whole
+  content names the first.
+- The guidance covering a directory, handed over on the request after a file tool reaches into it,
+  as a system-voice message rather than an edit to the instructions, so the cached prefix is left
+  alone. Whether it has already been handed over is asked of the history the model is about to be
+  given, which answers every case with one question: the console delivered it, the model read the
+  file itself, the model wrote the file, a fork carried it across, or a `forget` dropped it and it
+  is handed over again. A `bash` command reaches none of this, because its argv is the model's and a
+  path inside it is not this console's to parse; the index is what covers that.
+- The system prompt drawn as a panel, shut, under the rule that opens the stretch of context it
+  belongs to. It is read from what that stretch recorded rather than out of a turn's messages, so it
+  is on the page while the first turn is still being answered rather than only once one has landed; a
+  stretch nothing has composed for yet draws the working dots on the panel's row, which is where a
+  session sits for as long as its clone and its worktree take. Drawn as the Markdown it is, since
+  what is in it is `.md` files and a wall of `##` is the one reading of them nobody meant; the source
+  rides along as `data-markdown`, so the copy button still hands back exactly what was sent. The
+  panel's row stands for it with its own opening line, clipped at the width of the panel. A console
+  that shows what a model answered and hides what it was told is showing half of how a turn happened.
+- Guidance handed over mid-turn drawn as a `guidance` panel, in the same shape, at the position it
+  was delivered. Its own kind rather than the system prompt's, because the two sit in different
+  places in the request - `instructions` in front of the cached prefix against a system part appended
+  once into the history - reach the model with different authority depending on which model it is,
+  and are two things the key can quiet apart. Shut, its row names the file it came from, which is the
+  line it opens with.
+- Places reached by name rather than by path: `read`, `edit` and `create` take a `root`, and a
+  command finds `$MAINPLATE_WORKTREE` and `$MAINPLATE_SCRATCH` in its environment. A worktree sits
+  under 32 hex characters of session id, and a model reproducing those from memory eventually
+  reproduces them wrong, which costs a refusal and a round trip to recover from. The names are one
+  vocabulary both the tools and the sandbox read, so the two surfaces of one answer cannot drift.
+- What a session is answered under recorded as a step, exactly as the model is sent it, composed
+  once per stretch of context before that stretch's first request and replayed after that.
+  Instructions sit in front of the cached prefix, so composing them again on a later turn would
+  re-price every remaining request the moment anything under them moved, and a session working on a
+  repository's own guidance moves it constantly. A `forget` ends a stretch and composes again, which
+  costs nothing: the prefix it would have invalidated has just been thrown away.
+
+- How full the model's context window is, on every rule and in two forms. The figures say how much
+  context the request carried, how much of it was read from the provider's cache, and what percentage
+  of the window that is; the rule's own line is a gauge of the same fraction, filled from the left and
+  shading toward red as it fills. The scale is the whole width of the rule and the fill is clipped to
+  it, so a point along the line means the same fraction on every rule of every session. The window is
+  the reference database's answer about the session's model, so a console with none configured draws
+  the counts and no fraction, exactly as it did before.
+- What the conversation has cost so far, on every rule beside what that turn or request cost. One
+  turn's price is only readable against the running total, and a total at the bottom of the page is
+  at the bottom of a conversation somebody is reading the middle of. The first unpriced turn takes it
+  off every rule below, because a total quietly missing a turn reads as the whole and understates it.
+- **Handoff**: ask a session to write down where it has got to, and carry on from that document with
+  everything above it out of the model's context. The summariser is the session itself, with the
+  tools it already had, so it checks the working tree rather than recalling it - which is the failure
+  mode a summary has, and the one nothing else can catch. It happens in the session rather than in a
+  branch, so the cost lands on the session's own total, the worktree is the one the work is in, and
+  the turn is answered on the prefix already cached. `hand_off` takes the document as an argument
+  because a model asked for one in prose writes "Here is the handoff: ... what next?", and the
+  framing then becomes durably part of what the next model is told. Neither the ask nor the tool
+  prescribes a shape: what a refactor needs handed over and what an investigation needs are different
+  documents. `/handoff` in the composer asks for one, and it is the one answer in that menu whose box
+  may be empty: what it does with the text is point the handoff at something, appended to the standing
+  ask rather than replacing it, and the ordinary handoff has nothing typed into it. The two messages
+  it writes are drawn as their own `note` kind, because every other message in a conversation was
+  typed by somebody. Handing over is the last thing its turn does: the document carries the boundary,
+  so the next turn starts from it, and anything the delivering turn went on to say would be written
+  into a history about to be thrown away. It ships as a **plugin** rather than as part of the console,
+  which is what makes every word of it replaceable: install your own beside it and turn ours off with
+  one switch.
+- **Auto-handoff**: a session hands itself off when its context reaches the reserve it keeps free for
+  writing one. Headroom in tokens rather than a percentage, because what has to be true is that the
+  handoff run has room to do its work, and that is the same absolute quantity on every model. It is a
+  window rather than a threshold - one turn can cross the reserve and overshoot it - and past the far
+  end the console asks for nothing rather than spending a request on a handoff that cannot land. On by
+  default, which is safe only here: a handoff is an append, so the whole conversation stays in the
+  transcript and a fork above the boundary recovers it, where every other harness's compaction
+  defaults on as a bet that its summary is good enough because the original is gone. The switch and
+  the reserve are per session and changeable while it runs, on the plugin's own card in the rail.
+- A line above the message box saying whether the provider still holds this conversation's prefix, and
+  what re-sending it costs with none of it cached. Meaningless before there was a cache and worth a row
+  now that there is one: a conversation picked up after lunch pays full input price for everything said
+  in it, and nothing about the request looks any different. One-sided, always - past the retention a
+  prefix is cold and this says so, and under it what it says is when the prefix was last *written*,
+  because eviction cannot be observed from here. The retention is the answering wire's own: the hour
+  this console asks the Anthropic wire for, and the half hour OpenAI publishes and offers no way to
+  change. A session on the shorter of them goes cold when it actually does, rather than spending the
+  difference drawing a dropped prefix as one written a little while ago, which is exactly the
+  interval somebody comes back in. Both ends are priced - with the whole prefix cached
+  and with none of it - because the gap between them is what waiting actually costs, and on a long
+  conversation it is a tenfold jump. Both are floors and carry a `+`: they price the input of the next
+  turn's first request, where the answer, the tools it runs and any further requests are all on top.
+  The server renders an absolute time, which cannot rot, and the script renders the reading of it
+  against the clock, since nothing here re-renders while somebody is away.
+- A session the provider will never accept a request from says so and stops, rather than spinning.
+  What it names is `fork`, because nothing can be put back: what was turned down is the recorded
+  history itself, and forking at the turn drops that turn's own requests while keeping everything
+  under them.
+- A documentation site, one page per part of the console, built by `just docs-build` and published
+  to GitHub Pages on a push to `main`. It is where the design narrative now lives, with `README.md`
+  as its home page: `AGENTS.md` is the map, `PHILOSOPHY.md` is the one idea and the rules every page
+  cites rather than restates, and several directories carry an `AGENTS.md` saying what a change
+  *there* must not break, which is a different thing from the page that argues why.
+
+### Fixed
+
+- **A turn of more than fifty round trips failed, and was retried into the same failure every
+  lease.** Nothing set a request limit, so every turn ran under Pydantic AI's default of fifty
+  requests, counted over replayed requests as well as live ones, and the fifty-first raised
+  something no part of the pass caught. A turn now makes as many requests as it takes; how much a
+  session may spend is a question about money, and will be bounded where money is counted.
+- **A start page shorter than the shut picker drew the model card over the thinking level** and
+  whatever sat under it, rather than scrolling. The model group was allowed to shrink so its list
+  could scroll while open, and kept that permission while shut, when there was no list to scroll and
+  nothing to clip the one card. Nothing in the picker shrinks now, open or shut, and the page scrolls.
+- **A request is sent with the model's whole output limit.** Nothing set one, so the Anthropic wire
+  ran on Pydantic AI's default of 4096 tokens, which a model thinking at length hit on ordinary
+  coding turns, with every token paid for and nothing to act on. The number now comes off the
+  endpoint's own listing where it states one and the reference database where it does not, on both
+  wires, and is sent as the model's maximum rather than a budget: the model is never told it, so a
+  smaller one buys only a cut-off answer.
+- **A session cut off at that limit stops and says so, rather than retrying for ever.** The answer
+  was recorded before the loop raised over it, so a redelivery replayed the same answer into the same
+  exception once per lease with nothing on screen but a failure. It is now written down as a refusal
+  under the request the turn could not go on to make, the page says the model was cut off and at
+  what number, and a fork at the turn is the way past, exactly as for a request the provider will
+  not take.
+- The fork page's `Fork and ask` button wears the same face as `Create session`, which is the same
+  press one page over; it had the browser's own.
+- **A session whose pass fell over says so.** A pass that raises is left unanswered by the worker and
+  redelivered once per lease for as long as it keeps raising, which is the right answer to a fault
+  somebody can fix - but the whole account of it was a line in the log, so the page drew the same
+  three dots it draws for a reply being written and the two were indistinguishable for as long as the
+  fault lasted. The reason is now recorded, keyed by how far the session had got so a retry claims the
+  same key rather than adding one per lease, and the end of the transcript says which of the two is
+  happening: a pass is answering it, it is queued, the last one failed and here is what it said and
+  when the next is due, or nothing is scheduled at all. The failure is still re-raised, so the
+  redelivery that resumes the session once the fault is fixed is untouched. What made this visible was
+  a bundled plugin raising on every request for two days with nothing anywhere on screen.
+- The bundled `guidance` plugin no longer walks past the repository root looking for nested
+  `AGENTS.md` files. A worktree planted under the clone it came from has the console's own guidance
+  one directory up, which was never given to the session and has no name relative to its root, so the
+  plugin exited non-zero on every request after the model read anything nested - and a plugin that
+  fails is a turn that never makes its next request.
+- **Prompt caching is on.** It is opt-in on the Anthropic wire and was never asked for, so every
+  request paid full input price for the whole conversation - and since a conversation is re-sent
+  whole on every turn, on a long turn that is most of the bill. Nothing about the request looked any
+  different, which is why the wire now answers a question about it rather than a setting sitting
+  somewhere it can be forgotten. An hour's retention rather than the default five minutes, which is a
+  stated bet: it is written at 2x base input against 1.25x, so it pays where a conversation is picked
+  up again after a pause, and that is what a chat console is.
+- The instructions no longer print a session's own directories. They named the worktree and the
+  scratch by absolute path, which is 32 hex characters of session id sitting in front of the entire
+  cached prefix, so no two sessions could share one and a fork could never read its parent's. The
+  root names and `$MAINPLATE_WORKTREE` were already the way to reach both, so nothing was given up.
+
+### Changed
+
+- **The console drives its own model-and-tool loop**, and `StepwiseDurability` is gone with the
+  Pydantic AI agent graph it was a capability of. Pydantic AI still makes every provider request and
+  types every message; what the console owns now is the order of a turn, which is what durability
+  was always about: the allowance, the inbox cursor, a plugin's injection, the tree snapshot, the
+  request, the response, and each tool's return are recorded by the same `Stepping` in the same
+  places, handed to the loop as a value rather than found through a context variable under somebody
+  else's hooks. What went with the graph is what the console never used: structured output, native
+  and deferred tools, and the request cap a turn had to switch off. **A tool turning a call down is
+  now recorded like a tool answering it**, under the call's key with the outcome saying which, so a
+  resumed pass replays the refusal the model was actually sent instead of running the tool again to
+  hear what it would say now. The graph's retry budget went with it: a refusal is the call's result,
+  and nothing counts how many a turn has had.
+- **Every date is printed `2031-03-14 10:20`**, where it was `Mar 14, 10:20`, and a full stamp in a
+  hover carries the offset rather than a zone abbreviation: `2031-03-14 10:09:26-05:00` where it was
+  `Mar 14, 10:09:26 CDT`. One canonical form at every reader, on the grounds that this is a console
+  for programmers: it sorts lexicographically, it reads the same in Berlin as in Chicago, and an
+  offset cannot be resolved two ways where `CST` is both US Central and China Standard. Which
+  *instant* is shown still follows the reader's own clock; only how it is written no longer does.
+- **A tool call's row says what it acted on**, beside the tool's name: the path a `read` or an
+  `edit` took, with which lines or how many operations, and the first line of what `bash` ran, with
+  how many lines follow. That is what makes the other half affordable: **every call is drawn shut,
+  whether or not it has come back.** The page keeps every toggle as the reader's decision, so a call
+  that opened itself while it was out stayed open for good once a reader had watched it arrive, and
+  a turn of twenty reads was twenty open boxes. What says a call is out is the working mark on its
+  row; the dock's third button still puts every fold back where the console had it.
+- **A plugin claiming one of the console's own leaders is refused**, at the first message, naming
+  both parties, exactly as two plugins claiming one tool are. Unrefused, an operator's plugin
+  answering to `/run` is a second row under the console's own word and a second mode button lit by
+  `!`, with whichever the page drew first getting the keyboard. A repository's leaders carry its
+  name and a colon, so they never could; and a leader is typed with every character a plugin's name
+  may carry, so `/quality-check:run` reaches the keyboard rather than only the menu.
+- **Every wire asks for its answer as a stream**, and collects it before anything above sees it, so
+  nothing on a page arrives sooner than it did. A plain request is one some endpoints will not take
+  at all: exe.dev's OpenAI wire refuses one outright, and Anthropic's SDK refuses a request asking
+  for a model's whole output limit the same way.
+- **A discovered exe.dev gateway writes its OpenAI endpoint first, and defaults to it.** The
+  Anthropic endpoint is one line below, and the picker's model list is the cleaner of the two there.
+- **The OpenAI wire speaks the responses API.** OpenAI's current models refuse function tools with
+  reasoning on over chat completions, and GPT-5.6 reasons by default, so a coding session on it was
+  a refused turn or a model with its reasoning switched off. The conversation is still sent whole on
+  every request and the checkpoint stays the only copy of it: the wire never asks the provider to
+  hold the history, and tells it not to keep the exchange either. It asks for a reasoning summary as
+  well, so a turn there draws the thinking it did: unasked, the API sends the reasoning back as
+  encrypted content with no text in it, and a session showed none of the thinking the same
+  conversation on the Anthropic wire showed throughout. What a panel holds here is a summary of the
+  reasoning rather than the model's own words. Sessions already on the wire carry on; a gateway model
+  that only speaks chat completions stops working there, and its own refusal says so.
+- **The lease a pass holds is an hour**, up from ten minutes. A request sent with a model's whole
+  output limit is one Anthropic's SDK budgets an hour of generation for, and the only thing the length
+  costs is how long a session waits after the process answering it dies.
+- The sentence under a stopped turn says the turn stopped and would stop the same way again, rather
+  than that the provider refused it, since a turn cut off at its output limit stops the same way and
+  no provider refused anything.
+- **A window too narrow for three columns takes the phone's shape at once**: the session list and
+  the rail both fold away behind the two clasps in the row across the top, at the width where the
+  three stop fitting. There used to be a shape between, with the rail folded behind a glyph floating
+  over the conversation while the list kept its column; it was a third state with a folding mechanism
+  of its own, and a half-width laptop window now gets the conversation alone with both panels a press
+  away. What a phone needs beyond the fold, a rule's parts stacked and its running total dropped,
+  fields that do not zoom on focus, targets sized for a thumb, stays a phone's.
+- **The session list is ordered by when a session was last written to**, so the conversation being
+  worked in sits at the top however long ago it was started; it used to be ordered by when each was
+  made. The row is dated by the same moment, and hovering the date says when the last message was
+  and when the session was made. The order is still the tree's: a branch sits under what it came
+  from, and the moment orders siblings. Nothing new is recorded for it, since the store already stamps
+  every message as it files it.
+- On a phone the session list folds away off the left edge behind a clasp, the way the rail folds
+  away off the right, and opening either shuts the other. Slid out it is the column a wide window
+  draws, dates, repositories and the tree's indentation included; it used to be a strip of chips
+  across the top that scrolled sideways and had given those up to fit. What slides out is one sheet
+  that scrolls itself, so a thumb between two rows or two cards moves the list and not the
+  conversation under it. The two clasps stand in a row at the top of the page rather than over the
+  corners of what is under them, say `Sessions` and `Controls` rather than a glyph apiece, and the
+  console's name stands between them.
+- The rail is three kinds of card: one for reading the conversation, which holds the search, the
+  key and the dock as sections; a card per running plugin; and one for the session, its facts with
+  archiving as the last section. Every row on them is words at the left and a value or a control at
+  the right. A switch is a checkbox drawn in the page's own chrome, on the settings step too. A
+  number's `Set` is a mark against its own box, drawn only while the box holds something
+  unrecorded; the card-wide button is gone. The rail is 16rem at every shape, held short of a
+  phone's far edge, where a wide window's column was 11rem. A number's box drops to the line under
+  a label too long to share one rather than breaking the label beside it.
+- The page is 10% larger. Everything but the monospace grid is sized in `rem` off one root value, so
+  this is one number rather than a sweep; the grid is stated in whole pixels and was measured again
+  rather than multiplied, since the pitches on either side of the answer are a pixel apart.
+- A rule's input figure is the *context* the request carried rather than the sum of what the turn's
+  requests were charged for. Every request of a turn carries the whole conversation again, so the sum
+  says the same tokens several times over and would draw a turn of four round trips as four times as
+  full as it is.
+- A rule's figures are symbols rather than words: `↑` and `↓` for the tokens sent and returned, `▣`
+  for how much of the first came out of the cache, and `Δ` against `Σ` for what one exchange cost
+  against what the conversation has. The cached count is inside the context figure as `↑96K (▣45K)`,
+  because it is part of that count rather than a figure of its own, and none is drawn in a stronger
+  ink than the others. A rule is one line that must not wrap and it now carries six figures; the
+  words are in the titles. It is also a size larger, because a line whose whole job is figures was
+  saving a couple of pixels of height at the cost of reading them at a glance.
+- A turn waiting on a tool call draws no reply panel under it. The call is already drawn working on
+  its own panel, so the dots below it said the same thing twice, in the shape of an empty reply that
+  nothing was writing.
+- A rule's line stops where the panels' text does rather than crossing the whole column, so it no
+  longer runs under the transcript's scrollbar - which matters more now that the line is a gauge.
+- The marker that opens a request's raw record names its turn as well as its request, `r3.1` rather
+  than `r1`. A rule inside a turn draws no `#N`, so the index alone said which request without saying
+  of what.
+- A forget's rule says `context cleared`, in the middle of the line, between the turn's own controls
+  at one end and its figures at the other. On a phone those three parts stack, one to a row.
+- Every panel folds, from its own row of facts, with the mark immediately right of the title. What a
+  reader wants put away is theirs to decide, so the console says only where each kind starts: a
+  message, a reply, a stretch of reasoning and a batch of calls open, a system prompt and a delivered
+  guidance file shut. Shut, a panel is one row carrying the front of what is in it - clipped by the
+  browser at whatever width the panel has, and for a batch of calls or commands the names of what ran
+  rather than a quotation - so the whole transcript folds down to its own outline. A tool call and a
+  command keep the fold they have, because their summary is facts about the block rather than the
+  block restated and a panel holds a batch of either. Reasoning, the system prompt and delivered
+  guidance lose theirs, which is a row apiece back: the thing their summary said is the thing the
+  panel's row now says, and once open that row held a lone marker.
+- The dock's fold-everything and unfold-everything buttons reach every panel rather than only the
+  calls, and a third button beside them puts every fold back where the console had it. That is not a
+  midpoint between the two: it hands out a different answer per fold, so it is the way back from
+  either of them, which without it are one-way presses over a whole conversation.
+- The panel saying a reply is being written, and a stretch of context whose instructions are not
+  composed yet, carry the working dots on their own row instead of opening a panel to show them.
+- The dock's leap to the start lands on the rule that opens the first turn rather than on the first
+  panel under it. That rule carries the turn's own facts and its fork link, and where the stretch has
+  instructions there is a system prompt panel between it and the message, so the top of a
+  conversation was left above the reader with nothing saying so.
+- Panels are named after what they hold, in the word the page prints: `prompt` and `steer` where
+  they read `you` and `you (steering)`. A reader who learns a word from a panel now finds it in the
+  code behind it. The `data-kind` values changed with the labels, and the reader's muted-kind
+  choices are stored under those values, so a kind that was quieted comes back once and is quieted
+  again.
+
+### Removed
+
+- The composer's `fork` and `aside` answers, and the `/fork` and `/aside` leaders with them. Both
+  forked the end of a live conversation, which is typing into it with extra steps, and what they
+  planted the branch at depended on whether a turn was running at the time, where the `fork` link on
+  a rule always plants at that turn's own tree. Forking is that link, at a turn boundary, and the
+  one end worth forking, an archived session's, carries the same link on the rule under its last
+  turn. `Parent` stays, from any fork. Sessions recorded as asides are still drawn as they were.
+
+## [0.0.1]
+
+### Added
+
+- A chat console over a Pydantic AI agent, where each session is a durable workflow under
+  `without-durability`'s SQLite store: the checkpoint *is* the conversation, so a session survives
+  a restart and a reply in flight is answered rather than lost.
+- `StepwiseDurability`, a Pydantic AI capability that routes an agent's model requests *and* its
+  tool calls through the running session's checkpoint, so a pass that reaches the provider and then
+  dies does not pay for that answer twice, and a tool that has already read a file or written one
+  is not run again against a directory that has moved since. Model requests are numbered by
+  position within the turn; tool calls are keyed by the call's own id instead, because a batch of
+  them runs concurrently and a counter would name a record by whichever won the race. Each response
+  is *priced* and *timed* on the way past, before the step records it, so what a turn cost in money
+  and in seconds is in the checkpoint beside what it said: settled the moment the request is
+  answered, where re-deriving either later would quietly change what an old session came to. A tool
+  call is timed as well, under its own id beside its result, because a tool returns a value of its
+  own shape and a record carrying both would be indistinguishable from a tool that returned a pair.
+  It is transparent outside a session, so the same agent stays usable in a script or a test.
+- `mainplate serve`, which runs the console and the worker that answers its sessions over one
+  SQLite file.
+- A conversation read as panels of blocks, so reasoning and a tool call each get their own panel
+  and their own colour beside the answer they belong to. Messages are rendered as Markdown and
+  sanitised before they reach the page, and a tool's arguments are laid out rather than shown as
+  the one line the model sent. A call carries how long it ran beside its name, so a folded turn
+  says where its time went without being opened. Everything monospace is drawn in a vendored
+  JuliaMono on a grid stated in whole pixels, so the tables and trees a model answers in, the gutter
+  down every file it reads, and the arrows, dingbats and symbols it reaches for are all on one cell
+  and join into lines rather than into dashes, instead of depending on what the reader happens to
+  have installed. Reasoning is set in italic, and the code a model quotes while reasoning is not.
+- A turn drawn as it happens, rather than all at once when it finishes. The responses and tool
+  results behind a running turn are already in the checkpoint, recorded step by step so a resumed
+  pass does not pay for them twice, so the page reads those instead of waiting for the turn's
+  messages: reasoning appears, then a call with its arguments, then its result, then the next
+  request. A call still out is drawn working, which is a state the transcript could always describe
+  and nothing could previously produce.
+- One live connection per page, held open for as long as the page is, carrying whatever it is
+  watching as that changes. Each message is a whole current render rather than a delta, so a
+  dropped connection costs nothing and a reconnect needs no replay; each names the region it is
+  for, so a second region joins the same connection rather than opening another. The server notices
+  by counting a session's recorded steps, which decodes none of them, so a quiet console sends no
+  bytes at all.
+- A rail beside the conversation: find-and-step search, a key that filters and doubles as the
+  colour legend, a dock that steps whole turns, every panel in play, or only what the model
+  produced, and folds every tool call, a follow-the-end toggle, and a light/dark/system theme. All
+  of it is an enhancement; with JavaScript off the console still renders, posts, and folds.
+- A **shelf**: text written and not sent, kept for one conversation and pulled back into the box on
+  demand. `Keep` sits beside Send because it acts on the box, and the list of what is kept is in the
+  rail where nothing rebuilds it mid-turn. Keeping clears the box and taking adds to it rather than
+  replacing what is there, so several kept notes assemble into one message. A fork inherits what its
+  parent kept, which the script copies because the server is never told a draft exists. It lives in
+  the browser, so it is per machine for now.
+- **Steering**: a message put to the model in the turn it is answering now, rather than queued for
+  the next one. It is appended to the session's inbox from outside the pass, because the worker may
+  be another process and the store is the only channel to it, and the pass appends what it finds
+  there to the request the agent is about to make, so it travels up with whatever tool results are
+  going the same way and shapes the very next answer rather than the one after it. A message no
+  request carried is not stranded and nothing has to claim it: it is still in the queue, and
+  whichever turn opens next opens on it. How far down that queue each request had read is recorded
+  as a cursor, so a resumed pass asks the question the first pass asked rather than whatever is
+  queued by then. It reads back as a `steer` panel below the tool results it travelled with and
+  above the answer it shaped, and it is on the page the instant it is sent rather than when the turn
+  ends.
+- **`Send` decides for itself whether a message steers**, because neither the button nor the reader
+  can know: the page was rendered from a checkpoint that has moved by the time a paragraph has been
+  typed into it, so choosing between two moments on the page is choosing against a state that no
+  longer holds. Neither can the server, which read the checkpoint and then chose which of two writes
+  to make, with a turn free to end between the two. So nobody decides and the answer is the same
+  write either way: the message goes into the queue, and where it lands is wherever the pass finds
+  it, folded into the request the turn is about to make or opening the next turn. The pass is the
+  only party reading at the moment that answer is true. `Next` stays in the menu as the one answer
+  nothing can settle for you, since wanting to be taken up *after* the reply that is coming is an
+  intent no record carries.
+- **A rule at every model request**, carrying the worktree taken before it, how long it took, what
+  its answer cost, and the raw record behind it, which is the unit the checkpoint actually has a key
+  for: a panel is a run of blocks of one kind and a request is a round trip, so a panel's record was
+  a slice of a stored value reached by indices one walk had to hand another. It adds no concept,
+  because every rule the transcript draws already stood at a request boundary - a turn opens with its
+  first request - and the rule that opens a turn carries the turn's own facts besides. A record can
+  be opened while the turn is still running, and opens in place, below the rule it belongs to.
+- **Asides**: a fork recorded as a step out you mean to come back from, and a way back that sends a
+  message into the conversation it came out of. Nothing mechanical separates an aside from a fork, so
+  what is recorded is only what was meant, and what it buys is that the sidebar draws a digression as
+  one. Coming back is a *message* rather than a merge: splicing an aside's turns into its parent
+  would leave the parent holding requests whose context never existed. The way back is offered from
+  any fork, since every fork knows where it came from.
+- **Fork**, in a menu behind a caret beside Send: it asks the message in the box in a new session
+  carrying this whole conversation and leaves the original untouched, which is the same operation the
+  `fork` link on every rule performs, aimed at the end rather than at a turn. Where a message goes is
+  one field on the composer's form, posted as the submit button's own value, and the menu is a
+  `<details>` of submit buttons, so the whole control opens, chooses and sends with JavaScript off.
+  Shift-Enter still means Send. Forking the end of a conversation was always supported and reachable
+  by nothing.
+- A rule opening each turn, carrying everything true of the turn rather than of any panel inside it:
+  which turn it is, where the session may be forked from, the worktree the turn started on, and what
+  it spent in time, tokens and money. All three are read from the same recorded responses the panels
+  are, so a turn being answered fills its rule in as it runs rather than showing nothing until it
+  lands. The time is what the turn spent waiting on the provider, summed over its round trips, since
+  the calls it made in between are timed on their own panels and ran at once. A model nobody
+  publishes a price for shows counts and no money, and a turn nothing timed shows no seconds, which
+  is the same blank a card shows; the session's own total sits under the message box. Forking moved here from a link
+  revealed by hovering a message, which is where a touch screen could not reach it at all.
+- A panel marked for a beat when it arrives or when what it says changes, tinted in its own kind's
+  hue, so a reader watching a turn fill in is told which part of it moved rather than left to spot
+  it. Worked out from what a panel *says*, so unfolding a call or laying a search mark over one is
+  not mistaken for news, and suppressed on a first render, where every panel is new.
+- A copy button on every panel and inside every block of code in one, so what a model answered, what
+  a call was handed, and what it gave back can each be taken off the page whole. One control in two
+  places: the panel's own stands in its row of facts and hands over the whole of what it says, and a
+  block of code sits inside its own corner and hands over itself. What comes out is the Markdown a
+  message was written as rather than a reading of the rendering of it, so the fences, the emphasis
+  and the tables survive being copied, and it does not depend on what the reader has open, so a call
+  copies the same folded as unfolded.
+- Following the end as a mode rather than a setting: a page opens pinned to the end, scrolling away
+  releases it, scrolling back to the bottom re-enters it, and sending a message re-enters it too,
+  since what a reader wants to see after typing is the answer to what they just sent.
+- Shift-Enter sends a message and plain Enter breaks the line, which is that way round because a
+  message here is prose that often wants a second paragraph and a fenced block. An empty box refuses
+  from the keyboard exactly as it refuses from the button, and the cursor goes back into the box
+  once the message has gone, whichever way it was sent.
+- A message box that is one line at rest and grows a line at a time with what is typed, to fourteen
+  lines or two fifths of the window, whichever is smaller, and scrolls inside itself past that. Send
+  keeps its own height beside it rather than growing into a slab, and the box is edged in the
+  person's own hue, so what a message is written in sits on the same side of the palette as the
+  panel it becomes.
+- A console that reads on a phone. Under 48rem the session list stops being a 17rem column and
+  becomes a strip of chips across the top that scrolls sideways, which gives the conversation all
+  but about a twentieth of the height and keeps every session one swipe away with no control to
+  learn; the session being read is brought into view, on a strip and on a full-height list alike.
+  The choosing on the new-session page becomes one scroller rather than three nested ones, with the
+  message box still pinned beneath it, and the fork page scrolls as the single long thing it is.
+  Every field that takes text or a choice is held at 16px, which is what stops a phone zooming the
+  page as it is focused, and every control in the rail is sized to be hit rather than pointed at.
+  A branch link, which a wide window reveals on hover, is drawn always where nothing can hover.
+- `mainplate install` and `mainplate uninstall`, which converge and remove a user systemd unit
+  pointing at the interpreter that ran them. Any `MAINPLATE_*` setting lives in an
+  `EnvironmentFile` created `0600` on the first install and never overwritten.
+- Endpoints in `config.yaml`: a URL, the API format spoken to it (`anthropic` or `openai`), and a
+  credential. Each session records the endpoint and model it was created on and is answered on them
+  for life, so changing what is configured leaves existing conversations readable. Credentials are
+  read from the `0600` file and handed to the SDK, so they never enter the process environment.
+- Model discovery: no models are configured anywhere. Each endpoint's own model-list API is asked
+  what it serves, once before the console takes traffic and then on a timer, and the picker offers
+  whatever comes back, grouped by the vendor each model comes from. A refresh that fails keeps the
+  models discovered earlier; a first read that fails is a startup failure naming the endpoint.
+  `default_model` names which one a new session starts on, defaulting to whatever the endpoint
+  listed first. What the picker shows is what an endpoint *advertises*, which is narrower than what
+  it will route, so an existing session on a model that never appears in the list is still
+  answered: only a missing endpoint stops one.
+- exe.dev support: on a VM with the built-in LLM integration, `mainplate install` discovers it
+  through the reflection integration and writes keyless endpoints, so the box holds no credential
+  at all. One gateway gets one endpoint per API format, which between them reach Anthropic, OpenAI,
+  Fireworks, and xAI: around seventy models with nothing configured.
+- A thinking level on every session, chosen beside the endpoint and the model and fixed with them
+  for its life. Eight values, because saying nothing about thinking, asking for it to be off, and
+  asking for it at the provider's own budget are three different requests rather than gradations of
+  one. The effort names come from Pydantic AI's own type, so a level it adds reaches the picker
+  without a change here. `default_thinking` names the one a new session starts on.
+- Forking: any turn can be branched into a new session that carries the turns before it, on a
+  different model, a different endpoint, or a different thinking level. A fork is a *copy* of an
+  immutable prefix rather than a pointer into its parent, so each session's checkpoint stays the
+  whole of its own conversation and neither can change what the other reads. The branch point is
+  before the forked turn's message, which comes across editable and is asked again on the new
+  model, so seeing a turn answered differently never means retyping the question. The sidebar draws
+  the resulting tree, each fork under what it came from and labelled with the turn it left at.
+- A repository picker on the new-session page, alongside the endpoint, model and thinking level. Where
+  the repositories come from is an interface (`forge.py`) with one implementation: on an exe.dev VM,
+  `ExeDevGitHub` offers whatever GitHub integrations are attached, which needs no credential at all
+  because exe.dev injects one at its own edge. Anywhere else no forge reaches anything, the picker
+  does not appear, and the console is what it was before: a place to talk. A session may also choose
+  no repository. A fork may *attach* a repository to a session that had none, and may not *swap*
+  one for another: re-asking a turn against different files is a different question, where carrying
+  on with files where there were none is the ordinary shape of thinking something through and then
+  going to work on it.
+- Git snapshots: a session that picked a repository gets a worktree of its own, and the tree is
+  recorded before every model request rather than once per turn, so a turn that edits files records
+  the state on each side of the work. A model request is the only boundary where that is honest:
+  the tools of the previous batch have all returned, where a capture between two calls of one batch
+  would record a tree the other calls were still writing to. Snapshots go through a shadow index,
+  so nothing a reader can
+  see moves - not their staged changes, not `HEAD`, not a branch, not `git log` - and are chained
+  under `refs/mainplate/snapshots` so they survive `git gc`. An unchanged worktree writes no new
+  object at all. Forking checks the new session's worktree out at the tree the forked turn
+  originally saw, so a branch re-asks its question against the files that question was asked about.
+  Snapshots are gitignore-aware, so what a branch checks out is the source as that turn saw it and
+  never a `.venv`, a build directory, or an untracked file holding a secret. Everything this console
+  runs git for outside the sandbox, snapshots and `list` both, is told which git directory is its own
+  rather than finding one by looking down from the worktree, so the configuration git reads comes out
+  of the clone the sandbox binds read-only: settings that name a program git then runs are numerous
+  and the list is open-ended, and a session's worktree is the one directory that session may write.
+  A session cannot plant one either: the `.git` pointer at the root of its worktree is bound
+  read-only over the tree, so a command cannot write, remove, move or unmount it, and the file tools
+  refuse it by name because they write from the parent and pass through no sandbox at all.
+- Two isolation settings on a session, picked when it is created and fixed for its life like the
+  endpoint and the model, with forking the way to change them. **What files it has** is a repository
+  it works in, no files at all, or this whole machine. **Network** is on or off, and off rather than
+  a list of allowed hosts, because an allowlist holding a code forge holds every gist on it and one
+  holding a package registry holds a package anybody can publish.
+- The two are independent, because the whole-machine setting is still a sandbox with `/` bound
+  rather than no sandbox: a session can have every file and no network, or a worktree and a network.
+  A session on the whole machine can read this console's own configuration and its store, which is
+  what choosing it means, and the card says so.
+- Where a session works and what its tools may touch are **one** question on the picker, not two
+  that have to be kept agreeing: the choices are every repository this console can reach, plus no
+  files and this whole machine. Picking one settles both, so they cannot disagree at the source.
+- A `bash` tool, on sessions with somewhere to run one and only where there is a sandbox to run it
+  in. Every command runs in a mount namespace of its own holding that session's worktree, its clone
+  read-only, and a read-only system: there is no network, no home directory, and nothing belonging
+  to any other session. Reading git works, so `status`, `diff`, `log` and `blame` all answer, while
+  `add`, `commit` and `stash` fail on a read-only filesystem. That is deliberate rather than
+  incidental: a git write from inside would be a second history that no panel shows, no fork
+  inherits and no rewind restores, and committing is the person's to do. Snapshots are unaffected
+  because they run outside the sandbox, so the history they are chained onto cannot be rewritten
+  from in there.
+- Each command gets a new namespace and starts in the session's worktree, so nothing persists
+  between two calls: no working directory, no exported variable, no background process. That follows from how a pass resumes rather than from
+  frugality, since a sandbox held across calls would offer its state on a first pass and withhold it
+  on a resumed one, where recorded results are replayed instead of re-run. Output is capped to its
+  first and last lines with a count of what was dropped, a command that runs past its time limit is
+  stopped and says so, and a command's exit status is always stated so success is never inferred
+  from an empty answer.
+- A scratch directory per session, beside its worktree and bound read-write, for whatever is not the
+  repository's: a build cache, a downloaded artifact, a note to itself. It survives from one call to
+  the next and from one turn to the next, and nothing snapshots it, which is the same decision as
+  snapshots honouring a `.gitignore`: going back to before a call should not uninstall what was
+  installed since. Being outside the worktree is what keeps it out of `list` and out of `git
+  status`, where a directory inside would need an exclusion written somewhere no command can write.
+- Two tool calls aimed at one file are serialised, so a batch of them cannot lose each other's work.
+  A model emits several calls in one response and they run concurrently: two edits to one file each
+  read it, each computed against what they read, and the loser's write disappeared while both calls
+  reported success. Two `create`s of one path raced the same way, so the promise never to overwrite
+  quietly failed. The lock covers the whole read-modify-write, so the second call reads the first
+  one's result and an edit whose anchors that invalidated now fails loudly instead of silently.
+- `read`, `edit` and `create` reach the scratch directory as well as the repository, so a plan or a
+  notes file can be kept across turns and edited by anchor rather than rewritten. A relative path
+  still means the repository; anywhere else is reached by naming its absolute path. `list` stays on
+  the repository alone, because it answers by asking git and the scratch is deliberately not in git,
+  and it says so and points at `bash` rather than failing.
+- A console started on a machine with no `bwrap` says so in its log and offers its sessions every
+  file tool and no `bash`, rather than refusing to start or running commands unconfined.
+- A `list` tool taking a directory and a depth, so finding a file is looking rather than guessing at
+  a name. A directory at the depth asked for is summarised with a count instead of opened, so the
+  depth bounds the answer. It asks git what is there rather than walking, which means a `.gitignore`
+  is obeyed and an installed environment or a build directory never reaches the model, while a file
+  the agent itself just wrote does.
+- File tools, on sessions that picked a repository: `read`, `edit`, and `create`, bound to that
+  session's own worktree and refusing any path outside it. Lines are addressed by a four-letter
+  anchor derived from the line's own content rather than by a line number, so an edit elsewhere in
+  the file leaves other anchors valid and a line that has changed since it was read is a loud
+  refusal instead of a silent edit in the wrong place. Nothing is stored between calls: the anchors
+  are recomputed on every read, and where two lines would share one they take in the line above
+  until they differ. A read renders each line as its anchor, a box-drawing `│`, then the line, so
+  that no part of what the tool is saying can be mistaken for the file's own content, and the tool
+  descriptions carry a worked example of the format.
+- An `edit` that names a span by its ends, with the field name saying whether each end is inside it
+  (`from`/`to`) or outside it (`after`/`before`). One end alone inserts there. Blank lines carry no
+  anchor, so an exclusive end is how a span reaches them: deleting a function and the blank lines
+  after it names the next code line with `before` and neither names a blank nor retypes that line.
+  A `substitute` operation replaces text inside one anchored line, for when retyping a whole line
+  of prose to change a word is the wasteful part. Operations are given as a list, resolved against
+  one reading of the file and applied together, so they cannot shift each other and a batch whose
+  operations overlap is refused entire rather than resolved in an order nobody chose. Every reply
+  shows the changed regions with their new anchors, and names any anchor elsewhere in the file that
+  changed as a result, so a run of edits needs no re-read between them.
+- There is deliberately no tool that overwrites a whole file. `create` refuses a path that already
+  exists, so making a file and changing one stay separate operations: a tool that rewrote a file
+  wholesale would be the escape hatch from anchored editing, discarding whatever had not been read.
+- The repository a session works in, on its row in the sidebar, as `owner/repo` while a forge
+  reaches it and the recorded id once none does. It is read out of the session's own `choice` with
+  one join rather than held in the index: a checkpoint is a row per key, so this costs one small
+  row per session and keeps the index the settled facts it already held.
+- A `recorded` disclosure under every settled panel, showing the JSON the checkpoint actually holds
+  behind it: the prompt for a person's panel, and the stored parts for every other. Fetched only
+  when it is opened, so the transcript a running turn keeps updating does not carry it, and
+  preserved across that update so it does not shut under the reader's hand. A panel of the turn in
+  flight offers none, because what is behind it is still being written.
+- Syntax highlighting on fenced code blocks, in the console's own palette rather than an imported
+  theme. Only Pygments' own token classes survive sanitising, so a reply cannot paint itself as any
+  part of the console's chrome.
+- A new-session page built around the choosing rather than around the box. The endpoints are cards
+  naming the API format each speaks and the URL each points at, which is what tells two endpoints
+  apart when one gateway answers both formats on one hostname; the models are cards carrying cost,
+  context window, output cap, capabilities and release date. Every option is a radio input inside a
+  label, so the whole card is the target and the page works with JavaScript off. The choosing runs
+  down the top of the page with the message box pinned under it, which is the arrangement a page
+  with no conversation on it wants, and it is ordered widest-first - the repository, then the
+  endpoint, then the model, then the thinking level, then the name and the message box - so the
+  choice that decides what the agent can touch at all is the first thing on the page rather than a
+  line under seventy model cards.
+- All four questions the picker asks are one component: a group of cards that folds down to the one
+  picked, says how many options it has (`27 options`), and can be narrowed by typing. A gateway
+  serves seventy models, and a wall of that many cards left everything after it past the end of a
+  scroll; shut, the whole of what a session is decided by is four lines and four cards. The fold is
+  a checkbox and the folding is a CSS `:has()` rule, so it works with JavaScript off and a shut
+  group draws the card whose radio is actually checked rather than a summary that could go stale.
+  With scripting on, picking a card folds its group away.
+- The repository and the thinking level are cards too, rather than `<select>`s. A native `<option>`
+  renders as text in every browser, so a select can carry neither the fold nor the forge a
+  repository was reached through - and that forge is the fact telling two rows apart the moment
+  repositories come from more than one place.
+- Typing narrows a group. Each carries a `<datalist>` of the names in it, so the browser completes
+  one with no script at all, and the script hides the cards that do not match. Matching is over a
+  card's whole text, so a model answers to its name and to the id the request will actually name.
+  Naming one exactly picks it and shuts the group, which is what taking an entry from the
+  completion menu does; the match is never on a prefix, so spelling `xhigh` does not stop at
+  `high`.
+- An optional name for a session, in a field above the message box. Left empty, a session is named
+  after its first message exactly as before. A given name goes through the same rule, so there is
+  one answer to what a session name is rather than one per way of arriving at one.
+- A model reference database, off unless `config.yaml` names one under `model_reference`. No
+  gateway reached so far publishes a price anywhere in its model list, and coverage of everything
+  else is uneven: an endpoint describes its own vendor's models richly, forwards somebody else's record
+  verbatim for the ones it resells, and says nothing at all about the rest. So every fact on a card
+  comes from the one database instead, which is what lets two models on a page be compared. Records
+  are found by the routed `provider/model` id first and then by the model's canonical name upstream,
+  and a name two providers claim resolves to neither, so an ambiguous price is shown as no price
+  rather than as somebody's markup. `source` is fetched when it is a URL and read when it is a path,
+  so a machine with no outbound access can point at a file. It is read before the console is ready
+  and re-read on a timer, and unlike model discovery it can never stop the console starting: a
+  database that will not load costs a card its numbers and nothing else. Where one is configured and
+  has no record for a model, the card says so; where none is configured, nothing is reported as
+  missing, because nothing was asked.
+- Configuration is YAML (`config.yaml`) rather than TOML, and the vocabulary it uses is settled.
+  What the file declares is an **endpoint**: a `url`, the `format` spoken to it, and a credential.
+  The **provider** of a model (`anthropic`, `fireworks`, `xai`) is discovered rather than
+  configured and is deliberately not a level of that hierarchy, because the same provider appears
+  under more than one endpoint: every Fireworks model on exe.dev's gateway is listed by both of its
+  formats under one id. So the shape is `endpoint -> model`, with the provider the heading the
+  model cards are grouped under, and `format` means the same thing here as it does under
+  `model_reference`.

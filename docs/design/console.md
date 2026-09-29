@@ -1,0 +1,1242 @@
+# The console
+
+The page: how it is rendered, how a second render reaches a browser nobody reloaded, and the
+controls around the conversation. What *draws* it, the two shapes, the one value that scales
+everything, and the monospace grid, is [the stylesheet and the grid](assets.md).
+
+## htmx 4
+
+Vendored at `assets/htmax.min.js`, and it reads very differently from htmx 2: explicit `:inherited`,
+lowercase colon-separated event names (`hx-on:htmx:after:swap`), `hx-status:` in place of
+`responseHandling`, and every status swapping except `204` and `304`.
+
+**`htmax` and not `htmx`, and the extensions are gated by a meta tag.** `htmax` is core plus every
+bundled extension in one file, taken because one file cannot drift from itself: core and an
+extension vendored separately are two files that have to be kept on one version, and the failure
+when they are not is a swap that silently misbehaves rather than an error anybody sees. The price is
+ten extensions this console does not want, several of which would change how a page behaves just by
+being included: `history-cache` puts back the history store htmx 4 deliberately removed, and
+`hx-live` and `alpine-compat` are reactive scripting. `<meta name="htmx-config" content="extensions:
+...">` is the allowlist, read before any of them register, so a name absent from `EXTENSIONS` in
+`pages.py` is never installed rather than installed and unused.
+
+## Pages, and the one connection
+
+Pages are `without-html` node trees, [pure functions of already-answered
+questions](../philosophy.md#a-page-is-a-pure-function-of-already-answered-questions). A page and the
+fragment inside it are the same function called at two depths, which is what stops the two
+renderings from disagreeing.
+
+**A page holds one connection and the transcript carries no `hx-` attribute of its own.** The region
+neither asks for itself nor decides when to: `streaming.py` sends it down the page's event stream
+whenever the session records anything. That deletes a whole class of bug rather than moving it: a
+trigger on a region that is itself replaced had to be `every` and never `load`, because morphing
+keeps the element and a `load` poll fires exactly once and then waits forever on an answer that
+already arrived, invisibly to any markup assertion. A region with no trigger has nothing to get
+wrong.
+
+**`transcript_region` takes a whole `Conversation` rather than the things drawn out of one**,
+because every caller had one in hand and was taking it apart the same way. What the region needs is
+the session, what was said, whether it is stalled and the model's window, and four arguments derived
+from one value are four chances for a caller to pair a transcript with another session's window.
+
+**One connection drives whichever regions the page's shape has**, which is what `partial` was always
+for. A session past [its settings step](plugins.md#starting-a-session-takes-four-steps) is the
+transcript and [the cache note](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) in
+the composer; a session still on that step is the step, which has neither of those. One predicate,
+`settling`, decides both which shape the page is drawn in and which partials the stream sends, so the
+two cannot disagree - and they must not, because a partial naming a target that is not there is
+dropped in silence, which is a spinner that never resolves. **The session list rides every message
+on every page**, the dashboard and the new-session page included, because it is a region of every
+page and it moves when any session does: the token the stream polls has a half for the list, three
+aggregates over the store, beside the session's own. The dashboard's sessions that want attention
+are read off the same rows, so they ride the same half and need no token of their own; the dashboard
+says so by connecting with `shape=dashboard`, the other page with no session sends nothing, and each
+is sent only the regions it has. What is redrawn is the `<ul>` and not the sidebar around it,
+because what holds the list slid out on a phone is an attribute the script put on the sidebar, and a
+morph of the sidebar would take it off and snap the sheet shut under a thumb every time any session
+moved.
+
+**The page states its shape when it connects, and the stream says once when that shape is over.** A
+page drawn as the step whose session has since loaded is exactly the case above: the checkpoint's
+shape is the conversation and the page has nowhere to put one. So the step's stream URL carries
+`shape=settling`, the stream compares that against the checkpoint on every tick, and the moment they
+differ it sends one *named* event, `loaded`, and ends. htmx hands a named event to the element holding
+the connection rather than to a target, the element closes on it, and the script reloads the page,
+which opens a connection of its own in the new shape. The page states it rather than the stream
+remembering it, because a connection re-opened after the change has to be answered the same way. The
+cost, stated: one full reload at the step's end, over a page with nothing on it worth keeping.
+
+Three things about that connection are decided rather than incidental:
+
+- **It lives outside everything that swaps**, directly under `body`. Held by the transcript it would
+  be a connection its own traffic kept tearing down. Its target is itself with `innerHTML`, so it is
+  an inert sink: every message is `<hx-partial>` elements naming their own targets, which htmx
+  applies while leaving the connecting element alone, and anything else lands somewhere harmless
+  rather than over the conversation.
+- **Every message is a whole current render, never a delta.** So a reconnect needs no replay and no
+  cursor, a dropped frame costs nothing, and a duplicate morphs to a no-op. It is also why the first
+  thing a stream sends is the current state: what a page that has just connected needs and what one
+  connected for an hour needs are the same thing.
+- **The server notices by polling a change token**, not by being told. `Service.token` counts a
+  session's recorded steps and reads where it stands with the worker, which is cheap because it
+  decodes no value and is three rows by primary key. The two halves of the process stay joined only
+  by the store, exactly as they would be if the worker were elsewhere. The worker's standing is in
+  there because a pass that falls over records *nothing*, so a token made of the count alone holds
+  still while the page sits under a spinner; see
+  [what the worker is doing about a session](durability.md#what-the-worker-is-doing-about-a-session).
+- **A hidden tab lets the connection go, and takes it up again when shown.** That is htmx's own
+  `pauseOnBackground`, pinned by `TestLettingGoOfTheConnectionWhileHidden` rather than anything this
+  console wrote: a page nobody can see costs the console no polling, and coming back to the tab
+  reconnects, where the first message is the whole current state, so the page is current at once.
+  It is also what makes the seen mark below honest.
+
+**The page acknowledges what it has shown, and that is what marks a session as looked at while it is
+open.** The stream deliberately marks nothing. The server learns that a tab has gone dark only when a
+write to it fails, and the first write after that lands in a socket the browser has already left, so
+a mark made on send would land on exactly the answer that arrived while nobody was looking - and
+`without-http`'s HTTP/1.1 path reads the socket only while the request is being read, so there is no
+earlier signal to have. The page, which lets go of the connection while hidden and so is only ever
+sent what it can show, posts to `/fragments/seen` after it has swapped a message in, coalesced over a
+short beat because a running turn is several messages a second and the mark says "as it now stands".
+The address rides on the stream element as `data-seen`, so the thing acknowledging is the thing that
+was sent to. With the script absent, serving the page is the one mark there is. The cost, stated: one
+small request per beat of a running turn on every open page, which is a row update and no render.
+
+The transcript swaps with **`outerMorph`**, and that is what lets a turn be watched: a turn records
+several times while it runs, so a replacement would shut a call the reader opened to watch, over and
+over, precisely while they were reading it. `test_browser.py` pins that against a real Chromium and
+a real server, because it is a second render reaching a page nobody reloaded and neither a still nor
+a markup assertion can see one.
+
+## What a swap must not disturb
+
+**A panel that arrives or changes is marked for a beat** (`data-fresh`, a colour fade in the panel's
+own kind hue), because a re-render that lands silently leaves the reader to spot what moved. Two
+things there are decided:
+
+- **The change is worked out here, not taken from the swap.** Morphing reports nothing a listener
+  can hear: `htmx:before:morph:node` is an extension hook rather than a DOM event, and it fires
+  before htmx has decided whether the node differs. So `mainplate.js` keeps a signature per panel.
+- **The signature is the *text* of a panel's blocks.** A reader unfolding a call, a search mark laid
+  over a word, a kind switched off in the key: all change a panel's markup and none is news. It is
+  blocks rather than the whole panel because the header row, a role and an anchor, is the same on
+  every render, so nothing there is ever news either. The first render marks nothing, since every
+  panel is new to the script then and a conversation flashing top to bottom points at everything.
+
+**Following the end is being at the end**, decided in both directions by where the reader has
+scrolled, and re-entered by sending a message. `land` therefore has to route its scroll through
+`scrolling()` like `toEnd` does: without it, landing on the *last* panel puts the reader at the
+bottom and the scroll listener switches following back on at the very moment they asked to be
+somewhere in particular.
+
+The rail (one card for reading the conversation, which is the search, the key and the dock; the
+shelf; a card per running plugin; one card for the session, which is what it is and archiving it;
+and the theme) lives **outside** the region that swaps, so no control is rebuilt under a reader's
+finger. What it projects back *onto* the transcript, the search
+marks, the panel landed on, which kinds are muted, what is folded, cannot live in the markup either,
+so `assets/mainplate.js` holds it as values and reapplies it after every swap. That projection is
+one idempotent `repaint()` serving the first render, every swap, and every press.
+
+## The copy button
+
+**One sits on every panel and inside every block of code in one, and they are one control in two
+places rather than two controls.** One look, one listener, one clipboard, one way of saying it
+worked; what each copies is decided by where it sits, so the one in a fence hands over the fence and
+the panel's own hands over what the panel says. Five things there are decided:
+
+- **The script seats them, and the server draws none of them.** A fence is markup the Markdown
+  renderer produced, so `pages.py` has no node to hang a button on inside one; rendering the panel's
+  and seating the code's would be two mechanisms for one thing when the seating has to exist anyway.
+  They come off before a swap and go back after it, exactly as the search marks do and for the same
+  reason: a node the server never sent is a node a morph should not be reconciling.
+- **What comes out is what was *written*, not what is drawn.** A message is rendered Markdown and
+  the rendering is lossy in exactly the way somebody copying cares about, so a block that was
+  Markdown carries its source in `data-markdown` and that is what the button hands over. It is not a
+  second copy of anything: it is the same value the element was built from, put into the same
+  render, and nothing else reads it. Only the kinds that *are* Markdown, since a tool's arguments
+  and its return are shown as the text they were, and a fence renders as the characters it was
+  written with. Measured on the gallery's own conversation, carrying the sources costs the page 16%, most of
+  that the system prompt, which is the longest Markdown on any page and the one a reader is least
+  likely to be copying from. It is carried all the same: a fold nobody opened costs bytes, and a
+  fold somebody did open with no way to lift the prompt out of it costs the control.
+- **Where there is no source to carry it is `textContent`, never `innerText`.** `innerText` is what
+  is *rendered*, so a folded call would copy as its summary alone and one button would answer two
+  different things a click apart. The buttons are taken back out of the text first, since one seated
+  inside a fence is inside the very text that fence hands over.
+- **The confirmation is a value, projected.** A running turn morphs the transcript every time it
+  records anything, which is exactly when somebody is lifting a result out of it, so `copied` names
+  the button rather than marking it: the panel it is on and where in the panel it sits.
+- **A block that scrolls has no still corner to pin to.** An absolutely positioned child of a scroll
+  container travels with the content, so `.text pre` no longer scrolls and its `code` does, and the
+  raw record on a rule, a bounded box that genuinely scrolls, gets no button at all.
+
+The panel's own stands in the row of facts just left of the permalink, and the code's is inset
+inward from its block's corner on both axes, which is where a reader looks for each. **The panel
+keeps the spacing it has always had, and that is the point of putting the button in a row that
+already exists.** Hung off the top edge of the text instead, which is where scriptorium puts it,
+riding the border of a block that has one, it needs room, and the room costs every panel a strip of
+empty page between its title and what it says: a change to the whole transcript's rhythm bought for
+one control. The permalink gives up its own `margin-left: auto` only where the button is there to
+take it over, so a page rendered with the script absent still has it flush right.
+
+## The session list
+
+**The list is ordered by when a session was last written to, not by when it was started**, because
+the conversation somebody is in is the one they are looking for, and a creation date puts a session
+worked in all week under everything started since. The moment is read rather than recorded: the
+store stamps every checkpoint row as it files it, so the newest stamp on a session's inbox is the
+last thing said to it, and a session nobody has written to yet is dated from its making. The row
+prints the moment it is ordered by, with both moments in its title, since a list sorted by one date
+and labelled with another reads as unsorted. The cost is that the order is the tree's: a branch
+worked in this morning sits under what it branched from rather than at the top, and siblings are
+what the moment orders. The clock is the store's and not the console's, which is why the two are
+compared and never subtracted, and why a test about the order writes the stamps rather than racing
+them. An answer arriving moves no row, since nobody said anything; what says an answer arrived is the
+word below.
+
+**A row says `unread` when its session has recorded something since anybody looked at it.** "Recorded
+something" is the newest row in the session's checkpoint that is not in its inbox - an answer, a
+refusal, a command's result, a plugin setting itself up - because a person's own message is not news
+to them. "Looked at" is `seen_seq` on the session's row in the index, the highest row the store had
+filed for it when a page showing it was last served or last acknowledged a message, which is [the
+index's other mutable column](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies)
+and earns it the way `Tending` does: a fact nothing else records. It is the console's mark and not
+any one reader's, because this console has no accounts, which is right for one person on several
+devices - the phone that read the answer has read it for the laptop too - and becomes a table keyed
+by reader the day there are readers to key it by. The word and not a dot, for the archived word's
+reason: a dot alone reads as a styling accident. In the console's own mark hue, because it is about
+the console's bookkeeping and not about who spoke. Never on an archived row, since nothing more is
+said in one, and never on the row being read, because serving that page is what marks it.
+
+**A row says `working` while the worker has something to do about its session**, which is the other
+reason to open one: `unread` says something arrived, and this says something is still coming. It is
+[what the worker is doing](durability.md) read for every session in one statement rather than one
+per row, since the list is redrawn whenever any session moves, and it is the reason the list's token
+carries the claim and the queue beside the index's three numbers: the row says which, so the list
+has to be drawn again when the answer changes. One word for three arms, with the title saying which
+of a pass answering now, a delivery the next pass will take, or one held back after a pass fell
+over; `Idle` draws nothing, because a settled session is the ordinary row. In the same face and hue
+as `unread` and the regular weight beside its bold, since what has already arrived is the one to go
+and read. Never on an archived row, for `unread`'s reason. A console
+upgraded onto the column has it filled to where every session stood, since `NULL` reads as never
+looked at and lighting every session at once would tell the reader nothing.
+
+Each row names the repository its session works in, which is what tells two conversations apart
+once there is more than one. It reads `owner/repo` while a forge still reaches the repository and
+the recorded id once none does, so a detached integration leaves the row saying where the session is
+rather than saying nothing. That is `SELECTION` reading the repository straight out of the session's
+`choice` rather than a column beside it; see [the philosophy](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies).
+
+A fork is drawn nested under what it came from and labelled with the turn it left at, which is
+emergent from the `Origin` on each row rather than from anything inside a checkpoint.
+
+Each row also says what its session takes on disk, read off [a holder a sweep
+fills](workspace.md#what-a-session-takes-on-disk), and an [archived](workspace.md#archiving) row
+is muted with the word beside its date: the same join that reaches the repository reaches the
+`archived` key, so neither is a column.
+
+**Every live row carries the archive control, shown on hover and on focus, laid over the row's
+corner.** A console that has been used for a while is closed down from the list, and opening each
+session to reach its rail is a step per session. Laid over rather than added to the row, because a
+control that took a line of its own would move every row beneath it as the pointer passed down the
+list; hidden until reached, because a list of sessions with a button on every row is a list of
+buttons, and what the list is for is telling sessions apart. It is the rail's own disclosure, the
+sentence and then the press, so a mis-press on a row is exactly as impossible as one in the rail,
+and the redirect lands on the session it closed, which is the page saying what just happened. The
+cost, stated: it covers the tail of a long name while it shows, which is the corner every row action
+lives in, and the whole name is in the title. It is not drawn on a phone, where nothing hovers; a
+session is opened and closed from its rail there.
+
+## Which clock a moment is printed against
+
+Every moment this console shows is recorded in UTC and printed in somebody's local time, and the
+question is whose. The browser is the only party that knows, and it cannot say so in time to matter
+unless it says it on the request for the document itself, so it says it in a **cookie**: the script
+writes `zone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`, the `reading` extractor reads
+it, and the `Reader` it parses into is threaded to the page functions as one more
+[already-answered question](../philosophy.md#a-page-is-a-pure-function-of-already-answered-questions).
+The rules, the session list's dates, the cache note and the archived sentence are all drawn from it,
+so nothing on the page is in a different clock from anything else on it.
+
+**A value rather than a parameter, because of the threading rather than any second field.** The
+clock reached two dozen page signatures as a parameter of its own, so the next reader-scoped answer
+would touch every one of them again; a field on `Reader` costs one line. What does not go on it is
+anything that is not a rendering input: a credential shares the `Cookie` header and is a gate in
+*front* of drawing a page rather than something a page draws with, so it never becomes a field. That
+line is what keeps `Reader` a value and not a drawer. The zone may well stay its only field, and
+that is fine - what the value buys is that a second one would be an edit in one place.
+
+One cookie per answer rather than one cookie carrying all of them. A single packed value would buy a
+format, a parser and a version to keep in step, where a name apiece stays independently writable by
+the script and independently readable by `cookie_value`, which already takes a name.
+
+## The format is canonical, and the zone is the only thing that varies
+
+`resolvedOptions()` names a `locale` and an `hourCycle` beside the `timeZone`, and **both are
+declined**. Every moment this console prints is `%Y-%m-%d %H:%M`, at everybody: this is a console
+for programmers, and a stamp that sorts lexicographically and reads the same to a reader in Berlin
+as to one in Chicago is worth more here than one in their own conventions. So only *which instant*
+follows the reader; *how it is written* never does.
+
+Three things fall out of that, and they are the reason it is worth stating rather than just doing:
+
+- **The axis is closed, not unfilled.** A locale field is not a cell waiting to be filled in later;
+  it is a thing decided against, so nobody should arrive at `Reader` and read one field as an
+  unfinished job.
+- **`strftime` stays sufficient.** A genuinely locale-aware render needs CLDR data through `babel`,
+  because Python's own `locale` module is process-global and so no use per request. Declining the
+  locale is what keeps that dependency out.
+- **The full stamp carries an offset, not an abbreviation.** `CST` is US Central and also China
+  Standard, so the abbreviation answers "whose 09:32" with a value two readers resolve differently.
+  `2031-03-14 10:09:26-05:00` cannot be read two ways, and it is the same text as the `datetime`
+  attribute beside it give or take the separator.
+
+The cost, stated: `2031-03-14 10:20` is three characters wider than `Mar 14, 10:20` in a 17rem
+sidebar column, and a reader who would rather see their own conventions does not get them.
+
+**The formatting stays on the server**, which is the whole reason for the cookie rather than a
+script that rewrites `<time>` elements after the fact. A moment inside a sentence - `Archived
+2031-03-18 04:02:17-05:00: nothing more is said in it` - cannot be rewritten without composing that
+sentence in JavaScript too, so the alternative is two implementations of what a date looks like, in
+two languages, one of which cannot see the other. The `<time>` element is still there, carrying the
+instant in its `datetime` attribute while its text carries the reader's clock.
+
+**Without the cookie a page is drawn against the console's own zone**, which `here()` reads from `TZ`
+or `/etc/localtime`, and that is the right answer rather than a fallback: the install this console
+documents is a user unit on the machine somebody is reading it from. UTC where neither says, which
+is what a container with no zone configured is actually keeping.
+
+The page writes back the zone it *used*, on `<html>` as `data-zone`, and that is what closes the
+loop rather than leaving one. A browser whose zone is not the one the page was drawn against asks for
+the page again, once; the cookie it wrote is what stops it asking twice, since a name this machine's
+zone database does not have comes back as the console's own and would otherwise be requested for
+ever. The cookie is **read back before the reload** rather than assumed, which is the same loop shut
+one step earlier: a browser blocking this origin's cookies makes the write a silent no-op, so the
+request would carry no zone, the console would keep drawing in its own, and every load would ask for
+a page that could not say anything new. Where the answer cannot reach the server at all, the reader
+keeps the page they got. Two spellings of one clock are not a difference, and that is asked of the
+browser rather than decided by comparing strings: `Etc/UTC` on a server is `UTC` in Chromium, and
+`Asia/Calcutta` is `Asia/Kolkata`, so a string comparison would hand every console running in UTC
+one reload per visit for a page that was already printing exactly the right time.
+
+**On `<html>` rather than on `<body>`, which is what keeps that reload from being seen.** `paintClock`
+runs in the script's first block, beside the theme and before the document exists, for the reason the
+theme is there: a page opened dark must not flash light on the way, and a page opened in Tokyo must
+not paint a column of London times on the way. The open tag of `<html>` has been parsed by the time
+that block runs and `document.body` is still `null`, so the answer has to be on the element that
+exists. Moved to the body the check does not fire late, it stops firing at all, and
+`TestTheClockAPageIsDrawnAgainst`'s browser tests are what say so.
+
+**Asking from the head abandons the parse where it stands**, which is the price of asking early and
+is worth knowing about rather than discovering: `DOMContentLoaded` still fires on what was abandoned,
+with no `<body>` ever built, so `start` is handed a document that is already being replaced. It
+returns rather than wiring it, and without that every first visit from another zone raises where the
+wiring reads the body.
+
+The reload is a reload and not an htmx request, which is worth stating because the smaller-looking
+change does not work: `htmx.ajax` into `body` swaps the body and leaves `<head>` and the `data-zone`
+on `<html>` exactly as they were, so the page would keep saying it was drawn against a clock it no
+longer is. That is `hx-boost`'s known limitation arriving in a place nobody boosted. There is one
+document to replace, and `location.reload()` is what replaces it.
+
+**Every page and every fragment says `Vary: cookie`**, which is the one thing the cookie obliges
+beyond reading it. These responses carry no `cache-control` at all, so a cache with nothing said to
+it falls back to its own heuristic, and the browser's is what this closes: a page cached before the
+script wrote the cookie and served again from that cache is a reader stuck on the console's clock
+for ever, since the script has already asked once and will not ask again. The stream needs nothing,
+being `no-store` already.
+
+The cost, stated: **a reader in a zone the console is not in pays one reload on their first visit**,
+and a reader with no script gets the console's clock. `TestTheClockAPageIsDrawnAgainst` exists in
+both suites, the server's half in `test_console.py` and the script's in a real browser, because
+neither half can see the other.
+
+**Where the line between the two halves falls** is worth saying once, because the countdown beside
+this makes the other choice and the pair reads as an inconsistency otherwise. A fact that reads the
+same in an hour is the server's: a moment, a date, a rule's `09:32`. A figure that is wrong a second
+later is the script's: `Due in 4d 14h`, `warm as of 12m`. So `elapsed` in `pages.py` and `soon` in
+`mainplate.js` really do both implement how a duration is worded, and they have to agree unit for
+unit, down to the unit that is zero: the server draws the first figure and the script repaints it a
+second later, so a wait landing on a whole hour written `1h 0m` and repainted `1h` changes shape
+while a reader is looking at it, which reads as the countdown having moved. That is the one piece of
+this deliberately written twice, and the width holding still is the price of it. A date is not in
+that category,
+which is the whole argument for the cookie: nothing about `2031-03-18 04:02` stops being true while
+somebody reads it, so there is no reason for a second implementation of it to exist.
+
+## The dashboard
+
+`/` is the console's front page, titled `Mainplate`. It answers two questions, in the order a
+returning reader asks them: what wants me, and where can I start something.
+
+**First the sessions that want attention**: those with something recorded since anybody looked, and
+those a pass is on or will be. Both are the list's own marks, `unread` and `working`, and the rows are
+the list's own row, so a session is here for exactly the reason the list marks it and there is one
+drawing of a row. They redraw live, beside the list. The list keeps every session in the order they
+were last written to; this picks out the rows worth opening now.
+
+**Then the places a session can work, one card to a row**, which is where starting a session begins.
+The two places with no repository come first, as a section of their own, since they are always
+there; then a card per repository a forge reaches, then one per repository a live session is still
+on that no forge reaches any more, which lists its sessions and has no press. A card names its
+sessions not yet archived (the first few, then how many more), carries **New session** in its top
+corner so the press is in the same place on every card however long the list under it is, and a
+repository's name links to its page on the forge, which the forge says where it can: exe.dev's
+integration is GitHub behind a proxy, so the page is GitHub's for the same `owner/repo`.
+
+**A repository's card says when this console's copy was last fetched**, in its bottom corner, and a
+failure is drawn to be spotted with what git said in its title. A session's own `git fetch` reads
+that copy and not the forge, so the line is how far behind the remote every session on the repository
+can be. It comes from `Fetches`, which [the fetch loop and planting](workspace.md) rebind in memory and
+the page reads; nothing on the page asks the forge anything. The cost, stated: it is not persisted, so
+a restarted console says `not fetched since the console started` until its first round, which
+starts at once, and it is not in the stream's token, so an open dashboard shows a fetch on its next
+redraw rather than when it lands.
+
+**The press goes to `/sessions/new?workspace=…`**, the picker with the workspace already answered.
+A bare `/sessions/new` is sent back here rather than refused, since the page it wants is one press
+away; a workspace this console does not recognise, or a repository no forge reaches, is refused on
+the terms the form would be when it posted.
+
+## The picker
+
+**The workspace is the new-session page's heading rather than a question on it**, because the press
+on the dashboard answered it. It rides back on the form as a hidden field, so the post names a whole
+choice and is parsed as it always was, and `change` goes back to the dashboard. On a repository,
+**where to start in it comes first**, above everything else, since it is the question most likely to
+differ from one session to the next; its branches are asked for once the page has arrived, with the
+same fragment a workspace card asks for on the fork page, so the page never waits on the forge.
+
+**The fork page still asks the workspace as a question**, where a session with no repository may
+attach one. There it is the first group, which is where the rest of this ordering starts.
+
+**Ordered widest-first: workspace, network, repository code, endpoint, model, thinking, output
+override**, and then the name. What files a session has is the broadest thing about it and is one
+question rather than two, so it leads; the network follows because it is the other thing deciding
+what the agent can do at all; whether the repository's own code runs is the third question about
+that same subject, so it sits with them and is drawn only where a repository is picked; the endpoint
+and the model are adjacent because they are a pair, the list being whatever the endpoint above it
+offers; the thinking level and the output override are settings *on* the model, so they sit under
+it, the override last because it is the one almost nobody touches. The name comes after all of them
+because it is the one question here that decides nothing about how the session runs.
+
+**There is no message box on this page, and its button says `Create session`.** A repository's
+plugins cannot even be named until its worktree is planted, which a pass does, and none of them may
+be run until somebody has seen the list. So this page decides what a session *is*, the settings step
+decides what it loads, and the box is on the session's own page once there is a conversation to type
+into. See [the settings step](plugins.md#starting-a-session-takes-four-steps).
+
+**Every question the picker asks with a closed set of answers is one component.** `choosing` in
+`pages.py` takes a legend, a toggle id, the names on offer and a body of cards, and gives back a
+group that folds to what is picked, says how many options it has, and can be narrowed by typing. The
+workspace, the network, the endpoint, the model and the thinking level are all built from it, and
+that is why none of them is a `<select>`: a select renders its options as text in every browser, so
+it could carry neither the forge a repository came from, nor the sentence under a level that is not
+one, nor the fold. Having two kinds of control answering versions of one question was the thing to
+remove.
+
+**Three questions here are deliberately not cards, and all for the same reason**: `starting_at` asks
+for a commit-ish, `output_override_field` asks for a number, and `naming` asks for a line of prose,
+and none has a set to draw. Behind `choosing` they would be a card per ref a repository has, a card
+per integer, or a card that is really a text box. The name takes the *message box's* rules rather
+than a setting's, because the palette runs on one axis and a name is text the person writes, where a
+base, a branch and an override narrow a choice. The override's placeholder says what leaving it
+empty sends, as the number (`max (128K)`) or as a sentence saying nobody knows it, and it follows the
+pick: the number is the model's and the model is picked above it, so the server renders every card's
+sentence onto the card (`data-override`) and the starting model's into the box, and the script copies
+the picked card's across on a pick. The script holds no wording of its own, so the two cannot drift,
+and with it absent the box is right for the model the page opened on. What the field is for, and why
+its name is the word *override*, is on [the endpoints page](endpoints.md#what-a-request-may-generate).
+
+**Nothing in the picker gives up height; the choosing scrolls as one box.** The model list used to
+be the one part that did, scrolling inside a block that scrolled inside the page so the questions
+under it stayed put however long the list ran. What that bought on a short window was two lines of
+card behind a scrollbar, and, whenever the floor under the list and the permission to shrink
+disagreed, a group drawing its content over the questions beneath it: shut, its one card over the
+thinking level and the override box. Measuring a floor of three rows in the script was tried and is
+not worth trying again, because the floor holds the list open while the group around it is still
+allowed to shrink, which is the same overlap one step later. The fold is what makes the plain answer
+cheap: the list is only long while it is open, a pick shuts it, and the narrowing box shortens it, so
+the list is as tall as its cards and `.setup` carries the lot, which is what a phone already did and
+what every other page here does. The fork page keeps a bound on its list, since it has a transcript
+under the picker that a reader has to see to choose a turn at all.
+
+Another question with a closed set of answers is a `choosing` call and nothing else. The script
+names none of the card classes, since it finds a card structurally, as a `<label>` with a radio in
+it, or by the `data-name` the card declares, so a new kind of card needs no edit there. The one
+selector it does name is `.models__provider`, which is not a card but the heading over a run of
+them. The CSS is the one place a new kind is listed by name, because the shared card rules are a
+grouped selector, so a card added without being added there is drawn unstyled and, worse, does not
+fold.
+
+Four things there are decided:
+
+- **The fold is a checkbox and the folding is `:has()`, so nothing in the script decides it.** That
+  is what keeps a shut group honest: what it draws is the card whose radio is actually checked, read
+  off the radio, so there is no second copy of the choice to go stale. A summary line naming the
+  model was the obvious alternative and is exactly that copy: with scripting off it names the wrong
+  model from the first pick onwards. Everything the script does to a group, shutting it on a pick,
+  narrowing it, checking a card the reader named, *sets* state and never reads the choice back out
+  to decide anything.
+- **The count of what is on offer is on the control** (`27 options`), because a shut group is one
+  card and a card on its own reads as a fact about the session rather than a choice. It has to be
+  rendered *inside* what the endpoint swap replaces, which is why `model_cards` returns the whole
+  group, head and fold included, rather than just the list: outside it, the count keeps saying 27
+  after the list under it became 46.
+- **A swap resetting the fold is the right state to arrive in.** Picking an endpoint replaces the
+  model group, so it comes back shut on that endpoint's default model, which is a real choice
+  already made and worth seeing rather than a list to close.
+- **One argument is the count, the completions and the filter**, so the three cannot disagree.
+  `names` is one entry per card: passing a model's label *and* its routed id was two entries each
+  and a group announcing 54 options over 27 cards. Searching by id still works, because the filter
+  matches a card's whole text and the id is printed on it; the `<datalist>` is the readable half and
+  a list of names interleaved with `anthropic/claude-sonnet-4-6` is not that.
+
+The narrowing box is the one control on this page that does nothing without the script, and it is
+drawn that way deliberately: the `<datalist>` beside it is the browser's own completion over the
+same names, so with the file absent typing still helps and every card is still there to be picked.
+
+**Naming one exactly is choosing it.** Taking an entry from the completion menu puts the whole name
+in the box, and that is the reader having decided, so the card is checked and the group shuts rather
+than leaving them to reach for the one card still showing. The match is on the whole name and never
+a prefix, which is what stops the keystrokes spelling `xhigh` from stopping at `high`; every card
+carries the name it answers to as `data-name`, the same string that went into the completion list.
+Checking a radio from script fires nothing on its own, so the pick dispatches a real bubbling
+`change`, which is what shuts the fold *and* what lets an endpoint's own `hx-get` swap the models.
+
+**A sticky heading is measured from the scroll container's *content* edge, so that container gets no
+block padding.** `.setup` carried `padding-block` and `.picker` now does, which looks like moving a
+value between two elements that fill each other and is not: on a phone `.setup` is the box that
+scrolls, so padding on it parked the sticky provider heading that far down the box and left a strip
+above it with model cards sliding through. Inside, the padding scrolls away with the content, which
+is what it was always for.
+
+**And a scroller clips, so `.picker` carries inline padding too: the room a focus ring is drawn
+into.** `overflow-y: auto` computes `overflow-x` to `auto` as well, so a control flush with the
+scroller's edge has its gold cut off on that side: the base and the branch boxes, which fill their
+grid columns, and every card while its group is open. Inside the scroller for the same reason the
+block padding is. `TestTheFocusRingHasRoomToBeDrawn` is what fails when it goes, and it measures the
+gap against the ring's own `outline-width` and `outline-offset` rather than against a number written
+down twice. It sets a window narrower than the suite's own, because at 1400 the picker sits inside
+its `max-width` with room to spare and the clipping, which is every narrower window and so the
+common case, does not happen at all.
+
+The picker's controls are **associated with their form by name, not by nesting**, and what makes
+that worth doing is that half of them are also *fragments*. `model_cards` and `starting_at` are
+served both as part of a page and as the answer to a swap, and a fragment is markup with no ancestor
+at all until it lands; `form="choosing"` (`CHOOSING_ID` in `pages.py`) makes a control's association
+a property of the control rather than of wherever it was put, so one component serves both. Without
+it the console refuses its own page with a 422 saying a message needs an endpoint and a model. The
+fold's own checkbox is the one control that deliberately carries *neither* a `name` nor a `form`: it
+is how a group is looked at, not part of what a session is decided by. A markup assertion cannot see
+any of this, which is why `TestWhatAFormPosts` asks a browser what `form.elements` holds and
+`TestFoldingAGroupOfCards` asks what a shut group still posts.
+
+## The message box
+
+What happens to what is written in it is [the composer](composer.md); this is the box itself.
+
+**Shift-Enter sends and plain Enter breaks the line**, which is that way round because a message
+here is prose that wants paragraphs and fenced blocks: a box where the obvious key sends is a box
+you cannot write one in. `sendFrom` calls **`requestSubmit`** and not `submit`, and that is the
+whole of why one delegated listener serves every page: `submit()` posts *without* dispatching a
+`submit` event, so htmx would never see a send on a session page and the browser would navigate away
+from the conversation instead. It also runs the form's own validation, so an empty box refuses from
+the keyboard exactly as it refuses from the button. The Send button names the key, because a
+shortcut nothing on the page mentions is one nobody uses.
+
+Plain Enter is the one key a mode may take, and only while the leader palette is open: what it would
+otherwise do there is break a line in the middle of `/fo`. See [leaders](composer.md#leaders).
+
+**The box is one line at rest and grows a line at a time**, to fourteen lines or two fifths of the
+window, whichever is smaller, and scrolls inside itself past that. `field-sizing: content` is the
+whole of the mechanism, so there is no script and no height kept anywhere a swap could take it back
+from; `rows` stays in the markup as the floor for a browser without the property, which a browser
+that has it ignores. The cap has a viewport term as well as a count of lines because the box sits
+under the conversation it belongs to: bounded only by lines, a long message on a short window would
+leave the transcript nothing. `TestTheBoxYouTypeIn` is what fails when this breaks, and it has to be
+a browser: every height here is a correct rendering of *some* box, so what is asserted is how one
+box changes across what is put in it, which no still and no markup assertion can see. A browser that
+ignored the property would draw the `rows` floor and look entirely deliberate.
+
+`resize: none` is *said* rather than left off, and that is not a style preference: a textarea's own
+default is `resize: both`, so dropping the declaration puts the handle back. It goes because a
+dragged height is an inline style that outranks the content, so the box would stop growing and stop
+shrinking from the moment it was touched, and stay tall after the message had gone.
+
+**The box is edged in the person's own hue** rather than in the neutral `--edge` every other input
+takes, which is the palette's one axis applied to the thing a message is written in: cool is what
+reached the model, so the box belongs on the same side of it as the panel a message becomes and as
+the ground Send is painted in. The gold in a screenshot is the focus ring (`--mark`) over that
+border, not the border.
+
+**The box is one card: the text, and under it a row of what to do with it.** The edge, the ground
+and the focus ring are the card's rather than the textarea's, so Send and its menu read as the box's
+own tools and not as a button beside a field, and a phone and a wide window draw one shape: the row
+under the box used to be a phone rule that wrapped the buttons under a box they no longer fitted
+beside, and buttons that wrapped read as buttons that fell off. It is also the shape every chat
+composer a reader already knows takes, so there is nothing to learn. Send stands at the right of
+that row, where a thumb and a pointer both already are, and the room to its left is what anything a
+message may one day be sent with would take. The row is exactly one line of the box tall, so a box
+at rest is two equal rows, and it is the box's `<label>`: a press on the part of it where no tool is
+puts the cursor in the box, which is the browser's own rule for a label rather than a listener, and
+a press on a tool is the tool's. The cost, stated: a wide window spends a row on Send that used to
+sit beside the box, and the menu, which opens upward from the caret, now opens over the text rather
+than beside it.
+
+**Nothing sits under the box, and what sits above it is only what the next press depends on.** The
+line saying [whether the cache is still warm and what re-sending
+costs](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth), the sentence saying what
+the box will do while it is in [a mode](composer.md#leaders), and `sending…` for the length of a
+round trip; each appears above the box so that what grows is the composer's top edge and the box
+stays under the cursor. What the session *is* - the endpoint and model, the thinking level, the
+repository and branch, what it takes on disk - used to be a line under the box and is a card in the
+rail, among the cards about the session as a whole. The move is a grouping and not a saving:
+whatever stands against the box is read as being about the act of sending, and none of those is;
+they were settled when the session was made and took a row on every window and three on a phone to
+say so every turn. The rail is where facts about the whole session already stand, and on a phone it
+is behind the clasp, which is right for facts that never change. The one of them the box still needs
+is the branch, which somebody about to commit or press `/push` has to be able to read, and the
+sentence over a command box names it. The session's total went with the line, because the running total on the
+last rule is the same figure and moves with the transcript where a card in the rail sits stale until
+a reload. The cost, stated: the counts behind that total, tokens in and out over the whole session,
+are drawn nowhere now.
+
+That the box is the last thing on the page is also what a phone needs: the keyboard comes up under
+whatever is focused, and a row under the composer is a row the keyboard covers or the browser has to
+scroll past to show the box. [How the shell makes room for the
+keyboard](assets.md#the-document-never-scrolls-and-every-box-between-has-to-say-so) is the
+stylesheet's and the script's.
+
+**An archived session has no box at all**, rather than one that refuses. A disabled control is
+honest only where something on the page could enable it, and [nothing un-archives a
+session](workspace.md#archiving): the box would be a promise the page cannot keep, and the cache
+note over it would price a request nobody can make. The transcript ends in the sentence saying why,
+and the rule under the last turn is the way on. A session stalled on a missing endpoint keeps its
+refusing box, because a configuration put back *does* enable it, and that is the whole difference
+between the two stops.
+
+**On a phone the box does not take the focus on arrival, and on a pointer it does.** At a keyboard
+reaching a session opens it at its end with the box on screen, and the next thing somebody working
+does is type, so the cursor is already there. On a phone the same focus is the keyboard coming up
+over the conversation before a word of it has been read, so the box is left alone until it is
+touched. The fork page is the one box that takes the focus on any screen, since reaching it is being
+there to edit a message. Returning the cursor after a send, below, is the same split: a pointer gets
+it back, a phone does not.
+
+**And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
+button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
+flight, so without this the cursor is on nothing at all by the time the answer swaps in. Not on a
+touch screen, where taking it back brings the keyboard up over the answer the reader is now watching
+for: there the box waits to be touched. *When* matters as much as whether: htmx re-enables what it
+disabled just after dispatching `htmx:finally:request`, so the focus is asked for a turn of the
+event loop later, and asked any sooner it is asked of a box that is still disabled and takes
+nothing. Only where nothing else has claimed the focus meanwhile, so a reader who went to the search
+box while the message was in flight is left where they went. `TestWhereTheCursorIsAfterSending`
+drives both ways of sending and a touch screen being left alone, and it too has to be a browser: the
+focus is a live property the server never renders, and the ordering it turns on is htmx's rather
+than ours.
+
+## Markdown, and the sanitiser
+
+A message is **rendered Markdown, then sanitised**, in `markup.py`. Both halves are required.
+Python-Markdown passes raw HTML through untouched and never looks at URL schemes, so
+`<script>alert(1)</script>` and `[x](javascript:alert(1))` reach the page from a plain `convert`;
+`nh3` is what stops them. Do not drop it because the text "comes from the model": a reply is shaped
+by whatever was pasted into the box, and this project's direction is an agent that reads
+repositories.
+
+Command and tool output is not Markdown, because its punctuation is the program's own text.
+`linked_text` keeps that text verbatim while making each `http` or `https` URL an anchor, so the
+pull-request URL a push prints can be followed without a reader having to select and paste it.
+It suppresses the source page as a referrer.
+Every other run is escaped before the anchor is built: output can name a URL, but it cannot supply
+markup or a different URL scheme.
+
+Fenced code is highlighted, and the sanitiser is where that gets interesting. `codehilite` emits
+classes, `nh3` strips `class` by default, and the fix is **`allowed_classes` with Pygments' own
+`STANDARD_TYPES` vocabulary** rather than allowing the attribute. The difference is the whole point:
+this text is shaped by whatever reaches the box, so an open `class` would let a reply paint itself
+as the rail, the composer, or a panel of somebody else's kind. Taking the vocabulary from Pygments
+rather than listing it also means a token a new release emits is allowed the day it appears, where a
+hand-written list would strip it silently and that run of code would render unhighlighted with
+nothing saying why. `guess_lang` is off: a wrong guess colours text by a grammar it is not written
+in, which reads worse than no colour. The palette is the console's own hues in `mainplate.css`, not
+an imported Pygments theme with its own opinion about light and dark.
+
+**Two fences are also pictures.** A fence labelled `mermaid` or `svg` keeps its label on the page, as
+a class on the `<code>` alone that the sanitiser lets through (`DRAWABLE` in `markup.py`, the only
+two labels that reach the page: `language-python` is put on by the same formatter and stripped like
+any other class), and the script draws it as the picture: an image where the code would be, SVG as
+it was written or what the mermaid library rendered from the diagram in the reader's theme, with a
+button to the left of `copy` that puts the text back and takes it away again. The copy button stays
+in its corner, where it is on every other block, and the other one is what makes room. **An image,
+and never inline
+markup**, because the text is a model's: SVG loaded through `<img>` runs no script, follows no link
+and fetches nothing, which is the browser's own rule rather than a sanitiser's, and it holds for the
+library's output as much as for the hand-written kind, so the library's `strict` level is a second
+guard rather than the one this rests on. The cost, stated: nothing in a drawing can be selected or
+found by the search, and it is set in the browser's faces rather than the page's. Which blocks are
+shown as text is a value the script holds and reapplies after every swap, like the folds, since a
+morph would otherwise put a diagram back in front of the code somebody had just asked for. The
+library is three and a half megabytes and is fetched the first time a diagram is on the page, so a
+page with none pays nothing for it; where it comes from is [what is
+vendored](assets.md#what-is-vendored). The model is told so: `drawing_note` in
+`agent.py` is composed into every session's instructions beside the note about what its tools reach,
+the console's own sentence rather than a line in the operator's standing instructions, so an
+operator who rewrites those keeps it, and a model that has a flow or a figure to show knows the page
+will draw one.
+
+The two converters, and why a message's newlines are treated differently from a document's, are in
+[what a session is told](../plugins/guidance.md#the-system-prompt-is-drawn-as-a-panel).
+
+## Panels and rules
+
+A turn is read out of the checkpoint as **panels of blocks**, not as a question-and-answer pair. A
+block is prose, reasoning, a call with its result, or a command with its own; a panel is a run of
+blocks of one kind within one model request, and it is what the page draws a coloured edge down. The
+palette runs on one axis and every kind takes its side from it: cool is what the person produced
+(their message, their steer, their command), warm is what the model produced (its answer, its
+reasoning drawn back toward the ink, a call in ochre). A kind added later has its hue decided by
+that rather than chosen for it. A part kind `parted` has no rendering for is passed over rather than
+refused, because the provider and Pydantic AI are both free to add one.
+
+**A text part that opens inside `<think>` tags is read as reasoning**, which is how some
+OpenAI-compatible gateways hand a reasoning summary back: not as a thinking part but as text, the
+tags a model is trained to think inside, with one bold title on a line of its own between them.
+Drawn as it arrived that was an assistant panel saying `<think>`, with a blank line above and below
+the title where the tags' own newlines became breaks. `unthought` takes the tags and their newlines
+off and gives the title to a reasoning panel, and anything after the closing tag stays prose. It is
+a reading and never a rewrite: the checkpoint holds the part as the wire sent it, and the page is
+what changed its mind.
+
+**The axis is who wrote it and not who was told**, which a command is the case that settles: it is
+the one kind on the person's side that no model ever saw, and what says so is the `title` on its
+role and its chip in the key rather than a hue of its own. A colour for "the model does not know
+about this" would be a second axis over one palette.
+
+**Every kind is named after the thing it holds, in the word the page prints**, so `prompt`, `steer`
+and `command` are the labels, the `data-kind` values and the words behind them in `records.py`. They
+were `you`, `you (steering)` and `you (ran)`, which sent a reader who learned a word from a panel
+looking for an identifier the code does not have. Two things that cost, both accepted:
+
+- **`prompt` overlaps `records.Prompt`, which is narrower.** The record is a message that *must*
+  open a turn; the panel is whatever message a turn opened on, and a `Steer` arriving at an idle
+  session is drawn as one. That is the collision this vocabulary already has with `StepKind` on
+  `command` and `tool`, safe for the same reason: they never mix and mypy refuses the crossing.
+- **Three labels no longer share the word `you`**, which was the non-colour cue that they are one
+  side. The hue and `data-side` still carry it, and `TITLES` is where `you (ran)` put its extra
+  meaning down.
+
+`muted` is keyed by these values in `localStorage`, so the rename left every stored decision naming
+a kind nothing draws: a reader who had quieted one gets it back once and mutes it again. Said rather
+than migrated, because it is one press and the alternative is code that reads a vocabulary this
+console no longer has.
+
+**A panel says what is in it; a rule says what is true of the request or the turn around it.** Which
+turn it is, where the session may be forked from, the worktree a request was made against, and what
+it spent all belong to the exchange rather than to any one run of blocks, and hung on a panel they
+had to be hung on a chosen one. Usage settles it: it belongs to a `ModelResponse`, and one response
+becomes as many panels as it has kinds of part, so there is no attribution rule from a response to a
+panel that is not invented. `transcript_region` groups the panels by `turn` and then watches `asked`
+change within one, so nothing keeps a second list of where a turn or a request begins.
+
+**A rule names its turn, and that is legibility rather than decoration.** A turn rule sits directly
+under the last panel of the turn before it, so a bare row of figures there reads as a footer
+summarising what is *above* it, which is the opposite of what it says. The `#1` against the `#1.0`
+on the panels below settles the direction, and doubles as the permalink to the boundary the fork
+acts on. A rule inside a turn names its request the same way, as `r1.1`, which is also what opens
+the record: the whole address rather than the index within the turn, for `Panel.address`'s reason one
+level along, since a rule inside a turn draws no `#N` and a bare `r1` said which request without
+saying of what. The `r` is what keeps it from being read as a panel, which numbers a different axis:
+`#3.1` is turn 3's second *panel* and `r3.1` is its second *request*.
+
+### The record hangs off a request, not a panel
+
+`Source`, `sourced_at` and the per-panel `recorded` disclosure are gone. A panel is a run of blocks
+of one kind and a request is a round trip, so a panel's record was a *slice* of a stored value
+reached by indices one walk had to hand another. A request has a key of its own, so `requested_at`
+is a lookup, and it answers while the turn is still running: a step is written once and never
+rewritten, where `turn:{n}:messages` does not exist until the turn ends.
+
+**A rule per request, with the turn rule being the first one.** That adds no concept: every rule the
+transcript has ever drawn already stood at a request boundary, because a turn opens with its first
+request. A marker in the panel's own header row was wrong in a way this fixes, since one request
+becomes as many panels as it has kinds of part, so a marker on one of them attributed a round trip
+to a fraction of itself.
+
+It is what `Panel.asked` is for, and why `panelled` cuts by the request *and* the kind rather than
+by the kind alone. The cost is a merge: two responses that both answer in prose used to be one panel
+and are now two. That is the point rather than a regression, because a merged panel left no gap
+between requests for a rule to stand in, and it is also the more accurate reading.
+
+A turn's first rule carries the turn's own facts as well, which turn it is, where it may be forked
+from, the tree it started on, and what the **whole turn** spent, and the later ones carry only their
+own request's. The tree there comes off the turn's first panel rather than out of request 0, which
+is the same key read a request earlier: `turn:{n}:tree:0` is written *before* the model is asked, so
+a turn whose first answer has not landed yet still says what it started on. Where the figures on one
+rule are a turn's and on the next a request's, the title says which; only `rule--turn` is what the
+dock's turn arrows step, or a turn with four round trips in it would give that column four stops.
+
+## Every panel folds, from its own row
+
+**A panel is a `<details>`, its row of facts is the `<summary>`, and the mark sits immediately right
+of the title.** That is one mechanism for what used to be three folds and five kinds that could not
+fold at all. What a reader wants put away is theirs to decide, so the console says only where each
+kind *starts* (`OPENS` in `pages.py`) and nothing more.
+
+**It began as a complaint about vertical space, and the space was the symptom.** A stretch of
+reasoning, the standing system prompt and a delivered guidance file each carried a `<details>` of
+its own whose summary was the front of its own body, so a panel spent one row saying what it was and
+a second row saying it again, and once open the second row held a lone marker and nothing else.
+Those three had no fold worth keeping, because the thing their summary said is the thing the panel's
+row already says. They are drawn plain now, and the panel is their fold.
+
+**A call and a command keep theirs, and the difference is whether the summary is the block
+restated.** A tool's name with its outcome and how long it ran, and a command's line with the status
+a program chose, are facts about the block rather than a prefix of it, and a panel holds a whole
+*batch* of either, so a reader wanting one read out of three needs a fold per call as well as one
+per panel. Two levels, and each is named: a panel's fold is the reader's, a call's is the call's.
+
+**The row is the summary and everything in it keeps working**, which is the browser's rule rather
+than this markup's: a summary's activation behaviour skips a press whose target is interactive
+content, so the permalink navigates and the copy button copies without folding the panel underneath.
+`TestFoldingAPanel` asks Chromium both questions, because a page where that did not hold would look
+identical in the markup and fold the panel a reader had just linked to.
+
+**The mark is a `::after` on the role rather than the summary's own**, and that is forced: a
+disclosure's marker always leads the row, and this one has to come *between* the title and the line
+it stands for. On the role it takes the panel's kind colour for free, so there is no second list of
+hues to keep in step.
+
+**Shut, the transcript is its own outline**, one row per panel, which is what the dock's
+fold-everything button now produces. That is a wider meaning than it had, since it used to put the
+calls away, and it is the one worth having: what `muted` could never give a reader coming back to a
+finished conversation is a conversation that takes less room.
+
+**A third dock button puts every fold back where the console had it**, and it is not a midpoint
+between the two beside it: those set every fold one way, and this hands out a different answer per
+fold, a call shut and a reply open and a system prompt away. It is the way back from either of the
+others, which without it are one-way presses over a whole conversation. What makes it possible is
+`opens` in `pages.py`, which writes `data-opens` beside the `open` attribute: `open` is the state
+and is what makes the page work with no script, `data-opens` is where the console *put* it, and the
+two stop being the same thing the moment anything presses anything. Not a copy that can drift, then,
+but the original beside the current.
+
+**`mainplate.js` records every toggle as the reader's decision, and what makes that true is that
+the server never changes its mind about a fold.** Where a fold starts is decided per kind and never
+per render: a call is shut whether or not it has come back, a command is open, a system prompt is
+away. So a morph delivering a result adds no `open` and removes none the
+reader did not set, and the
+only toggles left to record are presses. The script cannot tell a morph's toggle from a reader's,
+and does not try; a render whose answer moved between two states of the same fold would be recorded
+as a decision nobody made. That is exactly what drawing a call *open while it was out* did: the morph
+that delivered it recorded it open, and every call a reader watched arrive stayed open for good, so a
+turn of twenty reads was twenty open boxes. A call still out is drawn as its tool is drawn now, with
+the working mark in its summary saying it is out and [the subject beside its
+name](#what-a-folded-call-says) saying what it is about. `TestWatchingATurnArrive` pins it.
+
+**Every call is drawn shut.** What a reader watching a turn is watching for is what the model is doing
+to the repository, and that is [the batch's diff](#the-batchs-diff) below the panel, which covers an
+`edit`, a `create` and a `bash` at once; what a read brought back or a command said, and a call's
+own diff or new file, are the fine print a reader opens a call to check. The same for every tool and
+every state, for the reason above: a call drawn shut while it was out and open once it landed would
+be a default that moved, and the morph delivering it would be recorded as the reader opening it.
+
+**A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
+working, on its own panel, and it is the model's call, so a second panel of dots under it says the
+same thing twice, and says it in a shape nothing is writing, since an empty reply below a call reads
+as a turn that has started answering where what is happening is a tool running. `out_on_a_call` asks
+it of the turn being answered rather than of the last panel on the page, because a person can type
+while a reply is coming and what is at the bottom may be their message. A *command* running is not
+this: it runs outside the conversation and no model was told about it, so it says nothing about
+whether one is answering.
+
+**The dots are the answer only where nothing is wrong, and where something is there is a line
+instead.** A reply being written and a session no worker will ever pick up drew the same three dots,
+for as long as the second lasted, which made a broken pass a thing nobody could see. So the end of a
+transcript draws one of three things and never two: [a refusal](durability.md#a-pass-that-falls-over),
+which outranks the rest because it is the only one nothing is waiting on; the `.attention` line,
+saying why nothing is happening where something should be; or the dots, which is what a reply being
+written actually looks like.
+
+`waiting_for` speaks on a **recorded failure** rather than on the worker's standing, which is what
+keeps it quiet: a held-back delivery is ordinary for a store round trip on every pass, so a line drawn
+on that alone would talk through healthy turns. The one exception is a session nothing is scheduled
+for at all, which no race produces. The reason is set apart from the prose either side of it, in the
+monospace face with a copy button of its own, because an exception's `repr` is the one thing in the
+box a reader has to work through and is neither a sentence nor centred text. The countdown beside it
+is the [cache note's](cost.md#whether-the-cache-is-still-warm-and-what-that-is-worth) bargain one
+field along: the server renders the figure and `data-due` lets the script keep it current, since the
+stream sends this region when the worker's standing *changes* and counting down is exactly the
+interval where it does not.
+
+**One arm of that line is not a failure at all**, and it outranks the rest: a session
+[waiting out a moment a provider named](durability.md#a-request-the-provider-will-not-take-yet).
+Nothing is wrong, nothing is refused, and the session is coming back, so it is drawn in the ordinary
+edge and ground rather than the red ones, which on this page mean a fault. It is the only arm
+carrying a **moment** as well as a countdown, and the pair is the point: a subscription's allowance
+resets days out, so `Due in 4d 14h` is a figure nobody can plan around and a moment with nothing
+beside it does not say how far off it is. The moment is a fact that reads the same in an hour, so it
+is the server's, and the countdown is wrong a second later, so it is the script's - which is the
+same split the rest of this line already makes. `elapsed` and the script's `soon` both grew an hours
+and a days width for it, since a wait of days read as `6623m 0s` before.
+
+**A panel whose default would otherwise move carries the working dots on its own row instead.** The
+panel saying a reply is being written, and a stretch of context whose instructions no pass has
+composed yet, are both drawn *shut* with the dots in the opening line's place. Two things fall out
+of one decision: a panel opened to show three dots is a row spent on three dots, which is the thing
+this row exists not to spend; and a fold whose default moves under a reader is one the console can
+no longer draw either way once a morph has recorded the state it delivered.
+
+### What a folded call says
+
+**A call's summary names what it acted on, beside the tool's name**, so a turn of reads and edits
+reads as a list of paths with nothing opened: `read src/mainplate/pages.py lines 140–179`, `edit
+src/mainplate/pages.py 3 operations`, `bash grep -n overflow-x mainplate.css`. It is what makes
+drawing a read or a command shut affordable, since what a reader scanning a turn wants from one is
+what it touched, and what it was handed and what came back are the press away that the fold has
+always been.
+
+Two slots, `said` and `extent`. The first is the subject, a path or a command's first line, and is
+the part that can be long, so the stylesheet lets it take the room the name and the outcome leave and
+clip to an ellipsis rather than wrap; the whole of it is in the `title`. The second is how much of the
+subject - which lines, how many operations, how deep, how many more lines of command - and stays
+whole, because it is short and is the half a reader cannot recover from the path.
+
+**Named per tool, and only for this console's own.** `subject_of` in `calls.py` knows the four file
+tools and `bash`, and reads the one field that is the point of each call. A plugin's tool is named
+and nothing more: its arguments are its own vocabulary, and a guess at which of them is the subject
+is a second rendering of something the body already shows exactly. So is a malformed call, which is
+the one a reader most needs to open as it arrived, so nothing that is not a well-formed object with
+the field in it produces a subject at all.
+
+### What an open call shows
+
+**The body is drawn per tool where the console knows the tool, and as its arguments one to a row
+and its return verbatim where it does not.** `call_body` in `calls.py` is the whole of it. A call
+used to open on the JSON the model sent and the text the tool sent back, which put the one argument
+a reader came for behind a brace and a quoted key and drew a shell command as a string with its
+quotes escaped. What a reader opening a call wants is what it did, in the shape the thing has:
+
+- **`bash` is its command, coloured as shell, and its output as it came back.** The command stands
+  under `called with` with no name in front of it, since a coloured shell line says what it is by
+  its shape and the fold's own summary is already that line; `seconds` keeps its name, as a bare
+  number says nothing about which argument it was. The output still
+  opens with the command echoed, because that is what the model was sent and the return is shown as
+  the model saw it; the coloured line above it is the reader's, the echo below is the model's.
+- **`edit` is the diff.** The tool records a unified diff of the change beside its reply, as
+  [metadata the model is never sent](tools.md#every-tool-that-writes-hands-back-anchors), and the
+  body is that alone: the operations are the diff said in anchors and the reply is its right-hand
+  side said in anchors again, so either beside it would be the same change a third time. **The cost,
+  stated:** the anchors an edit was addressed by, and the ones its reply handed back, are not on the
+  panel, and a reader working out why the model's *next* edit was refused wants exactly those. They
+  are in the raw record on the request. An edit with no diff recorded - one that was refused, or one
+  recorded before the diff existed - shows its operations and its reply as every other call does.
+- **`read`, `create` and `grep` are lines of a file, with the anchors left out**, and a read or a
+  create is coloured by the grammar its path names, through the same Pygments tokens a fence gets
+  and the same palette. A search is not coloured, since its regions come from as many files as
+  matched and which grammar each is in would mean parsing the header line the tool wrote a second
+  time. A file Pygments knows no grammar for is left as it is, for the reason an unlabelled fence
+  is. **A `create` that wrote its file is its reply alone**, for the reason an edit is its diff
+  alone: the reply is the new file under the tool's line saying it was written, which is the
+  content the call was handed with a confirmation on top, so the arguments beside it would be the
+  file twice. A create that was refused keeps them, since the content is then nowhere else on the
+  page.
+
+**The anchors are not drawn.** Everything left of the bar is the tool talking, which `read` says to
+the model in the same words, and it is talking to the model: an anchor is the name a line answers
+to in an `edit`, and it says nothing to a person reading the file. Drawn faint they were still a
+column of four letters a reader learned to look past, so they are left out, and what is left to
+tell the file's lines from the tool's own - the header saying which file and which lines, the note
+that an anchor moved - is the tone a `data-said` line is set in. **The cost, stated:** a reader
+working out which line the model meant by `qwrt`, or why the model's next edit was refused, has to
+open the raw record on the request, and the page's own search finds no anchor because none is on
+the page.
+
+**A diff's line numbers are painted by the stylesheet from an attribute, and are not in the text.**
+`data-gutter` carries them and `::before` draws them, which is what makes the copy button on the
+block hand over the diff: the numbers are the console's and are not in the change. The `-` and `+`
+deliberately are text, since a diff copied without its marks is not one.
+
+**Each line is a block with its newline inside it.** A `<span>` per line, `display: block`, so a
+changed line in a diff paints its whole row rather than the words on it; the newline is the last
+character of the line rather than a text node between lines, so the block's `textContent` still
+reads as lines and a morph has nothing between the spans to reconcile.
+
+**A file's lines are coloured as one text, not one line at a time.** A string or a comment that
+runs over several lines is one token, and a lexer handed the lines separately would colour the
+inside of it as code. `highlighted` in `markup.py` hands the lexer the whole run and cuts the
+tokens where the lines are, which is what the HTML formatter's own line wrapping does too. What the
+lexer cannot be told not to do is turn a bare carriage return into a line break, so a run that
+comes back with a different number of lines is shown uncoloured rather than with every line's
+colour one line off from the line it belongs to.
+
+### The batch's diff
+
+**Below a tool panel's calls stands the net change the whole batch made, as one diff.**  A model
+issues several calls in one response and they run at once, so no single call's diff says what the
+batch did: an `edit`, a `create` and a `bash` together would each report its own slice, and a `bash`
+reports none at all. The batch's diff is `diff(tree:{i}, tree:{i+1})`, the two snapshots around the
+request whose response produced the batch, computed where they are both in hand and [recorded rather
+than derived](tools.md#the-batchs-diff). It is drawn only where the diff has something in it, so a
+batch that merely read spends no row, and it is where an edit's own diff moved *to*: the per-edit
+diff is still a press away inside the collapsed call, where the anchors and the fine-grained hunks
+live, but what a reader watching a turn sees by default is the whole change, every tool and every
+file at once.
+
+**Each file in the diff is a header line naming its path, then its hunks**, the same numbered lines
+an edit's diff draws, one gutter width across the whole block so the columns line up. The path is a
+line the console writes, marked `said`, and a binary change, which has no lines to show, is left out.
+The whole block draws nothing where the two trees are the same, which is the common case for a turn
+that read more than it wrote.
+
+**It is a fold, and not shaped as a call.** Drawn as a card like the calls above it, it read as a
+fourth call, when it is what the calls came to. So it stands under them as a labelled rule, `changed`
+and the counts, with the diff bare beneath it, and the rule is the fold's summary: the dock's fold-all
+reaches it and the script keeps a reader's toggle of it the way it keeps a call's. The counts are how
+many files and how many lines went in and out, which is what a reader scanning a turn wants without
+opening it.
+
+**The calls above it are one box, a row each**, because they are one thing: the calls the model made
+in one response, run at once, rather than separate cards that happen to be stacked. The stylesheet
+draws each run of calls that way from the blocks as they stand, so a call still opens in its own row. **It is drawn open unless it runs past `LONGEST_OPEN_DIFF` lines**, because a batch that
+merged a branch or ran a formatter over the tree changes thousands of lines nobody asked to read, and
+drawn open that is the whole transcript spent on them. That is not a default that moves: the diff is
+recorded once, whole, so it arrives at the size it will always be. **The cost, stated:** a long diff
+that *is* the point of the turn is one press further away than a short one, and where the line falls
+is a judgement, which is why it is one named number.
+
+### A line that does not fit
+
+**A block of lines scrolls sideways and never wraps.** A file, a diff and a shell command are text where a
+line is a line: wrapped, a diff's row breaks in two under its own gutter and an indented block loses
+the shape a reader reads it by. So `pre.lines` scrolls, one level in on its `code` for the reason
+[a fence does](#the-copy-button), and the `code` is a one-column grid whose column is the longest
+line's width, stretched to the block's where every line is shorter. That is what lets a changed
+line's wash run to the end of the longest line: a column of `minmax(100%, max-content)` reads as the
+same thing and never grows, since a grid of definite width has no free space to grow a track into.
+What a tool said in prose, and a command's output, still wrap, since a log line cut off at the
+block's edge hides the half of it that says what went wrong.
+
+**A block whose lines do not fit takes a `focus` button that opens it on its own, as wide as the
+window.** The
+reading measure is 46rem, and a diff's gutter plus a line of real code outgrows it. The room beside
+the measure would be the obvious place to widen into, and at the widths a laptop has there is none:
+the transcript fills its column between the list and the rail up to about 1400px, and it is the
+scroll container, so a block let wider than it is clipped. So the press opens a modal `<dialog>`
+over everything, holding a copy of the block as it was when pressed, and Escape, a press on the
+backdrop, or its own `close` put it away. A copy rather than the block moved, because the block is
+the server's markup and a morph would go looking for it; the copy is sound because a file, a diff or
+a fence does not change under a later render. **The cost, stated:** the dialog is modal, so the
+conversation cannot be scrolled beside it, and it carries no copy button of its own.
+
+The button is seated where the block overflows *now*, which is a measurement rather than anything
+the markup says, so it is taken again after every swap, when a fold toggles, when the column
+changes width, and once the face has loaded. A phone is offered none, since the window there is barely
+wider than the block already is.
+
+## The line a shut panel stands for
+
+**Every panel's row carries the front of what is in it, clipped by the browser at the panel's
+width.** Folding prose is only worth offering if the shut state identifies it, so this is what makes
+the fold above worth having on a message and a reply rather than only on reference material.
+
+What that line *is* differs by what the blocks are, and `panel_opening` draws the split the old
+per-block folds already drew. Prose stands for itself with its own opening. A call and a command
+have no prose to take a front off, so the panel *names* what is in it: `read, read` and `git status
+--short, git diff --quiet`. The first block for the prose kinds and every block for the two that are
+named, which is not an inconsistency: an opening is a prefix, and a prefix of a run of paragraphs is
+the front of the first, where a list of calls naming only its first would be hiding the rest.
+
+There is deliberately no length in the markup: `text-overflow: ellipsis` measures a line against a
+box, which is a measurement the server cannot make, and any character count it picked would cut in
+the wrong place at every other width. `min-width: 0` is what lets the flex item shrink below its
+content and so is the whole of what makes the ellipsis appear.
+
+**The row carries the line and no figure beside it, a document's included.** The tempting one is a
+character count on a system prompt or a delivered guidance file, since what is in either is paid for
+on every request from here on and no rule speaks for that. It is refused because characters are not
+the unit: every other number on this page is tokens or money, a window is measured in tokens, and a
+count that cannot be compared against the gauge on the rule below it is a number a reader converts
+rather than reads. What a request carried is a fact about the request, so it belongs on the rule
+with the rest of them.
+
+`pages.OPENING` is a bound on what is *carried* rather than on what is shown, and it exists because
+a line holding the whole of a long block would put every word of it on the page twice, on a region
+re-rendered whenever the turn in flight records anything. The number is what keeps the clipping
+honest: clipped short of it the ellipsis says there is more, and clipped *at* it with no ellipsis it
+would say there is not. So it has to exceed what the widest panel can show, which is a bounded
+question because the transcript is capped at `--measure`, and
+`TestTheLineAShutPanelStandsFor::test_more_is_carried_than_the_widest_panel_can_ever_show` measures
+the worst case there is, the narrowest glyph the prose face draws repeated, and fails if it fits.
+
+Three consequences of the line being a prefix of the body under it:
+
+- **It is hidden once open**, since a prefix standing directly above the body says nothing twice.
+  Hidden and not removed: taken out of the flow the row's free space collapses and the permalink
+  slides left across the panel, and [a control that moves under the finger that pressed
+  it](../philosophy.md#controls) cannot be pressed twice.
+- **The search skips `.opening`.** Found in both, the dock would step through one sentence at two
+  stops and the count would say there is twice as much of it as there is. It is the one entry in
+  `markHits`'s skip list that is there for being a second copy rather than for not being
+  conversation.
+- **A copy button reads `data-markdown`**, as it does for every other Markdown block, so what comes
+  out is the source and the opening is in it once.
+
+**It is the source rather than the rendering**, which is what a message written to be markup makes
+worth saying: the sanitiser never sees this line, so the escaping of a text child is the whole of
+what keeps it inert, and `test_markup_in_a_message_is_still_text_in_the_line_its_panel_stands_for`
+reads it back with a real HTML parser.
+
+## What the figures on a rule say
+
+Seven of them, and none is picked out from the others: when the answer landed, how long it took, how
+much context it carried and how much of that came out of the cache, how full the model's window is,
+how much came back, what it cost, and what the conversation has cost so far. The cost used to take a
+stronger ink, which read as the figure to look at; which one somebody is reading changes with what
+they are doing, so picking one is deciding that for them.
+
+**The moment leads and the duration follows it**, which is the pair read together: the answer landed
+at 09:32 and 3.4s of that was spent waiting on the provider. It is `ModelResponse.timestamp`, which
+is the only moment a request records and is already in the checkpoint, so nothing new is written
+down for it; what it is *not* is when the request went out, which is this figure less the one beside
+it and would be a moment on the page that nothing wrote down.
+
+A turn rule shows its **first** request's, which is the one figure there that comes from a request
+rather than from the turn. That is the way round it is so the moments read down the page in the
+order they happened: a turn's last answer, on the rule that opens it, would run backwards against
+the requests below. The title says which - `Turn 3 was first answered at …` against `Request 3.1 was
+answered at …` - exactly as the other figures' titles say whose they are.
+
+On a phone the rule now drops the **fraction of the window** as well as the cached count and the
+running total. That figure is the one here already drawn twice, since the gauge along the rule says
+it as a picture for no room at all, and the trade is stated: at that width the row holds six cells
+and the seventh pushed the cost onto a line of its own. Of the two, the moment is the one a reader
+on a phone came for and the one the gauge cannot say.
+
+**The input figure is the context and not the sum**, which is `Spent.context`'s argument said on the
+page. Every request of a turn carries the whole conversation again, so a summed input says what the
+provider charged for, several times over about the same tokens; what a reader wants off a rule is
+how much of the window is gone, which is where the turn's *last* request left it. The summed figure
+is still true and is not drawn: the money on the rule already says what the provider charged for,
+and a second count that disagrees with the first by design would be a page arguing with itself.
+
+**A symbol per figure, and the words in the titles.** A rule is one line that must not wrap and it
+now carries seven figures where it carried three. `↑` and `↓` are a count of tokens going up to the
+model and coming back, `▣` is how much of the first came out of the provider's cache instead, and
+`Δ` against `Σ` is what this exchange added against the running total, which is that pair's own
+notation and reads as a pair rather than as two prices to tell apart by size. Five cells against the
+twenty or so the words would take, on the one line that cannot afford them.
+
+`▣` is the one of the five that is a mark rather than notation, and it is a mark rather than the `↩`
+tried before it for two reasons: `↩` is already the sidebar's aside, so it would be one glyph
+reading two ways on one page, and beside `↑` it read as a third direction rather than as a fact
+about the first. A square with something in it reads as a store, sits on the cell like every other
+symbol here, and cannot be mistaken for an arrow.
+
+The cached count sits inside the context figure as `↑96K (▣45K)` rather than beside it, because it
+is a fact about that count and not a figure of its own, the way the wire's own numbers nest. The
+bracket is what says so.
+
+**The separator is interleaved rather than carried by each figure.** Every one of these is drawn
+only where there is something to say, so a dot baked into a figure is a dot that appears with it:
+the time had none and the count after it had one, and a turn nothing timed then opened with a dot
+standing for nothing.
+
+**The running total is inclusive of what the rule speaks for**, so a turn rule says what the
+conversation had cost by the end of the turn it opens, exactly as it already says what that turn
+spent: both figures on it summarise what is below rather than what is above. It follows
+`altogether`'s rule one rule at a time, so the first unpriced turn takes it off every rule below,
+and it is left off entirely where it *is* the figure beside it, since the first priced turn of a
+session would otherwise print one number twice.
+
+**And the line itself is a gauge.** It is filled from the left as far as the request's context
+reaches into the model's window, shading from the rule's own colour toward `--vermilion`, which is
+the palette's red already. A rule is a hairline drawn across the whole column at every request
+boundary, so the one thing a long conversation most wants to know costs no row and no control: a
+reader scrolling down watches the line lengthen and warm. Four things there are decided:
+
+- **The scale is the whole width and the fill is clipped to it**, rather than the gradient being
+  squeezed into the filled part. Squeezed, every conversation ends in red and the colour at a point
+  means nothing; clipped, a point along the line means the same fraction on every rule of every
+  session. It shades rather than steps because a threshold is a number somebody would have to invent
+  and defend, where the whole point is that this gets worse gradually.
+- **The server computes fractions and nothing else.** The colours, the geometry and the cap are
+  decisions, so they live in the stylesheet; a fraction is a fact about one request, and there is
+  nowhere else it could come from. They are the only inline styles this console writes.
+- **The fill is the only mark on that scale.** A second one used to stand where the session's
+  handoff reserve opened, and it went when the reserve became a plugin's own setting: [the console
+  has no vocabulary for a plugin drawing in the transcript
+  region](plugins.md#what-is-structurally-out-for-three-separate-reasons), and stretching the card
+  language that far would be inventing an axis in order to have a cross-product.
+- **The window comes from the reference and not from the checkpoint.** `Conversation.window` is
+  `facts_of` asked about the session's own choice, which is the same lookup that prices a turn, so a
+  database that learns a model's window shows it on every session already running on that model.
+  Absent, with no database, an endpoint that no longer lists the recorded id, or a model with no
+  record, the counts are drawn and the fraction and the gauge simply are not, which is what a rule
+  was before there was one.
+
+## The dock
+
+The turn column steps `rule--turn` rather than the person's panels, and that is a removal. There is
+exactly one message per turn, so a "previous message of yours" column and a "previous turn" column
+visit the same positions and differ only in where they stop: two controls answering one question,
+which is the thing this console removes wherever it finds it. Every arrow declares what it steps
+over (`data-stop`) rather than being told apart by what it lacks, because a button identified as
+"the one with no side" stops being identifiable the instant a second kind of stop exists. The
+modifier and not every rule, because a rule now stands at every model request and a turn with four
+round trips in it would otherwise give that column four stops.
+
+**Four columns, widest first**, which is the picker's own ordering one control along: where the
+model's history starts again, then turns, then every panel in play, then one side of them. The
+forget column is the newest and the only one that finds its stops by an attribute a rule declares
+about itself rather than by a class; see [forget](composer.md#forget) for why it is drawn in every
+session.
+
+**The leap to the start lands on the rule that opens the first turn**, which is the top of the
+transcript rather than the first panel in it: a turn rule carries that turn's own facts and its fork
+link, and where the stretch has instructions there is a system prompt panel between the rule and the
+message, so landing on the panel put the reader below both with nothing saying so. The leap to the
+end is still the last panel, since nothing is drawn under one.
+
+## Opening the raw record
+
+The raw record hangs off a **model request** rather than a panel, on the rule at that request's own
+boundary. Two things about how it is fetched are decided rather than incidental:
+
+- **On demand and `hx-preserve`d.** A running turn re-renders the transcript repeatedly, so the raw
+  record of every request is not something to carry in it; and because the server renders the
+  disclosure closed, a morph takes the `open` attribute back off unless the element is preserved.
+  htmx reads `hx-preserve` off the *incoming* markup, so taking it off the live node proves nothing.
+- **`once` is safe here in a way it never was under a panel.** A step's key is written once and
+  never rewritten, so a request's record is settled the moment it exists, where a panel's record
+  came out of `turn:{n}:messages`, which does not exist until the turn ends. So a tag can be opened
+  mid-turn and the panel disclosure could not.
+
+**Opened, it grows the rule downward rather than lying over the conversation.** A record read
+against the reply it came from is worth more than a page that holds still, and an overlay is the one
+shape where the two cannot be looked at together. It takes a line of the rule to itself, since the
+rule wraps and the record asks for the whole of one, which is what a phone decides: sharing the line
+leaves the record a column six characters wide, and pinning the figures so it does not is a row that
+runs off the side of the screen.
+
+**[A control that toggles may not move.](../philosophy.md#controls)** The record tag is where that
+was learned: what wrapped onto the second line was the whole `<details>`, so `r0` set off across the
+rule on the way to opening it.
+
+The shape that gets this right is the general one, so reach for it before inventing another. What
+wraps must be the *content* and never the summary above it, which means the summary and the content
+have to be separate items of the row that wraps. `display: contents` on the `<details>` is what does
+that: the tag makes no box of its own, so the summary stays an item in its own place and the content
+becomes the item that takes a line. Both candidates for that item are told the same thing, because
+`::details-content` is the box a browser wraps a disclosure's content in and the content itself is
+the item where there is no such box, and the closed state has to hide *both* or an empty item leaves
+every shut rule a row gap taller.
+
+`TestOpeningTheRecordBehindARequest` is what fails when this breaks, and it has to be a browser:
+both states are correct markup and each screenshot is right on its own, so what is measured is one
+element's box across the press. Within its rule rather than within the window, because the page
+follows the end and a record opening at the bottom scrolls the transcript under it, which is the
+console doing what it is asked, and would otherwise report as the marker having moved.

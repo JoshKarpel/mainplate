@@ -1,0 +1,7 @@
+/* A table's first column is an identifier here: a key, a setting, a member name. Left to wrap it
+   breaks mid-token, so `turn:{n}:opened` reads as two things on two lines and `inbox:{n}` loses the
+   only part that says what it is. The cell is allowed to be as wide as its widest name; the columns
+   beside it are prose and give way. */
+.md-typeset table:not([class]) td:first-child code {
+  white-space: nowrap;
+}

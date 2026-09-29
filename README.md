@@ -1,0 +1,479 @@
+# mainplate
+
+A coding agent that keeps its own sessions.
+
+A chat console over a durable model-and-tool loop, using [Pydantic AI](https://ai.pydantic.dev) for
+provider requests and normalized messages. A conversation is a workflow rather than a process's
+memory: kill the server during a reply, start it again, and the session resumes where it stopped.
+
+It is early and it is experimental. A session that picks a repository gets a checkout of its own and
+the agent can read, edit and create files in it and run git there; the work so far is mostly about the
+substrate underneath, because a coding agent that forgets what it was doing when its process dies
+is the failure worth designing out first.
+
+What it looks like is [the gallery](https://joshkarpel.github.io/mainplate/gallery/): every page of
+the console, rendered from fixtures, that can be opened and folded and searched without running one.
+
+The name is a watchmaker's word: the mainplate is the plate every other part of a movement is
+mounted on. It keeps no time itself; it holds the parts that do in place, which is the job the
+durable session does here.
+
+## Running it
+
+Write `$XDG_CONFIG_HOME/mainplate/config.yaml` (usually `~/.config/mainplate/config.yaml`), then
+start it:
+
+```yaml
+default: anthropic
+
+endpoints:
+  anthropic:
+    format: anthropic
+    api_key: sk-ant-...
+```
+
+No models are listed, because none are configured: mainplate asks each endpoint what it serves and
+offers whatever comes back.
+
+```console
+$ uvx mainplate serve          # once there is a release; from a checkout, `just serve`
+```
+
+Then open <http://127.0.0.1:8100>. Sessions are stored in `mainplate.db` in the working directory,
+so pointing the console at a different project is `--database`, and reading a session back is
+opening the same file again.
+
+On a phone, open the console over HTTPS and install it from the browser's add-to-home-screen action
+to give it its own icon and a full-height app window. Browsers allow service workers only on secure
+origins (or localhost), so plain HTTP on a LAN address does not offer the installable app. The
+installed app remains online-only: it keeps no offline copy of the console or its sessions.
+
+`mainplate serve --help` lists the flags. They are the few worth reaching for at a shell; every
+other setting is a field of `Settings` read from a `MAINPLATE_`-prefixed environment variable, so
+`MAINPLATE_REFRESH` sets how often the models are re-read and `MAINPLATE_PASSES` how many sessions
+are answered at once. Read `settings.py` for the whole set, each with what it is for.
+
+### Endpoints
+
+An **endpoint** is where requests go, which API format is spoken there, and how to authenticate. The
+models are deliberately not part of one, and are not written down anywhere: mainplate asks the
+endpoint's own model-list API what it serves. That is the same call whether the endpoint is
+`api.anthropic.com` or a gateway fronting five vendors, and it means the picker is never a list
+somebody has to remember to update.
+
+`format` names the API shape rather than the vendor, because one hostname often answers both and
+each reaches models the other does not. It also decides what `url` has to be: the Anthropic SDK
+appends `/v1/messages` to what it is given, so it wants the host, and the OpenAI SDK appends
+`/responses`, so it wants the host and `/v1`.
+
+A new session starts on whichever model the default endpoint listed first, which for most gateways
+is their newest. Set `default_model` at the top level to name one instead; a name the endpoint has
+since dropped falls back to the first rather than stopping the console. `default_thinking` names the
+level, and defaults to saying nothing about thinking at all.
+
+## Starting a session
+
+The front page is a **dashboard**: the sessions with something new since you looked and the ones
+still working, then a card for each place a session can work - only scratch, the whole machine, and
+every repository this console can reach, each with its sessions, a **New session** press, and for a
+repository when this console last fetched it. Pressing one opens the rest of the questions with that
+workspace already answered.
+
+You pick what a session is answered on when you create it, ordered widest first: its **workspace**,
+which is a repository this console can reach, or only scratch, or the whole machine; whether its
+commands may reach the **network**; whether the repository's own **plugins** run; the **endpoint**
+and **model**; a **thinking level**; and, for a model the console has no output limit for, a **max
+output tokens override**. All of it is fixed for the session's life, and **forking is how it
+changes**.
+
+Creating one takes you to its page, where it plants its worktree and reads what each tier of plugins
+*declares* out of files. It runs none of them: a plugin is a program, so the step you pass through
+next is where you say which ones may be executed. Every declared plugin is listed with its path,
+grouped by where it came from, with a switch apiece; **Load plugins** hands exactly the ones left on
+to the next pass, which sets each of them up - installing whatever it needs, which is the one moment
+a plugin has a network - and lands you in the conversation. Which plugins a session runs is settled
+from there, because a tool definition leaving the cached prefix invalidates the whole conversation
+beneath it, and **forking is how it changes**. What each plugin is *set to* stays changeable, on its
+own card in the rail.
+
+On a repository the first two fields are **where in it to start** and **what branch to start
+there**, both optional. Left blank the worktree is checked out at the repository's default branch as
+it stands now, on a branch named after the session (`mainplate/349e2f1e`), so a `git commit` from
+the box under the conversation has somewhere to live and `/push` sends it under that name. The starting point is a search over the branches the repository actually has, read from the
+repository rather than from this console's copy, so it works on the very first session you start on
+one.
+
+This console's copy of a repository is fetched when a session is started on it and every few
+minutes while any session works in it, since a session's own `git fetch` reads that copy.
+
+**Forking keeps the original readable.** Every turn opens with a rule carrying a `fork` link:
+following it makes a new session that inherits the turns before that one, on whatever endpoint,
+model and thinking level you pick, and asks that turn's own question again with the message editable.
+The sidebar draws the result as a tree. A fork inherits its parent's repository, because re-asking a
+turn against different files is a different question wearing the same words; a session working in
+*no* repository is the exception, and forking one is how you pick a repository up.
+
+A fork inherits no plugins, though, so it lands on that same **Load plugins** step before it answers
+anything, with the parent's switches already set the way you left them. The step stands where the
+transcript will be, so a branch will not show you what its parent said until you press the button.
+That is the cost of forking being how a session changes its mind about them: a branch declares and
+sets up from scratch, so editing a repository's `.mainplate/` and forking is how you try the change.
+
+**Archiving keeps the conversation and gives the disk back.** Every session holds a worktree and a
+scratch, and its row says how much they come to. `Archive`, on a card in the rail, closes the
+session at once: nothing more can be said in it, and a loop in the background takes its directories
+off the disk once no turn is running in it. The conversation stays readable, and the rule under its
+last turn forks from the end, which is how an archived session comes back: a live one with every
+turn and a fresh worktree at the files it ended with.
+
+## What a model costs
+
+No gateway reached so far publishes a price anywhere in its model list, and what it does publish is
+uneven: an endpoint describes its own vendor's models in detail, forwards somebody else's record for the
+ones it resells, and says nothing at all about the rest. So the facts on a model card come from a
+reference database rather than from the listing, which is what lets two models on one page be
+compared.
+
+It is off unless you ask for it. Name one at the bottom of `config.yaml`:
+
+```yaml
+model_reference:
+  source: https://models.dev/api.json
+  format: models.dev
+```
+
+`source` is fetched when it is a URL and read when it is a path, so a machine with no outbound
+access can point at a file it already has. Delete it and mainplate calls nobody but the gateways
+your own endpoints name.
+
+It can never stop the console starting: a database that will not load costs a card its numbers and
+nothing else. A model it has no record of says so on its card, and a console with no reference
+configured says nothing, because nothing was looked up.
+
+Both the reference and the model list are read before the console takes traffic and refreshed on a
+timer after that (`MAINPLATE_REFRESH`, fifteen minutes by default), so rendering a page never causes
+a request to a gateway and a model that appears at the provider reaches the picker without anybody
+restarting anything.
+
+Credentials live in that file rather than in the environment. A key read from a `0600` file and
+handed to the SDK never becomes an environment variable, so it is not inherited by child
+processes, not in `/proc/<pid>/environ`, and not in a crash dump of anything but this process. An
+endpoint that names neither `api_key` nor `url` falls back to the SDK's own environment
+variable, which is what the SDK does for itself.
+
+### On exe.dev, no key at all
+
+An [exe.dev](https://exe.dev) VM with the built-in
+[LLM integration](https://exe.dev/docs/integrations-llm.md) reaches Anthropic, OpenAI, Fireworks,
+and xAI through `https://llm.int.exe.xyz` with **no credential on the box**: exe.dev injects one at
+its own edge. That is the best version of the secrets story available here, because there is
+nothing to store, rotate, or leak.
+
+`mainplate install` finds it for you. It asks the
+[reflection integration](https://exe.dev/docs/integrations-reflection.md) which integrations are
+attached, writes keyless endpoints per LLM integration it finds, and says so:
+
+```console
+$ just install
+mainplate is installed and restarted
+  found    exe.dev llm integration 'llm' at https://llm.int.exe.xyz
+  console  http://127.0.0.1:8100
+  endpoints /home/you/.config/mainplate/config.yaml
+```
+
+One hostname gets two endpoints, one per API format, because each reaches models the other does not.
+`llm-openai` offers GPT, Grok, and every Fireworks model, all answered over `/v1/responses`;
+`llm-anthropic` offers every Claude and Fireworks again over `/v1/messages`. Between them a
+default VM offers around seventy models with nothing configured.
+
+Off exe.dev the lookup finds nothing and the install writes a template to edit. Either way an
+existing `config.yaml` is never overwritten.
+
+`just demo` runs the same console on a throwaway database, for poking at a page without touching
+real sessions.
+
+## Leaving it running
+
+`mainplate install` converges a user systemd unit and restarts the service onto the interpreter
+that ran the command, so an install means "the running service is this installation". Run it again
+after changing anything; from a checkout, `just install` syncs first so the unit points at an
+environment that has what you just added.
+
+```console
+$ just install         # or `mainplate install --port 8100`
+$ just logs            # journalctl --user -u mainplate -f
+$ just uninstall       # keeps the settings and the sessions
+```
+
+The install prints where its files are. `config.yaml` is the one to edit, and
+`environment` beside it carries any `MAINPLATE_*` process setting. Both are created `0600` on the
+first install and neither is ever overwritten.
+
+With no usable endpoint, or with one no endpoint will answer a model list for, the service fails at
+startup and restarts every five seconds: the endpoints are built and asked what they serve before
+anything binds. That is deliberate: a console that could answer nothing has nothing honest to
+serve, and failing at boot is louder than failing on the first message.
+
+Sessions live at `$XDG_DATA_HOME/mainplate/mainplate.db` rather than in whatever directory you
+installed from, since a service has no meaningful working directory.
+
+## How a session survives
+
+The whole design is one sentence: **the checkpoint is the conversation**. There is no messages
+table, and the server holds no session state. What has been said is what has been recorded, so a
+page renders the checkpoint, a crash resumes from it, and a second process reading the same file
+sees exactly what the first one did.
+
+A session is a durable workflow under
+[`without-durability`](https://without.help/without-durability/), over its
+[SQLite store](https://without.help/without-durability-sqlite/), and it has an **inbox**: everything
+you do to it from the page is an append, a message or a command to run in its worktree. The pass
+answering it suspends until there is something there, so nothing polls, no pass is held open, and
+the wait outlives the process that was waiting.
+
+**Nothing decides in advance which turn a message lands in.** Type while a reply is coming and the
+pass folds your message into the request it is about to make; type a moment later and it opens the
+next turn. Neither the page nor the handler has to guess, because the pass is the only thing reading
+at the instant the answer is true.
+
+A pass is **one live model request and the tool batch behind it** rather than a whole turn, so a
+turn of forty round trips is forty passes. A live worker renews a short lease while each pass runs:
+a dead process loses its session after that liveness window, while a separate budget caps a pass
+that stays alive but never finishes. Every model request and every tool call is a recorded step, so
+a pass that reaches the provider and then dies does not pay for that answer twice, and a tool that
+already read a file is not run again against a directory that has moved since.
+
+**A provider that says to come back later is taken at its word.** A request turned down for now
+with a moment attached - a subscription's usage limit and its reset time, or a `Retry-After` -
+parks the session until exactly that moment rather than being retried every lease for however many
+days that is, and the page says which limit was reached and when the next attempt goes out.
+
+## How the agent edits files
+
+What a session's tools reach is one of the things it picks when it is created. A session working in
+a repository gets `read`, `edit` and `create` over its own checkout and a scratch directory
+beside it, and repository-only `list` and `grep` over the worktree. One working on the whole machine
+gets the first three with no such boundary, while the repository-only pair refuse. One reaching
+nothing gets no tools at all, which is what this console was before there were repositories: a place
+to talk.
+
+Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
+Every command runs in a mount namespace of its own holding exactly what that session reaches and a
+read-only system, so your home directory and the console's configuration are not in it, and the
+network is off unless the session asked for it. What a command does get as its home is the session's
+own scratch directory, which is where a repository's own setup plugin installs whatever a session
+needs to run its tests, once, before the first message.
+
+The checkout's git is the session's own: `add`, `commit`, `rebase`, `stash` and the rest work as
+they would anywhere, and `git fetch` brings the repository's current branches with no network,
+because `origin` is this console's own clone, which the console fetches every few minutes while a
+session works in it. With the network off nothing in there can push; on exe.dev a sandbox with the
+network on can, since there the network is the credential. Every snapshot the
+conversation keeps is taken out of the checkout into that clone, so a rebase in the session rewrites
+nothing a fork plants from. Without `bubblewrap` no repository is offered at all, since git in a
+checkout reads configuration the session can write and has to be confined as surely as a command.
+
+**Run** in the composer runs a command you type in the same sandbox, under the same network answer,
+so a hook the model left in `.git` can reach no more from your `git commit` than from its own.
+**Online** is the same with the network on for one command, in a session that otherwise has it off.
+**Push** sends the session's own branch to the repository with this console's credentials, never
+forced, without reading anything the session configured.
+
+`list` asks git what is there rather than walking the directory, so a `.gitignore` is obeyed and an
+installed environment never reaches the model, while a file the agent itself just wrote does. A
+directory past the depth you asked for is summarised by a count rather than opened.
+
+`grep` searches those same Git-known files with a line-oriented regular expression and returns
+matching regions with the anchors `edit` accepts. That removes the second read a shell `rg` needs
+before a match can be changed. Its result count and context are bounded; multiline, structural and
+unusually configured searches remain shell commands.
+
+**A line is addressed by a hash of its own content, not by its position.** A read puts a four-letter
+anchor in front of every line:
+
+```text
+app.py, 6 lines
+
+cxec│def greet(name):
+infr│    return f"hello {name}"
+----│
+----│
+vhvn│def farewell(name):
+kxpe│    return f"bye {name}"
+```
+
+A line number is the one address that cannot fail: an edit above shifts everything below it and `47`
+still resolves, so a stale line number silently edits the wrong place. An anchor either resolves to
+exactly one line or does not resolve at all, so the same mistake is a refusal that says to read the
+file again. It also means the model never retypes the text it is replacing, which is the expensive
+half of a search-and-replace edit. Nothing is stored between calls, and an `edit` takes a list of
+operations applied against one reading of the file, so a batch that contradicts itself is refused
+entire rather than half-applied.
+
+There is deliberately no tool that overwrites a whole file. `create` refuses a path that already
+exists, because a tool that rewrites a file wholesale is the escape hatch that makes all of this
+pointless: the first refused edit becomes a full rewrite, discarding whatever had not been read.
+
+## The console
+
+Server-rendered HTML with [htmx](https://four.htmx.org/), built from
+[`without-html`](https://without.help/without-html/) node trees. The stylesheet, the script, and
+htmx are all served from the process rather than a CDN, so a console on a machine with no route
+out still renders.
+
+A page holds **one connection**, open for as long as the page is, and the server sends the
+conversation down it whenever the session records anything. Every message is a whole current render
+rather than a delta, which is what makes a dropped connection cost nothing and a reconnect need no
+replay, and each names the region it is for, so a second region joins the same connection rather
+than opening another. A render is *morphed* into the page rather than replacing it, so what a reader
+has done to the conversation, a panel or a tool call they unfolded, a command they put away, a
+search, the place they had scrolled to, survives an update arriving.
+
+**A turn is drawn as it happens.** The responses and tool results behind a running turn are already
+in the checkpoint, recorded step by step so a resumed pass does not pay for them twice, so the page
+reads those rather than waiting for the turn to finish: reasoning appears, then a call with its
+arguments, then its result, then the next request. Nothing is stored to make this work and nothing
+is streamed from the provider; it is the same checkpoint, read sooner.
+
+A turn is drawn as **panels**, a coloured edge per run of one kind within one request, with the
+person's message, the model's reasoning, its calls and its answer each in their own. The palette
+runs on one axis, cool for what reached the model and warm for what it produced. **Every panel
+folds, from its own row**, so the dock's fold-everything button turns a finished conversation into
+its own outline; shut, a row carries the front of what is in it.
+
+A **rule** stands at every round trip, carrying what is true of that request rather than of any
+panel in it: the worktree it was made against, when the answer came back, how long it took, what it
+spent in tokens and money, and a fold showing the JSON the checkpoint actually holds for it. Every
+moment the console prints is recorded in UTC and drawn against your own clock, which your browser
+tells it in a cookie, and written `2031-03-14 10:20` at everybody rather than in each reader's own
+conventions: one stamp that sorts and reads the same anywhere. Since the checkpoint *is* the
+conversation, that is the state itself rather than a debug view of it. The rule's own line is a
+**gauge** of how much of the model's context window the request carried, filled from the left and
+shading toward red, so scrolling down a long conversation shows the line lengthen and warm. What a
+turn cost is an estimate from published rates rather than a bill, since no gateway reports what it
+actually charged; the last rule carries the session's total, and above the message box is whether
+the provider still holds this conversation's prefix and what re-sending it costs with none of it
+cached. What the session is on, its model, its repository and branch, and what it takes on disk,
+stands on a card in the rail.
+
+Three panels say what the model was *told* rather than what anyone in the conversation said: the
+**system prompt** every request in a stretch of context carried, **guidance**, a repository's own
+`AGENTS.md` for a directory handed over at the moment a tool reached into it, and a **note**, which
+is a message a plugin asked for. A note carries the word its plugin put on it and the weight of ink
+it asked for, so a pre-commit failure and a handoff document do not read alike halfway down a
+transcript.
+
+Beside the conversation is a rail: find-and-step search, a key that filters by kind and doubles as
+the colour legend, a dock that steps through the transcript, a shelf for text you have written and
+not sent, when this session hands itself off, and a light/dark/system theme. Everything there is an
+enhancement: with JavaScript off the console still renders, still posts messages, still hands off,
+and every panel is still a fold that opens.
+
+**It reads on a phone, and in a narrow window.** Wherever three columns do not fit, the rail folds
+away off the right edge behind a clasp and the session list off the left behind one of its own, so
+the conversation gets the screen.
+
+### What you can do with what you typed
+
+**Send** puts it into the conversation now. If a reply is already coming, that means **steering**:
+the message is put to the model in the turn it is answering, so it shapes that answer rather than
+the one after it. You are not asked which, because you could not answer: the page you typed on was
+drawn from a checkpoint that has moved since. It goes in the session's queue and the reply takes it
+if it is still running when it looks; a message nobody took is still in the queue, and the next turn
+opens on it.
+
+The caret beside Send opens the rest. Each has a name you can type instead: `/` at the start of an
+empty box opens the same list, and a space after the whole word takes it, so `/forget ` puts the box
+in that answer's mode with the button beside it saying `Forget` rather than `Send`. Nothing is ever
+inferred from what you typed, so what you are about to press always says what it does.
+
+- **Next** queues the message behind the reply that is coming instead of putting it to the model
+  now. It is the one thing the record cannot decide for you.
+- **Forget** asks it with the model's context cleared, for when a conversation has wandered and the
+  backlog costs more than it is worth. What is cleared is the context and nothing else: everything
+  said so far stays on the page, keeps counting toward what the session has cost, and still comes
+  across if you fork.
+- **Handoff** is the same family one step along. Where `Forget` drops the backlog, this has the
+  session write it down first, checking the working tree rather than recalling it, and start again
+  from that document. It also happens without being asked: a session keeps a **reserve** of the
+  window free for writing one, and hands itself off once the conversation reaches it. On by default,
+  which is safe only because a handoff destroys nothing. All of it is a plugin, so every word of it
+  can be replaced with your own.
+- **Parent**, from any fork, sends what is in the box back into the conversation it was forked
+  from. That is a message rather than a merge, which is what makes it honest: the turns you took on
+  the branch were asked against a different history. Forking itself is never in this menu; it is the
+  `fork` link on a rule, at a turn boundary.
+- **Keep** puts it on the shelf and clears the box. Pressing a kept note adds it back rather than
+  replacing what is there, so several assemble into one message. It lives in your browser, so it
+  does not follow you to another machine yet.
+- **Run** is the one that is not a message. It runs what is in the box in this session's worktree,
+  in the session's own sandbox, and the model is never told, so committing at the end of a session
+  costs it no context and reaches no provider. It is still recorded, so it draws as a `command`
+  panel with what it exited with, survives a reload, and a fork carries it. `! ` into an empty box is
+  its own shorter key, and the box stays a command box after each run.
+- **Online** is Run with the network on, offered where the session's network is off, for the one
+  command that needs it. Its panel says `online`, because on exe.dev such a command can push.
+- **Push** takes nothing from the box. It sends the session's own branch, the one named above the
+  box, to the repository under the same name and never forced, and draws what git said the way a
+  command's result is drawn.
+
+Shift-Enter sends; plain Enter breaks the line. That way round because a message here is prose that
+often wants a second paragraph and a fenced block, and a box where the obvious key sends is a box
+you cannot write one in.
+
+## What it does not do yet
+
+Named plainly, because they are the next things rather than omissions nobody noticed:
+
+- **No allowlist for the network, only on or off.** An allowlist holding a code forge holds every
+  gist on it and one holding a package registry holds a package anybody can publish, so what it
+  would buy is a defence against a repository's own build script and little against anything
+  deliberate, at the price of a proxy in front of every command.
+  Narrowing it would be that proxy, not a longer setting.
+- **Nothing serialises `bash` against an edit.** Two `edit` calls at one file are serialised, so a
+  batch of them cannot lose each other's work, but a shell command writing a file while an edit
+  writes it is outside what that can see: the paths a command touches are not knowable before it
+  runs.
+- **Two API formats, not every format.** An endpoint's `format` takes `anthropic` or `openai`, which
+  between them cover most gateways. A third is one `Wire` class saying how to name a model over that
+  format, how to ask it what it serves and what it has to be told to reuse a conversation's prefix,
+  plus an extra on `pydantic-ai-slim`.
+- **A session cannot be moved to another endpoint.** Removing an endpoint that sessions use leaves
+  them readable and stuck; the page names the endpoint so putting it back is obvious. Forking one
+  onto an endpoint that still exists is the way out. A model dropping out of the picker is *not* that
+  case and does not stop a session, since an endpoint routes more ids than it advertises.
+- **Going back means forking, never rewinding.** A session that picked a repository works in a
+  worktree of its own, the tree is recorded before every model request, and a fork is checked out at
+  the tree the forked turn saw. There is deliberately no way to put an *existing* session's files
+  back: the branch gets the old files and the original stays readable beside it, where truncating a
+  session in place would destroy history that its own branches point into.
+- **One forge, and it is exe.dev's.** `ExeDevGitHub` reads the GitHub integrations attached to a
+  VM. Anywhere else it reaches nothing, so the picker does not appear and the console is a place to
+  talk. Reaching GitHub through an App, so this works off exe.dev, is another class behind the same
+  interface.
+- **Nothing prunes a clone.** Archiving a session takes its worktree away, but the repository's
+  clone keeps every tree any session snapshotted, so a fork can still plant at it, and it only grows.
+- **No streaming.** A streamed model request inside a session raises rather than running
+  unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
+  recording the stream's events alongside its response.
+- **One machine.** SQLite means every process sharing this store shares a filesystem. That is the
+  deployment this is for rather than a defect; a second machine means another store.
+- **`install` is Linux only.** It renders a user systemd unit and knows no other service manager.
+  `serve` itself is portable, so elsewhere it is a foreground process and whatever you already use
+  to keep one running.
+- **Nothing deletes a session.** They accumulate, and the only way to remove one is the file.
+
+## Why it is built this way
+
+The reasoning is written down rather than left to be inferred from the source:
+
+| | |
+|---|---|
+| [Philosophy](https://joshkarpel.github.io/mainplate/philosophy/) | The one idea everything rests on, and the rules new work is measured against |
+| [Design](https://joshkarpel.github.io/mainplate/design/) | How each part works, what it costs, and which alternatives were tried and are not worth trying again |
+| [Maintaining](https://joshkarpel.github.io/mainplate/maintaining/) | The toolchain around the source, for working on the repository itself |
+
+## Why the name
+
+The mainplate is the base plate of a watch movement: the flat piece everything else is mounted to
+and located by. It does nothing on its own.

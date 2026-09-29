@@ -1,0 +1,348 @@
+# The stylesheet, the script, and the grid
+
+`mainplate.css`, `mainplate.js`, the vendored htmx, and the two JuliaMono weights, all served from
+the process rather than a CDN so a console on a machine with no route out still renders. What they
+draw is [the console](console.md); this is why they are the way they are.
+
+**The stylesheet is a deliverable, and no string assertion checks one.** `just shots` renders every
+page from fixture checkpoints and drives a real Chromium over them, so a styling change can be
+looked at rather than argued about. `just serve` restarts on any change under `src/mainplate`, which
+is what makes an edit watchable: the assets are inventoried once at startup, so an edited stylesheet
+only reaches a *new* process.
+
+## The installed app is still an online console
+
+On a secure origin, the web app manifest makes the console installable with its own icon and opens
+it in a `standalone` window, where the shell's existing `100dvh` bound spends the full app viewport
+rather than the space left under browser controls. Service workers require HTTPS except on
+localhost, so plain HTTP on a LAN address remains an ordinary browser page. The Apple metadata
+carries the same name, icon, and standalone display onto iOS, whose home-screen installation does
+not use every manifest field.
+
+The manifest link carries `crossorigin="use-credentials"`, which looks redundant on a same-origin
+URL and is not: Chromium fetches a manifest with credentials omitted unless the link says so, while
+every other request the page makes sends the cookie. A console behind a login, which is how the
+exe.dev proxy serves a private VM, would otherwise hand the browser the login page where it expected
+JSON, and the page would offer a plain home-screen shortcut rather than the installed app.
+
+A service worker is the small piece Chromium expects an installable app to carry, and this one's
+only response to a fetch is the network's response. It writes no Cache Storage entries and has no
+offline path: without the server, the installed console does not open. That is deliberate, because
+the conversation lives in the server's checkpoint and an offline page would either be an empty
+shell or a second, stale copy of it. The cost, stated: every request from an installed page passes
+through one network-only worker before it reaches the server.
+
+The worker is served under `/assets/` with `Service-Worker-Allowed: /`, so it can control the `/`
+start URL without creating a special second route for one static file. The header is inert on the
+other assets that share the inventory's response policy. Its update check bypasses the browser's
+HTTP cache, while ordinary assets keep the inventory's revalidation policy; neither is an offline
+application cache.
+
+## Everything the script does is an enhancement
+
+With `mainplate.js` absent the page still renders, posts, and folds. What the rail projects onto the
+transcript, the search marks, the panel landed on, which kinds are muted, what is folded, cannot
+live in the markup, so the script holds it as values and reapplies it after every swap through one
+idempotent `repaint()` serving the first render, every swap, and every press.
+
+The one thing it tells the *server* is which clock its reader keeps, because the browser is the only
+party that knows and a cookie is the only carrier that reaches the request for the document itself.
+It writes the name and asks for the page again where what it got was drawn against another clock;
+it formats nothing, because the moments are already drawn and half of them are inside sentences. See
+[which clock a moment is printed against](console.md#which-clock-a-moment-is-printed-against). With
+the script absent a page is drawn against the console's own zone, which for a unit on the machine
+somebody is reading it from is the right answer anyway.
+
+That check is not part of `repaint()` and runs nowhere near it. `paintClock` sits in the same first
+block as the theme, before the document exists, reading what the page was drawn against off `<html>`
+because `document.body` does not exist yet: a page for the wrong zone is thrown away before it is
+painted rather than after, which is the theme's own reason one attribute along.
+
+## The two shapes, and one width that decides between them
+
+Over 78rem the shell is three columns, the session list and the rail standing either side of the
+conversation. Under it the shell is one column, and both lie off their edges of the page behind a
+clasp apiece in a row across the top, which is the shape a phone has and is also the shape a
+half-width laptop window has.
+
+**Two shapes and not three, and that is a decision rather than a default.** There was a shape
+between, from 48rem to 78rem, with the rail folded behind a glyph floating over a corner of the
+conversation and the list keeping its column. It was a third state to keep right, with a folding
+mechanism of its own and a clasp face of its own, and the two queries it took overlapped, so the
+narrow one won only by coming later: split up, the rail's own block sat below the narrow one and
+put the 17rem sidebar column back on every phone, leaving the conversation about a hundred pixels
+to render in, a bug invisible in either rule and obvious with both in one list. The cost of going
+without it, stated: a window too narrow for three columns but wide enough for two gets the
+conversation alone with both panels a press away, where it used to get the list beside it. That is
+the trade for one mechanism, one script and one block to read, and **every narrow rule is in that
+one block at the end of `mainplate.css`**, with nothing for its order against another query to
+matter.
+
+The fold is not the whole of what a phone needs, and the rest is a query nested at the end of that
+block, at 48rem: the rule under a turn stacks its parts and drops its running total because a phone
+has no room on a line for them, fields are held at 16px so a phone does not zoom on focus, targets
+grow to a thumb, the picker stops scrolling inside a box that scrolls, and nothing is revealed by
+hover. None of that is about columns. Written in the outer block it fired on half a laptop, which
+has every bit of the room a wide window has on a line, and a 1200px window drew its rules the way
+a phone does. Nested rather than a second top-level query, so it comes after everything it refines
+and there is still no order between blocks to get wrong.
+
+The session list in that shape is the rail's mechanism from the other edge: fixed to the viewport,
+`pointer-events: none` on the box and back on its children, the clasp left in place and everything
+else parked off the edge by a transform until the clasp is pressed. One script wires both clasps and
+opening either shuts the other, since there is room for one of them across the page at a time. Slid
+out, the list is the column a wide window draws, with the date, the repository and the tree's
+indentation that a strip of chips across the top had to give up; the strip was tried first and was
+one more scroller, sideways, to learn.
+
+**What slides is one sheet, and the sheet is what a finger lands on.** Everything but the clasp is
+in a box of its own with the page's ground, a border and a lift, and that box is the scroller at
+every width, wide included, where it is simply the column. Loose cards over a bare box were tried
+first and read the same in a screenshot; what they cost was every touch that landed between two of
+them, which fell through to the conversation showing in the gap and scrolled that instead. The
+sheet takes the touch and scrolls itself, so a thumb anywhere on it moves the list and never the
+conversation. The rail is the same shape at both widths its overlay applies at.
+
+The cost, stated: the two clasps stand in a row at the top of the page that everything else starts
+under, about the height the strip took, because floating them over the corners would put the left
+one over the picker's first legend and the role of whichever panel scrolled under it. The row is a
+track of the shell rather than padding `main` clears, and since it is spent either way the clasps
+say their words rather than a glyph apiece and the console's name stands between them, which is the
+one place the name is drawn: a wide window has no banner, for the reason in `shell`.
+`toCurrentSession` brings the session being read into the list whether it is parked or out, since a
+hidden box keeps its layout and still scrolls.
+
+Two more things change on a phone, and both follow from it having one column of room. **Nested
+same-axis scrollers go away**: the fork page bounds its model list on a wide window so the transcript
+under the picker stays in reach, and on a phone that bound bought a list thirty pixels tall, so it
+comes off and the choosing scrolls as one box, which is what the new-session page does at every width
+([the picker](console.md#the-picker)). **And nothing on the transcript is revealed by
+hover any more**, which is the same lesson taken one step further than a `@media (hover: none)`
+override: the branch link used to appear on a person's panel under the pointer, so on a touch screen
+forking did not exist until a media query put it back. On the rule it is simply always drawn, and
+there is no pointer question left to answer.
+
+`TestTheShapeOfANarrowWindow` is the guard, and it asks three things because overflow can be right
+for the wrong reason: whether any page pushes the document sideways on a phone, whether a page
+carrying a rail is still *one* grid track there, and whether the narrow shape begins exactly where
+three columns stop fitting. The second is the direct guard on a sidebar track coming back, which a
+second query would reintroduce, and it reports that rather than one of the ways it shows.
+
+### Putting a column away, and how wide the conversation is read
+
+**On a wide window each side column can be put away, and the conversation's width can be dragged.**
+Both are the reader's and are kept per browser, in `localStorage`, because what fits is a fact about
+the screen and not about the person; both are pinned on `<html>` before the first paint, for the
+theme's reason, so a page opened with the list away never draws it and takes it back.
+
+A column put away is a strip the width of the chevron that brings it back, standing on the column's
+inner edge in both states. A strip rather than the narrow shape's drawer, because a drawer needs a
+clasp to stand somewhere, and on a wide window the only places are over the conversation's corners,
+which is the argument above against floating clasps. Each column's width is one custom property
+the grid reads, so two columns out or away are four layouts and one rule each. The narrow block
+draws both columns as sheets behind clasps whatever this says, and draws no chevron.
+
+**The width is one value, `--column`, that the transcript and the message box both read**: the
+reader's `--reading` where they have dragged one and the measure where they have not, held to the
+room there is by `width: 100%`, so a width chosen on a wide screen is simply as wide as a narrower
+one allows, and nothing has to notice the window changing. The grip is the conversation's *left*
+edge, because the right one is the transcript's scrollbar, and it moves both edges at once since the
+column is centred; the arrows move it a step and Home or a double press puts the measure back. What
+is kept is the width the column was drawn at, so a drag past the edge of a wide screen keeps that
+screen's width rather than a number no screen showed. **The cost, stated:** past about ninety
+characters prose is harder to read, which is why the measure is still the default, and the grip is
+not drawn while a fork is being chosen, since the picker there is wider than the column and the
+grip would stand over its controls. `TestPuttingASideColumnAway` and
+`TestTheWidthTheConversationIsReadAt` are what fail when either goes.
+
+## The document never scrolls, and every box between has to say so
+
+`.shell` is `100dvh` and nothing above it moves, so a page is a window with one thing scrolling
+inside it: the transcript on a session page, `.setup` on the new-session page, and the model list inside
+that. **What makes it work is a chain, and every box in the chain has to pass the bound down.** A
+grid or flex item's minimum is its own min-content unless it says `min-height: 0`, so one box that
+does not say it is floored at its content and the bound stops there: `main`'s growing row sizes to
+the whole picker, the page overflows the window, and the model list, which is sized by the room left,
+is left at its full height. Wrapping the new-session page's picker in a `<form>` did exactly that, which is
+why `.choosing` is a grid that says `min-height: 0` rather than the plain block a form otherwise is.
+
+**The symptom a reader meets is not the page having grown.** It is that a wheel anywhere over the
+model list moves nothing at all, because a list at its full height is a scroll container with nothing
+to scroll. So the guard is written as the gesture: `TestWhatScrollsOnTheStartPage` wheels over the
+list and asks that the list moved *and* that the block around it took the rest.
+
+That second half is why the model list does not set `overscroll-behavior: contain`. Contained, the
+end of the list was a wall, and a wheel that started over the models could not reach the questions
+under them: on the fork page, seventeen pixels of list and then nothing with five hundred left below.
+**`contain` belongs on a scroller that *is* the reading surface**, which the transcript is and a
+bounded slice of a picker is not. The cost is that a fast flick through seventy models runs on into
+the block around it, which is what a reader who kept flicking asked for.
+
+**A phone's keyboard is the one thing `100dvh` does not know about.** `dvh` is the window less the
+browser's own bars; a keyboard is laid *over* the page, so the visual viewport shrinks to what is
+left and the layout viewport, which `dvh` and so the shell are sized by, stays where it was. The
+shell then runs on under the keys with the message box at the bottom of it, and what a browser does
+about that is scroll the page so that the *focused* element is in view: the textarea, and not the
+row under it holding Send, which on a phone is the one control a message can be sent with, since
+Shift-Enter does not exist there. Two things cover it, and they are one mechanism each side of a
+browser split:
+
+- **The viewport meta asks for the layout viewport to shrink too**, with
+  `interactive-widget=resizes-content`. Chrome and Firefox honour it, and there the shell's `100dvh`
+  ends where the keyboard begins and nothing else is needed. Safari does not honour it in any shipped
+  release, though WebKit carries the implementation.
+- **`wireKeyboard` covers Safari**, from the visual viewport: where it is shorter than the window at
+  scale one, which is a keyboard and nothing else, the script sets `--visible-height` to what is
+  left, the shell is that tall, and the page is put back at its top, since Safari will already have
+  scrolled it to show the textarea. On the resize of the visual viewport and never its scroll: the
+  shell is then exactly what can be seen, so there is nothing to scroll, and following the visual
+  viewport as a thumb drags it is what makes a layout jitter. At any other scale the visual viewport
+  is a pinch zoom, and shrinking the page to the part being looked at would be wrong, so
+  `keyboardLeaves` answers nothing and the property is taken off. On a browser that honoured the
+  meta both viewports shrank together, so the same test answers nothing there and the two cannot
+  fight.
+
+The cost, stated: **this is written against what the two viewports are documented to do and against
+nothing measured**, because neither Playwright nor the suite can raise a keyboard, and no device it
+was tried on is a claim this page can make. What it must not do it cannot do: with the script
+absent the property is never set and the shell is `100dvh` as before, and on a browser that resizes
+its content the test never fires.
+
+## One value scales the whole page
+
+**And it is `html { font-size }`.** Everything except the monospace grid is sized in `rem`, the
+text, the spacing steps, the reading measure, the sidebar and the rail, so a single percentage moves
+all of it in the proportions it already has. It is 110% because the console read small enough that
+the page was better at a browser zoom of 110%, which is the same scaling asked for by hand on every
+visit, and a stylesheet that needs a zoom is a stylesheet with a number in the wrong place.
+
+Deliberately *not* the breakpoints, which resolve `rem` against the browser's own default rather
+than against this: the two shapes are about how much screen there is, and the shape should change
+where the window runs out of room and not where the text got bigger.
+
+## Monospace is a grid, and it is vendored because a grid cannot be borrowed
+
+A model answers in tables and trees, and every `read` comes back as lines behind a `│` gutter, so
+most of what a panel here shows is box drawing. Two rows of it join on two conditions, and missing
+either draws that column as a dashed line rather than as a line.
+
+The row pitch must be no more than the glyph's own ink, which is a fact about the font: `│` is drawn
+over about 1.7 times its size in JuliaMono, where Fira Code, Cascadia Code, DejaVu Sans Mono,
+Liberation Mono and Courier New all cap out well under that, so a stack of names makes the console's
+spacing depend on which of those the reader happens to have. And the pitch must be a **whole number
+of pixels**, or every row lands on a different subpixel phase and the joins falling between two
+device rows draw as two half-lit ones, a hairline on some rows of a figure and not others, which is
+the failure that survives getting the first condition right.
+
+So `JuliaMono-Regular.woff2` and its bold are upstream unmodified, under the OFL beside them, and
+`--mono-size` and `--mono-line` are stated in pixels: at a size of 14 a run joins at a pitch of 23
+and breaks at 24, so the pitch is 22, which is that ceiling less the pixel that keeps it off its own
+boundary. **Measured rather than taken from the outline**, because a rendered glyph is hinted: the
+outline says 1.70em and `measureText` says less again, and neither is the number to build on. That
+also means the pair cannot be *scaled* when the rest of the page is, since the whole numbers on
+either side of the answer are a pixel apart: `html { font-size }` moves everything in `rem` at once
+and this is the one thing it does not reach, so moving it is a measurement rather than a
+multiplication.
+
+The pixel held back is not symmetry: overlapping ink still draws the line the figure means, and a
+gap draws a line the figure does not. Air beyond that has to come from a larger `--mono-size`, since
+the span is a multiple of the size rather than a constant, which is the one knob that moves the
+ceiling. Both the size and the pitch have to move together, and both belong to every monospace block
+at once: `.text pre` for a fence and `.tool__body pre` for a read, whose family is said again there
+rather than inherited, since a browser's own sheet sets `pre` to `monospace` and a rule on the
+element beats a value inherited from an ancestor.
+
+**A megabyte a weight is what completeness costs, and completeness is what is being bought.** A
+model draws with far more than box drawing, and the gaps in an otherwise good font are exactly what
+a fallback fills, one character at a time, on a cell of its own. Measured as the share of each block
+a face carries: JuliaMono has all of box drawing, block elements, geometric shapes, arrows,
+mathematical operators, miscellaneous symbols, dingbats and braille, every glyph on the cell, where
+Fira Code has 2% of dingbats and no braille, Cascadia Code 8% of arrows, Iosevka 361 symbols at the
+wrong advance, and Roboto Mono no box drawing at all. Two static weights rather than one variable
+file, 400 and 700, so the 600 a panel role asks for resolves to the bold instead of being
+synthesised by smearing the regular.
+
+A *nerd font* is not the answer to a missing `✗` and the numbers say why: patching Cascadia Code
+adds 9,219 private-use icons and takes it from 598 KB to 3.35 MB while leaving dingbats at 8 of 192,
+because what it fills is the private-use area a shell prompt draws from and not the block `✗` lives
+in. The lighter alternative to a whole face, if the megabyte ever has to go, is a face cut to the
+symbol blocks under a `unicode-range` so it is fetched only by a session that shows one, with
+`size-adjust` to put its cell on this grid: JuliaMono cut to arrows through braille is 115 KB.
+
+`TestTheGridMonospaceIsDrawnOn` is what fails when any of this breaks, and it has to be a browser
+twice over: every one of these renderings is a correct picture of *some* grid, so what is wrong with
+the broken one is a hairline no still and no markup assertion can see, and the join is asked by
+drawing a run into a canvas and reading the pixels back rather than by comparing the pitch against a
+number. Rows rather than a column, because the stroke is a pixel wide across two half-lit columns
+and the inkiest single column reports joins as gaps. A canvas rasterises about a pixel longer than
+the same text laid out in the document, so the gap check is the coarse half and `pitch < span` is
+the exact one.
+
+**Reasoning is set in italic and the code inside it is not.** A model reasons *about* code, so a
+block in a reasoning panel is a quotation of something that exists, and slanting it makes the
+quotation differ from the thing quoted. It costs alignment as well: no italic face is vendored, so
+an oblique is synthesised by shearing every glyph, which leans a gutter and the sides of a box while
+leaving the horizontals flat.
+
+## The mark
+
+The mark is a watch movement's mainplate, which is what the console is named for: the plate every
+other part is mounted on and the one that stays put while the rest is taken off and put back. The
+disc is the plate; the large cutout is the barrel's opening with its arbor standing in it, and the
+small one is a pivot hole. Circles and nothing else, and only two cuts, because the mark has to read
+at sixteen pixels in a tab: a letterform does not, and at that size a plate with two holes in it is
+still a plate with two holes in it. Every version has a transparent ground.
+
+**The monochrome mark is the shape, and colour is only ever put into its holes.**
+`icon-mono-on-dark.svg` and `icon-mono-on-light.svg` are the plate in one colour with the holes cut
+through, named for the ground each is drawn on. `icon.svg` fills the holes instead, the barrel in the
+person's blue and the pivot in the assistant's orange, the two speakers' hues from the stylesheet, so
+the colour says who is in it without changing its outline. A second colour anywhere else is where
+this mark goes wrong: a light arbor in a dark ring on a blue plate reads as the catchlight of an eye.
+
+`icon.svg` is the favicon and the dashboard's mark, and it takes its colours two ways, one per
+place. Every fill reads a custom property: drawn on its own, as the favicon, the file sets those
+itself from the OS's scheme, which is all a tab strip knows; drawn by the dashboard as a `<use>` of
+its `#plate`, it inherits them from `.home__mark`, which points them at `--ink` and the speakers'
+tokens, so the mark follows the reader's theme toggle as an `<img>` could not. That is one file
+rather than a second copy of the geometry in `pages.py`, at the cost of the dashboard's mark
+depending on the browser fetching and drawing an external `<use>`, which is checked in Chromium
+and nowhere else.
+
+The manifest's two PNGs and the Apple touch icon are `icon-mono-on-dark.svg` rasterised by a browser
+onto the console's dark ground, because an installed icon is opaque, and the plate is exactly the
+safe circle a platform's mask keeps, so a masked icon is the plate with its corners gone and nothing
+cut.
+
+## What is vendored
+
+Everything served from `assets/` that somebody else wrote is a row in `scripts/vendored.toml`: the
+URL it was published at, pinned to a release, and the digest of the bytes. `just vendor` fetches
+every row and writes none of them unless every one hashes to what is recorded, and
+`tests/test_vendored.py` holds the copies on disk against the same table with no network, so a
+vendored file edited by hand is a failing test rather than a quiet drift. One table and one rule
+rather than a download apiece, because the check is the whole of the safety and a script nobody
+checked would otherwise have somewhere to land. The pre-commit hooks step around the same files,
+since a newline one of them appends is a digest the test then refuses, and `.gitattributes` has git
+store them verbatim, since a line ending normalised on the way into the index is the same refusal
+on every other machine. A release is taken on once it
+has aged, a week for a minor and a month for a major, which is `uv`'s cooldown applied by hand to a
+fetch `uv` does not make.
+
+`htmax.min.js` is htmx 4 core plus every bundled extension in one file, with an allowlist in a meta
+tag deciding which actually register. Why one file rather than core plus separately vendored
+extensions is on [the console's page](console.md#htmx-4), because what reads the allowlist is
+`EXTENSIONS` in `pages.py` rather than anything here.
+
+`mermaid.min.js` is the diagram library, and it is the one asset no page loads by itself: `<html>`
+carries its address and the script fetches it the first time a `mermaid` fence is on the page, so a
+page with no diagram pays nothing for the three and a half megabytes. Vendored rather than
+taken from a CDN for the reason everything here is, that a console on a machine with no route out
+still draws. What the button does with it is [two fences are also
+pictures](console.md#markdown-and-the-sanitiser).
+
+The two faces are members of one release archive rather than files published as themselves, which
+is what the `member` field on a row is for; their digest is the face's own and never the archive's.
+
+`mainplate.js` itself depends on nothing, and nothing in the repository needs Node: `just shots`
+drives the same Python Playwright the suite does, so a checkout pins one Chromium.

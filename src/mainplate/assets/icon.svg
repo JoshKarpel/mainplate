@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Every fill reads a property rather than naming a colour, so the dashboard's `<use>` of
+       `#plate` can hand it the page's own tokens and follow the theme toggle. The properties set
+       here are for when the file is drawn on its own, as the favicon, where only the OS's scheme is
+       known. The fills are `style` attributes because those travel with the element into a `<use>`,
+       where this stylesheet may not. -->
+  <style>
+    svg { --plate: #22201c; --person: #274690; --assistant: #c0603d; }
+    @media (prefers-color-scheme: dark) {
+      svg { --plate: #e6e4e0; --person: #7f9fe6; --assistant: #e08a6a; }
+    }
+  </style>
+  <g id="plate">
+    <circle cx="256" cy="256" r="204" style="fill: var(--plate)"/>
+    <circle cx="208" cy="212" r="92" style="fill: var(--person)"/>
+    <circle cx="208" cy="212" r="40" style="fill: var(--plate)"/>
+    <circle cx="344" cy="332" r="36" style="fill: var(--assistant)"/>
+  </g>
+</svg>

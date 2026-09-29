@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# A repository plugin that tells a session where its worktree stands, once, before its first request.
+#
+# It is here as a **test fixture**, and it is the one in this repository that is none of Python, none
+# of ours, and none of the console's tiers: it is declared by `.mainplate/mainplate.yaml` in a
+# repository, it runs behind the sandbox, and it proves the three claims that are otherwise only
+# asserted in prose - that a plugin may be written in any language, that it reaches nothing it was
+# not handed, and that a repository's own script can contribute to what a session is told.
+#
+# It is a port of a `SessionStart` hook, which is why `setup` is the only event it wants: what a
+# session-start hook does is put context in front of the first request, and `instructions` is exactly
+# that. There is no later event to want, because the thing it reports goes stale the moment the model
+# starts editing and a session that re-read it every turn would be re-pricing its own cached prefix.
+#
+# **Confinement is what makes the shape of this readable.** `--clearenv` takes the environment away,
+# so there is nothing to read out of it; `--chdir` starts it in the worktree, so `git` here is the
+# session's own repository and no path has to be parsed out of the payload. The clone is bound
+# read-only, so every read below works and nothing here could write history if it tried.
+
+set -euo pipefail
+
+# The payload is read and discarded. Nothing in it is needed: the working directory *is* the
+# worktree, which is the one fact this plugin wants, and reading stdin to the end is what keeps the
+# console's write from failing on a closed pipe.
+cat >/dev/null
+
+# There is no event to branch on here, and none is needed: `"events": []` below is what stops
+# anything after `setup` ever reaching this script. A guard on `$1` could not do that job anyway -
+# the console passes no arguments, and the event is in the payload that was just discarded.
+STATUS=$(git status --short --branch 2>/dev/null) || { echo '{}'; exit 0; }
+CURRENT=$(git symbolic-ref --short HEAD 2>/dev/null) || CURRENT=""
+DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's:^origin/::') || DEFAULT=""
+[[ -n "$DEFAULT" ]] || DEFAULT=$(git rev-parse --verify --quiet main >/dev/null && echo main || echo "")
+
+SAID="Current git status:
+
+$STATUS"
+
+if [[ -n "$CURRENT" && -n "$DEFAULT" && "$CURRENT" != "$DEFAULT" ]]; then
+  LOG=$(git log "${DEFAULT}..HEAD" --oneline 2>/dev/null || true)
+  if [[ -n "$LOG" ]]; then
+    SAID="$SAID
+
+Recent commits:
+
+$LOG"
+  fi
+  # Net diff vs. the merge-base (three-dot): each file once, cumulative change, collapsing per-commit
+  # churn. Orients a cold session on what the branch amounts to.
+  DIFFSTAT=$(git diff "${DEFAULT}...HEAD" --stat 2>/dev/null || true)
+  if [[ -n "$DIFFSTAT" ]]; then
+    SAID="$SAID
+
+Net changes vs. ${DEFAULT} (merge-base):
+
+$DIFFSTAT"
+  fi
+fi
+
+# Python for the JSON escaping and nothing else, which is the honest division of labour: shell is
+# good at running git and bad at quoting, and the protocol is one object either way. It is also the
+# whole of what this plugin needs from the sandbox beyond git, so a namespace with `/usr` bound is
+# enough to run it.
+SAID="$SAID" python3 -c '
+import json, os
+print(json.dumps({"events": [], "instructions": os.environ["SAID"]}))
+'

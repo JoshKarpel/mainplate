@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check
+    # One platform, and now for a reason rather than for want of one: `install.py` renders a
+    # systemd unit, so its tests are Linux's and there is nothing for a macOS or Windows runner
+    # to run a meaningful version of. The console itself is portable, which is what would make a
+    # matrix worth adding later; the other thing that would is the SQLite the interpreter links
+    # against, which differs per platform and has a floor this store needs (3.42, for
+    # `unixepoch`'s `subsec`). Neither is asserted by a test yet.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
+
+      - name: Run pre-commit checks
+        run: uv run pre-commit run --all-files --show-diff-on-failure --color=always
+
+      - name: Run type checking and tests
+        run: just test --cov --durations 20 -vvv
+
+  docs:
+    name: Docs
+    # Its own job rather than a step in `check`, and it deliberately does not use
+    # `./.github/actions/setup`: that installs a Chromium and a `bubblewrap` the suite needs and a
+    # static site generator does not, which is minutes of download per pull request for a build that
+    # reads Markdown. `uv run` syncs the wheels the build does need, browsers not among them.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Build the documentation site
+        run: just docs-build

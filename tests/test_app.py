@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
+from pathlib import Path
+from typing import Any
+
+import pytest
+from calling import calling
+from conftest import CONFIG
+from conftest import DEFAULT_CHOICE
+from conftest import OFFERED
+from conftest import Stand
+from conftest import already
+from conftest import usage_limit_reached
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.models.function import AgentInfo
+from pydantic_ai.models.function import FunctionModel
+
+from mainplate.agent import Wires
+from mainplate.app import build_app
+from mainplate.app import open_console
+from mainplate.conversation import DECLARED_KEY
+from mainplate.conversation import messages_key
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.running import Spawned
+from mainplate.service import Service
+from mainplate.sessions import Delayed
+from mainplate.settings import Settings
+from mainplate.tending import SETTLE_FIELD
+from mainplate.tending import SETTLED
+
+# A bound on each half of the exchange rather than a wait for it. Every assertion below is an
+# event, so this only turns a wiring that never connects into a failure instead of a hung suite.
+# It has to sit under this test's own timeout, or a wiring failure kills the xdist worker instead
+# of reporting which wait went unanswered.
+PATIENCE = 5
+
+
+async def loaded(caller: Any, service: Service, session: str) -> None:
+    """
+    Press `Load plugins`, which every session goes through before there is anywhere to type.
+
+    A wait first, because the switches are drawn from what the *first pass* read out of files, and
+    the press is what actually runs them. That is the order somebody clicking through has, with the
+    poll standing in for the live connection their page holds.
+
+    Here rather than in `conftest.py` because this is the one suite where the bundled plugins are
+    really installed: `open_console` is what installs them, so it is the only place the step has
+    anything in it.
+    """
+    async with asyncio.timeout(PATIENCE):
+        while DECLARED_KEY not in await service.checkpointer.load(session):
+            await asyncio.sleep(0.05)
+    pressed = await caller.post(f"/sessions/{session}/setup", {SETTLE_FIELD: SETTLED})
+    assert pressed.status == 303, "the plugins loaded and the conversation is where to go next"
+
+
+@pytest.mark.timeout(30)
+async def test_a_message_posted_to_the_console_is_answered_by_the_worker(database: Path) -> None:
+    """
+    The one test of the wiring: the console records, the queue delivers, and the worker answers.
+
+    Both halves are tested on their own elsewhere. What only this can catch is the two being
+    assembled without being connected, which is a silent failure: the console would look exactly
+    the same and no session would ever be answered.
+
+    The signal is the model being reached, twice. The second one is what proves the *first* turn
+    was recorded rather than merely started: the body only moves past turn 0 once `turn:0:messages`
+    is in the checkpoint, and the model response it already recorded is replayed rather than asked
+    again, so a second call can only be turn 1.
+
+    It waits on a semaphore rather than sleeping, so the test runs as fast as the scheduler's poll
+    allows and does not depend on how quick the machine is.
+
+    The endpoints are stand-ins, so `open_console`'s own discovery runs for real over them: what
+    this asserts includes that a console whose models are asked for rather than configured still
+    reaches the point of taking traffic.
+    """
+    answered = asyncio.Semaphore(0)
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        answered.release()
+        return ModelResponse(parts=[TextPart("an answer")])
+
+    shared = FunctionModel(respond)
+    endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    async with open_console(Settings(database=database), CONFIG, endpoints) as service:
+        async with calling(build_app(already(service))) as caller:
+            started = await caller.post(
+                "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
+            )
+            assert started.status == 303
+            session = started.location.rsplit("/", 1)[-1]
+            # Creating one no longer says anything in it: the first pass plants and reads what is
+            # declared, the press loads it, and the first message is a third request. This is also
+            # the one test where the bundled plugins are actually run, since `open_console` is what
+            # installs them and the press is what runs them.
+            await loaded(caller, service, session)
+            said = await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})
+            assert said.status == 200
+            async with asyncio.timeout(PATIENCE):
+                await answered.acquire()
+
+            # `next` rather than a plain Send, which now decides for itself: the first turn may not
+            # have recorded its messages by the time the model has answered, and a message that
+            # steered it would reach the pass already running rather than starting a second one.
+            again = await caller.post(f"/sessions/{session}/messages", {"prompt": "and again", "disposition": "next"})
+            assert again.status == 200
+            async with asyncio.timeout(PATIENCE):
+                await answered.acquire()
+
+
+@pytest.mark.timeout(30)
+async def test_a_plugins_scratch_is_nowhere_the_model_can_write(database: Path) -> None:
+    """
+    The two roots are named a few lines apart in `open_console`, and nothing below them can tell they
+    were given the same path: `Spawned` says its root is not the session's and cannot check it, and a
+    unit test of either half passes on a fixture that names them separately.
+
+    What it costs to get wrong is not a tidiness bug. A session's scratch is bound read-write into the
+    model's namespace and is a root its file tools reach, so a plugin directory under it is `$HOME`
+    for a program the model can overwrite - and this console then runs that program, unattended, at
+    every turn boundary, reporting what it printed into the conversation in the console's own voice.
+    """
+    endpoints = Wires(
+        by_endpoint={
+            name: Stand(offers=OFFERED[name], responding=FunctionModel(unanswered)) for name in CONFIG.endpoints
+        }
+    )
+    async with open_console(Settings(database=database), CONFIG, endpoints) as service:
+        assert service.workspaces is not None
+        assert service.declaring is not None
+        speaking = service.declaring.speaking
+        # `Speaking` is the protocol a plugin is spoken to through, and only the real one knows where
+        # it puts a scratch: this test is about the wiring, so it asks for the wired thing by name.
+        assert isinstance(speaking, Spawned)
+        assert speaking.scratch is not None
+
+        session = "a-session"
+        theirs = service.workspaces.scratch_at(session)
+        mine = speaking.scratch_for(Installed(tier=Tier.REPOSITORY, name="checks", path=Path("/x")), session)
+
+        assert theirs not in mine.parents
+        assert mine not in theirs.parents
+
+
+@pytest.mark.timeout(30)
+async def test_a_session_the_provider_deferred_is_held_until_the_moment_it_named(database: Path) -> None:
+    """
+    The other end of a wait: the queue actually holding the delivery until then.
+
+    Everything up to the suspension is pinned a pass at a time in `test_conversation.py`, and this is
+    the one link neither half can see: a `Sleeping` pass is answered by the *worker*, with a
+    `wake_at` on the delivery it is holding, and a console assembled without that would record the
+    wait and then redeliver on the lease exactly as before - which is the whole thing this replaces,
+    with an extra record to show for it.
+
+    The moment is days out, so what is asserted is unambiguous: a delivery held for that long is not
+    one the lease put there, and no wait this suite is prepared to sit through would be.
+    """
+    until = datetime.fromtimestamp(int((datetime.now(UTC) + timedelta(days=3)).timestamp()), UTC)
+    reached = asyncio.Semaphore(0)
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        reached.release()
+        raise ModelHTTPError(status_code=429, model_name="fixture", body=usage_limit_reached(until))
+
+    shared = FunctionModel(respond)
+    endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    async with open_console(Settings(database=database), CONFIG, endpoints) as service:
+        async with calling(build_app(already(service))) as caller:
+            started = await caller.post(
+                "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
+            )
+            session = started.location.rsplit("/", 1)[-1]
+            await loaded(caller, service, session)
+            assert (await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})).status == 200
+            async with asyncio.timeout(PATIENCE):
+                await reached.acquire()
+
+            # Synchronised on the record rather than on a clock: the pass writes the wait and then
+            # suspends, and the worker answers for the delivery after that, so the queue is what is
+            # polled for.
+            async with asyncio.timeout(PATIENCE):
+                while not isinstance(held := await service.attention(session), Delayed):
+                    await asyncio.sleep(0.05)
+
+            assert held.until > timedelta(days=2), "the queue is holding it for the moment, not for a lease"
+            found = await service.read(session)
+            assert found is not None
+            assert found.deferred is not None
+            assert found.deferred.until == until, "and the page says which moment it is waiting for"
+
+
+async def unanswered(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:  # pragma: no cover - never called
+    """A wire that satisfies discovery for a test that asks the console about itself and never talks."""
+    raise AssertionError("this test asks nothing of a model")
+
+
+@pytest.mark.timeout(30)
+async def test_a_turn_of_more_than_one_request_is_carried_on_by_the_pass_after_it(database: Path) -> None:
+    """
+    The other half of the wiring, and the one that fails silently: a pass ends mid-turn now.
+
+    At the allowance the console ships, a pass makes one live model request and hands the rest of
+    the turn back. That comes back `Completed`, which the worker answers by doing nothing at all, so
+    `readying` asking for the session to be made ready again is the whole of what carries the turn
+    on. Without it the first request lands, the turn stops there, and nothing anywhere says so.
+
+    Two requests are forced by answering with a call to a tool that does not exist, which is the
+    cheapest way to make Pydantic AI ask again: this session has no repository, so it has no tools,
+    and giving it one would mean a repository to clone for a test about the queue.
+    """
+    answered = asyncio.Semaphore(0)
+    asked = 0
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal asked
+        asked += 1
+        answered.release()
+        if asked > 1:
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(parts=[ToolCallPart(tool_name="absent", args={}, tool_call_id="call-0")])
+
+    shared = FunctionModel(respond)
+    endpoints = Wires(by_endpoint={name: Stand(offers=OFFERED[name], responding=shared) for name in CONFIG.endpoints})
+
+    async with open_console(Settings(database=database), CONFIG, endpoints) as service:
+        async with calling(build_app(already(service))) as caller:
+            started = await caller.post(
+                "/sessions", {"endpoint": DEFAULT_CHOICE.endpoint, "model": DEFAULT_CHOICE.model}
+            )
+            session = started.location.rsplit("/", 1)[-1]
+            await loaded(caller, service, session)
+            assert (await caller.post(f"/sessions/{session}/messages", {"prompt": "hello"})).status == 200
+            # Twice, which is what a second pass had to happen for: the first request is the tool
+            # call, and the second is the one the pass after it made.
+            for _ in range(2):
+                async with asyncio.timeout(PATIENCE):
+                    await answered.acquire()
+
+            async with asyncio.timeout(PATIENCE):
+                while messages_key(0) not in await service.checkpointer.load(session):
+                    await asyncio.sleep(0.05)

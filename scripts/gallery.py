@@ -1,0 +1,1741 @@
+# Every page this console renders, written to a directory as files a browser can open.
+#
+# The point is to look at the stylesheet, which is a deliverable no string assertion can check. A
+# page here is produced by the *same* function that serves it, from a checkpoint shaped exactly as
+# a real session's is, so what a screenshot shows is what a reader gets rather than a second
+# rendering that resembles it.
+#
+# No server, no database, no provider and no `config.yaml`. Pages are pure functions of
+# already-answered questions, so the whole of what this needs is to answer them with fixtures. The
+# assets are copied beside the pages, which is why a static server rooted here renders identically
+# to the real one: `/assets/mainplate.css` resolves the same way either way.
+
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
+from dataclasses import replace
+from datetime import UTC
+from datetime import date
+from datetime import datetime
+from datetime import timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Final
+from zoneinfo import ZoneInfo
+
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelRequest
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import SystemPromptPart
+from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ThinkingPart
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.messages import UserPromptPart
+from pydantic_ai.usage import RequestUsage
+from without_durability.interfaces import inbox_key
+
+from mainplate import records
+from mainplate.agent import Choice
+from mainplate.agent import Listed
+from mainplate.catalogue import Catalogue
+from mainplate.catalogue import Offering
+from mainplate.catalogue import retention_for
+from mainplate.console import LINKS
+from mainplate.conversation import ARCHIVED_KEY
+from mainplate.conversation import Result
+from mainplate.conversation import commit_command
+from mainplate.conversation import heard_key
+from mainplate.conversation import instructions_key
+from mainplate.conversation import messages_key
+from mainplate.conversation import model_key
+from mainplate.conversation import opened_key
+from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_instructions
+from mainplate.conversation import recorded_messages
+from mainplate.conversation import recorded_prompt
+from mainplate.conversation import recorded_result
+from mainplate.conversation import recorded_steer
+from mainplate.conversation import result_key
+from mainplate.conversation import tool_key
+from mainplate.conversation import transcript
+from mainplate.conversation import tree_key
+from mainplate.conversation import wrote_key
+from mainplate.durability import TOOK
+from mainplate.durability import ModelResponseTypeAdapter
+from mainplate.forge import Fetched
+from mainplate.forge import Reachable
+from mainplate.forge import Repository
+from mainplate.pages import Links
+from mainplate.pages import Reader
+from mainplate.pages import dashboard_page
+from mainplate.pages import fork_page
+from mainplate.pages import new_session_page
+from mainplate.pages import session_page
+from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.installed import Installed
+from mainplate.plugins.installed import Tier
+from mainplate.plugins.protocol import Described
+from mainplate.reference import Cost
+from mainplate.reference import Facts
+from mainplate.reference import Reference
+from mainplate.reference import facts_of
+from mainplate.reference import resending
+from mainplate.sandbox import Filesystem
+from mainplate.sandbox import Isolation
+from mainplate.service import Conversation
+from mainplate.sessions import Attention
+from mainplate.sessions import Claimed
+from mainplate.sessions import Delayed
+from mainplate.sessions import Footprint
+from mainplate.sessions import Idle
+from mainplate.sessions import Origin
+from mainplate.sessions import Queued
+from mainplate.sessions import Session
+from mainplate.snapshots import branch_named
+
+ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
+
+WHEN = datetime(2031, 3, 14, 15, 9, 26, tzinfo=UTC)
+"""
+When everything in this gallery happened, which every response fixture is stamped with.
+
+`ModelResponse.timestamp` defaults to the moment it was constructed, so a fixture without one is the
+moment the gallery ran: the composer's cache note draws that time, and two runs would produce two
+different pages. A screenshot that differs run to run is one nobody can compare against the last.
+"""
+
+ZONE = ZoneInfo("America/Chicago")
+"""
+The clock this gallery's pages are drawn against, which is a reader's rather than this machine's.
+
+Named here for `WHEN`'s reason and one more. Stated, because `here()` reads the machine the render
+ran on and a shot taken in one zone would not match a shot taken in another; and deliberately *not*
+UTC, because every moment in these fixtures is recorded in UTC, so a gallery drawn in UTC would
+render identically whether or not anything converted anything. 10:09 against `WHEN`'s 15:09 is the
+conversion visible in a screenshot.
+
+The zone itself rather than the `READER` below, because `shoot.py` and the browser tests point a
+real browser at it by name and neither has a page to draw.
+"""
+
+READER = Reader(zone=ZONE)
+"""
+Who every page below is drawn for, which is what the console answers off a cookie and this states.
+"""
+
+# The session every page below is about, named here rather than on `PARENT` because the default
+# choice needs it too: a session's branch is named after its id, so the two would otherwise be one
+# literal written twice and a page saying it is on a branch belonging to some other session.
+PARENT_ID = "aa" * 16
+
+# The rest of what a gateway resells, named as the serving service names them. Enough of them that
+# an open model list is taller than a short window, which is what the start page's scrolling is
+# about and what a real gateway lists anyway: three cards are one row, and one row shows nothing
+# about what happens when the list does not fit. Each has a record under its upstream name, where
+# Kimi K2 above deliberately has none, so the one card saying so stays the one card.
+RESOLD_NAMES = (
+    ("kimi-k3", "Kimi K3"),
+    ("glm-5p3", "GLM 5.3"),
+    ("deepseek-v4-pro", "DeepSeek V4 Pro"),
+    ("qwen3-coder", "Qwen3 Coder"),
+    ("minimax-m3", "MiniMax M3"),
+    ("gpt-oss-120b", "GPT-OSS 120B"),
+    ("nemotron-3-ultra", "Nemotron 3 Ultra"),
+    ("inkling", "Inkling"),
+    ("muse-glimmer-30b", "Muse Glimmer 30B"),
+)
+RESOLD = tuple(
+    Listed(id=f"fireworks/{name}", label=label, provider="fireworks", upstream=f"accounts/fireworks/models/{name}")
+    for name, label in RESOLD_NAMES
+)
+
+CATALOGUE = Catalogue(
+    offered={
+        "llm-anthropic": Offering(
+            endpoint="llm-anthropic",
+            format="anthropic",
+            url="https://llm.int.exe.xyz",
+            models=(
+                Listed(id="anthropic/claude-sonnet-4-6", label="Claude Sonnet 4.6", provider="anthropic"),
+                Listed(id="anthropic/claude-opus-4-8", label="Claude Opus 4.8", provider="anthropic"),
+                Listed(
+                    id="fireworks/kimi-k2",
+                    label="Kimi K2",
+                    provider="fireworks",
+                    upstream="accounts/fireworks/models/kimi-k2",
+                ),
+                *RESOLD,
+            ),
+        ),
+        # Named with the `/v1` the OpenAI SDK wants, because the two rows differing only by a wire
+        # and a suffix is exactly the case the endpoint card exists to make legible.
+        "llm-openai": Offering(
+            endpoint="llm-openai",
+            format="openai",
+            url="https://llm.int.exe.xyz/v1",
+            models=(Listed(id="openai/gpt-5.5", label="openai/gpt-5.5", provider="openai"),),
+        ),
+    },
+    default=Choice(
+        endpoint="llm-anthropic",
+        model="anthropic/claude-sonnet-4-6",
+        repository="exe-github:mainplate",
+        # Both settled here for the reason `Service.start` settles them: a fixture naming a
+        # repository while recording that it reaches no files, or that it is on no branch, would draw
+        # a page no real session can produce. Every session working in a repository is on a branch
+        # named after it, so the card in the rail says one and a screenshot has to show it.
+        isolation=Isolation(filesystem=Filesystem.WORKTREE),
+        branch=branch_named(PARENT_ID),
+        thinking="high",
+    ),
+)
+
+# A reference covering three of the four models on offer, so the gallery shows a full card, a card
+# whose record carries less, and the marker on the one the database has never heard of. Written as
+# the indexes rather than parsed from a document, because what these pages are for is looking at a
+# rendering: a fixture that went through `parse_models_dev` would test the parser, which
+# `test_reference.py` does, and would make this file carry a copy of somebody else's schema.
+REFERENCE = Reference(
+    qualified={
+        "anthropic/claude-sonnet-4-6": Facts(
+            cost=Cost(input=3, output=15, cache_read=0.3, cache_write=3.75),
+            # The window every session in this gallery is answered on, and the smaller of the two
+            # deliberately: what the gauge along each rule has to show is a conversation getting
+            # somewhere near the end of one, and a fixture on a million-token window would draw every
+            # rule as an empty line. The card beside it still renders `1M` for the model below.
+            context=200_000,
+            output=128_000,
+            released=date(2030, 11, 19),
+            about="Balanced everyday model: fast enough to iterate with, careful enough to trust.",
+            traits=(("thinking", True), ("tools", True), ("vision", True), ("pdf", True), ("structured", True)),
+        ),
+        "anthropic/claude-opus-4-8": Facts(
+            cost=Cost(input=15, output=75, cache_read=1.5, cache_write=18.75),
+            context=1_000_000,
+            output=128_000,
+            released=date(2030, 8, 5),
+            traits=(("thinking", True), ("tools", True), ("vision", True), ("structured", True)),
+        ),
+        "openai/gpt-5.5": Facts(
+            cost=Cost(input=1.25, output=10),
+            context=400_000,
+            output=128_000,
+            released=date(2030, 9, 30),
+            traits=(("tools", True), ("vision", True)),
+        ),
+    },
+    upstream={
+        f"accounts/fireworks/models/{name}": Facts(
+            cost=Cost(input=0.6, output=2.5),
+            context=262_144,
+            output=131_072,
+            released=date(2030, 6, 1),
+            traits=(("tools", True),),
+        )
+        for name, _ in RESOLD_NAMES
+    },
+)
+
+# What each fixture session is on. Different models across the branches, because that is the whole
+# point of a branch: the sidebar shows one conversation answered three ways. The repository is put
+# on by `Fixture.of` from the session's own row rather than restated here, so a choice and the row
+# it is recorded under cannot say two different things.
+ON_SONNET = CATALOGUE.default
+ON_OPUS = replace(CATALOGUE.default, model="anthropic/claude-opus-4-8", thinking="xhigh")
+ON_GPT = Choice(endpoint="llm-openai", model="openai/gpt-5.5", thinking=None)
+
+WORKING_IN = "exe-github:mainplate"
+
+# A repository no forge reaches any more, so one row is drawn as the recorded id. That is the case
+# a screenshot is for: the name and the id are different lengths and different shapes, and whether
+# the second one still reads as a repository is not a thing a markup assertion can answer.
+DETACHED = "exe-github:archived"
+
+# When the sweep last measured the sessions below, a little after everything else happened, so the
+# time in the figure's title is a fixed one and two renders agree.
+MEASURED = WHEN + timedelta(minutes=12)
+
+PARENT = Session(
+    id=PARENT_ID,
+    created_at=WHEN,
+    # Written to after it was made, so the row is dated by the later moment and its title carries
+    # both; every other row here was made and never written to, which dates it from its making.
+    last_said_at=WHEN + timedelta(minutes=11),
+    title="Why does the poll stop after one answer",
+    repository=WORKING_IN,
+    # Large, because that is what a session that fetched a toolchain into its scratch looks like and
+    # the figure exists to be noticed on that one.
+    footprint=Footprint(allocated=1_290_000_000, measured_at=MEASURED),
+)
+
+# A branch, and a branch of that branch, so the sidebar's nesting is drawn at more than one depth
+# and the turn each left at is visible on the row. A fork inherits its parent's repository, so the
+# three of them read the same, and the two below are the other states a row can be in: one working
+# in nothing, one working in something nothing reaches.
+#
+# Every unit the figure can be drawn in is on one row or another, and the two states that draw no
+# figure at all are too: a session measured at nothing, and one nothing has measured.
+LISTED = (
+    PARENT,
+    Session(
+        id="bb" * 16,
+        created_at=WHEN + timedelta(minutes=4),
+        title=PARENT.title,
+        forked=Origin(session=PARENT.id, turn=1),
+        repository=WORKING_IN,
+        footprint=Footprint(allocated=46_400_000, measured_at=MEASURED),
+        # Under a pass right now, so the word the list says for that is on one row.
+        attention=Claimed(),
+    ),
+    Session(
+        id="cc" * 16,
+        created_at=WHEN + timedelta(minutes=9),
+        title=PARENT.title,
+        # An aside rather than a plain fork, so the sidebar's two marks are both on the page and a
+        # styling change can be seen against the pair rather than against one of them. Nothing writes
+        # the flag any more; rows written while the composer offered asides still carry it.
+        forked=Origin(session="bb" * 16, turn=2, aside=True),
+        repository=WORKING_IN,
+        footprint=Footprint(allocated=812_000, measured_at=MEASURED),
+    ),
+    Session(
+        id="dd" * 16,
+        created_at=WHEN,
+        title="Add a thinking control to the picker",
+        footprint=Footprint(allocated=0, measured_at=MEASURED),
+        # Answered since anybody looked, so the word the list says for that is on one row and a
+        # styling change can be seen against the rows that do not carry it; and queued for another
+        # pass as well, so the two words are drawn side by side on this one.
+        unseen=True,
+        attention=Queued(),
+    ),
+    Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
+    # Archived, and already off the disk, so the row is drawn muted with the word beside the date
+    # and no figure: what a closed session looks like once the reconciler has been round.
+    Session(
+        id="ff" * 16,
+        created_at=WHEN - timedelta(days=1),
+        title="Rewrite the seeder around Choice.settled",
+        repository=WORKING_IN,
+        archived=WHEN - timedelta(hours=20),
+        footprint=Footprint(allocated=0, measured_at=MEASURED),
+    ),
+)
+
+# The archived row above, as the page it opens on: there is no box, the transcript says why, the
+# rail's card says when, and the fork from the end is the one control left.
+ARCHIVED = LISTED[-1]
+
+# One turn per kind of thing a panel can hold, so a styling change can be seen against all of them
+# at once rather than against whichever session happened to be open. The code block is deliberately
+# wider than the column, because the one thing a transcript must never do is scroll the page
+# sideways.
+LONG_LINE = "    return Response.from_content(status, html_content(render(transcript_region(links, session, said))))"
+
+# What a read comes back as, in the shape `anchored` renders: a name, the gutter, and the line. Here
+# rather than assembled from the tool, so a fixture stays a value and needs no workspace to build,
+# and written out with the bar in it because that is what the model is sent: the page leaves the
+# anchors out, and a fixture without them would never show that it does.
+READ = 'qwrt│WAITING = "every 1s"\n----│\nmkpv│SWAP = "outerMorph"'
+
+
+def spending(asked: int, answered: int, cached: int = 0, cost: str = "0") -> RequestUsage:
+    """
+    What one fixture response cost, as the wire would have reported it and the step recorded it.
+
+    Fixtures carry this because a rule with no numbers on it is a rule nobody can look at, and the
+    shots exist to be looked at. The counts nest the way a real one does - `input_tokens` includes
+    the cached reads - so the fixtures exercise the same arithmetic a live turn does rather than a
+    tidier version of it that would hide a sign error.
+
+    The cost is on the response because that is where this console now records it, before the
+    response is written rather than after. A fixture that left it off would draw the one state the
+    live path no longer produces: a settled turn with counts and no price.
+
+    The counts climb across the conversation the way a real one's do - each request carries
+    everything said before it, and almost all of that comes back out of the cache - because that is
+    the whole of what the gauge on each rule draws. Fixtures that all sat at four thousand tokens
+    would draw four identical empty lines and say nothing about the one figure they are for. The
+    prices are what this reference's own rates come to on these counts, so a screenshot shows a
+    session whose money and tokens agree with each other.
+    """
+    return RequestUsage(
+        input_tokens=asked,
+        output_tokens=answered,
+        cache_read_tokens=cached,
+        cost=Decimal(cost),
+    )
+
+
+def timing(seconds: float) -> dict[str, object]:
+    """
+    How long one fixture response took to come back, in the slot a real pass stamps.
+
+    On the response rather than in a key beside it, because that is where `Stepping.stamp` puts it:
+    a fixture recording it anywhere else would draw a figure the live path cannot produce.
+    """
+    return {TOOK: seconds}
+
+
+# How long each fixture call ran, by the call id, so a folded turn carries the figure a real one
+# does. Two scales rather than one, because `elapsed` formats them differently and a shot is where
+# you find out whether both read well. A call still out is absent from here on purpose: its duration
+# is written after its return, so a call with a time and no result is a state nothing can record.
+TIMINGS = {
+    "call-1": 0.184,
+    "call-3": 0.041,
+    "call-4": 4.9,
+    "call-5": 0.052,
+    "call-6": 0.019,
+    "call-7": 12.65,
+    "call-9": 0.9,
+}
+
+# What a `read` of the stylesheet in the second turn brought back, ahead of the edit that addresses
+# the anchors it shows: a partial read, so the header says where it stopped, of a file whose grammar
+# the page colours by its name. The anchors here are the ones the edit below names, and the lines are
+# the ones its diff shows going and staying, so the three calls read as one piece of work.
+EDITED_PATH = "src/mainplate/assets/mainplate.css"
+STYLESHEET_READ = (
+    f"{EDITED_PATH}, lines 823-842 of 4191; pass `offset` to read further\n"
+    "\n"
+    "xhqe│.text pre {\n"
+    "lwnb│    position: relative;\n"
+    "tfor│    margin: var(--space-4) 0;\n"
+    "ymcs│    line-height: var(--mono-line);\n"
+    "rkav│    padding: var(--space-4) var(--space-5);\n"
+    "ewqb│    border: 1px solid var(--edge-soft);\n"
+    "xmwe│    border-radius: var(--radius);\n"
+    "zpqm│    background: var(--sunk);\n"
+    "pzrk│    overflow-x: auto;\n"
+    "kdms│}\n"
+    "----│\n"
+    "vgtm│/* The code scrolls sideways, not the block around it, so a long line still moves the block and never\n"
+    "obzy│   the page. One level in rather than on the `pre` itself, because a copy button pinned to a scroll\n"
+    "wnqd│   container travels with the content. */\n"
+    "xkqe│.text pre code {\n"
+    "hvrn│    display: block;\n"
+    "qlgd│    padding: 0;\n"
+    "nwzo│    background: none;\n"
+    "ycfe│    font-size: var(--mono-size);\n"
+    "pfjw│}"
+)
+
+# What an `edit` in the second turn changed, as the tool recorded it beside the reply the model got.
+# The reply says the changed regions in anchors; the diff is what the page draws instead, and a shot
+# is where you find out whether a removed line and an added one read as such at a glance.
+EDITED = (
+    f"edited {EDITED_PATH}, now 4191 lines\n"
+    "\n"
+    "lines 828-832:\n"
+    "ewqb│    border: 1px solid var(--edge-soft);\n"
+    "xmwe│    border-radius: var(--radius);\n"
+    "zpqm│    background: var(--sunk);\n"
+    "kdms│}\n"
+    "----│\n"
+    "\n"
+    "lines 835-841:\n"
+    "xkqe│.text pre code {\n"
+    "hvrn│    display: block;\n"
+    "rmta│    overflow-x: auto;\n"
+    "qlgd│    padding: 0;\n"
+    "nwzo│    background: none;\n"
+    "ycfe│    font-size: var(--mono-size);\n"
+    "pfjw│}"
+)
+EDIT_DIFF = "\n".join(
+    [
+        f"--- {EDITED_PATH}",
+        f"+++ {EDITED_PATH}",
+        "@@ -823,11 +823,10 @@",
+        " .text pre {",
+        "     position: relative;",
+        "     margin: var(--space-4) 0;",
+        "     line-height: var(--mono-line);",
+        "     padding: var(--space-4) var(--space-5);",
+        "     border: 1px solid var(--edge-soft);",
+        "     border-radius: var(--radius);",
+        "     background: var(--sunk);",
+        "-    overflow-x: auto;",
+        " }",
+        " ",
+        "@@ -837,6 +836,7 @@",
+        " .text pre code {",
+        "     display: block;",
+        "+    overflow-x: auto;",
+        "     padding: 0;",
+        "     background: none;",
+        "     font-size: var(--mono-size);",
+        " }",
+    ]
+)
+
+# What a `create` in the same batch was handed and what it said back: the whole new file, which the
+# model was sent behind fresh anchors under a line saying it was written. A create that succeeded is
+# drawn as that reply alone, so the content is here as the argument because that is what a real
+# call carries, and a shot shows only the reply.
+#
+# Its last line is longer than any column the page can give it, widened or not, so the shots show
+# what a block of lines does with a line that does not fit: in the create's reply and again in the
+# batch's diff below the panel.
+WIDER = (
+    "a line wider than its block scrolled the whole document sideways, which moves every panel under the"
+    " reader rather than the one block that was too wide for the column it stands in"
+)
+CREATED_PATH = "tests/test_long_lines.py"
+CREATED_CONTENT = (
+    "from playwright.async_api import Page\n"
+    "\n"
+    "\n"
+    "async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:\n"
+    '    await page.goto(f"{gallery}/session.html", wait_until="load")\n'
+    '    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")\n'
+    f"    assert not wider, {WIDER!r}\n"
+)
+CREATED = (
+    f"created {CREATED_PATH}, 7 lines\n"
+    "\n"
+    "rbqu│from playwright.async_api import Page\n"
+    "----│\n"
+    "----│\n"
+    "gdxn│async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:\n"
+    'zhmv│    await page.goto(f"{gallery}/session.html", wait_until="load")\n'
+    'kpwe│    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")\n'
+    f"ntyc│    assert not wider, {WIDER!r}"
+)
+
+# What a `bash` in the same batch ran and said, in the shape the tool hands back: the command echoed,
+# the output, and the status, so the page's rendering of the command above it can be compared against
+# the model's own view of the same thing directly below.
+CHECKED = "just check 2>&1 | tail -3"
+CHECK_SAID = (
+    f"$ {CHECKED}\n"
+    "\n"
+    "ruff format.............................................................Passed\n"
+    "uv run mypy\n"
+    "Success: no issues found in 77 source files\n"
+    "\n"
+    "exit 0"
+)
+
+
+# The net change the batch of four calls above made, in the shape the snapshot records it: the same
+# edit `EDIT_DIFF` shows, wrapped as one file of a `git diff`, and the file `create` made beside it as
+# a second. Drawn below the panel rather than inside any one call, which is what the block diff is
+# for: one reading of a batch that ran an edit, a create and a bash at once.
+BLOCK_DIFF = "\n".join(
+    [
+        f"diff --git a/{EDITED_PATH} b/{EDITED_PATH}",
+        "index 2c0f5a1..9d1e3b7 100644",
+        f"--- a/{EDITED_PATH}",
+        f"+++ b/{EDITED_PATH}",
+        "@@ -823,11 +823,10 @@",
+        " .text pre {",
+        "     position: relative;",
+        "     margin: var(--space-4) 0;",
+        "     line-height: var(--mono-line);",
+        "     padding: var(--space-4) var(--space-5);",
+        "     border: 1px solid var(--edge-soft);",
+        "     border-radius: var(--radius);",
+        "     background: var(--sunk);",
+        "-    overflow-x: auto;",
+        " }",
+        " ",
+        "@@ -837,6 +836,7 @@",
+        " .text pre code {",
+        "     display: block;",
+        "+    overflow-x: auto;",
+        "     padding: 0;",
+        "     background: none;",
+        "     font-size: var(--mono-size);",
+        " }",
+        f"diff --git a/{CREATED_PATH} b/{CREATED_PATH}",
+        "new file mode 100644",
+        "index 0000000..0000000",
+        "--- /dev/null",
+        f"+++ b/{CREATED_PATH}",
+        "@@ -0,0 +1,7 @@",
+        "+from playwright.async_api import Page",
+        "+",
+        "+",
+        "+async def test_a_long_line_scrolls_its_block_and_never_the_page(page: Page, gallery: str) -> None:",
+        '+    await page.goto(f"{gallery}/session.html", wait_until="load")',
+        '+    wider = await page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")',
+        f"+    assert not wider, {WIDER!r}",
+    ]
+)
+
+# What the requests in this fixture carried, so the panel that draws a session's system prompt has
+# something to draw. Three scopes in the order `instructing` composes them - the console's standing
+# directions, the working note the session's own isolation adds, and the repository's own
+# `AGENTS.md` last - because what that panel is for is showing a reader which of those they are
+# looking at.
+INSTRUCTIONS = """\
+You are a helpful assistant, working with a software engineer. Be concise and direct.
+
+You are working in a git worktree, which is called `worktree`. The file tools take paths relative to
+it and reach nothing outside it. Changes you make there are snapshotted automatically; you never
+need to commit, and you should not run git commands to record your work. You also have a scratch
+directory called `scratch`, outside the worktree and outside every snapshot. Reach it by passing
+`root: "scratch"` to `read`, `edit` or `create`; in a command it is `$MAINPLATE_SCRATCH`, and the
+worktree is `$MAINPLATE_WORKTREE`.
+
+Commands you run cannot reach the network: no fetching, no installing, no cloning. Something that
+needs one fails rather than hanging.
+
+A fenced code block labelled `mermaid` or `svg` is drawn as a picture on the page, so when a
+diagram or a figure would say it better than prose, write one: `mermaid` for a flow, a sequence, a
+state machine or a timeline, and `svg` when you need to draw exactly what you mean. Every other
+fence is shown as code.
+
+`AGENTS.md`, this repository's own guidance:
+
+# Polling
+
+The console holds one connection per page and the transcript carries no `hx-` attribute of its
+own. A region that asks for itself has to get its own trigger right; a region with no trigger has
+nothing to get wrong.
+
+Run `just test` before saying anything is done.
+"""
+
+ASKING = (
+    "Hand this conversation off. Summarise where the work has got to, what was decided and why, and "
+    "what to do next, and pass that to `hand_off`. Check the working tree rather than trusting your "
+    "recollection of it."
+)
+"""
+What the bundled handoff plugin's ask says, copied here rather than imported.
+
+**One fact in two places, and the second place is a fixture.** A bundled plugin is an executable this
+console speaks to over a pipe, so there is nothing to import: the gallery would have to spawn a
+process to ask, which is the one thing it exists not to do. What it costs is that a reworded ask
+leaves this stale, and what that shows is a screenshot of words nobody will read again - which is a
+drift with no consequence, unlike the pair `tree_key` and `Stepping.key` make.
+"""
+
+HANDED_OVER = (
+    "## Objective\n"
+    "\n"
+    "Find out why the transcript stops updating after the first answer, and fix it.\n"
+    "\n"
+    "## What is settled\n"
+    "\n"
+    "The connection is held by the page rather than by the transcript, so a swap of the transcript"
+    " no longer tears it down. `streaming.py` sends a whole current render on every change rather"
+    " than a delta, which is why a reconnect needs no cursor.\n"
+    "\n"
+    "## Ruled out\n"
+    "\n"
+    "An `hx-trigger` on the transcript itself. It has to be `every` rather than `load`, because"
+    " morphing keeps the element and a `load` poll fires once and then waits for ever on an answer"
+    " that already arrived, invisibly to any markup assertion.\n"
+    "\n"
+    "## Next\n"
+    "\n"
+    "Read `src/mainplate/streaming.py`, then `transcript_region` in `pages.py`. The change token is"
+    " `Service.token`, which counts recorded rows.\n"
+)
+"""
+A handoff as one actually reads: what the task is, what is settled, what was ruled out, what is next.
+
+Written out rather than generated, because what a screenshot has to show is a document long enough to
+need the panel it is drawn in and structured enough that its Markdown is doing something.
+
+Joined from single logical lines rather than written as a wrapped triple-quoted string, and that is
+about the rendering rather than about the source. A message's newlines are the author's, so
+`as_message` draws every one of them as a break; a fixture wrapped to fit this file would put a break
+mid-sentence in the screenshot and misrepresent what a model's own paragraph looks like.
+"""
+
+CONVERSATION: list[ModelMessage] = [
+    ModelRequest(
+        parts=[UserPromptPart(content="Why does the poll stop after one answer?")],
+        instructions=INSTRUCTIONS,
+    ),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            ThinkingPart(
+                content=(
+                    "The trigger is `load`, which fires once per element load. Morphing keeps the "
+                    "element, so it never loads again. It needs to be an interval:\n\n"
+                    # A fenced block inside reasoning, which is what says that the italic a
+                    # reasoning panel is set in stops at code. A model reasons *about* code, so it
+                    # quotes some, and a quotation slanted away from the thing it quotes is a
+                    # rendering that has changed what it is showing.
+                    "```html\n"
+                    '<div hx-get="/fragments/sessions/{id}" hx-trigger="every 1s"></div>\n'
+                    "```"
+                )
+            ),
+            TextPart(content="Let me look at how the region is swapped."),
+            ToolCallPart(
+                tool_name="read",
+                args={"path": "src/mainplate/pages.py", "offset": 140, "limit": 40},
+                tool_call_id="call-1",
+            ),
+        ],
+        usage=spending(asked=38_400, answered=196, cost="0.1181"),
+        metadata=timing(3.4),
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="read",
+                content=READ,
+                tool_call_id="call-1",
+            ),
+            # What the console hands over when a turn reaches into a part of the repository that
+            # carries its own guidance. A `SystemPromptPart` rather than a user one, because nobody
+            # typed it, which is also how the transcript tells the two apart.
+            SystemPromptPart(
+                content=(
+                    "`src/mainplate/AGENTS.md`, guidance for this part of the repository:\n\n"
+                    "# Pages\n\n"
+                    "Pages are `without-html` node trees, pure functions of already-answered\n"
+                    "questions. A page and the fragment inside it are the same function called at\n"
+                    "two depths, which is what stops the two renderings from disagreeing.\n"
+                )
+            ),
+        ]
+    ),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(
+                content=(
+                    "Because the swap is `outerMorph`, the element is **kept** rather than replaced.\n\n"
+                    "A `load` trigger fires once per element *load*, so it only ever repeated because "
+                    "each answer replaced the region. Here is the handler it lives in:\n\n"
+                    "```python\n"
+                    '@get(t"/fragments/sessions/{session_id}", session_id)\n'
+                    "async def session_fragment(service: Service, session: str) -> Response:\n"
+                    "    found = await service.read(session)\n"
+                    "    if found is None:\n"
+                    '        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))\n'
+                    f"{LONG_LINE}\n"
+                    "```\n\n"
+                    "So the fix is an interval, which belongs to the element rather than to its arrival:\n\n"
+                    "| trigger | fires | survives a morph |\n"
+                    "| --- | --- | --- |\n"
+                    "| `load` | once per load | no |\n"
+                    "| `every 1s` | on a timer | yes |\n\n"
+                    "Which puts the deciding where it belongs:\n\n"
+                    # An unlabelled fence, because a diagram is not a language Pygments knows and a
+                    # guess at one would colour it by a grammar it is not written in. It is here so
+                    # that the shots show the other half of what the row pitch is for: a diagram
+                    # somebody drew, where a pitch too tall for the font draws every join apart.
+                    "```\n"
+                    "┌──────────┐  records   ┌──────────┐\n"
+                    "│  worker  │ ─────────▶ │  store   │\n"
+                    "└──────────┘            └────┬─────┘\n"
+                    "                             │ token\n"
+                    "                        ┌────▼─────┐\n"
+                    "                        │   page   │\n"
+                    "                        └──────────┘\n"
+                    "\n"
+                    "  ✓ survives a morph        ✗ fires once\n"
+                    "```\n\n"
+                    # The two fences the script can draw a picture from, so the gallery has a `draw`
+                    # button to press and the browser tests have one to assert on. A diagram, and
+                    # an SVG written by hand, because they are drawn by different means: one goes
+                    # through the library and the other is an image as written.
+                    "Or, as the library would draw it:\n\n"
+                    "```mermaid\n"
+                    "flowchart LR\n"
+                    "  worker -- records --> store -- token --> page\n"
+                    "```\n\n"
+                    "And the token's own shape, since it is only ever compared:\n\n"
+                    "```svg\n"
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 48" width="240" height="48">\n'
+                    '  <rect x="1" y="1" width="238" height="46" rx="6" fill="none" stroke="#7a7f8a" stroke-width="2"/>\n'
+                    '  <text x="120" y="30" text-anchor="middle" font-family="monospace" font-size="16" fill="#7a7f8a">'
+                    "2891:3:2874</text>\n"
+                    "</svg>\n"
+                    "```\n"
+                )
+            )
+        ],
+        usage=spending(asked=44_800, answered=832, cached=38_400, cost="0.0432"),
+        metadata=timing(9.7),
+    ),
+]
+
+# A formatter's pass over the stylesheet, which is the batch whose diff is too long to read in
+# passing: every declaration in a dozen rules reindented, a hundred lines out and a hundred in, and
+# nothing a reader asked for. It is what a batch's fold is shut for, so the demo has one to show shut.
+FORMATTED = "just fmt"
+FORMAT_SAID = (
+    f"$ {FORMATTED}\n\nprettier --write src/mainplate/assets/mainplate.css\n"
+    "src/mainplate/assets/mainplate.css 212ms\n\nexit 0"
+)
+REINDENTED_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        ".shell",
+        ("display: grid;", "grid-template-columns: var(--list-column) 1fr;", "height: var(--visible-height, 100dvh);"),
+    ),
+    (
+        ".sessions",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "min-height: 0;",
+            "padding: var(--gap);",
+            "border-right: 1px solid var(--edge);",
+        ),
+    ),
+    (
+        ".sessions__sheet",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "flex: 1;",
+            "gap: var(--gap);",
+            "min-height: 0;",
+            "overflow-y: auto;",
+        ),
+    ),
+    (
+        "main",
+        (
+            "display: grid;",
+            "grid-template-rows: 1fr auto;",
+            "min-height: 0;",
+            "min-width: 0;",
+            "padding: 0 var(--gap);",
+            "position: relative;",
+        ),
+    ),
+    (
+        ".transcript",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "gap: var(--space-5);",
+            "width: 100%;",
+            "max-width: var(--column);",
+            "margin: 0 auto;",
+            "padding-top: var(--space-5);",
+            "overflow-y: auto;",
+            "overscroll-behavior: contain;",
+        ),
+    ),
+    (
+        ".panel",
+        (
+            "position: relative;",
+            "padding: var(--space-1) var(--space-6);",
+            "border-left: 2px solid var(--edge);",
+            "scroll-margin-top: var(--space-5);",
+        ),
+    ),
+    (
+        ".panel__meta",
+        (
+            "display: flex;",
+            "align-items: center;",
+            "gap: var(--space-4);",
+            "min-height: 1.6rem;",
+            "font-family: var(--mono);",
+            "font-size: 0.66rem;",
+            "letter-spacing: 0.07em;",
+            "text-transform: uppercase;",
+        ),
+    ),
+    (".block", ("margin: 0.6rem 0;",)),
+    (
+        ".text pre",
+        (
+            "position: relative;",
+            "margin: var(--space-4) 0;",
+            "line-height: var(--mono-line);",
+            "padding: var(--space-4) var(--space-5);",
+            "border: 1px solid var(--edge-soft);",
+            "border-radius: var(--radius);",
+            "background: var(--sunk);",
+        ),
+    ),
+    (
+        ".tool",
+        (
+            "margin: 0;",
+            "border: 1px solid var(--edge-soft);",
+            "border-radius: var(--radius);",
+            "background: var(--raised);",
+            "font-family: var(--mono);",
+            "font-size: 0.78rem;",
+        ),
+    ),
+    (
+        ".tool > summary",
+        (
+            "display: flex;",
+            "flex-wrap: wrap;",
+            "align-items: baseline;",
+            "gap: var(--space-4);",
+            "padding: 0.35rem 0.6rem;",
+            "color: var(--ink-soft);",
+            "cursor: pointer;",
+            "list-style: none;",
+        ),
+    ),
+    (
+        ".tool__body pre",
+        (
+            "position: relative;",
+            "margin: 0;",
+            "cursor: auto;",
+            "font-family: var(--mono);",
+            "font-size: var(--mono-size);",
+            "line-height: var(--mono-line);",
+            "padding: var(--space-3) var(--space-4);",
+            "border-radius: calc(var(--radius) / 1.5);",
+            "background: var(--sunk);",
+            "overflow-x: auto;",
+        ),
+    ),
+    (
+        ".composer",
+        (
+            "display: flex;",
+            "flex-direction: column;",
+            "gap: var(--space-3);",
+            "width: 100%;",
+            "max-width: var(--column);",
+            "margin: 0 auto;",
+        ),
+    ),
+)
+
+
+def reindented(rules: Sequence[tuple[str, Sequence[str]]]) -> str:
+    """The diff a formatter taking four-space indentation to two makes of these rules, as git prints it."""
+    hunks: list[str] = []
+    at = 1
+    for selector, declarations in rules:
+        span = len(declarations) + 2
+        hunks.append(f"@@ -{at},{span} +{at},{span} @@")
+        hunks.append(f" {selector} {{")
+        hunks.extend(f"-    {declaration}" for declaration in declarations)
+        hunks.extend(f"+  {declaration}" for declaration in declarations)
+        hunks.append(" }")
+        at += span + 1
+    return "\n".join(
+        [
+            f"diff --git a/{EDITED_PATH} b/{EDITED_PATH}",
+            "index 9d1e3b7..5a0c2e4 100644",
+            f"--- a/{EDITED_PATH}",
+            f"+++ b/{EDITED_PATH}",
+            *hunks,
+        ]
+    )
+
+
+REINDENT_DIFF = reindented(REINDENTED_RULES)
+
+TOOL_IN_FLIGHT: list[ModelMessage] = [
+    ModelRequest(parts=[UserPromptPart(content="Now check the stylesheet handles a long line.")]),
+    # Two settled batches ahead of the call still out, which between them are every rendering a
+    # call has: a partial read of the stylesheet, coloured by its name; then an edit addressed by
+    # the anchors that read showed, drawn as the diff the tool recorded beside its reply; a create,
+    # drawn as its reply alone since that is the new file under a line saying so; and a command
+    # with its output, which is the one call whose rendering of the arguments - the command,
+    # coloured - sits directly above the model's own view of the same command echoed at the top of
+    # what came back. The read is a batch of its own because an edit needs the anchors first, which
+    # is also what a real turn looks like.
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(content="Looking at how a fenced block is laid out first."),
+            ToolCallPart(
+                tool_name="read", args={"path": EDITED_PATH, "offset": 823, "limit": 20}, tool_call_id="call-5"
+            ),
+        ],
+        usage=spending(asked=95_600, answered=64, cached=44_600, cost="0.1699"),
+        metadata=timing(1.9),
+    ),
+    ModelRequest(parts=[ToolReturnPart(tool_name="read", content=STYLESHEET_READ, tool_call_id="call-5")]),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(
+                content=(
+                    "The block scrolls sideways rather than the page, so `overflow-x` belongs on the code "
+                    "and not on the `pre` around it. Moving it, pinning that with a browser test, then "
+                    "running the checks."
+                )
+            ),
+            ToolCallPart(
+                tool_name="edit",
+                args={
+                    "path": EDITED_PATH,
+                    "operations": [
+                        {"op": "splice", "from": "pzrk", "before": "kdms", "text": ""},
+                        {"op": "splice", "after": "hvrn", "text": "    overflow-x: auto;"},
+                    ],
+                },
+                tool_call_id="call-3",
+            ),
+            ToolCallPart(
+                tool_name="create", args={"path": CREATED_PATH, "content": CREATED_CONTENT}, tool_call_id="call-6"
+            ),
+            ToolCallPart(tool_name="bash", args={"command": CHECKED, "seconds": 300}, tool_call_id="call-4"),
+        ],
+        usage=spending(asked=96_900, answered=402, cached=95_600, cost="0.1721"),
+        metadata=timing(6.3),
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(tool_name="edit", content=EDITED, tool_call_id="call-3", metadata={"diff": EDIT_DIFF}),
+            ToolReturnPart(tool_name="create", content=CREATED, tool_call_id="call-6"),
+            ToolReturnPart(tool_name="bash", content=CHECK_SAID, tool_call_id="call-4"),
+        ]
+    ),
+    # The formatter, whose batch changed far more than anybody wants to read, so its diff is drawn
+    # shut under its rule; see `REINDENT_DIFF`.
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(content="The checks pass. Running the formatter before I look again."),
+            ToolCallPart(tool_name="bash", args={"command": FORMATTED}, tool_call_id="call-9"),
+        ],
+        usage=spending(asked=97_700, answered=51, cached=96_900, cost="0.1729"),
+        metadata=timing(1.1),
+    ),
+    ModelRequest(parts=[ToolReturnPart(tool_name="bash", content=FORMAT_SAID, tool_call_id="call-9")]),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(content="Checking."),
+            # A `bash` call whose command runs to a second line, because the folded summary shows
+            # the first line and says how many follow, and a shot has to show both halves.
+            ToolCallPart(
+                tool_name="bash",
+                args={"command": "grep -n 'overflow-x' src/mainplate/assets/mainplate.css \\\n  | head -20"},
+                tool_call_id="call-2",
+            ),
+        ],
+        usage=spending(asked=98_400, answered=88, cached=96_900, cost="0.1738"),
+        metadata=timing(1.2),
+    ),
+]
+
+# The one response a turn has produced so far, as the capability recorded it partway through. Two
+# calls in one response because that is the case worth looking at: they run at once, so one comes
+# back while the other is still out, and the panel has to read as both at the same time.
+PARTWAY = ModelResponse(
+    timestamp=WHEN,
+    parts=[
+        ThinkingPart(content="Two files to look at. I can read them at the same time."),
+        ToolCallPart(tool_name="read", args={"path": "src/mainplate/streaming.py"}, tool_call_id="call-7"),
+        ToolCallPart(tool_name="read", args={"path": "src/mainplate/pages.py", "depth": 2}, tool_call_id="call-8"),
+    ],
+    # A turn in flight has a cost too, which is the point of pricing a response before the step
+    # records it rather than after the run ends. Left off, this fixture would draw the state the
+    # console used to have and no longer does.
+    usage=spending(asked=151_900, answered=142, cached=98_300, cost="0.1981"),
+    metadata=timing(2.8),
+)
+
+
+def opening(messages: Sequence[ModelMessage]) -> str:
+    """
+    What the person said to start a turn, taken from the turn's own messages.
+
+    Read back out rather than passed in beside them, so a fixture cannot record a prompt that the
+    messages beneath it disagree with. Loud when the shape is wrong, because a fixture that is not
+    shaped like a real turn is exactly what these pages must not be built from.
+    """
+    first = messages[0]
+    if not isinstance(first, ModelRequest):
+        raise TypeError(f"a turn opens with a request, not {type(first).__name__}")
+    asked = first.parts[0]
+    if not isinstance(asked, UserPromptPart) or not isinstance(asked.content, str):
+        raise TypeError(f"a turn opens with what somebody typed, not {asked!r}")
+    return asked.content
+
+
+def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
+    """
+    A checkpoint holding these turns, in exactly the shape a pass would have written.
+
+    Each response is written twice over, as part of the turn's `messages` and as the step that
+    recorded it, because a pass writes both: the step is what the rule at that request's boundary
+    opens, so a fixture with only the messages renders a fold that answers 404 for every request.
+
+    A call's own record carries what it returned and how long it took, written for the calls
+    `TIMINGS` names, because that is what a pass writes. What it returned is read back out of the
+    turn's messages rather than restated, for the reason `opening` reads the prompt back out: a
+    fixture that said one thing in the step and another in the messages would draw a turn this
+    console cannot produce.
+    """
+    # What the stretch of context beginning at turn 0 is answered under, which is what the system
+    # prompt panel under that turn's rule draws. Written before the turn's first request by a pass,
+    # so a fixture that left it out would render a session whose first turn landed with nothing
+    # saying what it was told. A fixture with a forget in it records another beside the boundary,
+    # because that is where the next stretch begins.
+    written: dict[str, object] = {instructions_key(0): recorded_instructions(INSTRUCTIONS)}
+    for turn, messages in enumerate(turns):
+        came_back = returns(messages)
+        # The two records a turn opens with: the entry the message arrived as, and the cursor saying
+        # this turn took it. `seed.py` and this script are the two writers that are not `Service`, so
+        # what a pass would write is written by hand, both halves or neither.
+        written[inbox_key(turn)] = recorded_prompt(opening(messages))
+        written[opened_key(turn)] = inbox_key(turn)
+        written[heard_key(turn, 0)] = inbox_key(turn)
+        written[messages_key(turn)] = recorded_messages(messages)
+        for at, response in enumerate(message for message in messages if isinstance(message, ModelResponse)):
+            written[model_key(turn, at)] = records.Response(
+                response=ModelResponseTypeAdapter.dump_python(response, mode="json")
+            ).recorded()
+            for part in response.parts:
+                if isinstance(part, ToolCallPart) and part.tool_call_id in TIMINGS:
+                    answered = came_back.get(part.tool_call_id)
+                    written[tool_key(turn, part.tool_call_id)] = records.Returned(
+                        returned=None if answered is None else answered.content,
+                        took=timedelta(seconds=TIMINGS[part.tool_call_id]),
+                        metadata=None if answered is None else answered.metadata,
+                    ).recorded()
+    return written
+
+
+def returns(messages: Sequence[ModelMessage]) -> dict[str, ToolReturnPart]:
+    """
+    What each call in a turn came back with, by the id that names which call it answers.
+
+    The whole part rather than its content, because a call's record carries what the tool recorded
+    beside its return as well, and a fixture that wrote one and not the other would draw a call the
+    two readings of a turn disagree about.
+    """
+    return {
+        part.tool_call_id: part
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    }
+
+
+# A stand-in repository and one session's worktree of it, so the pages show what a console with
+# snapshots on looks like: the tree each turn started on, beside the fork link that would put it
+# back, and the repository the session is working in.
+SINCE = timedelta(minutes=12)
+"""
+How long ago the fixtures were last answered, which is the one thing a gallery cannot measure.
+
+Under the retention, so the cache note is drawn in the state a reader is usually in - the cold one is
+what a session looks like after lunch, and drawing it everywhere would make a page of fixtures look
+like a console nobody had touched.
+"""
+
+REPOSITORY = "JoshKarpel/mainplate"
+WORKSPACE = Path("/home/you/.local/share/mainplate/workspaces/worktrees")
+
+# What a forge reaches, so the start page's picker has something in it. Two attachments of one
+# repository, because that is the case the labels have to disambiguate and a screenshot is where
+# you find out whether they read well.
+REACHABLE = Reachable(
+    repositories=(
+        Repository(
+            forge="exe-github",
+            key="mainplate",
+            name="JoshKarpel/mainplate",
+            url="https://x.invalid/a.git",
+            web="https://github.com/JoshKarpel/mainplate",
+        ),
+        Repository(
+            forge="exe-github",
+            key="without",
+            name="JoshKarpel/without",
+            url="https://x.invalid/b.git",
+            web="https://github.com/JoshKarpel/without",
+        ),
+        Repository(forge="exe-github", key="dotfiles-rw", name="JoshKarpel/dotfiles", url="https://x.invalid/c.git"),
+        Repository(forge="exe-github", key="dotfiles-ro", name="JoshKarpel/dotfiles", url="https://x.invalid/d.git"),
+    )
+)
+
+# What the dashboard says about each repository's last fetch: one current, one whose last fetch
+# failed, and the rest not fetched since the console started, which are the three things a card says.
+FETCHES: Final[dict[str, Fetched]] = {
+    WORKING_IN: Fetched(at=WHEN + timedelta(minutes=12)),
+    "exe-github:without": Fetched(
+        at=WHEN + timedelta(minutes=11),
+        failed="fatal: unable to access 'https://x.invalid/b.git/': Could not resolve host: x.invalid",
+    ),
+}
+
+# A tree per model request rather than per turn, which is what a console with a worktree writes: a
+# snapshot is taken before every request, so the second request of a turn stands on whatever the
+# first one's tool calls left behind. The rules within a turn are the only place that shows, so a
+# fixture with one hash per turn would draw the design as it was before there were any.
+TREES = (
+    ("9e75602b2554519c9f620dfdb2010586fde7e076", "c41d7a08b8e6cf2f4a90b3d5eec1120b7f5a3e91"),
+    ("3de66468884176acb6dc1a522aa8cfa5ace6f0e0",),
+)
+
+
+def snapshotted(written: dict[str, object]) -> dict[str, object]:
+    """
+    The same checkpoint with a tree before each of a turn's model requests, and a batch's diff
+    where its tools changed the tree.
+
+    Only for the turns the checkpoint holds, because a tree recorded before a request in a turn
+    nobody took is a record no pass could write, and the seeder plants these into a real store.
+    """
+    turns = transcript(written).turns
+    return {
+        **written,
+        **{
+            tree_key(turn, at): records.Tree(tree=tree).recorded()
+            for turn, taken in enumerate(TREES[:turns])
+            for at, tree in enumerate(taken)
+        },
+        **(
+            {
+                wrote_key(1, 1): records.Wrote(diff=BLOCK_DIFF).recorded(),
+                wrote_key(1, 2): records.Wrote(diff=REINDENT_DIFF).recorded(),
+            }
+            if turns > 1
+            else {}
+        ),
+    }
+
+
+# What a session's first pass read out of files, which is what the settings step draws a switch for.
+# Three tiers with something in two of them, because what that step is *for* is provenance: a reader
+# deciding what to load is deciding whose program to run, and a shot of one tier would not show it.
+DECLARED: tuple[Installed, ...] = (
+    Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/opt/mainplate/plugins/handoff")),
+    Installed(tier=Tier.BUNDLED, name="guidance", path=Path("/opt/mainplate/plugins/guidance")),
+    Installed(tier=Tier.USER, name="notify", path=Path("/home/you/.config/mainplate/plugins/notify")),
+    Installed(tier=Tier.REPOSITORY, name="lint", path=Path("/srv/mainplate/worktrees/f3c1/.mainplate/lint")),
+)
+
+# And what the press then ran, as one plugin with a card of both kinds of control. Written out rather
+# than asked of the bundled handoff, because a gallery answers every question with a fixture and
+# asking would mean spawning a process: the point of this file is that a page is a pure function of
+# already-answered questions.
+ENROLLED: tuple[Enrolled, ...] = (
+    Enrolled(
+        installed=Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/opt/mainplate/plugins/handoff")),
+        described=Described.model_validate(
+            {
+                "events": ["tool", "after_turn", "compose"],
+                "answers": [
+                    {
+                        "leader": "handoff",
+                        "saying": (
+                            "Have it write down where it has got to and carry on from that, dwelling on "
+                            "anything you typed"
+                        ),
+                        "demands": False,
+                    }
+                ],
+                "card": {
+                    "heading": "handoff",
+                    "rows": [
+                        {"switch": {"name": "hands_off", "label": "auto at reserve", "default": True}},
+                        {
+                            "number": {
+                                "name": "reserve",
+                                "label": "reserve",
+                                "unit": "K",
+                                "default": 40,
+                                "least": 8,
+                            }
+                        },
+                    ],
+                },
+            }
+        ),
+    ),
+)
+
+
+def settled_checkpoint() -> dict[str, object]:
+    """
+    The parent session's checkpoint: two turns, a boundary between them, three commands and a
+    `/commit`, which is drawn as the command it ran.
+
+    The commands are ones the person ran themselves, which no model was told about and which the
+    store holds beside what was said. Two exit states, because they are drawn differently and the
+    difference is exactly what a screenshot is for: an exit of zero, and an exit that is not a
+    failure - `git diff --quiet` exits 1 to say there *are* changes. The third state, a command
+    still running, is on the in-flight page rather than here, since a command that never finishes is
+    honest under a pass and a lie in a settled session the demo database holds.
+
+    The boundary is turn 1 opening on a clean history, so it is drawn somewhere it can be looked at.
+    Turn 1 rather than a turn of its own, because what a screenshot has to show is the rule standing
+    *between* two turns with the first still on the page above it: a boundary at the top of a
+    conversation would draw the same markup and prove nothing about what it says. What the stretch
+    it opens is answered under is composed again, because a forget has thrown the cached prefix away
+    and composing exactly there is free. The same words, since nothing under them moved between the
+    two turns; what the second panel shows is that a boundary gets one.
+    """
+    written = recorded(CONVERSATION, TOOL_IN_FLIGHT)
+    written[inbox_key(2)] = recorded_command("git status --short")
+    written[result_key(inbox_key(2))] = recorded_result(
+        Result(status=0, output=" M src/mainplate/pages.py\n", took=timedelta(seconds=0.11))
+    )
+    written[inbox_key(3)] = recorded_command("git diff --quiet")
+    written[result_key(inbox_key(3))] = recorded_result(Result(status=1, output="", took=timedelta(seconds=0.08)))
+    written[inbox_key(4)] = recorded_command("just test")
+    written[result_key(inbox_key(4))] = recorded_result(
+        Result(
+            status=0,
+            output=(
+                "uv run mypy\n"
+                "Success: no issues found in 77 source files\n"
+                "uv run pytest\n"
+                "bringing up nodes...\n"
+                "........................................................................ [ 50%]\n"
+                "........................................................................ [100%]\n"
+                "1204 passed in 118.40s (0:01:58)\n"
+            ),
+            took=timedelta(minutes=2, seconds=1),
+        )
+    )
+    written[inbox_key(5)] = recorded_command(commit_command("Scroll a long line inside its block"))
+    written[result_key(inbox_key(5))] = recorded_result(
+        Result(
+            status=0,
+            output=(
+                "[mainplate/aaaaaaaa 4be1f0c] Scroll a long line inside its block\n"
+                " 2 files changed, 8 insertions(+), 1 deletion(-)\n"
+                " create mode 100644 tests/test_long_lines.py\n"
+            ),
+            took=timedelta(seconds=0.21),
+        )
+    )
+    written[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
+    written[instructions_key(1)] = recorded_instructions(INSTRUCTIONS)
+    return written
+
+
+@dataclass(frozen=True, slots=True)
+class Fixture:
+    """
+    One session as both scripts know it: its row, what it is on, and the checkpoint under it.
+
+    The one table the gallery and the seeder read, which is what keeps the demo database and the
+    stills the same conversations: a page is drawn from one of these, and `seed.py` plants each of
+    them. Everything here is settled - nothing in a checkpoint is waiting for a pass - because the
+    demo has no worker behind it and a session drawn as being answered, with nothing answering it,
+    is a page that reads as broken. The states a worker produces on the way to settled are drawn by
+    `pages()` as variations on these checkpoints and are not fixtures.
+    """
+
+    session: Session
+    chosen: Choice
+    checkpoint: dict[str, object]
+
+    @classmethod
+    def of(cls, session: Session, chosen: Choice, checkpoint: dict[str, object]) -> Fixture:
+        """
+        A fixture whose choice agrees with its row, which is the one rule `Service.start` applies
+        that a fixture would otherwise skip.
+
+        The repository comes off the row, because a read puts it there: the index holds no such
+        column and the sidebar gets it out of the recorded choice, so declaring it twice is how a
+        seeded session would come to say one thing and render another. `settled` and `branching`
+        are then the two rules the service applies to a posted choice, so a fixture cannot name a
+        repository while recording that it reaches no files or that it is on no branch, which are
+        contradictory pairs nothing else in this console can produce.
+
+        A session with a repository is snapshotted as a pass would snapshot it, which is what puts a
+        batch's diff below its tool panel in the demo: `showing` does the same for a page the gallery
+        draws, and a fixture that skipped it would be a demo missing what the stills show.
+        """
+        working = replace(chosen, repository=session.repository).settled().branching(session.id)
+        taken = snapshotted(checkpoint) if session.repository is not None else checkpoint
+        return cls(session=session, chosen=working, checkpoint=taken)
+
+
+def fixtures() -> tuple[Fixture, ...]:
+    """
+    Every session the demo database holds, over the rows `LISTED` declares.
+
+    The branch relationships are the ones the rows already carry, so the tree the sidebar draws in
+    the demo is the tree the screenshots show, and what each branch holds is exactly the turns
+    before the one it branched at: a checkpoint that said otherwise would be a plausible-looking
+    approximation of a fork rather than one.
+    """
+    parent, branch, deeper, other, detached, archived = LISTED
+    if archived.archived is None:  # pragma: no cover - the fixture says it is, and this is what reads it
+        raise ValueError("the gallery's last session is the archived one, and it records no time")
+    return (
+        Fixture.of(parent, ON_SONNET, settled_checkpoint()),
+        # Branched at turn 1 and answered on a different model, so it carries turn 0 and nothing
+        # after it.
+        Fixture.of(branch, ON_OPUS, recorded(CONVERSATION)),
+        # A branch of that branch, at turn 2, on the other wire entirely: turns 0 and 1 come across.
+        Fixture.of(deeper, ON_GPT, recorded(CONVERSATION, TOOL_IN_FLIGHT)),
+        Fixture.of(other, ON_SONNET, recorded(CONVERSATION)),
+        # On a repository nothing reaches, so a demo console has the row that renders a bare id.
+        Fixture.of(detached, ON_SONNET, recorded(CONVERSATION)),
+        # Archived, with the key the press writes rather than only the row's field, because the row's
+        # field is *read* out of that key: a session with the field alone is one the sidebar draws as
+        # open. The reconciler finds nothing on disk for it and leaves it be.
+        Fixture.of(
+            archived,
+            ON_SONNET,
+            {**settled_checkpoint(), ARCHIVED_KEY: records.Archived(at=archived.archived).recorded()},
+        ),
+    )
+
+
+FIXTURES = fixtures()
+
+
+def showing(
+    session: Session,
+    written: dict[str, object],
+    *,
+    chosen: Choice = CATALOGUE.default,
+    answerable: bool = True,
+    started: bool = True,
+    refused: records.Refused | None = None,
+    failed: records.Failed | None = None,
+    deferred: records.Deferred | None = None,
+    attention: Attention | None = None,
+    since: timedelta | None = SINCE,
+    plugins: tuple[Enrolled, ...] | None = ENROLLED,
+    declared: tuple[Installed, ...] | None = DECLARED,
+) -> Conversation:
+    """
+    One session as a page sees it.
+
+    `chosen` is what it is on, and whether it picked a repository at all is read off that rather
+    than said twice. `started` is whether a pass has been there yet: a session whose message is
+    still queued has no turn, so it has no tree recorded before a request nobody has made, and a
+    fixture that gave it one would be a checkpoint no pass could write.
+
+    `since` is how long ago it was last answered, which is the one thing here a page cannot read out
+    of a checkpoint: `Service.read` measures it against a clock, and a gallery has none. Given rather
+    than computed for that reason, and given a value under the retention by default so the cache note
+    is drawn in the state a reader is usually in.
+
+    `declared` is what the session's first pass read out of files, and `plugins` is what the press on
+    the settings step then ran. The pair is the trust boundary and so is the pair of states worth
+    drawing: `plugins` of `None` is a session still on that step, and `declared` of `None` as well is
+    one whose worktree is still being planted. Both default to something, because that is what every
+    ordinary page shows - the rail draws a card per running plugin, and a gallery of pages with an
+    empty rail would be a gallery of a console nobody has.
+
+    `failed` and `attention` are the other thing a page cannot read out of a checkpoint, and the
+    second is the only argument here that is not a fact at all: what the worker is doing is true at the
+    instant it is read, and a gallery has no worker any more than it has a clock. `Claimed` by default
+    where a turn is outstanding, because that is what an ordinary page is showing - a reply being
+    written - and it is what makes the failure pages the *only* ones drawing the line.
+    """
+    working = chosen.repository is not None
+    said = transcript(snapshotted(written) if working and started else written)
+    facts = facts_of(CATALOGUE, REFERENCE, chosen)
+    return Conversation(
+        session=session,
+        said=said,
+        chosen=chosen,
+        answerable=answerable,
+        plugins=plugins,
+        declared=declared,
+        refused=refused,
+        failed=failed,
+        # Already filtered to a moment still ahead, which `Service.read` does against a clock and a
+        # gallery has none: what is given here is a wait that is on.
+        deferred=deferred,
+        attention=attention if attention is not None else Claimed(),
+        repository=REPOSITORY if working else None,
+        worktree=WORKSPACE / session.id if working else None,
+        # Which follows the repository, because a command runs in a session's worktree: it is what
+        # puts `Run` among the sending menu's answers, and so what makes `/run` and `!` reach a mode
+        # at all.
+        runnable=working,
+        # Looked up here rather than written down, exactly as `Service.read` does it, so the gauge
+        # on every rule is drawn against the same number the model's own card shows.
+        window=facts.context if facts is not None else None,
+        since=since if said.answered_at is not None else None,
+        # Looked up for the same reason the window is: the cache note's threshold is the answering
+        # wire's, so a gallery that wrote one down would draw a state no console renders.
+        retention=retention_for(CATALOGUE, chosen),
+        resending=(
+            resending(facts.cost, said.total.context)
+            if facts is not None and facts.cost is not None and said.total.context
+            else None
+        ),
+    )
+
+
+# One sentence per page, for the index the documentation site draws over them. Every page has one
+# and nothing else does, which `test_browser.py` holds: a page added below without a caption here
+# is a page the site would list with nothing beside it.
+CAPTIONS: Final[dict[str, str]] = {
+    "dashboard.html": "The dashboard: what is unread and what is working, then a card per place to start a session in.",
+    "new-session.html": "A new session in a repository: where to start in it, then the network, the endpoint and the model.",
+    "new-session-unreferenced.html": "The same with no reference configured, so no card carries a price or a window.",
+    "new-session-nothing.html": "A new session with no repository, which has no branch to start from.",
+    "setting-up.html": "A session whose worktree is still being planted, with nothing yet to switch.",
+    "settings.html": "The settings step: a switch per plugin under a heading per tier, before anything runs.",
+    "settings-installing.html": "The step after the press, with a pass out installing what the plugins need.",
+    "settings-refused.html": "A setup that stopped, naming the plugin that would not answer.",
+    "opening.html": "A session with its first message queued and nothing answered yet.",
+    "session.html": (
+        "A settled conversation: reasoning, a read, a highlighted reply with a table, a diagram and an SVG to "
+        "draw, commands the person ran, a boundary where the context started again, and under it a read of "
+        "the stylesheet, a batch drawn with its diff of an edit and a file created, a formatter whose diff is "
+        "too long to draw open, and a shell command with what it said."
+    ),
+    "waiting.html": "A message waiting for its turn.",
+    "answering.html": "A turn part way through: two reads out at once, a steer taken and one still to be, a command running.",
+    "handed-off.html": "A handoff: the plugin's ask, and the document the next stretch of context opens on.",
+    "stalled.html": "A session on an endpoint this console no longer has.",
+    "refused.html": "A request the provider turned down, pointing at the fork.",
+    "failed.html": "A pass that fell over, with the worker waiting out the lease before trying again.",
+    "deferred.html": "A session held off until the moment a rate limit named.",
+    "dropped.html": "Nothing answering the session and nothing scheduled to.",
+    "archived.html": "An archived session, muted, with the fork from its end as the one control left.",
+    "forking.html": "Forking at a turn: what is carried over and what is left behind.",
+    "forking-attach.html": "Forking a session that worked in no repository, which is the one that may pick one up.",
+}
+
+
+def pages(links: Links = LINKS) -> dict[str, str]:
+    """
+    Every page worth looking at, by the file it is written to.
+
+    `links` is where the pages say the assets are: the console's own, which is an absolute path a
+    static server at the root answers, or a relative one for a site that serves the gallery under a
+    directory of its own.
+
+    Drawn from `FIXTURES`, which is what the demo database holds, plus the states a worker produces
+    on the way to one of those: a message waiting, a turn part way through, a pass that fell over, a
+    session held off or dropped, a handoff whose document is still unread. Those are variations on
+    a fixture's checkpoint rather than fixtures of their own, because every one of them is a session
+    something should be answering, and in the demo nothing would be.
+    """
+    parent, branch, _, other, _, archived = FIXTURES
+    settled = parent.checkpoint
+    waiting = dict(settled)
+    waiting[inbox_key(5)] = recorded_prompt("And what about a turn still being answered?")
+
+    # A turn part way through, read from the steps behind it rather than from messages it has not
+    # written yet. The state exists only while a pass is actually running, so a fixture is the one
+    # way to look at it - and looking at it is the point, since what it has to prove is that a
+    # half-drawn turn reads as a turn in progress rather than as a broken one.
+    answering = dict(waiting)
+    # And a command still running beside it, which is the third of a command's states and the one
+    # that belongs on a page where something is still happening: a command with no result under a
+    # settled turn would be one that never finishes.
+    answering[inbox_key(8)] = recorded_command("just shots")
+    answering[opened_key(2)] = inbox_key(5)
+    answering[heard_key(2, 0)] = inbox_key(5)
+    answering[model_key(2, 0)] = records.Response(
+        response=ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
+    ).recorded()
+    answering[tool_key(2, "call-7")] = records.Returned(
+        returned="# The one connection a page holds open, and what goes down it.",
+        took=timedelta(seconds=TIMINGS["call-7"]),
+    ).recorded()
+    # A steer the request in flight has already taken, and one sent into the same turn that no request
+    # has, which are the two states Send reaches every time somebody types while a reply is coming.
+    # Both are drawn from the entry rather than from messages that do not exist yet, and the first is
+    # here because the cursor is written *before* its request and the response only when that request
+    # comes back: for as long as that runs it has no answer to sit above, and a page that drew only
+    # the cursors it had answers for would show nothing at all where it is.
+    #
+    # What the screenshot shows is that the two read as one run of steers while neither has an answer,
+    # which is the honest state and not a distinction being lost: what separates them is which request
+    # took them, and a request that has said nothing is not somewhere a panel can sit above. The taken
+    # one moves up to its own answer when that lands, which is the one reorder this reading performs.
+    answering[inbox_key(6)] = recorded_steer("use the endpoint's own name for it, not the wire's")
+    answering[heard_key(2, 1)] = inbox_key(6)
+    answering[inbox_key(7)] = recorded_steer("and while you are there, check the phone width")
+
+    # A handoff, which is two panels of a kind nobody in the conversation typed: the bundled plugin's
+    # own ask, and the document that came back and starts the model's history again. Turn 1's opener
+    # is replaced rather than a turn being added, so the ask sits under a turn that actually worked -
+    # which is what a handoff turn looks like, and what a screenshot has to show is that the two
+    # panels read as a plugin's rather than as somebody's. The document is left unread, since a
+    # message waiting for its turn is both the honest state a moment after a handoff and the one that
+    # draws the boundary on the page.
+    #
+    # **Two tones, which is the whole of what a note may vary.** The ask is `quiet` and the document
+    # is `strong`, because one is a console asking and the other is what the next stretch of context
+    # opens on; both are on the person's side of the palette, so what differs is weight rather than
+    # hue. A screenshot is where you find out whether that reads as two weights or as two colours.
+    handed = dict(settled)
+    handed[inbox_key(1)] = records.Note(
+        said=ASKING,
+        plugin="bundled:handoff",
+        label="handoff",
+        title="This session was asked to write down where it has got to.",
+        tone="quiet",
+    ).recorded()
+    handed[inbox_key(7)] = records.Note(
+        said=HANDED_OVER,
+        plugin="bundled:handoff",
+        forget=True,
+        label="handoff",
+        title="This is where the conversation's context starts again.",
+        tone="strong",
+    ).recorded()
+
+    # A pass that fell over and the worker waiting out the lease before trying again, which is the one
+    # state that used to be drawn as three dots and is the reason this line exists. The turn is the one
+    # in `answering`, so the page shows a half-finished turn with the sentence where its spinner was:
+    # what a screenshot has to prove is that a reader can tell this from a reply being written, which
+    # is exactly what no still of the old page could show.
+    fell_over = showing(
+        parent.session,
+        answering,
+        failed=records.Failed(
+            why=(
+                "PluginFailed(\"bundled:guidance exited 1: ValueError: '/srv/AGENTS.md' is not in the "
+                "subpath of '/srv/mainplate/worktrees/f3c1'\")"
+            ),
+            at=len(answering),
+        ),
+        attention=Delayed(until=timedelta(minutes=8, seconds=24)),
+    )
+    # A session waiting out a limit the provider named a moment for, which is the one line here where
+    # nothing is wrong: the request is fine, the allowance is spent, and the wait is days rather than
+    # minutes. What a screenshot has to prove is that the moment is on the page, since a countdown
+    # reading `in 4d 14h` is a figure nobody can plan around.
+    held_off = showing(
+        parent.session,
+        answering,
+        deferred=records.Deferred(
+            until=WHEN + timedelta(days=4, hours=14, minutes=23),
+            why=(
+                "status_code: 429, model_name: openai/gpt-5.6-sol, body: {'type': 'usage_limit_reached', "
+                "'message': 'The usage limit has been reached', 'plan_type': 'plus', 'resets_at': 1930303879}"
+            ),
+        ),
+        attention=Delayed(until=timedelta(days=4, hours=14, minutes=23)),
+    )
+    # And the other half of the same failure: nothing holds the session and nothing is scheduled to,
+    # which is a session that has been dropped rather than one waiting. Drawn with no reason recorded,
+    # because that is the shape it comes in - there is no pass to have written one - and it is the arm
+    # whose whole content is that nothing is coming.
+    dropped = showing(parent.session, answering, attention=Idle())
+    closed = showing(archived.session, archived.checkpoint, chosen=archived.chosen, attention=Idle())
+    stalled = showing(other.session, other.checkpoint, chosen=other.chosen, answerable=False)
+    # The other way to be stopped, which points somewhere different because nothing can be put back:
+    # what the provider turned down is the recorded history itself, so the sentence names the fork.
+    turned_down = showing(
+        other.session,
+        other.checkpoint,
+        chosen=other.chosen,
+        refused=records.Refused(
+            why="prompt is too long: 214331 tokens > 200000 maximum",
+            status=400,
+        ),
+    )
+    # The state every session opens in, and stays in for as long as the clone and the worktree take:
+    # the message is there to be drawn and what the session is answered under is not, because
+    # composing that reads a repository the pass is the one to fetch. The system prompt panel is
+    # drawn with nothing in it rather than left out, and a screenshot is where you find out whether
+    # that reads as something on its way or as something broken.
+    queued = showing(
+        branch.session,
+        {inbox_key(0): recorded_prompt("Why does the poll stop after one answer?")},
+        chosen=branch.chosen,
+        started=False,
+    )
+    # The step between creating a session and typing into it, which is where a person says which
+    # programs this console may run. Four states, drawn differently, and the difference is the whole
+    # of what a reader can do about each: a first pass still planting has nothing to switch, one that
+    # has read the declarations has a switch per plugin under a heading per tier, one whose press has
+    # been answered is a pass out installing whatever those plugins need, and one whose setup stopped
+    # says which plugin would not answer, above the switch that turns it off.
+    planting = showing(branch.session, {}, chosen=branch.chosen, started=False, plugins=None, declared=None)
+    choosing_plugins = showing(branch.session, {}, chosen=branch.chosen, started=False, plugins=None)
+    installing = replace(choosing_plugins, settling_up=True)
+    failed_setup = replace(
+        choosing_plugins,
+        settling_up=True,
+        refused_setup=records.Refused(
+            why="repository:lint exited 127: .mainplate/lint: line 3: shellcheck: command not found"
+        ),
+    )
+
+    return {
+        "dashboard.html": dashboard_page(links, READER, LISTED, REACHABLE, FETCHES),
+        "new-session.html": new_session_page(
+            links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, WORKING_IN, Filesystem.WORKTREE, FETCHES[WORKING_IN]
+        ),
+        # The same page with nothing configured to look models up in, which is the default and the
+        # one a screenshot has to prove still reads as a finished page rather than as a broken one.
+        "new-session-unreferenced.html": new_session_page(
+            links, READER, LISTED, CATALOGUE, REACHABLE, None, WORKING_IN, Filesystem.WORKTREE, FETCHES[WORKING_IN]
+        ),
+        "new-session-nothing.html": new_session_page(
+            links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, None, Filesystem.NOTHING
+        ),
+        "setting-up.html": session_page(links, READER, LISTED, planting, REACHABLE),
+        "settings.html": session_page(links, READER, LISTED, choosing_plugins, REACHABLE),
+        "settings-installing.html": session_page(links, READER, LISTED, installing, REACHABLE),
+        "settings-refused.html": session_page(links, READER, LISTED, failed_setup, REACHABLE),
+        "opening.html": session_page(links, READER, LISTED, queued, REACHABLE),
+        "session.html": session_page(links, READER, LISTED, showing(parent.session, settled), REACHABLE),
+        "waiting.html": session_page(links, READER, LISTED, showing(parent.session, waiting), REACHABLE),
+        "answering.html": session_page(links, READER, LISTED, showing(parent.session, answering), REACHABLE),
+        "handed-off.html": session_page(links, READER, LISTED, showing(parent.session, handed), REACHABLE),
+        "stalled.html": session_page(links, READER, LISTED, stalled, REACHABLE),
+        "refused.html": session_page(links, READER, LISTED, turned_down, REACHABLE),
+        "failed.html": session_page(links, READER, LISTED, fell_over, REACHABLE),
+        "deferred.html": session_page(links, READER, LISTED, held_off, REACHABLE),
+        "dropped.html": session_page(links, READER, LISTED, dropped, REACHABLE),
+        "archived.html": session_page(links, READER, LISTED, closed, REACHABLE),
+        # Forking at turn 1, so the page has something to show as carried over and something to
+        # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
+        # is already in a repository, so no repository control appears - it inherits that one.
+        "forking.html": fork_page(
+            links, READER, LISTED, showing(parent.session, settled), 1, CATALOGUE, REACHABLE, REFERENCE
+        ),
+        # And a fork of a session in *no* repository, which is the one that may pick one up: the
+        # ordinary shape of having thought something through and then going to work on it. The
+        # choice is settled against having none, as the console would settle it, so the rail says so.
+        "forking-attach.html": fork_page(
+            links,
+            READER,
+            LISTED,
+            showing(parent.session, settled, chosen=replace(CATALOGUE.default, repository=None).settled()),
+            0,
+            CATALOGUE,
+            REACHABLE,
+            REFERENCE,
+        ),
+    }
+
+
+def write(into: Path, links: Links = LINKS) -> tuple[str, ...]:
+    """
+    Every page, into a directory holding those pages and nothing else, named back to the caller.
+
+    A page renamed or dropped is *removed* rather than left behind, because the alternative is a
+    directory that accumulates: a stale page sits beside the current ones, a screenshot run can be
+    pointed at one the console no longer renders, and what a reader is looking at is a page from
+    some earlier version of this file.
+    """
+    into.mkdir(parents=True, exist_ok=True)
+    served = into / "assets"
+    if served.exists():
+        shutil.rmtree(served)
+    shutil.copytree(ASSETS, served)
+    written = pages(links)
+    for stale in set(into.glob("*.html")) - {into / name for name in written}:
+        stale.unlink()
+    for name, markup in written.items():
+        (into / name).write_text(markup)
+    return tuple(sorted(written))
+
+
+if __name__ == "__main__":
+    print(json.dumps(write(Path(sys.argv[1] if len(sys.argv) > 1 else "build/gallery")), indent=2))
