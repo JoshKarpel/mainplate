@@ -411,10 +411,7 @@ def opens(starts: bool) -> Attributes:
 # would make "a worktree's worktree" a sentence somebody has to parse.
 NEW_SESSION: Final = "New session"
 
-# What a session with no name of its own is called. Unreachable today, because every session is
-# named when it is created - after the box, or after its first message - and nothing renames one.
-# Kept as the answer to a row that has somehow lost its title, which is a database somebody edited
-# rather than a state this console produces.
+# A session created without a name is untitled until its first message arrives.
 UNTITLED: Final = "Untitled"
 
 # How much of a tree hash a rule prints. Git's own abbreviation length for a repository of any size,
@@ -480,6 +477,7 @@ class Links:
     fork: Reversible
     setup: Reversible
     press: Reversible
+    rename: Reversible
     archive: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
@@ -598,6 +596,9 @@ class Links:
         hold without knowing what a session enrolled.
         """
         return url_for(self.press, {"session": session})
+
+    def to_rename(self, session: str) -> str:
+        return url_for(self.rename, {"session": session})
 
     def to_archive(self, session: str) -> str:
         """Where the press that closes a session goes, which is a plain form post answered with a redirect."""
@@ -813,20 +814,17 @@ DEEPEST: Final = 3
 
 def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
     """
-    Every session with how deep in the tree it sits, a branch directly under what it branched from.
+    Every active session above every archived one, with branches nested within each group.
 
-    Pure, and separate from the rendering, because it is the one piece of real reasoning in the
-    sidebar: the flat list the index hands back says nothing about shape, and the shape is the
-    whole reason forking is worth having a picture of.
-
-    A branch whose parent is not in the list is drawn as a root. That is not a fallback but the
-    honest reading: the row says where it came from either way, and hiding a session because its
-    parent went missing would lose a conversation somebody can still read.
+    The index supplies newest-first order within each group. A branch whose parent is archived or
+    absent is a root among active sessions; an archived branch of an active parent is a root among
+    archived sessions. Each still names its origin on its row.
     """
-    known = {session.id for session in listed}
+    known = {session.id: session for session in listed}
     children: dict[str | None, list[Session]] = {}
     for session in listed:
-        parent = session.forked.session if session.forked and session.forked.session in known else None
+        origin = known.get(session.forked.session) if session.forked else None
+        parent = origin.id if origin is not None and (origin.archived is None) == (session.archived is None) else None
         children.setdefault(parent, []).append(session)
 
     arranged: list[tuple[Session, int]] = []
@@ -836,7 +834,9 @@ def arrange(listed: Sequence[Session]) -> tuple[tuple[Session, int], ...]:
             arranged.append((session, depth))
             walk(session.id, min(depth + 1, DEEPEST))
 
-    walk(None, 0)
+    for session in sorted(children.get(None, ()), key=lambda session: session.archived is not None):
+        arranged.append((session, 0))
+        walk(session.id, 1)
     return tuple(arranged)
 
 
@@ -866,14 +866,9 @@ def sidebar(
     links: Links, reader: Reader, listed: tuple[Session, ...], showing: str | None, reachable: Reachable
 ) -> Element:
     """
-    Every session, the one most recently written to first, with branches under what they branched
-    from and the current one marked.
-
-    Most recent first among siblings rather than across the whole list, which is what a tree costs
-    and what it buys: a branch worked in this morning sits with the conversation it came from rather
-    than at the top away from it, and the ordering within any one group is still the one a chat
-    console reads in. The row dates itself by the same moment it is ordered by, since a list sorted by
-    one date and labelled with another reads as unsorted.
+    Active sessions above archived ones, newest first within each, with branches under their parents
+    where both share a status. A branch of an archived parent sits among active roots, so no archived
+    row precedes an active one. The row dates itself by the moment it is ordered by within its group.
 
     A row says which repository its session works in, because that is the thing two conversations
     with the same opening line are actually told apart by once a console is used to work in more
@@ -4314,6 +4309,27 @@ def plugin_id(qualified: str) -> str:
     return f"plugin-{qualified.replace(':', '-')}"
 
 
+def rename_card(links: Links, session: str, title: str) -> Element:
+    return form(
+        cls="rename",
+        attrs={"method": "post", "action": links.to_rename(session)},
+        children=[
+            label(attrs={"for": "session-title"}, children="Name"),
+            input_(
+                attrs={
+                    "id": "session-title",
+                    "type": "text",
+                    "name": TITLE_FIELD,
+                    "value": title,
+                    "maxlength": str(TITLE_LENGTH),
+                    "required": True,
+                }
+            ),
+            button(attrs={"type": "submit"}, children="Rename"),
+        ],
+    )
+
+
 def archive_card(links: Links, reader: Reader, session: str, archived: datetime | None) -> Element:
     """
     The one control that closes a session, or the fact that somebody already did.
@@ -4415,6 +4431,7 @@ def rail(
     links: Links,
     reader: Reader,
     session: str,
+    title: str,
     tended: Tending,
     plugins: Sequence[Enrolled] = (),
     *,
@@ -4496,6 +4513,7 @@ def rail(
                         children=[
                             div(cls="about__head", children="session"),
                             about,
+                            rename_card(links, session, title),
                             archive_card(links, reader, session, archived),
                         ],
                     ),
@@ -5844,6 +5862,7 @@ def session_page(
                 # the step is answered.
                 pane=[
                     setup_step(links, showing),
+                    rename_card(links, showing.session.id, showing.session.title),
                     archive_card(links, reader, showing.session.id, showing.session.archived),
                 ],
             ),
@@ -5912,6 +5931,7 @@ def session_page(
                     links,
                     reader,
                     showing.session.id,
+                    showing.session.title,
                     showing.session.tending,
                     plugins,
                     about=about_card(
@@ -6071,9 +6091,7 @@ def fork_page(
                             attachable(showing, reachable),
                             reference,
                             showing.chosen,
-                            # And no name to give: a fork's title is its parent's, because it
-                            # literally carries it - the title is what the first message says, and
-                            # the first message came across with the rest.
+                            # A fork begins with its parent's current title; it can be renamed later.
                         ),
                         div(
                             cls="forking__act",

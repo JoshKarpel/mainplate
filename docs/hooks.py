@@ -47,6 +47,7 @@ from mainplate.console import LINKS  # noqa: E402
 from scripts.gallery import ASSETS  # noqa: E402
 from scripts.gallery import CAPTIONS  # noqa: E402
 from scripts.gallery import pages  # noqa: E402
+from scripts.vendor import SIDECARS  # noqa: E402
 
 ROOT_PAGES: Final = (
     ("README.md", "index.md"),
@@ -90,11 +91,10 @@ def on_files(files: Files, config: MkDocsConfig) -> Files:
     rendered = pages(replace(LINKS, assets="assets"))
     for name, markup in rendered.items():
         files.append(File.generated(config, f"{GALLERY}/{name}", content=markup))
-    # Everything the console serves, less the guidance files that sit in the same directory for
-    # whoever edits it: mkdocs would read those as pages and refuse a build for their absence from
-    # the nav.
+    # Everything the console serves, less the compressed copies beside the vendored files: a static
+    # host never reads a sidecar, so publishing them would put megabytes on the site nothing fetches.
     for asset in sorted(ASSETS.iterdir()):
-        if asset.is_file() and asset.suffix != ".md":
+        if asset.is_file() and asset.suffix not in SIDECARS:
             files.append(File.generated(config, f"{GALLERY}/assets/{asset.name}", abs_src_path=str(asset)))
     files.append(File.generated(config, f"{GALLERY}.md", content=gallery_index(rendered)))
     return files

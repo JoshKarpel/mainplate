@@ -94,3 +94,5 @@ The prose in this repository is split four ways, and the split is worth keeping:
   change *there* must not break, which is a different thing from a design note rather than a shorter
   one: the page argues for four lowercase letters, the file beside `anchors.py` says do not make it
   three. Write a new constraint beside the code and its reasoning on the page, never either in both.
+  The one directory that cannot hold its own is `src/mainplate/assets/`, since every file in it is
+  served, so its constraints are a section of the root file instead.

@@ -39,6 +39,7 @@ from playwright.async_api import Route
 from playwright.async_api import ViewportSize
 from playwright.async_api import async_playwright
 from playwright.async_api import expect
+from without_asgi import Inventory
 from without_durability.interfaces import INBOX
 from without_http import serving
 
@@ -100,10 +101,10 @@ VIEWPORT = ViewportSize(width=1400, height=1000)
 # rather than where exactly it starts drawing it; `TestTheShapeOfANarrowWindow` asks the latter once.
 PHONE = ViewportSize(width=390, height=844)
 
-# Every page the gallery renders, named at collection so each is a test of its own rather than a
-# loop that can only fail at the first one to break. Asked of `pages()` rather than listed here,
-# which is what stops a page added later from being one nothing measures; it is pure, so the render
-# nobody looks at costs only itself.
+# Every page the gallery renders, each a subtest of its own rather than a loop that can only fail at
+# the first one to break. Asked of `pages()` rather than listed here, which is what stops a page
+# added later from being one nothing measures; it is pure, so the render nobody looks at costs only
+# itself.
 EVERY_PAGE = tuple(sorted(pages()))
 
 # Every panel drawn as *where the reader is*, however they got there. The stylesheet draws `:target`
@@ -160,7 +161,7 @@ async def browser() -> AsyncIterator[Browser]:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple[str, Service]]:
+async def console(tmp_path: Path, catalogues: Catalogues, assets: Inventory) -> AsyncIterator[tuple[str, Service]]:
     """
     The real console on a real port, with the store it reads handed back beside it.
 
@@ -182,7 +183,7 @@ async def console(tmp_path: Path, catalogues: Catalogues) -> AsyncIterator[tuple
         # never reached. It is supplied all the same and would fail loudly if it were, since a
         # console that quietly did nothing here would pass these tests while doing nothing.
         service = replace(opened, declaring=Declaring(speaking=Spawned(environ={})))
-        async with serving(build_app(already(service)), port=0) as server:
+        async with serving(build_app(already(service), assets), port=0) as server:
             yield f"http://{server.host}:{server.port}", service
 
 
@@ -511,29 +512,27 @@ class TestWhatAFormPosts:
     """
 
     @pytest.mark.parametrize(("name", "carrying"), CHOOSING)
-    async def test_the_form_carries_every_field_its_handler_requires(
-        self, page: Page, gallery: str, name: str, carrying: frozenset[str]
+    async def test_the_form_as_it_loads(
+        self, page: Page, gallery: str, name: str, carrying: frozenset[str], subtests: pytest.Subtests
     ) -> None:
         await page.goto(f"{gallery}/{name}", wait_until="load")
-        # `form.elements` is exactly the set the browser would submit, however the association was
-        # made, which is the point: asking the DOM for the controls *inside* the form would pass on
-        # the arrangement this is here to refuse.
-        associated = await page.evaluate(
-            "() => [...document.querySelector('form#choosing').elements].map((element) => element.name)"
-        )
-        assert carrying <= set(associated)
 
-    @pytest.mark.parametrize(("name", "carrying"), CHOOSING)
-    async def test_the_form_is_submittable_the_moment_it_loads(
-        self, page: Page, gallery: str, name: str, carrying: frozenset[str]
-    ) -> None:
-        # Association is not enough on its own: a radio group that is associated but has nothing
-        # checked posts no field at all, and the picker's whole promise is that the choice is
-        # already made. So this asserts what would be *posted* rather than what is associated, which
-        # are the same question only when both hold.
-        await page.goto(f"{gallery}/{name}", wait_until="load")
-        posted = await page.evaluate("() => [...new FormData(document.querySelector('form#choosing')).keys()]")
-        assert carrying <= set(posted)
+        with subtests.test("the form carries every field its handler requires"):
+            # `form.elements` is exactly the set the browser would submit, however the association
+            # was made, which is the point: asking the DOM for the controls *inside* the form would
+            # pass on the arrangement this is here to refuse.
+            associated = await page.evaluate(
+                "() => [...document.querySelector('form#choosing').elements].map((element) => element.name)"
+            )
+            assert carrying <= set(associated)
+
+        with subtests.test("the form is submittable the moment it loads"):
+            # Association is not enough on its own: a radio group that is associated but has
+            # nothing checked posts no field at all, and the picker's whole promise is that the
+            # choice is already made. So this asserts what would be *posted* rather than what is
+            # associated, which are the same question only when both hold.
+            posted = await page.evaluate("() => [...new FormData(document.querySelector('form#choosing')).keys()]")
+            assert carrying <= set(posted)
 
 
 # Record every form the page tries to submit, and let none of it leave: the gallery is static files,
@@ -798,15 +797,23 @@ class TestTheShapeOfANarrowWindow:
     too narrow for all three goes straight to this shape rather than to one between.
     """
 
-    @pytest.mark.parametrize("name", EVERY_PAGE)
-    async def test_no_page_pushes_the_document_sideways(self, phone: Page, gallery: str, name: str) -> None:
-        await phone.goto(f"{gallery}/{name}", wait_until="load")
-        # The transcript may scroll its own wide blocks and the session list scrolls inside its own
-        # card; what must never move is the document, which has nowhere to overflow to.
-        room = await phone.evaluate(
-            "() => ({ document: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth })"
-        )
-        assert room["document"] <= room["viewport"]
+    @pytest.mark.timeout(60)
+    async def test_no_page_pushes_the_document_sideways(
+        self, phone: Page, gallery: str, subtests: pytest.Subtests
+    ) -> None:
+        # One context for every page, since nothing here presses anything: what one load leaves
+        # behind is only what a page's script writes as it opens, and a context per page cost a
+        # renderer and both faces decoded again for each.
+        for name in EVERY_PAGE:
+            with subtests.test(name):
+                await phone.goto(f"{gallery}/{name}", wait_until="load")
+                # The transcript may scroll its own wide blocks and the session list scrolls inside
+                # its own card; what must never move is the document, which has nowhere to overflow to.
+                room = await phone.evaluate(
+                    "() => ({ document: document.documentElement.scrollWidth,"
+                    " viewport: document.documentElement.clientWidth })"
+                )
+                assert room["document"] <= room["viewport"]
 
     async def test_a_page_with_a_rail_is_still_one_column(self, phone: Page, gallery: str) -> None:
         # A session page is the one that carries a rail, so it is the one that matched both
@@ -1101,35 +1108,45 @@ class TestTheGridMonospaceIsDrawnOn:
     assertion built on it demands a pitch four pixels tighter than the one that actually joins.
     """
 
-    async def test_the_vendored_face_is_what_a_conversation_is_drawn_in(self, page: Page, gallery: str) -> None:
+    async def test_a_conversation_draws_its_grid_whole(
+        self, page: Page, gallery: str, subtests: pytest.Subtests
+    ) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
         await page.evaluate("() => document.fonts.ready")
-        # `check` asks whether the face is loaded and usable, which a stack naming it cannot: with
-        # the file missing every assertion below still passes against whatever the reader has.
-        assert await page.evaluate("""() => document.fonts.check('13px "JuliaMono"')""") is True
-        drawn = await page.evaluate(
-            "(where) => where.map(one => getComputedStyle(document.querySelector(one)).fontFamily)", list(MONOSPACE)
-        )
-        # Unquoted, because a computed `font-family` quotes a name only where one is needed.
-        assert [family.split(",")[0].strip('"') for family in drawn] == ["JuliaMono"] * len(MONOSPACE)
 
-    @pytest.mark.parametrize("where", MONOSPACE)
-    async def test_a_run_of_box_drawing_has_no_gap_in_it(self, page: Page, gallery: str, where: str) -> None:
-        await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.evaluate("() => document.fonts.ready")
-        assert (await self.rasterised(page, where))["gaps"] == 0
+        with subtests.test("the vendored face is what a conversation is drawn in"):
+            # `check` asks whether the face is loaded and usable, which a stack naming it cannot:
+            # with the file missing every assertion below still passes against whatever the reader
+            # has.
+            assert await page.evaluate("""() => document.fonts.check('13px "JuliaMono"')""") is True
+            drawn = await page.evaluate(
+                "(where) => where.map(one => getComputedStyle(document.querySelector(one)).fontFamily)",
+                list(MONOSPACE),
+            )
+            # Unquoted, because a computed `font-family` quotes a name only where one is needed.
+            assert [family.split(",")[0].strip('"') for family in drawn] == ["JuliaMono"] * len(MONOSPACE)
 
-    @pytest.mark.parametrize("where", MONOSPACE)
-    async def test_the_pitch_stays_inside_the_ink_it_joins_with(self, page: Page, gallery: str, where: str) -> None:
-        await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.evaluate("() => document.fonts.ready")
-        measured = await self.rasterised(page, where)
-        # Strictly inside, which is the stylesheet's own rule: the pitch is a pixel under the span,
-        # so that the two ways of being wrong are not equally likely. The gap check above is the
-        # coarse half and this is the exact one - a canvas rasterises a glyph about a pixel longer
-        # than the same text laid out in the document, so a run can still draw joined at a pitch the
-        # page itself breaks at, and only the comparison catches that.
-        assert measured["pitch"] < measured["span"]
+        for where in MONOSPACE:
+            measured = await self.rasterised(page, where)
+            with subtests.test("a run of box drawing has no gap in it", where=where):
+                assert measured["gaps"] == 0
+            with subtests.test("the pitch stays inside the ink it joins with", where=where):
+                # Strictly inside, which is the stylesheet's own rule: the pitch is a pixel under the
+                # span, so that the two ways of being wrong are not equally likely. The gap check
+                # above is the coarse half and this is the exact one - a canvas rasterises a glyph
+                # about a pixel longer than the same text laid out in the document, so a run can
+                # still draw joined at a pitch the page itself breaks at, and only the comparison
+                # catches that.
+                assert measured["pitch"] < measured["span"]
+            with subtests.test("every row lands on the same subpixel phase", where=where):
+                grid = await page.evaluate(
+                    "(where) => { const s = getComputedStyle(document.querySelector(where));"
+                    "return [parseFloat(s.fontSize), parseFloat(s.lineHeight)]; }",
+                    where,
+                )
+                # The pitch is what phase depends on; the size is here because it is what a pitch
+                # stated as a ratio would be multiplied by, which is how a fractional one gets in.
+                assert [value % 1 for value in grid] == [0, 0]
 
     @staticmethod
     async def rasterised(page: Page, where: str) -> dict[str, float]:
@@ -1171,18 +1188,6 @@ class TestTheGridMonospaceIsDrawnOn:
             [where, list(JOINING)],
         )
 
-    @pytest.mark.parametrize("where", MONOSPACE)
-    async def test_every_row_lands_on_the_same_subpixel_phase(self, page: Page, gallery: str, where: str) -> None:
-        await page.goto(f"{gallery}/session.html", wait_until="load")
-        grid = await page.evaluate(
-            "(where) => { const s = getComputedStyle(document.querySelector(where));"
-            "return [parseFloat(s.fontSize), parseFloat(s.lineHeight)]; }",
-            where,
-        )
-        # The pitch is what phase depends on; the size is here because it is what a pitch stated as a
-        # ratio would be multiplied by, which is how a fractional one gets in.
-        assert [value % 1 for value in grid] == [0, 0]
-
 
 class TestHowReasoningIsSet:
     """
@@ -1217,7 +1222,7 @@ class TestDrawingAFence:
 
     async def drawable(self, page: Page, gallery: str, kind: str) -> Locator:
         """The first fence of one drawable kind, drawn, with its button offering the text."""
-        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.goto(f"{gallery}/drawing.html", wait_until="load")
         pre = page.locator(f"pre:has(> code.language-{kind})").first
         await expect(pre.locator(".draw")).to_have_text("code", timeout=15_000)
         return pre
@@ -1279,37 +1284,34 @@ class TestDrawingAFence:
         await expect(pre.locator("img.drawing")).to_have_count(0)
         await expect(pre.locator(".draw")).to_have_text("code")
 
-    async def test_a_fence_that_is_not_a_picture_takes_no_button(self, page: Page, gallery: str) -> None:
-        await self.drawable(page, gallery, "svg")
-        plain = page.locator(".panel pre:has(> code:not(.language-mermaid):not(.language-svg))").first
-        await expect(plain.locator(".copy")).to_have_count(1)
-        await expect(plain.locator(".draw")).to_have_count(0)
-
-    async def test_the_copy_button_stays_in_its_corner_and_the_draw_button_stands_to_its_left(
-        self, page: Page, gallery: str
-    ) -> None:
-        """
-        The copy button sits where it does on every other block, so a reader's hand finds it in the
-        same place whether a block can be drawn or not; what makes room is the other button.
-        """
+    async def test_the_buttons_a_fence_takes(self, page: Page, gallery: str, subtests: pytest.Subtests) -> None:
         pre = await self.drawable(page, gallery, "svg")
         plain = page.locator(".panel pre:has(> code:not(.language-mermaid):not(.language-svg))").first
-        drawable_copy = await pre.locator("[data-copy]").bounding_box()
-        plain_copy = await plain.locator("[data-copy]").bounding_box()
-        draw = await pre.locator(".draw").bounding_box()
-        pre_box = await pre.bounding_box()
-        plain_box = await plain.bounding_box()
-        assert drawable_copy is not None
-        assert plain_copy is not None
-        assert draw is not None
-        assert pre_box is not None
-        assert plain_box is not None
 
-        def right_inset(button: FloatRect, block: FloatRect) -> float:
-            return (block["x"] + block["width"]) - (button["x"] + button["width"])
+        with subtests.test("a fence that is not a picture takes no button"):
+            await expect(plain.locator(".copy")).to_have_count(1)
+            await expect(plain.locator(".draw")).to_have_count(0)
 
-        assert abs(right_inset(drawable_copy, pre_box) - right_inset(plain_copy, plain_box)) < 1
-        assert draw["x"] + draw["width"] < drawable_copy["x"], "the draw button is wholly to the left of copy"
+        with subtests.test("the copy button stays in its corner and the draw button stands to its left"):
+            # The copy button sits where it does on every other block, so a reader's hand finds it
+            # in the same place whether a block can be drawn or not; what makes room is the other
+            # button.
+            drawable_copy = await pre.locator("[data-copy]").bounding_box()
+            plain_copy = await plain.locator("[data-copy]").bounding_box()
+            draw = await pre.locator(".draw").bounding_box()
+            pre_box = await pre.bounding_box()
+            plain_box = await plain.bounding_box()
+            assert drawable_copy is not None
+            assert plain_copy is not None
+            assert draw is not None
+            assert pre_box is not None
+            assert plain_box is not None
+
+            def right_inset(button: FloatRect, block: FloatRect) -> float:
+                return (block["x"] + block["width"]) - (button["x"] + button["width"])
+
+            assert abs(right_inset(drawable_copy, pre_box) - right_inset(plain_copy, plain_box)) < 1
+            assert draw["x"] + draw["width"] < drawable_copy["x"], "the draw button is wholly to the left of copy"
 
     async def test_the_copy_button_hands_over_the_text_whichever_is_showing(self, page: Page, gallery: str) -> None:
         """A picture is a rendering of the text, so what is copied is the text: the copy button reads it, hidden or not."""
@@ -1345,50 +1347,49 @@ class TestALineThatDoesNotFit:
         await page.goto(f"{gallery}/session.html", wait_until="load")
         return page.locator("#panel-1-4 .tool__batch")
 
-    async def test_a_block_of_lines_scrolls_inside_its_box_and_never_wraps_or_widens_the_page(
-        self, page: Page, gallery: str
+    async def test_a_block_too_wide_for_its_column_as_it_is_drawn(
+        self, page: Page, gallery: str, subtests: pytest.Subtests
     ) -> None:
         pre = await self.batch(page, gallery)
-        measured = await pre.evaluate(
-            """(pre) => {
-              const code = pre.querySelector(':scope > code');
-              const line = parseFloat(getComputedStyle(pre).lineHeight);
-              return {
-                scrolls: code.scrollWidth > code.clientWidth,
-                wrapped: [...code.querySelectorAll('.line')].filter((each) => each.getBoundingClientRect().height > line).length,
-                wider: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-              };
-            }"""
-        )
-        assert measured == {"scrolls": True, "wrapped": 0, "wider": False}
 
-    async def test_a_changed_line_is_washed_to_the_end_of_the_longest_line(self, page: Page, gallery: str) -> None:
-        """Scrolled to its end, a block whose rows stopped at the box's first edge is a wash cut off mid-line."""
-        pre = await self.batch(page, gallery)
-        widths = await pre.evaluate(
-            """(pre) => {
-              const code = pre.querySelector(':scope > code');
-              return [code.scrollWidth, ...[...code.querySelectorAll('.line[data-mark]')].map((line) => line.getBoundingClientRect().width)];
-            }"""
-        )
-        longest, *rows = widths
-        assert all(abs(row - longest) < 1 for row in rows), f"every row {longest}px wide, and they were {rows}"
+        with subtests.test("a block of lines scrolls inside its box and never wraps or widens the page"):
+            measured = await pre.evaluate(
+                """(pre) => {
+                  const code = pre.querySelector(':scope > code');
+                  const line = parseFloat(getComputedStyle(pre).lineHeight);
+                  return {
+                    scrolls: code.scrollWidth > code.clientWidth,
+                    wrapped: [...code.querySelectorAll('.line')].filter((each) => each.getBoundingClientRect().height > line).length,
+                    wider: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+                  };
+                }"""
+            )
+            assert measured == {"scrolls": True, "wrapped": 0, "wider": False}
 
-    async def test_a_block_takes_a_focus_button_exactly_where_its_lines_do_not_fit(
-        self, page: Page, gallery: str
-    ) -> None:
-        pre = await self.batch(page, gallery)
-        await expect(pre.locator("[data-focus]")).to_have_count(1)
-        mismatched = await page.evaluate(
-            """() => [...document.querySelectorAll('.transcript .panel pre')].filter((pre) => {
-              const code = pre.querySelector(':scope > code');
-              const overflows = Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
-              return overflows !== Boolean(pre.querySelector(':scope > [data-focus]'));
-            }).map((pre) => pre.closest('.panel').id)"""
-        )
-        fitting = await page.locator(".transcript .panel pre:not(:has(> [data-focus]))").count()
-        assert fitting > 0, "the gallery has blocks that fit, or the rule is unexercised"
-        assert mismatched == []
+        with subtests.test("a changed line is washed to the end of the longest line"):
+            # Scrolled to its end, a block whose rows stopped at the box's first edge is a wash cut
+            # off mid-line.
+            widths = await pre.evaluate(
+                """(pre) => {
+                  const code = pre.querySelector(':scope > code');
+                  return [code.scrollWidth, ...[...code.querySelectorAll('.line[data-mark]')].map((line) => line.getBoundingClientRect().width)];
+                }"""
+            )
+            longest, *rows = widths
+            assert all(abs(row - longest) < 1 for row in rows), f"every row {longest}px wide, and they were {rows}"
+
+        with subtests.test("a block takes a focus button exactly where its lines do not fit"):
+            await expect(pre.locator("[data-focus]")).to_have_count(1)
+            mismatched = await page.evaluate(
+                """() => [...document.querySelectorAll('.transcript .panel pre')].filter((pre) => {
+                  const code = pre.querySelector(':scope > code');
+                  const overflows = Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
+                  return overflows !== Boolean(pre.querySelector(':scope > [data-focus]'));
+                }).map((pre) => pre.closest('.panel').id)"""
+            )
+            fitting = await page.locator(".transcript .panel pre:not(:has(> [data-focus]))").count()
+            assert fitting > 0, "the gallery has blocks that fit, or the rule is unexercised"
+            assert mismatched == []
 
     async def test_pressing_focus_opens_the_block_wider_than_its_column_and_escape_puts_it_away(
         self, page: Page, gallery: str
@@ -1911,6 +1912,28 @@ class TestWatchingATurnArrive:
         await expect(call).not_to_have_attribute("open", "")
         await expect(reply).to_have_attribute("open", "")
 
+    async def test_a_swap_landing_before_the_press_is_recorded_does_not_undo_it(self, page: Page, gallery: str) -> None:
+        """
+        A press on the dock is followed by the `toggle` it queues, a task later, and a swap arriving in
+        between repaints every fold from what was decided before. Forced here in one task, which is
+        the order a turn streaming in produces now and then: shut after open, then a swap, and the
+        call has to stay shut.
+        """
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        shut = await page.evaluate(
+            """async () => {
+                const fold = document.querySelector("details.tool");
+                const opened = new Promise((done) => fold.addEventListener("toggle", done, { once: true }));
+                document.querySelector('[data-fold="open"]').click();
+                await opened;
+                document.querySelector('[data-fold="shut"]').click();
+                document.dispatchEvent(new CustomEvent("htmx:after:swap"));
+                return !fold.open;
+            }"""
+        )
+        assert shut, "the swap put back the decision the press had just replaced"
+        await expect(page.locator("details.tool").first).not_to_have_attribute("open", "")
+
     async def test_the_settings_step_becomes_the_conversation_when_the_session_loads(
         self, page: Page, console: tuple[str, Service]
     ) -> None:
@@ -2259,29 +2282,34 @@ class TestFoldingAPanel:
         await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
         return page.locator(".panel[data-kind=thinking]")
 
-    async def test_reasoning_is_drawn_open(self, page: Page, console: tuple[str, Service]) -> None:
-        """
-        Reasoning arrives while the turn is being answered, and watching a model think is one of the
-        things a live transcript is for: rendered shut it would hide the thing being watched at the
-        moment it is worth watching.
-        """
-        panel = await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
-
-        await expect(panel).to_have_attribute("open", "")
-        await expect(panel.locator(".block--thinking")).to_be_visible()
-
-    async def test_it_carries_no_fold_of_its_own_inside_the_panel(
-        self, page: Page, console: tuple[str, Service]
+    async def test_a_reasoning_panel_as_it_arrives(
+        self, page: Page, console: tuple[str, Service], subtests: pytest.Subtests
     ) -> None:
-        """
-        The row it used to spend on a marker standing for the very text below it, which is the whole
-        of what moving the fold up to the panel row saves. A call and a command keep theirs, because
-        neither summary is a prefix of anything; a stretch of reasoning has nothing to say that its
-        panel's row does not already say.
-        """
         panel = await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
 
-        await expect(panel.locator("details")).to_have_count(0)
+        with subtests.test("reasoning is drawn open"):
+            # Reasoning arrives while the turn is being answered, and watching a model think is one
+            # of the things a live transcript is for: rendered shut it would hide the thing being
+            # watched at the moment it is worth watching.
+            await expect(panel).to_have_attribute("open", "")
+            await expect(panel.locator(".block--thinking")).to_be_visible()
+
+        with subtests.test("it carries no fold of its own inside the panel"):
+            # The row it used to spend on a marker standing for the very text below it, which is the
+            # whole of what moving the fold up to the panel row saves. A call and a command keep
+            # theirs, because neither summary is a prefix of anything; a stretch of reasoning has
+            # nothing to say that its panel's row does not already say.
+            await expect(panel.locator("details")).to_have_count(0)
+
+        with subtests.test("the mark is drawn right of the title"):
+            # Which is the whole of the ask: one row, the title, and the control beside it. The mark
+            # is a `::after` on the role rather than the summary's own, because a disclosure's marker
+            # always leads the row and this one has to come *between* the title and the line it
+            # stands for.
+            where = await panel.locator(".panel__role").evaluate("""
+                node => getComputedStyle(node, "::after").content
+            """)
+            assert where.strip('"') == "\N{BLACK DOWN-POINTING SMALL TRIANGLE}", "open, the mark points down"
 
     async def test_the_row_folds_it(self, page: Page, console: tuple[str, Service]) -> None:
         panel = await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
@@ -2290,20 +2318,6 @@ class TestFoldingAPanel:
 
         await expect(panel).not_to_have_attribute("open", "")
         await expect(panel.locator(".block--thinking")).to_be_hidden()
-
-    async def test_the_mark_is_drawn_right_of_the_title(self, page: Page, console: tuple[str, Service]) -> None:
-        """
-        Which is the whole of the ask: one row, the title, and the control beside it. The mark is a
-        `::after` on the role rather than the summary's own, because a disclosure's marker always
-        leads the row and this one has to come *between* the title and the line it stands for.
-        """
-        panel = await self.a_turn_that_reasoned(console, page, "Two files to look at, so let me read both.")
-
-        where = await panel.locator(".panel__role").evaluate("""
-            node => getComputedStyle(node, "::after").content
-        """)
-
-        assert where.strip('"') == "\N{BLACK DOWN-POINTING SMALL TRIANGLE}", "open, the mark points down"
 
     async def test_the_permalink_inside_the_row_navigates_without_folding_it(
         self, page: Page, console: tuple[str, Service]
@@ -2486,40 +2500,30 @@ class TestFoldingADocumentTheConsoleHandedOver:
         await expect(panels).to_have_count(3)
         return panels
 
-    async def test_the_two_of_them_are_one_block_under_two_kinds_of_panel(self, page: Page, gallery: str) -> None:
-        """
-        Which is the whole of the split: one shape on the page, two words in the key, because the two
-        sit in different places in the request and a reader may want to quiet them apart.
-        """
+    async def test_the_two_of_them_as_they_are_drawn(self, page: Page, gallery: str, subtests: pytest.Subtests) -> None:
         panels = await self.documents(page, gallery)
 
-        drawn = await panels.evaluate_all("panels => panels.map(panel => panel.dataset.kind)")
+        with subtests.test("the two of them are one block under two kinds of panel"):
+            # Which is the whole of the split: one shape on the page, two words in the key, because
+            # the two sit in different places in the request and a reader may want to quiet them
+            # apart.
+            drawn = await panels.evaluate_all("panels => panels.map(panel => panel.dataset.kind)")
+            assert drawn == ["system-prompt", "guidance", "system-prompt"]
 
-        assert drawn == ["system-prompt", "guidance", "system-prompt"]
+        with subtests.test("both are drawn shut"):
+            # Both are long and both are reference, so unfolded either would be most of what a
+            # reader sees. The opening line is what makes that affordable rather than a loss.
+            for panel in await panels.all():
+                await expect(panel).not_to_have_attribute("open", "")
 
-    async def test_both_are_drawn_shut(self, page: Page, gallery: str) -> None:
-        """
-        Both are long and both are reference, so unfolded either would be most of what a reader sees.
-        The opening line is what makes that affordable rather than a loss.
-        """
-        panels = await self.documents(page, gallery)
-
-        for panel in await panels.all():
-            await expect(panel).not_to_have_attribute("open", "")
-
-    async def test_a_shut_one_names_what_is_in_it(self, page: Page, gallery: str) -> None:
-        """
-        Which is the whole reason drawing them shut costs nothing: a guidance block opens by naming
-        the file it came from, and a system prompt by saying what the session is for.
-        """
-        panels = await self.documents(page, gallery)
-
-        told = await panels.locator("> .panel__meta > .opening").evaluate_all(
-            "lines => lines.map(line => line.textContent)"
-        )
-
-        assert told[0].startswith("You are a helpful assistant")
-        assert told[1].startswith("`src/mainplate/AGENTS.md`, guidance for this part of the repository:")
+        with subtests.test("a shut one names what is in it"):
+            # Which is the whole reason drawing them shut costs nothing: a guidance block opens by
+            # naming the file it came from, and a system prompt by saying what the session is for.
+            told = await panels.locator("> .panel__meta > .opening").evaluate_all(
+                "lines => lines.map(line => line.textContent)"
+            )
+            assert told[0].startswith("You are a helpful assistant")
+            assert told[1].startswith("`src/mainplate/AGENTS.md`, guidance for this part of the repository:")
 
     async def test_the_frame_around_it_shuts_the_panel_it_belongs_to(self, page: Page, gallery: str) -> None:
         """
@@ -3026,7 +3030,9 @@ class TestWhereTheComposerSendsTo:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces) -> AsyncIterator[tuple[str, Service]]:
+async def working(
+    tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces, assets: Inventory
+) -> AsyncIterator[tuple[str, Service]]:
     """
     The console over a store with files, which is what a command needs somewhere to run in.
 
@@ -3035,7 +3041,7 @@ async def working(tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces
     real repository would put a clone and a worktree behind tests that never look at either.
     """
     async with open_store(tmp_path / "mainplate.db", LEASE, catalogues, workspaces) as service:
-        async with serving(build_app(already(service)), port=0) as server:
+        async with serving(build_app(already(service), assets), port=0) as server:
             yield f"http://{server.host}:{server.port}", service
 
 

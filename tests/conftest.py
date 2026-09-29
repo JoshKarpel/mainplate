@@ -29,6 +29,7 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.settings import ModelSettings
 from without_asgi import ASGIApp
+from without_asgi import Inventory
 from without_durability.interfaces import claimed
 from without_durability.interfaces import inbox_key
 from without_durability.memory import MemoryCheckpointer
@@ -43,6 +44,7 @@ from mainplate.agent import Wires
 from mainplate.agent import agent_for
 from mainplate.app import build_app
 from mainplate.app import open_store
+from mainplate.app import served_assets
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import Offering
@@ -536,8 +538,17 @@ async def service(database: Path, catalogues: Catalogues) -> AsyncIterator[Servi
         )
 
 
+@pytest.fixture(scope="session")
+def assets() -> Inventory:
+    """
+    The served files, inventoried once for the session: the inventory is a value, and building it
+    compresses every file no sidecar covers, which per test was most of what a console test cost.
+    """
+    return served_assets()
+
+
 @pytest.fixture
-def app(service: Service) -> ASGIApp:
+def app(service: Service, assets: Inventory) -> ASGIApp:
     """
     The console over a store nothing is working, which is what makes these tests deterministic.
 
@@ -545,7 +556,7 @@ def app(service: Service) -> ASGIApp:
     pending turn would pass or fail on how fast the machine is. What the worker does is tested
     where it can be driven a pass at a time, in `test_conversation`.
     """
-    return build_app(already(service))
+    return build_app(already(service), assets)
 
 
 async def registered(service: Service, session: str, enrolled: Sequence[Enrolled] = ()) -> None:

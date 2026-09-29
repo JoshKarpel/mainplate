@@ -329,6 +329,20 @@ on every other machine. A release is taken on once it
 has aged, a week for a minor and a month for a major, which is `uv`'s cooldown applied by hand to a
 fetch `uv` does not make.
 
+Each vendored file the server compresses is committed compressed as well, once per coding it
+offers, as the `.br`, `.zst` and `.gz` beside it. The inventory reads a sidecar where it finds one no
+older than its file and compresses at startup where it does not, and the levels `just vendor` uses
+are not ones a start could pay: brotli at its ceiling takes six seconds over the diagram library and
+ships 13% less than the default a start would use, which takes under a tenth of one. The recipe runs
+only on a bump, so it takes every coding's highest level rather than weighing each against what the
+next release of a library makes it worth. A sidecar is derived bytes and carries no digest; the suite decodes each
+one against the digest of its file. The cost, stated: about two and a half megabytes more in the
+repository per version of the diagram library, and a sidecar older than its file is ignored for a
+startup compression with nothing but a log line to say so, which is why the suite also asks the
+inventory what it actually serves. `mainplate.css` and `mainplate.js` have none: they change with
+most commits, a sidecar would be a second copy to keep in step with each, and at startup's default
+they cost hundredths of a second.
+
 `htmax.min.js` is htmx 4 core plus every bundled extension in one file, with an allowlist in a meta
 tag deciding which actually register. Why one file rather than core plus separately vendored
 extensions is on [the console's page](console.md#htmx-4), because what reads the allowlist is

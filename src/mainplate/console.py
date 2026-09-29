@@ -275,6 +275,16 @@ def parse_form_prompt(raw: bytes) -> str:
 prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
 
 
+def parse_form_title(raw: bytes) -> str:
+    title = fields_in(raw).get(TITLE_FIELD, [""])[0].strip()
+    if not title:
+        raise NotAMessage("a session name cannot be empty")
+    return title
+
+
+title = body(parse_form_title, schema={"type": "string"}, media_type="application/x-www-form-urlencoded")
+
+
 def posted_switches(fields: Mapping[str, list[str]]) -> dict[str, bool]:
     """
     Which plugins the settings step said this session runs, as a switch per qualified name.
@@ -1183,6 +1193,14 @@ async def press(service: Service, session: str, pressed: Pressed) -> Response:
     return page_response(200, fragment(plugin_card(LINKS, session, enrolled, settings)))
 
 
+@post(t"/sessions/{session_id}/rename", session_id, title, summary="Rename a session")
+async def rename_session(service: Service, session: str, title: str) -> Response:
+    if await service.read(session) is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    await service.rename(session, title)
+    return seeing(LINKS.to_session(session))
+
+
 @post(t"/sessions/{session_id}/archive", session_id, summary="Archive a session, keeping its conversation")
 async def archive(service: Service, session: str) -> Response:
     """
@@ -1218,6 +1236,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     say,
     setup,
     press,
+    rename_session,
     archive,
     request_record,
 )
@@ -1237,6 +1256,7 @@ LINKS = Links(
     fork=fork,
     setup=setup,
     press=press,
+    rename=rename_session,
     archive=archive,
     assets=ASSETS,
 )

@@ -93,6 +93,7 @@ from mainplate.sessions import Session
 from mainplate.sessions import enrol
 from mainplate.sessions import mint_session_id
 from mainplate.sessions import name_from
+from mainplate.sessions import name_if_untitled
 from mainplate.sessions import now_utc
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
@@ -604,9 +605,9 @@ class Service:
         """
 
         def query(connection: sqlite3.Connection) -> str:
-            filed, count, looked = connection.execute(LISTING).fetchone()
+            filed, count, looked, titles = connection.execute(LISTING).fetchone()
             held, due = connection.execute(ATTENDING_TOKEN, {"namespace": self.durable.scheduler.namespace}).fetchone()
-            return f"{filed}:{count}:{looked}:{held}:{due}"
+            return f"{filed}:{count}:{looked}:{titles}:{held}:{due}"
 
         return await self.database.run(query)
 
@@ -827,10 +828,8 @@ class Service:
         that is only whitespace collapses to nothing and is the same as not having named it, which is
         what an empty box posts.
 
-        **A session is `UNTITLED` until its first message lands**, where a name was not given. The
-        name still comes from that message and is still written once, so the claim the session index
-        rests on survives with one word moved: written when the first message arrives rather than at
-        creation.
+        A name is inferred from the first message only if the title is still empty.
+        A chosen name belongs to the index and may be changed without changing the conversation.
         """
         named = name_from(title) if title else ""
         # Settled here rather than taken as posted, which is the same stance that stops a form with
@@ -924,8 +923,6 @@ class Service:
         forked = Session(
             id=mint_session_id(),
             created_at=self.now(),
-            # A fork's opening line is its parent's, because it literally carries it: the title is
-            # what the first message says, and the first message came across with the rest.
             title=parent.title,
             forked=Origin(session=session, turn=at),
         )
@@ -1265,20 +1262,12 @@ class Service:
         """
         Name a session after the first thing said in it, where nobody named it and nothing has been.
 
-        **Written once, when the first message arrives**, which is one word moved from where it used
-        to be rather than a new kind of write: a session is named after its opening line and nothing
-        ever renames it, so the index still holds a copy of something settled rather than of
-        something that changes.
-
-        A session created with a title keeps it, which is `Choice.branching`'s existing rule one
-        field along: a name somebody typed always wins over a generated one.
-
-        The statement is the check, so there is nothing to read first: `rename` matches on the title
-        still being empty, and a session created without one is written `''` rather than `NULL`. A
-        `SELECT` in front of it would be the same condition asked twice, once of a row and once of a
-        join, with a window between them.
+        A first message fills an empty title without overwriting a chosen one.
         """
-        await rename(self.database, session, name_from(said))
+        await name_if_untitled(self.database, session, name_from(said))
+
+    async def rename(self, session: str, title: str) -> None:
+        await rename(self.database, session, name_from(title))
 
     async def send(self, session: str, said: str) -> None:
         """

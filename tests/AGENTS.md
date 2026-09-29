@@ -4,9 +4,8 @@ description: "How the suite is driven: the in-memory client, the browser tests, 
 
 # The suite
 
-`just test` is mypy then pytest, and extra arguments go straight to pytest (`just test
-tests/test_console.py::TestTheConsole`). Run it, or `just check`, before saying anything is done. CI
-runs the same pre-commit configuration, so there is one definition of what the checks are.
+How to run it, and how to run less of it while working, is in the root [`AGENTS.md`](../AGENTS.md);
+this is how the suite is written.
 
 `pytest` runs under `xdist` (`-n auto`), `pytest-randomly`, and a 10-second per-test timeout, all
 from `addopts`. A test that needs longer raises it with `@pytest.mark.timeout(...)` rather than
@@ -24,6 +23,10 @@ document around it now that no endpoint serves one.
 The `app` fixture deliberately runs the console over a store with **no worker**, so a test asserting
 on a pending turn cannot race one. What the worker does is tested in `test_conversation.py`, a pass
 at a time.
+
+**A test that builds its own app hands it the session's `assets`** rather than calling
+`served_assets()`: the inventory is a value, and building it compresses every first-party asset, which
+paid per test was the largest single cost the suite had.
 
 **A test that wants a turn writes the two records a pass would**, which is the cursor saying which
 entry the turn took and the messages saying what came of it. The suites that run without a worker
@@ -152,6 +155,21 @@ It drives Playwright's **async** binding, which is not a preference: `sync_playw
 loop on the calling thread, and this suite is already running one, so the sync API leaves every
 browser test passing and every *other* async test failing its teardown. One session-scoped loop
 (`pytestmark = pytest.mark.asyncio(loop_scope="session")`) so the browser can be session-scoped too.
+
+**A claim that only reads a page another test already loads is a subtest of that test**, through
+pytest's own `subtests` fixture, rather than a test with a context of its own. What a browser test
+costs is its fresh context: a renderer process and both faces decoded again, about 300ms of CPU on
+the suite's two cores, where one more claim read off a page already loaded costs milliseconds. Each
+subtest still reports as its own `SUBFAILED[...]` and the rest still run, so a merged test fails at
+every claim that broke rather than at the first. `test_a_conversation_draws_its_grid_whole` is the
+shape to copy, and `test_no_page_pushes_the_document_sideways` is the same move over every gallery
+page in one context, with its timeout raised to cover the loop.
+
+**Only reading.** A claim that clicks, fills, scrolls, reloads, or writes through the `Service`
+changes what every claim after it sees, which is the leak a context per test exists to prevent,
+moved inside one test; those stay tests of their own. The context per test stays for the reason
+Playwright gives for it: a context cleaned up and reused has state nothing can reset (visited
+links), and a reset list is one more thing to keep complete.
 
 ## What has to be a browser, and why
 
