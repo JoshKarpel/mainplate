@@ -8,7 +8,7 @@
 #
 # What it insists on is deliberately dumb - it keeps the turn going until `attempt` reaches the number
 # in `STICKLER_UNTIL`, once by default - so that a test decides how many times the model is sent back
-# by setting one variable and nothing else. A real check would run something over the worktree; this
+# by setting one variable and nothing else. A real check would run something over the checkout; this
 # one is about the mechanism and not the judgement.
 #
 # It appends the `attempt` it was handed to the file named in `STICKLER_ASKED` each time it is asked,

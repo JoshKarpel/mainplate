@@ -27,11 +27,11 @@
 # The tools hang off the agent as toolsets, and they hang off it *per session* rather than once for
 # the process, because what makes a path safe is the root it is resolved inside and every session
 # picks its own. **Which tools a session gets is decided by its `isolation`**, not by what this
-# module happens to be handed: a worktree gets the file tools over it and its scratch, the whole
+# module happens to be handed: a checkout gets the file tools over it and its scratch, the whole
 # machine gets them over `/`, and reaching nothing of the machine gets them over a scratch of its
 # own - each beside `bash` where there is a sandbox, and the last two with nothing at all without
 # one, because tools that can only fail are worse than none. `list` and `grep` ask git, so only a
-# worktree gets them. The loop records every model request and tool call through the `Stepping` it
+# checkout gets them. The loop records every model request and tool call through the `Stepping` it
 # is handed by the conversation.
 
 from __future__ import annotations
@@ -75,11 +75,11 @@ from mainplate.plugins.asking import contributions
 from mainplate.roots import environment_named
 from mainplate.sandbox import Confinement
 from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InACheckout
 from mainplate.sandbox import InAScratch
-from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 from mainplate.snapshots import branch_named
 from mainplate.tools import Files
 from mainplate.tools import GitTracked
@@ -136,7 +136,7 @@ class Choice:
 
     base: str | None = None
     """
-    What the worktree is checked out at when this session's files are first planted, or nothing at
+    What the checkout starts at when this session's files are first planted, or nothing at
     all to begin where the repository is.
 
     A **commit-ish** and not a commit: a branch name, a tag, a hash, or anything else `git rev-parse`
@@ -146,14 +146,14 @@ class Choice:
     to is in `turn:0:tree:0` for anybody who wants it.
 
     Fixed for the session's life like everything else here, and it stops mattering after the first
-    pass: a worktree is planted once, so this is read by exactly one call and is thereafter a fact
-    about where the session began. A fork does not carry it, because a fork plants at a recorded tree
-    and a base beside that would be two claims about one worktree.
+    pass: a checkout is planted once, so this is read by exactly one call and is thereafter a fact
+    about where the session began. A fork does not carry it, because a fork plants at the commit its
+    parent recorded and a base beside that would be two claims about one checkout.
     """
 
     branch: str | None = None
     """
-    A branch to start at `base` and leave the worktree on.
+    A branch to start at `base` and leave the checkout on.
 
     Optional on the *form* and not in the record: `Choice.branching` fills it with a name from the
     session's id wherever a repository was picked, so every session working in one is on a branch.
@@ -161,23 +161,25 @@ class Choice:
     existed. What it buys is somewhere for a commit to go, since a commit on a detached `HEAD` is
     reachable only through the reflog and has no name to push under.
 
-    **Naming a base does not put the worktree on that branch.** Two sessions started at `main` and
+    **Naming a base does not put the checkout on that branch.** Two sessions started at `main` and
     both committing on a branch called `main` would be two histories under one name, and the second
     push would be refused against the first. So a base names *where to begin* and this names *what to
     begin*, which is why they are two fields rather than one that sometimes means both.
 
-    Not carried by a fork, and that is a refusal rather than an oversight: a fork on its parent's
-    branch would be two writers in one history, which is the thing a worktree apiece exists to
-    prevent, and they would meet at the first push. A fork is given one of its **own** instead, by
-    the same call.
+    **A fork's is the person's to pick**, on the fork page, where it starts out as the branch the
+    parent was on when the forked turn began, and an empty box gives the fork one of its **own** by
+    the same call. Carrying the parent's on is the common case - the fork *is* that work, tried
+    another way - and it is two checkouts under one name: separate repositories, so nothing collides
+    until both push. The cost, stated: pushes are never forced, so the second of the two to push is
+    refused rather than overwriting the first, and has to be renamed to be pushed at all.
     """
 
     isolation: Isolation = field(default_factory=Isolation)
     """
     How confined this session is: what its tools may reach, and whether they may dial out.
 
-    Not free of `repository` on the filesystem axis: a session that picked one reaches its worktree
-    and can reach nothing else, and a session that picked none cannot reach a worktree there is none
+    Not free of `repository` on the filesystem axis: a session that picked one reaches its checkout
+    and can reach nothing else, and a session that picked none cannot reach a checkout there is none
     of. `Isolation.settled` is what makes that true, applied by `Service.start` and `Service.fork`
     rather than trusted from a form - the same stance that stops a form with no repository field
     moving a branch out of its repository. So the pair can never be recorded contradicting itself and
@@ -214,7 +216,7 @@ class Choice:
     repository somebody is reading rather than working in - a stranger's pull request, a dependency
     being triaged. Nothing else on the choice can say so, which is why this is drawn in the picker
     rather than inferred from the isolation: a session that picks a repository is on
-    `Filesystem.WORKTREE` whatever was posted, and gets a shell wherever there is a sandbox, so the
+    `Filesystem.CHECKOUT` whatever was posted, and gets a shell wherever there is a sandbox, so the
     isolation reads the same for the session working in a repository and the one only reading it. A
     session on `Filesystem.NOTHING` has no repository to trust at all: it reaches a scratch of its
     own, with the file tools and `bash` where there is a sandbox and nothing without one.
@@ -225,7 +227,7 @@ class Choice:
     warning that something may be unsafe.
 
     Meaningless without a repository, and `settled` clears it there for the reason it clears the base
-    and the branch: a session with no worktree has nothing a repository could carry.
+    and the branch: a session with no checkout has nothing a repository could carry.
     """
 
     thinking: ThinkingLevel | None = None
@@ -285,16 +287,17 @@ class Choice:
         than posting one - so the alternative to settling here is every writer reconciling the same
         three fields and one of them eventually not.
 
-        With no repository there is no worktree, so there is nothing to reach, nothing to check out,
+        With no repository there is no checkout, so there is nothing to reach, nothing to check out,
         no branch to start and nothing whose code could be trusted or not: all of them collapse
         together because they are answers to one question the picker asks once. The page draws no
         base and no branch until a repository is picked, so a form cannot express the contradiction in
         the first place; this is what says the same of every other way in, a fork and
         `scripts/seed.py` alike.
 
-        `forked` drops the base and the branch whatever the repository is. A fork plants at the tree
-        of the turn it re-asks, so a base would be a second answer to where its files come from, and
-        a branch would be the parent's history under a second writer.
+        `forked` drops the base whatever the repository is. A fork plants at the commit and the files
+        of the turn it re-asks, so a base would be a second answer to where its files come from. The
+        branch stays, because on a fork it is what the fork page asked: what to call that commit,
+        which is a different question from which commit it is.
 
         Trust survives a fork and the base does not, and the two are different questions. A fork
         reads its repository's declaration again, out of the tree it is planted at, so this is what
@@ -305,7 +308,7 @@ class Choice:
         if self.repository is None:
             return replace(self, base=None, branch=None, trusted=True, isolation=self.isolation.settled(None))
         if forked:
-            return replace(self, base=None, branch=None, isolation=self.isolation.settled(self.repository))
+            return replace(self, base=None, isolation=self.isolation.settled(self.repository))
         return replace(self, isolation=self.isolation.settled(self.repository))
 
     @property
@@ -814,9 +817,9 @@ def working_note(scratch: bool) -> str:
     since a toolset is built per session and its own description is not.
 
     **No absolute path appears here, and both halves of that are decided.** It is what `roots.py`
-    exists for: a worktree sits under 32 hex characters of session id, and a model reproducing those
+    exists for: a checkout sits under 32 hex characters of session id, and a model reproducing those
     from memory eventually reproduces them wrong, so printing the path invites exactly the failure
-    the root names were built to prevent - and a relative path already lands in the worktree, so
+    the root names were built to prevent - and a relative path already lands in the checkout, so
     there was never anything to do with it.
 
     The second half is the cache. Instructions are a per-request parameter Pydantic AI renders in
@@ -826,7 +829,7 @@ def working_note(scratch: bool) -> str:
     reads its parent's prefix from cache instead of paying for the whole conversation again.
     """
     said = (
-        "You are working in a git checkout, which is called `worktree`. The file tools take paths "
+        "You are working in a git checkout, which is called `checkout`. The file tools take paths "
         "relative to it and reach nothing outside it. Changes you make there are snapshotted "
         "automatically, so you never need to commit to keep your work."
     )
@@ -846,14 +849,14 @@ def working_note(scratch: bool) -> str:
     # question, since on exe.dev a connected command reaches the forge with this console's authority,
     # so it is `network_note`'s to say and this stays a function of the isolation alone.
     return (
-        f"{said} You also have a scratch directory called `scratch`, outside the worktree and "
+        f"{said} You also have a scratch directory called `scratch`, outside the checkout and "
         f"outside every snapshot, which is where anything that is not the repository's belongs. "
         f'Reach it by passing `root: "scratch"` to `read`, `edit` or `create`; in a command it is '
-        f"`${environment_named('scratch')}`, and the worktree is `${environment_named('worktree')}`. "
-        f"Commands you run start in the worktree, so a relative path means the same thing there as "
+        f"`${environment_named('scratch')}`, and the checkout is `${environment_named('checkout')}`. "
+        f"Commands you run start in the checkout, so a relative path means the same thing there as "
         f"it does to the file tools and you never need to `cd` into it. They reach those two "
         f"directories and a read-only system, and nothing else: no home directory, no other "
-        f"session's files, and no configuration of the console itself. The worktree's git is yours: "
+        f"session's files, and no configuration of the console itself. The checkout's git is yours: "
         f"`add`, `commit`, `merge` and `rebase` work as they would anywhere, and `git fetch` brings "
         f"the repository's current branches. `origin` is a read-only copy of the repository, so a "
         f"push to it is refused."
@@ -864,14 +867,14 @@ def scratch_note() -> str:
     """
     What a session with no repository is told about the one place it reaches.
 
-    The same shape as `working_note` with the worktree taken out, and said separately rather than
+    The same shape as `working_note` with the checkout taken out, and said separately rather than
     by a flag on that one: what a relative path means is the whole of what differs, and a sentence
-    saying it means the worktree "except where there is none" is a sentence a model has to resolve
+    saying it means the checkout "except where there is none" is a sentence a model has to resolve
     on every call. Pure of paths for `working_note`'s reason, so every session of this shape shares
     one cached prefix.
     """
     return (
-        "You are working with no repository and no worktree. You have a scratch directory called "
+        "You are working with no repository and no checkout. You have a scratch directory called "
         "`scratch`, which is where anything you make or fetch belongs, and it is kept from one turn "
         'to the next. Reach it by passing `root: "scratch"` to `read`, `edit` or `create`, or by a '
         f"relative path; in a command it is `${environment_named('scratch')}`, and commands start "
@@ -932,10 +935,10 @@ def whole_machine_note() -> str:
 
     No root to name, because the root is `/` and saying so tells a model nothing it cannot see. What
     it cannot see is that this was *chosen*, and that nothing here is snapshotted: a session on this
-    arm has no worktree, so the record of what it did is the conversation and nothing else.
+    arm has no checkout, so the record of what it did is the conversation and nothing else.
     """
     return (
-        "You are working on this machine directly, with no repository and no worktree. Paths are "
+        "You are working on this machine directly, with no repository and no checkout. Paths are "
         "absolute and reach the whole filesystem. Nothing you change is snapshotted, so there is no "
         "going back to before a change through this console; say what you are about to do to "
         "anything you cannot undo."
@@ -964,27 +967,27 @@ class Reach:
 
 def reaching(
     isolation: Isolation,
-    worktree: Worktree | None = None,
+    checkout: Checkout | None = None,
     scratch: Path | None = None,
     bwrap: str | None = None,
 ) -> Reach:
     """
-    What one session's isolation affords, given the worktree, the scratch and the sandbox this
+    What one session's isolation affords, given the checkout, the scratch and the sandbox this
     machine has.
 
     **Decided by the session's own isolation**, not by what a caller happens to be handed.
     `Filesystem.NOTHING` reaches nothing of the machine, and that is a scratch directory of the
     session's own and commands inside it: a conversation that is not about a repository still wants
     to run a script or keep a note, and what it must not reach is anything that was there before it.
-    Offered only where a command can make the directory exist, for the reason the worktree's scratch
+    Offered only where a command can make the directory exist, for the reason the checkout's scratch
     is: a `read` naming a directory nothing ever creates is a tool that can only fail, and a tool
     that can only fail is worse than none, since it spends its description on every request. So a
     `NOTHING` session gets `read`, `edit` and `create` over its scratch and `bash` in it where there
     is a sandbox, and nothing without one. It gets no `list` and no `grep` either way, and neither
-    does `EVERYTHING`: both ask git, and `agent_for` offers them only where a root is a worktree.
+    does `EVERYTHING`: both ask git, and `agent_for` offers them only where a root is a checkout.
 
     `bwrap` is passed in rather than looked up, because where the sandbox binary is is a fact about
-    the machine. Without it a `WORKTREE` session keeps its file tools and is offered no `bash`, which
+    the machine. Without it a `CHECKOUT` session keeps its file tools and is offered no `bash`, which
     is what this console was before there was one; a `NOTHING` session reaches nothing, since its
     scratch is only ever made by a command; and an `EVERYTHING` session reaches nothing at all: what
     that arm *is* is a sandbox with `/` in it, so without one there is nothing left that anybody
@@ -999,20 +1002,20 @@ def reaching(
             )
         case Filesystem.NOTHING:
             return Reach()
-        case Filesystem.WORKTREE if worktree is not None:
+        case Filesystem.CHECKOUT if checkout is not None:
             # The scratch is reachable by the file tools only where a command can make it exist,
             # which is the same condition `bash` is offered under. Offered without one, `read` would
-            # name a directory nothing ever creates. The worktree is first, so a relative path still
+            # name a directory nothing ever creates. The checkout is first, so a relative path still
             # means the repository however many roots a session ends up with.
             if scratch is None or bwrap is None:
-                return Reach(roots=(GitTracked(worktree=worktree),), note=working_note(scratch=False))
+                return Reach(roots=(GitTracked(checkout=checkout),), note=working_note(scratch=False))
             return Reach(
-                roots=(GitTracked(worktree=worktree), Scratch(path=scratch)),
-                confinement=InAWorktree(worktree=worktree, scratch=scratch),
+                roots=(GitTracked(checkout=checkout), Scratch(path=scratch)),
+                confinement=InACheckout(checkout=checkout, scratch=scratch),
                 note=f"{working_note(scratch=True)}\n\n{network_note(isolation.network)}",
             )
-        case Filesystem.WORKTREE:
-            # A worktree was chosen and none was supplied, which is the instant before a session's
+        case Filesystem.CHECKOUT:
+            # A checkout was chosen and none was supplied, which is the instant before a session's
             # first pass has planted one. Nothing rather than tools rooted nowhere.
             return Reach()
         case Filesystem.EVERYTHING if bwrap is not None:
@@ -1031,7 +1034,7 @@ def agent_for(
     wires: Wires,
     chosen: Choice,
     instructions: str,
-    worktree: Worktree | None = None,
+    checkout: Checkout | None = None,
     scratch: Path | None = None,
     bwrap: str | None = None,
     plugins: Live | None = None,
@@ -1094,13 +1097,13 @@ def agent_for(
         **(ModelSettings() if output_cap is None else ModelSettings(max_tokens=output_cap)),
         **(chosen.settings or ModelSettings()),
     }
-    reach = reaching(chosen.isolation, worktree, scratch, bwrap)
+    reach = reaching(chosen.isolation, checkout, scratch, bwrap)
     tools: list[AbstractToolset[None]] = []
     if plugins is not None and (contributed := contributions(plugins)):
         tools.append(PluginTools(contributed, asking_through(plugins)))
     if reach.roots:
         # One `Files` for both, so a search and an edit of one file take the same lock. `grep` only
-        # where there is a worktree, which is `list`'s condition inside `file_tools` and for the same
+        # where there is a checkout, which is `list`'s condition inside `file_tools` and for the same
         # reason: both ask git, and over anything else a tool that can only refuse still costs its
         # description on every request.
         files = Files(roots=reach.roots)

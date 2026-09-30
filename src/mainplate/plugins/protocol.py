@@ -480,7 +480,7 @@ class Payload(Speech):
     """This plugin's own, filled from its card's defaults, so it reads a value rather than deciding
     what absent means."""
 
-    worktree: str | None = None
+    checkout: str | None = None
     """
     Where this session's files are, or nothing for a session with none.
 
@@ -526,10 +526,10 @@ class SettingUp(Payload):
     The first call, which asks a plugin to get ready and say what it is.
 
     It carries nothing the envelope does not, because everything it needs is already there: the
-    worktree it is being set up against, and a scratch directory of its own to install into.
+    checkout it is being set up against, and a scratch directory of its own to install into.
 
     **Both halves in one call, and the answer is what the session records.** A plugin with
-    dependencies resolves them by being run at all; a plugin that wants a program in the worktree
+    dependencies resolves them by being run at all; a plugin that wants a program in the checkout
     fetches it here, because this is the one event with a network. What it returns is `Described`,
     which is settled for the session's life: tool definitions sit above the system prompt in the
     cached prefix, so a set that changed mid-conversation would invalidate everything under it.

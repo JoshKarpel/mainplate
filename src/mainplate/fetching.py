@@ -1,9 +1,9 @@
 # Keeping each store's idea of its remote current while sessions are working in it.
 #
-# A session's `git fetch` reads the store rather than the forge, because `origin` in a worktree is
+# A session's `git fetch` reads the store rather than the forge, because `origin` in a checkout is
 # the store: most sessions have no network, and on exe.dev being on the network is the credential, so
-# the one remote a worktree names is one that needs neither. So what `origin/main` means inside a
-# session is whatever the store last fetched, and planting a worktree is only one moment. A session
+# the one remote a checkout names is one that needs neither. So what `origin/main` means inside a
+# session is whatever the store last fetched, and planting a checkout is only one moment. A session
 # rebasing onto `origin/main` an hour in wants the `main` of now, and a reviewer's commit pushed to the
 # session's own branch is invisible to it until something fetches.
 #

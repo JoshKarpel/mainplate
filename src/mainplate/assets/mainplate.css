@@ -1102,7 +1102,7 @@ pre .gs {
 /* Folded, every one: what a read brought back or a command said is context a reader reaches for,
    and what the calls that write did is the batch's diff under them. The fold is a real `<details>`,
    which is what the dock's fold-all works on and what keeps the whole thing usable with no script at
-   all. The cost, stated: a session with no worktree has no batch's diff, so there an `edit` or a
+   all. The cost, stated: a session with no checkout has no batch's diff, so there an `edit` or a
    `create` is shut with nothing standing in for it. */
 .tool {
     margin: 0;
@@ -2566,7 +2566,7 @@ pre.lines > code {
     gap: var(--space-3);
 }
 
-/* Where in the repository the worktree starts, under the cards that say which repository. Two text
+/* Where in the repository the checkout starts, under the cards that say which repository. Two text
    boxes rather than cards, because neither has a closed set to draw; laid out on the same grid as
    the cards above so the group reads as one question with its details under it. */
 .basis {
@@ -3997,7 +3997,7 @@ summary.archive__head {
 /* --- The rule between turns ------------------------------------------- */
 
 /* The line at a round trip's boundary, carrying everything true of the request rather than of any
-   panel in it: the worktree it was made against, what it cost, and the record behind it. The first
+   panel in it: the checkout it was made against, what it cost, and the record behind it. The first
    rule of a turn carries the turn's own facts too, which is where the fork link lives. Always drawn,
    never revealed by hover: these are facts to scan down a conversation for, and the fork is the only
    way a session changes its mind, so a pointer-only control would take it off every phone.
@@ -4076,8 +4076,8 @@ summary.archive__head {
 
 /* The one thing on any rule that is a sentence rather than a figure, so it takes the full ink and
    the bold face while everything around it stays faint. A boundary is the rarest and most
-   consequential thing this transcript draws, and set in the same weight as a tree hash it reads as
-   one more piece of chrome to skip. */
+   consequential thing this transcript draws, and set in the same weight as the figures beside it
+   it reads as one more piece of chrome to skip. */
 .rule__forget {
     color: var(--ink);
     font-weight: 600;

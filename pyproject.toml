@@ -144,7 +144,7 @@ plugins = ["pydantic.mypy"]
 
 files = ["."]
 
-# `workspaces/` is the clones and worktrees a local console makes, which land beside the database and
+# `workspaces/` is the clones and checkouts a local console makes, which land beside the database and
 # so land here whenever `just serve` or `just demo` is run from this directory. They hold *other
 # people's* repositories, checked out by a session, so type-checking them is checking somebody else's
 # code against this project's settings. `site/` is the built documentation, which carries a copy of

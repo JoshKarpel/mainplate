@@ -146,9 +146,9 @@ a turn half-finished long enough to assert on it. It has no worker either, for t
 one more.
 
 `working` is the same fixture with workspaces behind it, which the command box needs and nothing
-else there does: a session must have a worktree before `Run` is offered at all. Two fixtures rather
+else there does: a session must have a checkout before `Run` is offered at all. Two fixtures rather
 than workspaces on the one, so a test that only drives a conversation does not get a clone and a
-worktree it never looks at. The real repository they are both built on lives in `conftest.py`, since
+checkout it never looks at. The real repository they are both built on lives in `conftest.py`, since
 two suites want one now.
 
 It drives Playwright's **async** binding, which is not a preference: `sync_playwright` runs an event
@@ -203,7 +203,7 @@ see.** These are the ones that turn on it:
 
 ## Real processes and real clocks
 
-`test_commands.py` runs real processes against a real worktree, and synchronises on the *record*
+`test_commands.py` runs real processes against a real checkout, and synchronises on the *record*
 rather than on a clock: a command is run by a task nobody holds a handle to, so what a test waits
 for is `result:{entry}` appearing. Any fixed sleep there is either racy or wasted, and the record is
 the actual signal.
@@ -219,7 +219,7 @@ is the mechanism - what it installs lands in the *session's* scratch, only the e
 crosses back, and a malformed line is loud. `TestAPluginThatSetsTheRepositoryUp` is the switch and
 the record, driven through a real pass, and it needs `tendings` for the reason above. Both put their
 plugin **into the repository a session plants from**, which is not incidental: the namespace binds
-the worktree, its store and two scratches, so a script anywhere else is one `bwrap` cannot find.
+the checkout, its store and two scratches, so a script anywhere else is one `bwrap` cannot find.
 
 **What that stub cannot cover is asserted against arguments instead.**
 `TestWhereARepositorysPluginRuns` reads the `bwrap` argv this console builds - the network on `setup`
@@ -227,14 +227,14 @@ and shut everywhere else, the session's scratch and the environment file on `set
 `$HOME` in the plugin's own scratch at every event including that one, a scratch per plugin per
 session - because running it to find out would be the same assertions made slowly and over a network.
 
-**`origin` and `worktree` in `conftest.py` are two different repositories.** `origin` is the plain
+**`origin` and `checkout` in `conftest.py` are two different repositories.** `origin` is the plain
 repository a stand-in forge reaches, and a test that wants the remote to move commits there;
-`worktree` is a session's worktree planted from it through `Workspaces`, with its own `.git`, its
-store, and an ignored `.env` and `built/` written in. A test that commits into `worktree` and expects
+`checkout` is a session's checkout planted from it through `Workspaces`, with its own `.git`, its
+store, and an ignored `.env` and `built/` written in. A test that commits into `checkout` and expects
 a new session to see it is committing to the wrong one. `checkout_in` is for a test that set a
 directory up itself and wants the file tools or `list` over it, with an empty store beside it.
 
 `test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
 fixtures there hand an absolute workspace root and so would never notice a path resolved against the
 wrong directory. It parametrises over naming a base and naming nothing, because the no-base arm of
-planting a worktree is the one that is easy to get wrong.
+planting a checkout is the one that is easy to get wrong.

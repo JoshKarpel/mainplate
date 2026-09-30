@@ -2535,7 +2535,7 @@ async def landed_on_the_branch(console: tuple[str, Service], page: Page) -> None
     Answer the settings step of the branch a send just navigated to, so a transcript is drawn.
 
     **A fork lands on that step**, because it carries its parent's turns and none of its plugins, and
-    that is the console working rather than a fixture to loosen: a branch plants a fresh worktree and
+    that is the console working rather than a fixture to loosen: a branch plants a fresh checkout and
     may be planted at a tree whose `.mainplate/` says something new, so it asks again. This console
     runs no worker, so the pass that press would ask for never happens and the registration is written
     here instead of clicked.
@@ -2992,7 +2992,7 @@ async def working(
 
     A second fixture rather than workspaces on the first, because the one above is deliberately a
     console with none: what most of these drive is a conversation, and giving every one of them a
-    real repository would put a clone and a worktree behind tests that never look at either.
+    real repository would put a clone and a checkout behind tests that never look at either.
     """
     async with open_store(tmp_path / "mainplate.db", LEASE, catalogues, workspaces) as service:
         async with serving(build_app(already(service), assets), port=0) as server:

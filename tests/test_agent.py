@@ -13,19 +13,19 @@ from mainplate.agent import Reach
 from mainplate.agent import agent_for
 from mainplate.agent import reaching
 from mainplate.sandbox import Filesystem
+from mainplate.sandbox import InACheckout
 from mainplate.sandbox import InAScratch
-from mainplate.sandbox import InAWorktree
 from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
+from mainplate.snapshots import Checkout
 from mainplate.snapshots import Store
-from mainplate.snapshots import Worktree
 from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
 from mainplate.tools import System
 
 BWRAP = "/usr/bin/bwrap"
-WORKTREE = Worktree(
-    root=Path("/var/lib/mainplate/worktrees/aaaa"),
+CHECKOUT = Checkout(
+    root=Path("/var/lib/mainplate/checkouts/aaaa"),
     store=Store(path=Path("/var/lib/mainplate/clones/x.git")),
     session="aaaa",
     bwrap=BWRAP,
@@ -46,7 +46,7 @@ class TestWhatASessionReaches:
         assert reach.roots == (Scratch(path=SCRATCH),)
         assert reach.confinement == InAScratch(scratch=SCRATCH)
         assert "`scratch`" in reach.note
-        assert "no repository and no worktree" in reach.note
+        assert "no repository and no checkout" in reach.note
         assert "cannot reach the network" in reach.note
         assert str(SCRATCH) not in reach.note, "no path is ever said, so every session of a shape shares a prefix"
 
@@ -65,33 +65,33 @@ class TestWhatASessionReaches:
         """A `read` over a directory only a command makes exist is a tool that can only fail."""
         assert reaching(Isolation(filesystem=Filesystem.NOTHING), None, scratch, bwrap) == Reach()
 
-    def test_a_worktree_session_reaches_the_worktree_first_and_its_scratch_beside_it(self) -> None:
-        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=False), WORKTREE, SCRATCH, BWRAP)
-        assert reach.roots == (GitTracked(worktree=WORKTREE), Scratch(path=SCRATCH))
-        assert reach.confinement == InAWorktree(worktree=WORKTREE, scratch=SCRATCH)
+    def test_a_checkout_session_reaches_the_checkout_first_and_its_scratch_beside_it(self) -> None:
+        reach = reaching(Isolation(filesystem=Filesystem.CHECKOUT, network=False), CHECKOUT, SCRATCH, BWRAP)
+        assert reach.roots == (GitTracked(checkout=CHECKOUT), Scratch(path=SCRATCH))
+        assert reach.confinement == InACheckout(checkout=CHECKOUT, scratch=SCRATCH)
         assert "git checkout" in reach.note
 
     @pytest.mark.parametrize("network", [False, True], ids=["offline", "online"])
-    def test_a_worktree_session_is_told_origin_refuses_a_push_whatever_its_network(self, network: bool) -> None:
-        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=network), WORKTREE, SCRATCH, BWRAP)
+    def test_a_checkout_session_is_told_origin_refuses_a_push_whatever_its_network(self, network: bool) -> None:
+        reach = reaching(Isolation(filesystem=Filesystem.CHECKOUT, network=network), CHECKOUT, SCRATCH, BWRAP)
         assert "`origin` is a read-only copy of the repository, so a push to it is refused" in reach.note
 
     def test_a_session_with_no_network_is_told_nothing_it_runs_can_push(self) -> None:
-        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=False), WORKTREE, SCRATCH, BWRAP)
+        reach = reaching(Isolation(filesystem=Filesystem.CHECKOUT, network=False), CHECKOUT, SCRATCH, BWRAP)
         assert "nothing you run can push" in reach.note
 
     def test_a_session_with_the_network_is_not_told_nothing_it_runs_can_push(self) -> None:
         """On exe.dev a connected command reaches the forge with this console's authority."""
-        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE, network=True), WORKTREE, SCRATCH, BWRAP)
+        reach = reaching(Isolation(filesystem=Filesystem.CHECKOUT, network=True), CHECKOUT, SCRATCH, BWRAP)
         assert "nothing you run can push" not in reach.note
 
-    def test_a_worktree_session_without_a_sandbox_keeps_its_file_tools_and_gets_no_bash(self) -> None:
-        reach = reaching(Isolation(filesystem=Filesystem.WORKTREE), WORKTREE, SCRATCH, None)
-        assert reach.roots == (GitTracked(worktree=WORKTREE),)
+    def test_a_checkout_session_without_a_sandbox_keeps_its_file_tools_and_gets_no_bash(self) -> None:
+        reach = reaching(Isolation(filesystem=Filesystem.CHECKOUT), CHECKOUT, SCRATCH, None)
+        assert reach.roots == (GitTracked(checkout=CHECKOUT),)
         assert reach.confinement is None
 
-    def test_a_worktree_session_before_its_worktree_is_planted_reaches_nothing_yet(self) -> None:
-        assert reaching(Isolation(filesystem=Filesystem.WORKTREE), None, SCRATCH, BWRAP) == Reach()
+    def test_a_checkout_session_before_its_checkout_is_planted_reaches_nothing_yet(self) -> None:
+        assert reaching(Isolation(filesystem=Filesystem.CHECKOUT), None, SCRATCH, BWRAP) == Reach()
 
     def test_a_whole_machine_session_reaches_the_root_and_no_scratch(self) -> None:
         reach = reaching(Isolation(filesystem=Filesystem.EVERYTHING, network=True), None, SCRATCH, BWRAP)
@@ -112,25 +112,25 @@ class TestWhichToolsASessionIsGiven:
     The table in `src/mainplate/tools/AGENTS.md`, held against the agent a pass actually builds.
 
     Asked of `agent_for` rather than of `reaching`, because the roots alone do not say it: `list` and
-    `grep` ask git, so they are offered only where a root is a worktree, and a session that reaches
+    `grep` ask git, so they are offered only where a root is a checkout, and a session that reaches
     only its scratch or the whole machine gets neither rather than two tools that can only refuse.
     """
 
     @pytest.mark.parametrize(
-        ("filesystem", "worktree", "bwrap", "given"),
+        ("filesystem", "checkout", "bwrap", "given"),
         [
-            (Filesystem.WORKTREE, WORKTREE, BWRAP, FILES | REPOSITORY | {"bash"}),
-            (Filesystem.WORKTREE, WORKTREE, None, FILES | REPOSITORY),
-            (Filesystem.WORKTREE, None, BWRAP, set()),
+            (Filesystem.CHECKOUT, CHECKOUT, BWRAP, FILES | REPOSITORY | {"bash"}),
+            (Filesystem.CHECKOUT, CHECKOUT, None, FILES | REPOSITORY),
+            (Filesystem.CHECKOUT, None, BWRAP, set()),
             (Filesystem.EVERYTHING, None, BWRAP, FILES | {"bash"}),
             (Filesystem.EVERYTHING, None, None, set()),
             (Filesystem.NOTHING, None, BWRAP, FILES | {"bash"}),
             (Filesystem.NOTHING, None, None, set()),
         ],
         ids=[
-            "worktree",
-            "worktree-no-sandbox",
-            "worktree-not-planted",
+            "checkout",
+            "checkout-no-sandbox",
+            "checkout-not-planted",
             "everything",
             "everything-no-sandbox",
             "nothing",
@@ -138,9 +138,9 @@ class TestWhichToolsASessionIsGiven:
         ],
     )
     def test_each_isolation_is_given_the_tools_its_table_row_names(
-        self, filesystem: Filesystem, worktree: Worktree | None, bwrap: str | None, given: set[str]
+        self, filesystem: Filesystem, checkout: Checkout | None, bwrap: str | None, given: set[str]
     ) -> None:
         chosen = replace(DEFAULT_CHOICE, isolation=Isolation(filesystem=filesystem))
-        agent = agent_for(Provider().endpoints(), chosen, INSTRUCTIONS, worktree, SCRATCH, bwrap)
+        agent = agent_for(Provider().endpoints(), chosen, INSTRUCTIONS, checkout, SCRATCH, bwrap)
         named = {name for toolset in agent.toolsets if isinstance(toolset, FunctionToolset) for name in toolset.tools}
         assert named == given

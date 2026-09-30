@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC
@@ -113,6 +114,7 @@ from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.durability import deferred_until
 from mainplate.durability import parse_refused
+from mainplate.durability import parse_snapshot
 from mainplate.durability import stepping
 from mainplate.durability import terminally
 from mainplate.forge import Workspaces
@@ -507,7 +509,7 @@ class TestForgettingWhatCameBefore:
             # An answered turn always has a spend, even where every count on it is zero: what makes
             # it absent is a turn that has recorded no response at all, not one that cost nothing.
             spent={0: Spent(asked=0, answered=0, cost=None)},
-            requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None), when=WHEN),)},
+            requests={0: (Request(at=0, spent=Spent(asked=0, answered=0, cost=None), when=WHEN),)},
             # When the last response landed, which is what the composer reads to say whether the
             # provider still holds this conversation's prefix.
             answered_at=WHEN,
@@ -672,7 +674,7 @@ class TestWhatASessionIsAnsweredUnder:
 
     def test_a_stretch_nothing_has_composed_for_yet_is_pending_rather_than_absent(self) -> None:
         """
-        A message is queued before the pass that composes for it has planted a worktree to read, so
+        A message is queued before the pass that composes for it has planted a checkout to read, so
         the page draws the panel with nothing in it rather than nothing at all.
         """
         assert transcript(said_at(0, "what is it")).system_prompts == {0: None}
@@ -1435,7 +1437,7 @@ class TestWhatOnePassDoes:
     passes as it has requests. What has to hold across that is everything: the provider is asked
     once per request whatever the cut, and the conversation the store ends up holding is the same
     one either way. The fixture repository is here because a turn needs a *tool* to be worth more
-    than one request, and a tool needs a worktree to run in.
+    than one request, and a tool needs a checkout to run in.
     """
 
     def scripted(self) -> Scripted:
@@ -1704,11 +1706,19 @@ class TestWhatOnePassDoes:
         ]
         assert spoken(transcript(one)) == spoken(transcript(other))
         assert [panel.kind for panel in transcript(one).panels] == [panel.kind for panel in transcript(other).panels]
-        # The trees are the values that can be compared outright, holding neither a duration nor a
-        # timestamp nor a key from the store's own space. A tool that ran again and wrote something
-        # else shows here; so does a snapshot taken at a different point.
+        # The trees and the commits under them are the values that can be compared outright, holding
+        # neither a duration nor a timestamp nor a key from the store's own space. A tool that ran again
+        # and wrote something else shows here; so does a snapshot taken at a different point. The
+        # branch is left out, since each session is on one named after its own id.
         settled = (tree_key(0, 0), tree_key(0, 1))
-        assert {key: one[key] for key in settled} == {key: other[key] for key in settled}
+
+        def standing(recorded: Mapping[str, object]) -> dict[str, tuple[str, str | None] | None]:
+            return {
+                key: None if (held := parse_snapshot(recorded[key])) is None else (held.tree, held.head)
+                for key in settled
+            }
+
+        assert standing(one) == standing(other)
         # And the cursors say the same thing in each session's own terms: nothing was steered into
         # either turn, so every request read no further than the message the turn opened on.
         for held in (one, other):
@@ -1728,7 +1738,7 @@ class TestReadingBackWhatWasAlreadyRecorded:
         with_repository = parse_choice({"endpoint": "here", "model": "ripe/fast", "repository": "test:fixture"})
         without = parse_choice({"endpoint": "here", "model": "ripe/fast"})
 
-        assert with_repository.isolation.filesystem is Filesystem.WORKTREE
+        assert with_repository.isolation.filesystem is Filesystem.CHECKOUT
         assert without.isolation.filesystem is Filesystem.NOTHING
         assert not without.isolation.network, "there was no way to reach a network then, so it reads as off"
 
@@ -1765,7 +1775,7 @@ class TestAPassThatFellOver:
     def test_a_failure_is_why_the_session_is_stopped_only_while_nothing_has_happened_since(self) -> None:
         """
         `refusal_in`'s rule against a count rather than against a turn, and it has to be a count
-        because a pass can fall over somewhere no turn names: planting a worktree, reading a
+        because a pass can fall over somewhere no turn names: planting a checkout, reading a
         declaration, running a setup.
         """
         fell = records.Failed(why="PluginFailed('checks exited 1')", at=2).recorded()

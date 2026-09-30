@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-type RootName = Literal["worktree", "scratch", "machine", "plugin_scratch"]
+type RootName = Literal["checkout", "scratch", "machine", "plugin_scratch"]
 """
 The name a place answers to, which is the word on the tool argument and in the environment.
 
 Named after what the place *is* rather than after the session's own id, which is the whole point: a
-worktree is at `/var/lib/mainplate/worktrees/<32 hex characters>` and a model that has to reproduce
+checkout is at `/var/lib/mainplate/checkouts/<32 hex characters>` and a model that has to reproduce
 that from memory eventually reproduces it wrong, which is a refusal it then has to recover from.
 
 `plugin_scratch` is the one arm no file tool returns, because it is nobody's place but the plugin's:

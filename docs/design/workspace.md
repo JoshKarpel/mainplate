@@ -1,6 +1,6 @@
 # The workspace
 
-The git side: where a repository is reached from, the worktree a session gets and what it is made
+The git side: where a repository is reached from, the checkout a session gets and what it is made
 of, where in it a session starts, and how a tree is snapshotted at every model request.
 
 ## Where a repository comes from
@@ -30,17 +30,17 @@ Three things there are decided rather than incidental:
   That is what tells two attachments apart, and it is narrower besides: an integration's own host
   answers "Repository not found" for any repository but its own.
 
-`Clones` keeps one **bare** clone per repository, the **store**, so there is no "main" worktree to
-confuse with a session's and every session's worktree borrows one set of objects. `Workspaces` is
-the five of them as one value, the stores, the worktree root, the scratch root, what the forges
-reach, and the `bwrap` every git against a worktree runs behind, because they only mean anything as
-a set: a worktree is of a store, a store is of something a forge reached, a scratch is what sits
-beside a worktree, and a worktree without a sandbox is one nothing may safely run git in. It is the
+`Clones` keeps one **bare** clone per repository, the **store**, so there is no "main" checkout to
+confuse with a session's and every session's checkout borrows one set of objects. `Workspaces` is
+the five of them as one value, the stores, the checkout root, the scratch root, what the forges
+reach, and the `bwrap` every git against a checkout runs behind, because they only mean anything as
+a set: a checkout is of a store, a store is of something a forge reached, a scratch is what sits
+beside a checkout, and a checkout without a sandbox is one nothing may safely run git in. It is the
 one place the word "workspaces" means anything, naming the storage area rather than a collection of
-`Worktree`, which is what `MAINPLATE_WORKSPACES` and `Settings.workspace_root` call it.
+`Checkout`, which is what `MAINPLATE_WORKSPACES` and `Settings.workspace_root` call it.
 
 **The worker clones, never a request handler.** `Service.start` records the choice and returns; the
-session's first pass clones the repository and plants the worktree. A clone is a network fetch that
+session's first pass clones the repository and plants the checkout. A clone is a network fetch that
 can take minutes and creating a session is a POST somebody is waiting on, so putting it there is
 exactly the coupling the control-plane rule argues against. Both halves are idempotent, so every
 later pass reaches the same call and does nothing. It is an effect *outside* a step deliberately:
@@ -51,44 +51,44 @@ record and nothing for a replay to disagree with.
 will carry its own settings; one that does not needs no switch, because `ExeDevGitHub` reaching
 nothing off exe.dev is the correct behaviour there rather than something to turn off.
 
-## A worktree apiece
+## A checkout apiece
 
-A session that picked a repository gets **a worktree of its own**, under `MAINPLATE_WORKSPACES`
+A session that picked a repository gets **a checkout of its own**, under `MAINPLATE_WORKSPACES`
 (beside the database by default, and never inside any repository, which would put every session's
-files in every other session's snapshots). A worktree apiece rather than one shared tree, because
+files in every other session's snapshots). A checkout apiece rather than one shared tree, because
 two writers in one directory make a snapshot unattributable and the person is always one of the two.
 
-**It is a complete repository, `.git` and all**, rather than a linked worktree of the store. Its
+**It is a complete repository, `.git` and all**, rather than a linked checkout of the store. Its
 refs, its index, its reflog and its configuration are its own, so the session's `bash` commits,
 rebases and stashes the way git does anywhere, and nothing it does reaches another session. Three
 things make that cheap and keep it apart:
 
 - **It borrows the store's objects** through `objects/info/alternates` rather than copying them, so
-  a worktree costs a checkout rather than a clone. The store is bound read-only wherever the
-  worktree is, so the borrowing cannot run the other way; a hardlinked copy would have let a session
+  a checkout costs its files rather than a clone. The store is bound read-only wherever the
+  checkout is, so the borrowing cannot run the other way; a hardlinked copy would have let a session
   `chmod` its way into the store's own object files.
 - **`origin` is the store**, fetching the store's `refs/remotes/origin/*`, which are the ones this
   console refreshes. `git fetch` in a session brings the repository's current branches with no
   network and no credential, and nothing can be pushed there.
 - **It is built beside where it goes and renamed into place**, with the operator's `user.name` and
   `user.email`, read once at startup, copied in so a commit carries the name the person pushing it
-  would give it. A crash part-way leaves a directory nothing names rather than a worktree half made.
+  would give it. A crash part-way leaves a directory nothing names rather than a checkout half made.
   Every git that builds it runs in the parent, which is safe for exactly as long as it takes: until
   the rename, no session has had a moment to write its configuration. After it, [no git in the
-  parent touches it](security.md#the-parent-never-runs-git-against-a-worktree).
+  parent touches it](security.md#the-parent-never-runs-git-against-a-checkout).
 
-**The store never prunes.** A worktree borrows objects without the store knowing which, so a commit
-a session merged from a branch the remote has since deleted is one only that worktree refers to.
+**The store never prunes.** A checkout borrows objects without the store knowing which, so a commit
+a session merged from a branch the remote has since deleted is one only that checkout refers to.
 `Clones.refresh` sets `gc.pruneExpire` to `never` before every fetch, because a fetch is what drops
 the store's last ref to such a commit and then runs git's automatic `gc`; so every store gets it at
 its next fetch, whenever it was cloned, before anything that fetch drops can be pruned. The cost,
 stated: a store only grows.
 
-**Whether a worktree is planted is read from its directory, never from its `.git`.** Everything
+**Whether a checkout is planted is read from its directory, never from its `.git`.** Everything
 under the directory is the session's to delete or replace, `.git` included, so an answer read from
 there is one the session chose, and a session that ran `rm -rf .git` would make every later pass
 try to plant over its files. The directory itself is not the session's: planting puts it in place
-with one rename, and a sandbox cannot remove it because it is the mount point the worktree is bound
+with one rename, and a sandbox cannot remove it because it is the mount point the checkout is bound
 at. So planting stays a no-op for a session that has broken its own git.
 
 **What fails instead is the next capture, and the pass with it.** A capture is `git add -A` inside
@@ -100,15 +100,15 @@ The cost, stated: a model "reinitialising" its repository stops its own session 
 puts the history back or forks from the last turn that recorded a tree.
 
 `Settings.workspace_root` **resolves that path**, and it is not tidying. Everything under it runs
-`git` with a `cwd` of its own: a store is cloned from the clones root, a worktree is initialised
-from the worktree root. Hand either a relative destination and git resolves it against *that*
-directory, so the store lands at `workspaces/clones/workspaces/clones/…` and the worktree lands
+`git` with a `cwd` of its own: a store is cloned from the clones root, a checkout is initialised
+from the checkout root. Hand either a relative destination and git resolves it against *that*
+directory, so the store lands at `workspaces/clones/workspaces/clones/…` and the checkout lands
 somewhere nobody asked for. The idempotence checks then look at the path that was asked for, never
 find it, and let every pass try again, which is a `SnapshotFailed` on a session's second turn. The
 default database is `mainplate.db` in the working directory and `just serve`/`just demo` name one
 there too, so a relative root is the common case rather than the odd one. Resolved at the setting
 because that is where a configured path enters the process, and one absolute value cannot be got
-wrong by the next consumer; `Clones` and `Worktrees` take an absolute root as a precondition.
+wrong by the next consumer; `Clones` and `Checkouts` take an absolute root as a precondition.
 `test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
 fixtures there hand both an absolute root and so would never notice.
 
@@ -120,7 +120,7 @@ no files.
 
 ## Where in it, and on what branch
 
-`Choice.base` is a commit-ish the worktree is checked out at and `Choice.branch` is one started
+`Choice.base` is a commit-ish the checkout is planted at and `Choice.branch` is one started
 there; both are recorded with the rest of the choice. A blank base is the repository's default
 branch as it stands now.
 
@@ -147,7 +147,7 @@ would land every fork on a detached `HEAD`, which is exactly where somebody carr
 **They are two questions and not one, because where work begins is not where it goes.** A session
 started at `main` and left *on* `main` is one whose push lands on `main`, which is rarely what
 naming a starting point meant. So a base says where to begin and a branch says what to begin, and
-the words on both controls have to say so: "leave the worktree detached" read as though the first
+the words on both controls have to say so: "leave the checkout detached" read as though the first
 field answered the second.
 
 Five things there are decided rather than incidental:
@@ -167,14 +167,18 @@ Five things there are decided rather than incidental:
   such a session starts on the repository's default branch under the name this console gives it. The
   completions were always the swap's to deliver, so that page was already the lesser half of this
   control.
-- **A fork carries neither**, which is `settled(forked=True)`, and is then given a branch of its
-  own. A fork plants at the tree of the turn it re-asks, so a base beside that is a second answer to
-  where its files come from; and an inherited branch is one a push from the fork would land on the
-  parent's work. `Worktrees.plant` ranks its three answers, a tree first, then a base, then the
-  default branch, and `settled` is what makes sure it is never handed two.
+- **A fork carries no base, and its branch is the one its fork page posted.** A fork plants at the
+  commit its parent recorded for the turn it re-asks, so a base beside that is a second answer to
+  where its files come from, and `settled(forked=True)` drops one. The branch is a different
+  question - what to call that commit - so it stays: the page offers the branch the parent was on,
+  and an emptied box is a branch of the fork's own. `Checkouts.plant` ranks its three answers, a
+  recorded snapshot first, then a base, then the default branch, and `settled` is what makes sure it
+  is never handed two. The cost of the pre-filled name, stated: the fork and its parent are two
+  checkouts under one branch, so nothing collides until both push, and then the second is refused,
+  since a push is never forced.
 - **The store is fetched on a timer while any session works in it, and again when one is
   planted.** A session's own `git fetch` reads the store and not the forge, since `origin` in a
-  worktree is the store, which needs no network and no credential; so the store is the whole of how
+  checkout is the store, which needs no network and no credential; so the store is the whole of how
   current `origin/main` is in there. `fetching.py` fetches
   every repository an unarchived session works in, every `fetch_every` (five minutes), off the
   request path; that is what lets a session an hour in rebase onto the `main` of now, and see a
@@ -184,20 +188,20 @@ Five things there are decided rather than incidental:
   fetched. The cost, stated: a round trip per repository per interval whether or not anything moved.
   `Clones.refresh` fetches into `refs/remotes/origin/` and never over `refs/heads/`, which keeps the
   store's own branches as old as the clone and one namespace apart from the fresh ones; a store just
-  cloned copies its heads there itself, with no network, so a worktree's `git fetch` finds them from
+  cloned copies its heads there itself, with no network, so a checkout's `git fetch` finds them from
   the start.
 
     **The no-base arm is the one that is easy to get wrong**, and it was wrong first: a fetch writes
     `refs/remotes/origin/` and leaves the store's own `HEAD` pointing at the stale `refs/heads/`, so
     planting at `rev-parse HEAD` refreshed the refs and then checked out the commit beside them, a
-    round trip that changes nothing, which is worse than not making it. `Worktrees.default_branch`
+    round trip that changes nothing, which is worse than not making it. `Checkouts.default_branch`
     reads the *name* out of the store's `HEAD` symref and `resolve` turns that into the current
     commit, so both arms go down one path. `test_snapshots.py` parametrises over naming a base and
     naming nothing for exactly that reason.
 
     Two cases skip the fetch and both would be round trips that cannot change an answer: a store
-    that has just been cloned is current by construction, and a fork plants at a recorded tree,
-    which is an object this console wrote and already holds.
+    that has just been cloned is current by construction, and a fork plants at a recorded
+    snapshot, whose tree and commit a capture already carried into the store.
 
 - **The branches are offered rather than enumerated, and asked of the remote.** Picking a workspace
   card swaps the block under the cards through `/fragments/branches`, which is the shape the model
@@ -254,34 +258,56 @@ anybody who wants it.
 
 ## Snapshots
 
-`snapshots.py` captures a tree through a *shadow index*, so nothing a reader can see moves: not
-their staged changes, not `HEAD`, not a branch, not `git log`. The tree goes into the **store**
-rather than staying in the worktree, which is what lets it outlive the worktree and what a fork
-plants from. Six things there are easy to undo:
+A snapshot is a checkout's whole git state before one model request: the **tree** its files make,
+uncommitted changes and untracked files included, the **commit** `HEAD` names, and the **branch**
+it is on. `snapshots.py` captures the tree through a *shadow index*, so nothing a reader can see
+moves: not their staged changes, not `HEAD`, not a branch, not `git log`. The tree and the commit go
+into the **store** rather than staying in the checkout, which is what lets them outlive the checkout
+and what a fork plants from.
 
-- **Git against the worktree runs in its sandbox, and only a bundle comes back.** `add -A` and
-  `write-tree` run behind `bwrap` through `Worktree.git`. Where the store does not already hold that
-  tree, the sandbox commits it onto the session's base and bundles the commit, excluding everything
-  reachable from the base and from the session's last snapshot, so what crosses is what changed; the
-  store fetches the bundle, reads the tree back out of itself and refuses one the worktree
-  misreported. An untouched worktree, or a fork nobody has changed yet, sends nothing. The worktree
-  is the one directory a session may write and its configuration names programs git runs, so
-  [the parent reads none of it](security.md#the-parent-never-runs-git-against-a-worktree). The cost,
+**A snapshot is never something a person handles.** It is how this console puts a session's
+repository back for a fork, and nothing else: no page prints a snapshot's hash, and no checkout's
+git names one, since the chain lives under refs in the store that no checkout fetches. What a
+person sees of one is a fork standing on the commit, the branch and the uncommitted files its
+parent had, which are all things they already know the names of. That is the test for anything
+new built on a snapshot: if it would show a person a tree or a chain link, it is exposing the
+mechanism rather than the work. What it costs is a hash a person could have copied to go back to a
+turn by hand, and `fork` already goes back to a turn.
+
+Six things there are easy to undo:
+
+- **Git against the checkout runs in its sandbox, and only a bundle comes back.** `add -A`,
+  `write-tree` and the two questions about `HEAD` run behind `bwrap` through `Checkout.git`. Where
+  the store does not already hold that tree or that commit, the sandbox commits the tree onto
+  `HEAD` (onto the session's base, on an orphan branch with no commit yet) and bundles it, excluding
+  the base, the session's last snapshot and a `HEAD` the store already holds, so what crosses is
+  what the session wrote and committed since; the store fetches the bundle, reads the tree and the
+  commit under it back out of itself and refuses either one the checkout misreported. The branch is
+  the one thing taken on the checkout's word, because it is a name and not an object: it goes through
+  `parse_branch`, and only ever pre-fills a box on the fork page. An untouched checkout, or a fork
+  nobody has changed yet, sends nothing. The checkout is the one directory a session may write and
+  its configuration names programs git runs, so
+  [the parent reads none of it](security.md#the-parent-never-runs-git-against-a-checkout). The cost,
   stated: a capture that changed something is a few more processes than a `write-tree` in place.
 - **Stopped part-way, a git in the parent is terminated and one in the sandbox is killed.** Git
   removes the lock files it holds on `SIGTERM` and leaves them on `SIGKILL`, and a lock left in the
   store fails every later write to that ref with nothing able to reach the store to delete it; so
   `git_at` asks first and kills only after a grace. `bwrap` passes no signal on, so asking would not
-  reach the git inside, and what a killed one can leave is a lock in the worktree, which the
+  reach the git inside, and what a killed one can leave is a lock in the checkout, which the
   session's own `bash` can remove.
 - **A fresh index per operation, not one per workspace.** It lives in a directory made for that one
   capture, never in `.git`. Two concurrent captures over one path write over each other, and the
   loser's `write-tree` then describes a tree that never existed, in practice the *empty* tree.
-- **Trees are chained into commits in the store, under `refs/mainplate/sessions/<id>/snapshots`.** An
-  unreferenced tree is unreachable and `gc` prunes it, so a bare `write-tree` would be a hash that
-  stops resolving later. The chain is extended with the tip it read as the old value, so two captures
-  racing each other both land. The session's base is `refs/mainplate/sessions/<id>/base` beside it,
-  which keeps that commit reachable and is what every bundle is thin against.
+- **Snapshots are chained into commits in the store, under `refs/mainplate/sessions/<id>/snapshots`.**
+  An unreferenced tree is unreachable and `gc` prunes it, so a bare `write-tree` would be a hash that
+  stops resolving later; and a commit the session never pushed is in its checkout and nowhere else.
+  So each link holds the tree and has the commit `HEAD` named as its second parent, which keeps both
+  alive through the one ref. A link is new wherever either moved, since a commit that changed no
+  file still moves `HEAD`. The chain is extended with the tip it read as the old value, so two
+  captures racing each other both land. The session's base is `refs/mainplate/sessions/<id>/base`
+  beside it, which keeps that commit reachable and is what every bundle is thin against. The cost,
+  stated: the chain keeps every commit a session ever stood on, including the ones a rebase then
+  abandoned.
 - **A diff is asked of the store.** Both trees are objects there, and the store's configuration is
   this console's, so no diff driver a session named runs to draw a batch's change.
 - **Capture only where the agent is quiescent**, which means at a model-request boundary and not
@@ -297,18 +323,33 @@ else, so what a fork checks out is the source as that turn saw it and never a `.
 directory, or an untracked file holding a secret. It is the contract git already offers, so nobody
 has to learn a second one.
 
-## What a fork's worktree is
+## What a fork's checkout is
 
-**A fork's worktree is checked out at the tree the forked turn originally saw**, so a branch re-asks
-its question against the files that question was asked about. Planting at the repository's head
-instead would ask the new model to redo turn 3 against whatever the disk holds now, which is a
-different question wearing the same words and invisible in the transcript.
+**A fork's checkout is its parent's git state as the forked turn began**: the same commit, so the
+same history under it, with the parent's uncommitted edits, deletions and untracked files on top,
+unstaged. So a branch re-asks its question against the repository that question was asked about.
+Planting at the repository's head instead would ask the new model to redo turn 3 against whatever
+the disk holds now, which is a different question wearing the same words and invisible in the
+transcript. And planting the files alone, as a commit of their own, would hand the fork a history
+with nothing in common with its parent's, and the first `git merge origin/main` in it is refused as
+unrelated.
 
-The mechanism is one extra key rather than planting a worktree in a request handler:
+`Checkouts.plant` checks the recorded commit out, then lays the recorded tree over it with
+`read-tree -u` and puts the index back with `reset`, so the fork's first `git status` reads as its
+parent's did. A parent on an orphan branch recorded no commit, and its fork stands on the default
+branch with the files laid over that instead. The cost, stated: whatever the parent had staged comes
+back unstaged, since the snapshot's index was its own and not the session's.
+
+**The branch is the person's to pick.** The fork page's box starts out holding the branch the
+parent was on then, so carrying the work on under its own name needs nothing typed, and an emptied
+box gives the fork one of its own. `Service.branch_at` reads it out of the same record the fork
+will be planted at, through `fork_point`, so the name offered is the one that commit was under.
+
+The mechanism is one extra key rather than planting a checkout in a request handler:
 `Service.fork` copies `turn:{at}:tree:0` across on its own, even though that turn's prompt and
-messages are *not* inherited, and the fork's first pass plants at whatever tree is already recorded
-for the turn it is about to run. The `:0` is the point: a turn records a tree per model request, and what a fork wants
-is the one before the turn did anything.
+messages are *not* inherited, and the fork's first pass plants at whatever state is already
+recorded for the turn it is about to run. The `:0` is the point: a turn records a snapshot per model
+request, and what a fork wants is the one before the turn did anything.
 
 ### A fork may attach a repository and may not swap one
 
@@ -325,7 +366,7 @@ branch out of its repository, the bug that shape of trust actually produced.
 ## What a session takes on disk
 
 **Every directory that is one session's is named in one place, `Places.of`**, and derived from the
-session id and the roots the console started with rather than found by looking. The worktree, `.git`
+session id and the roots the console started with rather than found by looking. The checkout, `.git`
 and all, where the session works in a repository; the scratch and [the plugins'
 scratches](sandbox.md#the-scratch-directory) either way. Not the store, which every session on that
 repository shares, and not the snapshots, which are objects in the store under refs of their own.
@@ -349,7 +390,7 @@ cost is that the figure is as old as the interval, and the row says when it was 
 letting a size read as current.
 
 It counts what `du` counts: blocks allocated rather than apparent size, a file linked twice counted
-once across the whole set (`uv` links a worktree's venv to the cache in the scratch, and both are
+once across the whole set (`uv` links a checkout's venv to the cache in the scratch, and both are
 the session's), and a symbolic link counted as itself and never followed, so a link out to the
 machine cannot make a session look like the machine. A directory that is not there is nothing, which
 is every one of them for a session that has not worked yet, and the page draws nothing for nothing
@@ -365,7 +406,7 @@ hand, which is the second copy this console is built to refuse, one level down f
 **Archiving a session keeps its conversation and takes its directories away.** The checkpoint stays,
 so the session is still readable and still forkable; what goes is everything `Places.of` names, which
 is the space a session holds once it is over. It is the answer to a console that has been used for a
-while: every session ever started holds a worktree and a scratch, and the one thing a finished
+while: every session ever started holds a checkout and a scratch, and the one thing a finished
 session needs from the disk is nothing.
 
 **The press records a fact and a reconciler acts on it.** `Service.archive` writes one key,
@@ -382,28 +423,28 @@ pass still held the session, finishes on its next round with nothing to be told.
 a session pressed archived keeps its files for up to `archive_every`, and a console with nothing to
 do reads its index once a minute.
 
-**It refuses to take a worktree from under a pass.** A pass reads the checkpoint at its top and never
+**It refuses to take a checkout from under a pass.** A pass reads the checkpoint at its top and never
 sees a key written after it started, so a session the worker holds is left for the next round, and
 the pass that follows reads the key at its own top and stops - `Archived` is its own arm of `Ended`,
 so the log says a session was closed rather than that one stalled. A command a person is still
 running is the same case from the other side. Both are read off live state, since both are true only
 at the instant they are read.
 
-**The worktree's last tree is captured on the way out**, under `archived:tree`, because the press
+**The checkout's last tree is captured on the way out**, under `archived:tree`, because the press
 cannot know it: files may still be being written when the button goes down, and the reconciler waits
 until nothing holds the session. It is what a fork from the end of an archived session plants at, so
-the branch carries on with the files the conversation actually ended with, snapshots the worktree
+the branch carries on with the files the conversation actually ended with, snapshots the checkout
 never captured included - what a person ran in it after the last request, and what a plugin fixed
-at the turn's end. A worktree whose session broke its own `.git` fails that capture, and its files go
+at the turn's end. A checkout whose session broke its own `.git` fails that capture, and its files go
 anyway, since no later round would capture it either: the failure is logged, no `archived:tree` is
 recorded, and a fork from the end plants at the newest tree a turn recorded instead. The cost,
-stated: whatever changed after that turn is lost with the worktree. Then the worktree is a directory
+stated: whatever changed after that turn is lost with the checkout. Then the checkout is a directory
 like any other and is removed as one; the snapshots are in the store under the session's refs and
 outlive it, which is what keeps every earlier fork point reachable too.
 
 **Nothing un-archives a session, and that is the design rather than a gap.** The key is write-once,
 and what a person wants back is the conversation with somewhere to work, which is exactly what
 [forking from the end](forking.md#forking-the-end) is: a live session carrying every turn, with a
-fresh worktree at the archived tree and a scratch of its own. Putting the archived session itself
+fresh checkout at the archived tree and a scratch of its own. Putting the archived session itself
 back would mean reconstructing a scratch that was deliberately not snapshotted, which is a second
 mechanism to keep for a state a fork already reaches.

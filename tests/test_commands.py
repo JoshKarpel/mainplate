@@ -80,10 +80,10 @@ def caller_form() -> dict[str, str]:
 
 async def planted(service: Service, workspaces: Workspaces, chosen: Choice) -> str:
     """
-    A session whose worktree is actually on disk, without driving a pass to get it there.
+    A session whose checkout is actually on disk, without driving a pass to get it there.
 
     Planted directly rather than through `conversing`, because what these tests are about is what
-    happens in the worktree and not how it came to exist: a pass would bring a stand-in provider, an
+    happens in the checkout and not how it came to exist: a pass would bring a stand-in provider, an
     agent and a whole turn along with it to produce one directory.
     """
     session = await started(service, "hello", chosen)
@@ -334,7 +334,7 @@ class TestHowACommandIsDrawn:
 
 
 class TestRunningOne:
-    async def test_a_command_runs_in_the_session_s_own_worktree(
+    async def test_a_command_runs_in_the_session_s_own_checkout(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         session = await planted(running, workspaces, on_fixture)
@@ -368,10 +368,10 @@ class TestRunningOne:
 
         assert (await ran(running, session, "exit 3")).status == 3
 
-    async def test_a_git_write_lands_in_the_worktree(
+    async def test_a_git_write_lands_in_the_checkout(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        """The point of the whole thing: the worktree's git is the session's, so a commit commits."""
+        """The point of the whole thing: the checkout's git is the session's, so a commit commits."""
         session = await planted(running, workspaces, on_fixture)
         where = workspaces.at(session)
         (where / "src" / "kept.txt").write_text("edited by hand\n")
@@ -389,7 +389,7 @@ class TestRunningOne:
         self, running: Service, workspaces: Workspaces, on_fixture: Choice, tmp_path: Path
     ) -> None:
         """
-        Why a person's command is confined at all. A hook is a file in the worktree's `.git`, which
+        Why a person's command is confined at all. A hook is a file in the checkout's `.git`, which
         the model writes; a person's `git commit` run as the service user would run it with
         everything that user holds. The hook runs, since that is what hooks are for, and what it
         tries to reach outside the sandbox is not there.
@@ -479,11 +479,11 @@ class TestRunningOne:
         assert entry is not None
         assert (await running.checkpointer.load(session))[entry] == recorded_command("echo late")
 
-    async def test_a_command_before_the_first_turn_says_the_worktree_is_not_there_yet(
+    async def test_a_command_before_the_first_turn_says_the_checkout_is_not_there_yet(
         self, running: Service, on_fixture: Choice
     ) -> None:
         """
-        The common case rather than an odd one. A worktree is planted by the session's *first pass*,
+        The common case rather than an odd one. A checkout is planted by the session's *first pass*,
         because a clone is a network fetch and creating a session is a POST somebody is waiting on -
         so between creating one and its first reply there is a repository, a `Run` on offer, and
         nowhere yet to run in. What that must not be is a `FileNotFoundError` repr.
@@ -493,7 +493,7 @@ class TestRunningOne:
         came = await ran(running, session.id, "git status")
 
         assert came.status == UNFINISHED
-        assert "worktree is made on its first turn" in came.output
+        assert "checkout is made on its first turn" in came.output
 
     async def test_a_session_with_no_files_has_nowhere_to_run_one(self, running: Service) -> None:
         """`None` rather than a raise: it is a state the page can explain, not a fault."""
@@ -786,7 +786,7 @@ class TestCommittingThroughTheConsole:
     """
     `/commit`, which is a `Run` of `git commit` with the box as the message: a shortcut that commits
     what is staged and stages nothing. What git did is read off the recorded result, which is what a
-    reader sees too, rather than by running git against the worktree from out here.
+    reader sees too, rather than by running git against the checkout from out here.
     """
 
     MESSAGE = "Scroll a long line inside its block\n\nIt's the block that scrolls, and never the page."

@@ -249,7 +249,7 @@ NETWORK_ID: Final = "network"
 TRUST_TOGGLE_ID: Final = "open-trust"
 TRUST_ID: Final = "trust"
 
-# The one field the worktree group posts. Form-only rather than a recorded field, because what
+# The one field the checkout group posts. Form-only rather than a recorded field, because what
 # it carries is *two* recorded things at once - a repository and a filesystem level - and which
 # two is decided by parsing it, at the boundary, once.
 WORKSPACE_FIELD: Final = "workspace"
@@ -309,7 +309,7 @@ NAMES: Final[tuple[tuple[Kind, str], ...]] = (
 # only kind whose name leaves something out. Named for the attribute rather than for what it holds,
 # since `aside` is taken and means a side conversation.
 TITLES: Final[dict[Kind, str]] = {
-    "command": "You ran this yourself, in the session's worktree. No model was told about it.",
+    "command": "You ran this yourself, in the session's checkout. No model was told about it.",
     # The other kind whose label leaves something out: `guidance` says what it holds and not why it
     # is here, which is that a tool reached into a part of the repository carrying its own.
     "guidance": (
@@ -404,17 +404,13 @@ def opens(starts: bool) -> Attributes:
 
 
 # What the link that starts one is called, and what the tab says on the page where a session does
-# not exist yet. "Session" rather than "worktree", which is the other word for this and is already
-# taken: a session's *worktree* is the git worktree it works in, so calling the session one too
-# would make "a worktree's worktree" a sentence somebody has to parse.
+# not exist yet. "Session" rather than "checkout", which is the other word for this and is already
+# taken: a session's *checkout* is the directory of its repository's files it works in, so calling
+# the session one too would make "a checkout's checkout" a sentence somebody has to parse.
 NEW_SESSION: Final = "New session"
 
 # A session created without a name is untitled until its first message arrives.
 UNTITLED: Final = "Untitled"
-
-# How much of a tree hash a rule prints. Git's own abbreviation length for a repository of any size,
-# which is the number a reader is used to seeing and long enough to tell two snapshots apart.
-SHORT_HASH: Final = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -1129,7 +1125,7 @@ def footprint_note(footprint: Footprint, reader: Reader) -> str:
     as the last sweep, and a size with no time beside it reads as current.
     """
     return (
-        f"{sized(footprint.allocated)} on disk across this session's worktree, scratch and plugins, "
+        f"{sized(footprint.allocated)} on disk across this session's checkout, scratch and plugins, "
         f"measured at {timed(footprint.measured_at, reader)}"
     )
 
@@ -1892,7 +1888,7 @@ def network_cards(chosen: bool) -> Element:
 
 
 TRUST_CHOICES: Final[tuple[tuple[str, bool, str], ...]] = (
-    ("trusted", True, "Its own plugins run, confined to the worktree"),
+    ("trusted", True, "Its own plugins run, confined to the checkout"),
     ("read only", False, "None of its own code runs unattended"),
 )
 """
@@ -1954,7 +1950,7 @@ def trust_cards(trusted: bool) -> Element:
     settled before its first message and fixed for its life, and changing your mind is `fork`.
 
     Drawn only where a repository is picked, by the same rule the base and the branch follow: with no
-    worktree there is nothing whose code could be trusted or not.
+    checkout there is nothing whose code could be trusted or not.
 
     The cost, stated: a repository's plugin runs unattended at every turn boundary and puts text into
     the conversation, which is a delivery channel for prompt injection with a guaranteed slot. The
@@ -2034,7 +2030,7 @@ def workspace_card(links: Links, naming: str, value: str, saying: str, chosen: b
 
 def starting_at(repository: str | None, base: str | None, branch: str | None, branches: Sequence[str] = ()) -> Element:
     """
-    Where in the repository the worktree starts, and what branch it starts there.
+    Where in the repository the checkout starts, and what branch it starts there.
 
     Free text and not cards, because neither has a closed set to draw: a commit-ish is anything `git
     rev-parse` resolves, and a branch is a name that does not exist yet. `choosing` is the component
@@ -2071,7 +2067,7 @@ def starting_at(repository: str | None, base: str | None, branch: str | None, br
     it stands now, on a branch this console names after the session.
 
     **Two fields and not one, because naming a base cannot check that branch out.** Git refuses a
-    branch another worktree already holds, so a session started at `main` that was left *on* `main`
+    branch another checkout already holds, so a session started at `main` that was left *on* `main`
     would stop the next one planting at all. So one says where to begin and the other says what to
     begin, and the placeholder on this one has to say so rather than implying the first answers both.
     """
@@ -2153,24 +2149,36 @@ def starting_at(repository: str | None, base: str | None, branch: str | None, br
                     ),
                 ],
             ),
-            label(
-                cls="basis__field",
-                children=[
-                    span(cls="basis__label", children="New branch"),
-                    input_(
-                        attrs={
-                            "type": "text",
-                            "name": BRANCH_FIELD,
-                            "value": branch,
-                            "form": CHOOSING_ID,
-                            "maxlength": str(LONGEST_REF),
-                            "autocapitalize": "off",
-                            "autocomplete": "off",
-                            "spellcheck": "false",
-                            "placeholder": "name one (or leave it off and this session gets its own)",
-                        }
-                    ),
-                ],
+            branch_field("New branch", branch, "name one (or leave it off and this session gets its own)"),
+        ],
+    )
+
+
+def branch_field(saying: str, branch: str | None, placeholder: str) -> Element:
+    """
+    The box that names the branch a checkout is left on, as the new-session page and the fork page ask it.
+
+    One field in two places rather than two fields, because it is one question with one parse behind
+    it: whatever is typed goes through `parse_branch` on the way in, and empty means a branch this
+    console names after the session. What differs is only what the box is called and what leaving it
+    empty says, since a new session starts one and a fork is offered the one its parent was on.
+    """
+    return label(
+        cls="basis__field",
+        children=[
+            span(cls="basis__label", children=saying),
+            input_(
+                attrs={
+                    "type": "text",
+                    "name": BRANCH_FIELD,
+                    "value": branch,
+                    "form": CHOOSING_ID,
+                    "maxlength": str(LONGEST_REF),
+                    "autocapitalize": "off",
+                    "autocomplete": "off",
+                    "spellcheck": "false",
+                    "placeholder": placeholder,
+                }
             ),
         ],
     )
@@ -2189,7 +2197,7 @@ def workspace_cards(
 
     A repository and a filesystem level used to be separate groups, and that was the mistake: the
     level a repository implies is not a second decision beside it, so the two controls had to be kept
-    in step - the worktree level greyed until a repository was picked, a swap to update the greying,
+    in step - the checkout level greyed until a repository was picked, a swap to update the greying,
     and a filter that could name a card it must not check. Every one of those is machinery for
     keeping one answer stored in two places, which is the thing this console refuses everywhere else.
 
@@ -2211,12 +2219,12 @@ def workspace_cards(
     """
     rows = reachable.labelled()
     return choosing(
-        "Worktree",
+        "Checkout",
         REPOSITORY_TOGGLE_ID,
         [*(naming for naming, _, _ in WITHOUT_A_REPOSITORY), *(naming for _, naming in rows)],
         div(
             cls="repos",
-            attrs={"id": REPOSITORY_ID, "role": "radiogroup", "aria-label": "Worktree"},
+            attrs={"id": REPOSITORY_ID, "role": "radiogroup", "aria-label": "Checkout"},
             children=[
                 div(
                     cls="repos__grid",
@@ -2286,7 +2294,7 @@ def picker(
     A fork passes the parent's own choice instead, so continuing on the same model is the path that
     needs nothing touched: the fork exists to let the choice change, not to require it.
 
-    Whether the worktree *can* be chosen here is the caller's answer, given as `None` rather than
+    Whether the checkout *can* be chosen here is the caller's answer, given as `None` rather than
     as an empty set: a fork of a session already in a repository is handed `None`, because it
     inherits that one and a control that could not be honoured would be a lie about what the page
     does. An empty `Reachable` is a different thing and still draws the group, since a machine with
@@ -2315,7 +2323,7 @@ def picker(
                     ),
                 )
             ),
-            # The network sits under the worktree and above the endpoint, because that is the order
+            # The network sits under the checkout and above the endpoint, because that is the order
             # of breadth: what a session's files are decides what it can touch, whether it can dial
             # out decides what it can do with them, and the endpoint and model only decide who
             # answers.
@@ -2367,7 +2375,7 @@ def about_card(
     reader: Reader,
     chosen: Choice | None,
     repository: str | None = None,
-    worktree: Path | None = None,
+    checkout: Path | None = None,
     footprint: Footprint | None = None,
 ) -> Element | None:
     """
@@ -2388,7 +2396,7 @@ def about_card(
 
     The thinking level is named only when there is one to name. A session that said nothing about
     thinking is not a session set to some level called "default"; it is one that never raised the
-    question, and printing a word for that would invent a setting nobody chose. The worktree is
+    question, and printing a word for that would invent a setting nobody chose. The checkout is
     named on the same terms, and its absence means the same thing: no snapshots are being kept, so
     there is nothing a later fork could put back on disk.
 
@@ -2426,14 +2434,14 @@ def about_card(
                     *fact(
                         "repo",
                         repository,
-                        cls="worktree",
-                        # The repository is what a reader recognises and the worktree is
+                        cls="checkout",
+                        # The repository is what a reader recognises and the checkout is
                         # where to point an editor, so one is shown and the other is there
-                        # to be read. No worktree yet is an ordinary state rather than a
+                        # to be read. No checkout yet is an ordinary state rather than a
                         # missing one: the first pass makes it, so a session says where it
                         # works before it has worked.
-                        title=f"This session's worktree: {worktree}"
-                        if worktree is not None
+                        title=f"This session's checkout: {checkout}"
+                        if checkout is not None
                         else "This session works here once its first turn runs",
                     ),
                     # The branch is what somebody about to push needs, and the one
@@ -2490,7 +2498,7 @@ def working(*, saying: str = "working", extra: str | None = None, identified: st
 
     Drawn the same whichever thing is still happening, because a reader is being told the same
     thing, and that is the whole of what these share. A turn with no answer yet, a tool call that has
-    not returned, a session whose worktree is still being planted: each is a fact read off the
+    not returned, a session whose checkout is still being planted: each is a fact read off the
     checkpoint, holding across however many renders it takes. A request in flight is htmx's instead,
     held for one round trip and shown by whatever points `hx-indicator` at it, which is what `extra`
     and `identified` are for.
@@ -2513,7 +2521,7 @@ def tool_block(used: ToolUse, anchor: str, at: int) -> Element:
     controls act on. Every call is folded: what a read brought back or a command said is context a
     reader reaches for rather than prose they read through, and what the calls that write did is
     the batch's diff below the panel, which covers every file they touched at once. The cost,
-    stated: a session with no worktree has no snapshots and so no batch's diff, and there an `edit`
+    stated: a session with no checkout has no snapshots and so no batch's diff, and there an `edit`
     or a `create` is shut with nothing standing in for it.
 
     **Shut whether or not the call has come back.** A call still out is drawn working, with the dots
@@ -2832,7 +2840,6 @@ def rule_element(
     session: str,
     turn: int,
     asked: int | None = None,
-    tree: str | None = None,
     spent: Spent | None = None,
     when: datetime | None = None,
     opens: bool = False,
@@ -2865,6 +2872,11 @@ def rule_element(
     a footer summarising what is above it, which is the opposite of what it says: these are the
     counts for the turn that starts below. `#1` against the `#1.0` and `#1.1` on the panels under it
     settles the direction, and it doubles as the permalink to the boundary the fork acts on.
+
+    **No snapshot hash**, although one is recorded at every boundary a rule stands on. Snapshots are
+    how this console puts a session's files back for a fork, never something a reader handles: the
+    checkout's own git names none of them, so a hash here would be a detail of the mechanism
+    dressed as a fact about the work, and it would cost the line room the figures need.
 
     `rule--turn` is what the dock's turn arrows step, so that column keeps stepping turns now that
     there are rules between them as well as before them.
@@ -2931,26 +2943,6 @@ def rule_element(
                 else ()
             ),
             *((request_label(turn, asked),) if asked is not None else ()),
-            *(
-                (
-                    span(
-                        cls="rule__tree",
-                        # Short here and whole in the title: a hash is read to tell two apart and to
-                        # be typed at git, and the first several characters do the first job in a
-                        # tenth of the width. The second is what a reader copies, so it stays intact.
-                        attrs={
-                            "title": (
-                                f"The worktree this turn started on: {tree}"
-                                if opens
-                                else f"The worktree this request was made against: {tree}"
-                            )
-                        },
-                        children=tree[:SHORT_HASH],
-                    ),
-                )
-                if tree is not None
-                else ()
-            ),
             span(cls="rule__span"),
             # Between two spacers rather than beside the fork link, so it sits in the middle of the
             # line with the turn's own controls at one end and its figures at the other. That is what
@@ -3030,7 +3022,7 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
     the browser rather than about this markup, so `TestFoldingAPanel` asks Chromium.
 
     What a panel says is still what is *in* it, and nothing about the turn or the request around it.
-    The worktree, the fork, what was spent and which request it was are all facts about the exchange rather
+    The checkout, the fork, what was spent and which request it was are all facts about the exchange rather
     than about any one run of blocks, so they are on the rules between them. See `rule_element`.
 
     Nothing here draws the copy buttons, and that is not an omission. One of them sits inside a
@@ -3194,7 +3186,7 @@ def system_prompt_panel(turn: int, said: str | None) -> Element:
     happened in: the boundary, then what the model is told from here, then the message.
 
     **`None` is a stretch whose instructions are not composed yet**, drawn as the panel with the
-    working dots in it. Composing reads the repository's guidance out of a worktree the pass is the
+    working dots in it. Composing reads the repository's guidance out of a checkout the pass is the
     one to plant, so on a session's first turn there is a real gap between the message being there to
     render and this being there to put in it. Drawn rather than left out, so what is coming is
     visible from the moment the message is; it resolves on the same swap the first response arrives
@@ -3524,12 +3516,11 @@ def transcript_region(links: Links, reader: Reader, showing: Conversation) -> El
                 session,
                 turn,
                 asked=0 if asking else None,
-                tree=within[0].tree,
                 spent=spent,
                 when=asking[0].when if asking else None,
                 opens=True,
-                # Off the turn's first panel beside its tree, which is where both facts about a turn
-                # rather than about a request are carried.
+                # Off the turn's first panel, which is where a fact about a turn rather than about a
+                # request is carried.
                 forget=within[0].forget,
                 window=window,
                 running=through,
@@ -3552,7 +3543,6 @@ def transcript_region(links: Links, reader: Reader, showing: Conversation) -> El
                             session,
                             turn,
                             asked=at,
-                            tree=asking[at].tree,
                             spent=asking[at].spent,
                             when=asking[at].when,
                             window=window,
@@ -4004,7 +3994,7 @@ What each tier is called on the settings step, and the one line under the headin
 are not equally trusted, and a reader deciding what to leave on is deciding about provenance.
 
 The repository's line is the exposure in plain terms rather than a warning that something may be
-unsafe. Behind the confinement one of those plugins can read and write the worktree and run what is
+unsafe. Behind the confinement one of those plugins can read and write the checkout and run what is
 in it, which is what that session's `bash` could already do; the two things it adds are that it runs
 unattended rather than because a model asked, and that it puts text into the conversation, which is a
 delivery channel for prompt injection with a guaranteed slot on every turn. A reader's next question
@@ -4136,7 +4126,7 @@ def setup_step(links: Links, showing: Conversation) -> Element:
     Which of the plugins a session declares to load, drawn between creating one and typing into it.
 
     **The step is the confirmation before anything is executed.** A plugin is a program, so the pass
-    that plants a session's worktree reads only what each tier *declares* - a directory listing and
+    that plants a session's checkout reads only what each tier *declares* - a directory listing and
     two YAML mappings - and the switches here are drawn from that. Pressing the button is what runs
     them, in the request that answers this form, and only the ones left on. So a session that never
     gets past this screen has invoked nothing at all.
@@ -4167,7 +4157,7 @@ def setup_step(links: Links, showing: Conversation) -> Element:
     set up before it will show it.
 
     Four states, and each says the one thing a reader can act on. Nothing declared yet is the clone
-    and the worktree. A refusal names what could not be read and offers another pass. A press that
+    and the checkout. A refusal names what could not be read and offers another pass. A press that
     has been answered and not yet finished is the setup itself, which is the other slow moment in a
     session's life and the one a repository's own plugin decides the length of. Otherwise it is the
     tiers, with a switch apiece, under the button that sets them up - carrying the reason the last
@@ -4187,7 +4177,7 @@ def setup_step(links: Links, showing: Conversation) -> Element:
             p(
                 cls="setup__says",
                 children=(
-                    "Setting up: planting this session's worktree and reading what it declares."
+                    "Setting up: planting this session's checkout and reading what it declares."
                     if showing.refused_plugins is None
                     else showing.refused_plugins.why
                 ),
@@ -4355,7 +4345,7 @@ def archive_card(links: Links, reader: Reader, session: str, archived: datetime 
     """
     The one control that closes a session, or the fact that somebody already did.
 
-    Behind a disclosure rather than a bare button, because the press takes a worktree off the disk
+    Behind a disclosure rather than a bare button, because the press takes a checkout off the disk
     and a mis-press on a card in a rail is one thing this console can make impossible for the price
     of one more click: what opens says what the press does, and the button is under that sentence.
     A plain form answered with a redirect, so it works with the script absent and lands on the page as
@@ -4376,7 +4366,7 @@ def archive_card(links: Links, reader: Reader, session: str, archived: datetime 
             cls="archive",
             attrs={
                 "title": (
-                    "Its worktree and scratch are taken off the disk; the conversation stays, and forking it "
+                    "Its checkout and scratch are taken off the disk; the conversation stays, and forking it "
                     "from the end carries on."
                 )
             },
@@ -4396,7 +4386,7 @@ def archive_card(links: Links, reader: Reader, session: str, archived: datetime 
 
 
 ARCHIVING_TAKES: Final = (
-    "Takes its worktree, scratch and plugins off the disk and stops anything more being said in it. "
+    "Takes its checkout, scratch and plugins off the disk and stops anything more being said in it. "
     "The conversation stays, and a fork of it carries on."
 )
 """What the press does, said once for the card in the rail and the action on a row."""
@@ -4427,7 +4417,7 @@ def archive_action(links: Links, session: str) -> Element:
     `:focus-within` while it is, so a reader tabbing through the list meets the action on each row.
 
     The same disclosure as the rail's card, behind the same sentence, posting the same form: the
-    press takes a worktree off the disk, and a bare button in a list is exactly the mis-press that
+    press takes a checkout off the disk, and a bare button in a list is exactly the mis-press that
     disclosure exists to make impossible. The redirect lands on the archived session, which is the
     page saying what just happened; a list that stayed put would say nothing.
 
@@ -5403,7 +5393,7 @@ def new_session_page(
     page never waits on the forge; see `starting_at`.
 
     **There is no message box here**, and that is the visible half of a change with two mechanical
-    causes. A repository's plugins cannot be named until its worktree is planted, which the worker
+    causes. A repository's plugins cannot be named until its checkout is planted, which the worker
     does on a pass; and none of them may be run until somebody has seen the list, because running one
     is executing a program. So this page records the choices, the settings step on the session's own
     page decides what it loads, and the message box is there once both are settled. The cost, stated:
@@ -5587,7 +5577,7 @@ def stalled_by(showing: Conversation, reader: Reader) -> str | None:
     # a fork past a refusal would carry on a session that was deliberately closed.
     if showing.session.archived is not None:
         return (
-            f"Archived {stamped(showing.session.archived, reader)}: nothing more is said in it, and its worktree "
+            f"Archived {stamped(showing.session.archived, reader)}: nothing more is said in it, and its checkout "
             f"and scratch are taken off the disk. Fork it to carry on from where it left off."
         )
     if showing.chosen is None:
@@ -5811,7 +5801,7 @@ def settling(showing: Conversation) -> bool:
 
     A fork is why the turn count is not read here. It carries its parent's turns and none of its
     plugins, so it is a session holding a conversation and still owing an answer to the step - which is
-    the point, since it plants a fresh worktree whose toolchain nothing has installed yet and may be
+    the point, since it plants a fresh checkout whose toolchain nothing has installed yet and may be
     planted at a tree where `.mainplate/` says something new. What the cached prefix cannot survive is
     a plugin set changing under a request already made, and a fork has made none.
 
@@ -5915,7 +5905,7 @@ def session_page(
                             # on the floor.
                             answering=showing.said.answering is not None,
                             # Only where there are files to run in. A session with no repository has
-                            # no worktree, so `Run` would be an offer with nowhere to honour it.
+                            # no checkout, so `Run` would be an offer with nowhere to honour it.
                             runs_in=runs_in(showing),
                             connected=showing.chosen is not None and showing.chosen.isolation.network,
                             # Above the box, where the mode sentence already is, and above that
@@ -5946,7 +5936,7 @@ def session_page(
                         reader,
                         showing.chosen,
                         showing.repository,
-                        showing.worktree,
+                        showing.checkout,
                         showing.session.footprint,
                     ),
                     archived=showing.session.archived,
@@ -5971,7 +5961,7 @@ def runs_in(showing: Conversation) -> str | None:
     if not showing.runnable:
         return None
     if showing.repository is None:
-        return "this session's worktree"
+        return "this session's checkout"
     return where_it_works(showing.repository, showing.chosen.branch if showing.chosen is not None else None)
 
 
@@ -5980,7 +5970,7 @@ def attachable(showing: Conversation, reachable: Reachable) -> Reachable | None:
     What a fork of this session may work in, or nothing at all once the question is already answered.
 
     A fork attaches a repository or inherits one; it never swaps. `None` rather than an empty set of
-    choices, and the difference is load-bearing now that the worktree group holds more than
+    choices, and the difference is load-bearing now that the checkout group holds more than
     repositories: empty means "no forge reaches anything", which still leaves two answers worth
     offering, where `None` means the question is settled and the control would be a lie about what
     the page does. Answering it here is what keeps `picker` a rendering rather than a place that
@@ -6012,17 +6002,18 @@ def branching_files(at: int, repository: str) -> str:
     What a fork does to the files, said before somebody finds out afterwards.
 
     The turns a fork carries are visible on the page below it; what happens to the working files is
-    not visible anywhere, and it is the half with work in it. A branch gets *its own* worktree
-    checked out at the tree the forked turn started on, so anything committed or edited after that
-    turn is simply not in it, and its scratch directory starts empty.
+    not visible anywhere, and it is the half with work in it. A branch gets *its own* checkout at the
+    commit the forked turn started on, with that turn's uncommitted changes on top, so anything
+    committed or edited after that turn is simply not in it, and its scratch directory starts empty.
 
-    Nothing is destroyed and the sentence says so, because "restores the worktree" reads as an
-    action on the conversation you are looking at. The parent keeps its worktree and its scratch
+    Nothing is destroyed and the sentence says so, because "restores the checkout" reads as an
+    action on the conversation you are looking at. The parent keeps its checkout and its scratch
     exactly as they are: a fork is a new session beside this one, never this one moved backwards.
     """
     return (
-        f"Gets a fresh worktree of {repository} at the files turn {at} started on, and an empty "
-        f"scratch directory. This conversation's own files are left as they are."
+        f"Gets its own checkout of {repository} at the commit turn {at} started on, with that turn's "
+        f"uncommitted changes, and an empty scratch directory. This conversation's own files are left "
+        f"as they are."
     )
 
 
@@ -6035,6 +6026,7 @@ def fork_page(
     catalogue: Catalogue,
     reachable: Reachable,
     reference: Reference | None = None,
+    carrying: str | None = None,
 ) -> str:
     """
     What a branch from one turn would be, and the one control that may answer differently.
@@ -6047,6 +6039,12 @@ def fork_page(
     The picker is the *session's* choice rather than the configured default, so the common branch -
     go back and try that turn again on the same model - is the one that needs nothing changed. A
     fork is the one moment a choice may differ, and it is deliberately not the moment it must.
+
+    **The git branch is asked the same way**, above everything else because it is the one question
+    about the files: `carrying` is the branch the parent was on when the forked turn began, already
+    in the box, so carrying the work on under its own name needs nothing typed. Emptied, the fork
+    gets a branch of its own. Only for a session already in a repository; one in none picks its
+    repository and its branch together in the picker, as a new session does.
     """
     kept = tuple(panel for panel in showing.said.panels if panel.turn < at)
     asked = showing.said.asked_at(at)
@@ -6067,7 +6065,7 @@ def fork_page(
                         h1(children="Fork this conversation"),
                         p(cls="forking__kept", children=inheriting(at, asked is not None)),
                         # Only where there is a repository to say it about. A session working in no
-                        # files has no worktree and no scratch, so the sentence would be describing
+                        # files has no checkout and no scratch, so the sentence would be describing
                         # something that does not exist for it.
                         *(
                             (p(cls="forking__files", children=branching_files(at, showing.repository)),)
@@ -6100,6 +6098,16 @@ def fork_page(
                             reference,
                             showing.chosen,
                             # A fork begins with its parent's current title; it can be renamed later.
+                            leading=(
+                                div(
+                                    cls="basis",
+                                    children=branch_field(
+                                        "Branch", carrying, "leave it empty and this fork gets its own"
+                                    ),
+                                )
+                                if showing.repository is not None
+                                else None
+                            ),
                         ),
                         div(
                             cls="forking__act",

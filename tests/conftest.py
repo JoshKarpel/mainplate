@@ -69,8 +69,8 @@ from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_session
+from mainplate.snapshots import Checkout
 from mainplate.snapshots import Store
-from mainplate.snapshots import Worktree
 from mainplate.snapshots import branch_named
 
 # The first moment a test's clock reads, so a test that renders a session's row asserts on a value
@@ -505,7 +505,7 @@ def read_to(turn: int, at: int, entry: int) -> dict[str, object]:
 
 
 def snapshotted(tree: str | None) -> dict[str, object]:
-    """What the worktree held before one request, as the record of that snapshot."""
+    """What the checkout held before one request, as the record of that snapshot."""
     return records.Tree(tree=tree).recorded()
 
 
@@ -589,7 +589,7 @@ async def started(
     A session on `chosen` with `said` in it, which is what creating one used to be in one call.
 
     **Creating a session and saying the first thing in it are separate calls now**, because a
-    repository's plugins cannot be named until its worktree is planted and none of them is run until
+    repository's plugins cannot be named until its checkout is planted and none of them is run until
     the settings step is answered. Most tests here are about something else entirely and want a
     session with a message in it, so the pair is written once rather than at every call site - and a
     test that is about the split says so by calling `Service.start` itself.
@@ -635,7 +635,7 @@ async def run(*arguments: str, cwd: Path) -> str:
 
 # What a stand-in forge reaches, which is the repository below. `git clone` takes a path as readily
 # as a URL, so a test needs no server to exercise the whole path a real session takes: reach a
-# repository, clone it, plant a worktree of the clone.
+# repository, clone it, plant a checkout of the clone.
 FIXTURE = "test:fixture"
 
 # And what a card for it is *called*, which is what a browser test presses: the radio inside a card
@@ -643,8 +643,8 @@ FIXTURE = "test:fixture"
 FIXTURE_NAME = "me/fixture"
 
 
-# The session the `worktree` fixture is planted for. Shaped like a real id, and not one `started`
-# ever hands out, so a test that also starts sessions never finds this one's worktree in its way.
+# The session the `checkout` fixture is planted for. Shaped like a real id, and not one `started`
+# ever hands out, so a test that also starts sessions never finds this one's checkout in its way.
 PLANTED: Final = "0f" * 16
 
 # Who every repository here commits as. Stated rather than read off the machine running the suite,
@@ -656,7 +656,7 @@ IDENTITY: Final = (("user.name", "probe"), ("user.email", "probe@example.invalid
 @pytest.fixture
 async def origin(tmp_path: Path) -> Path:
     """
-    The repository a stand-in forge reaches, which is where every worktree here comes from.
+    The repository a stand-in forge reaches, which is where every checkout here comes from.
 
     A real one, because everything worth checking against one is what git actually does. A stand-in
     for git would be a second implementation of the thing under test, and the questions asked of
@@ -681,7 +681,7 @@ def bwrap() -> str:
     Where the sandbox binary is, and a loud failure if it is not anywhere.
 
     Not skipped when it is missing, for the same reason the browser tests are not: a check nobody
-    runs is a check that catches nothing, and git against a worktree only ever runs behind it.
+    runs is a check that catches nothing, and git against a checkout only ever runs behind it.
     """
     return sandbox_command()
 
@@ -689,10 +689,10 @@ def bwrap() -> str:
 @pytest.fixture
 async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
     """
-    Somewhere to clone the repository above and to plant each session's worktree of it.
+    Somewhere to clone the repository above and to plant each session's checkout of it.
 
     Both outside the repository deliberately, and these tests would not notice if they were not: a
-    worktree planted *inside* it would be captured by the snapshots it exists to take, so every
+    checkout planted *inside* it would be captured by the snapshots it exists to take, so every
     session would hold a copy of every other session's files.
     """
     reaching = Reaching(
@@ -700,7 +700,7 @@ async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
     )
     return Workspaces(
         clones=Clones(root=tmp_path / "clones"),
-        root=tmp_path / "worktrees",
+        root=tmp_path / "checkouts",
         scratch=tmp_path / "scratch",
         reaching=reaching,
         bwrap=bwrap,
@@ -708,29 +708,29 @@ async def workspaces(origin: Path, tmp_path: Path, bwrap: str) -> Workspaces:
     )
 
 
-def checkout_in(root: Path, bwrap: str) -> Worktree:
+def checkout_in(root: Path, bwrap: str) -> Checkout:
     """
-    A directory a test set up itself, as the worktree the file tools and `list` are handed.
+    A directory a test set up itself, as the checkout the file tools and `list` are handed.
 
     Its store is an empty directory beside it, which is enough for the sandbox to bind and holds
-    nothing, so what git answers about the worktree comes from the worktree alone. For a test about
-    listing or editing files; a test about snapshots wants the planted `worktree`.
+    nothing, so what git answers about the checkout comes from the checkout alone. For a test about
+    listing or editing files; a test about snapshots wants the planted `checkout`.
     """
     store = root.parent / f"{root.name}-store"
     store.mkdir(exist_ok=True)
-    return Worktree(root=root, store=Store(path=store), session=PLANTED, bwrap=bwrap)
+    return Checkout(root=root, store=Store(path=store), session=PLANTED, bwrap=bwrap)
 
 
 @pytest.fixture
-async def worktree(workspaces: Workspaces) -> Worktree:
+async def checkout(workspaces: Workspaces) -> Checkout:
     """
-    A session's worktree, planted the way a session's first pass plants one.
+    A session's checkout, planted the way a session's first pass plants one.
 
     With an ignored `.env` and `built/` in it, which a clone never carries, because what a snapshot
     leaves out is half of what these tests ask.
 
     Here rather than beside the snapshot tests because several suites need it: what a command a
-    person runs does to a worktree is the same kind of question, asked from the other end.
+    person runs does to a checkout is the same kind of question, asked from the other end.
     """
     planted = await workspaces.plant(PLANTED, FIXTURE, branch=branch_named(PLANTED))
     if planted is None:

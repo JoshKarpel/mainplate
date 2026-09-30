@@ -109,7 +109,7 @@ follows the settings step being answered. Everything it contributes comes back f
 including which events it wants:
 
 ```json
-→ {"event": "setup", "session": "a1b2", "plugin": "bundled:handoff", "worktree": "/…/a1b2"}
+→ {"event": "setup", "session": "a1b2", "plugin": "bundled:handoff", "checkout": "/…/a1b2"}
 ← {"events": ["after_turn", "compose"],
    "tools": [{"name": "hand_off", "description": "…", "schema": {…}}],
    "answers": [{"leader": "handoff", "saying": "hand off and clear the context", "demands": false}],
@@ -143,7 +143,7 @@ two events, a `describe` with a setup of its own beside it, and collapsed back i
 
 **What collapsed it is that a plugin's first run is already its install.** A `uv run --script`
 shebang resolves an interpreter and a dependency tree the moment the console executes the file,
-whether or not anybody named an event for it; a plugin that wants a program in the worktree runs
+whether or not anybody named an event for it; a plugin that wants a program in the checkout runs
 whatever fetches it. So the second event was buying a *scheduling* distinction - fast and pure here,
 slow and effectful there - which is a decision the console can make on its own, at the price of one
 more moment every plugin author has to learn about.
@@ -180,7 +180,7 @@ press did the work:
   along.
 
 **A session waiting on its setup is a fourth state of the settings step**, drawn with a spinner and
-the line that says what is happening. The step now has four: the worktree being planted, a
+the line that says what is happening. The step now has four: the checkout being planted, a
 declaration that would not parse, a setup out working, and the switches themselves.
 
 **`events` is what stops this being wasteful.** Without it every event goes to every plugin and a
@@ -304,11 +304,11 @@ not a plugin's, a field on the repository's declaration saying whether the tree 
 checkpoint written by none of the machinery that writes the others.
 
 What argues for paying that is the observation that a *bundled* plugin cannot do this job. It would
-have to be confined where the rest of its tier is not, left off sessions with no worktree where the
+have to be confined where the rest of its tier is not, left off sessions with no checkout where the
 rest of its tier is declared for every session, registered by tier while being confined, and known to
 the console by name. Every one of those is true, and **not one of them is about the tier this
 actually belongs to**: a repository's plugin is confined already, refused on a session with no
-worktree already, registered by tier already, and named by the repository rather than by us already.
+checkout already, registered by tier already, and named by the repository rather than by us already.
 The session's scratch is the one real exception left, and a grant keyed on an event is a smaller
 thing than a mechanism.
 
@@ -322,7 +322,7 @@ repository's own code could leave there from the session's first `bash` anyway. 
 buys is the *moment*: a plugin stages the environment before the model has run at all, which is what
 a setup is for and is why the whole thing cannot wait until a command asks for it.
 
-**A plugin outside a worktree gets neither grant**, because both ride on the namespace: such a plugin
+**A plugin outside a checkout gets neither grant**, because both ride on the namespace: such a plugin
 has the operator's own `$HOME` and environment already. So an operator who wants a variable set for
 every session's commands still has no way to say so, since those commands are `--clearenv`'d. That is
 a gap rather than a decision, and it is a narrow one: what knows which toolchain a session's commands
@@ -330,7 +330,7 @@ need is the repository they run in.
 
 ## Starting a session takes four steps
 
-**A repository's plugin cannot even be named until its worktree is planted**, which is the first
+**A repository's plugin cannot even be named until its checkout is planted**, which is the first
 pass, because [the worker clones and a request handler never does](
 workspace.md#where-a-repository-comes-from). And no plugin in any tier may be *run* until somebody
 has seen the list and said so, because running one is executing a program somebody may not want
@@ -344,7 +344,7 @@ repository. So creation splits:
    run at all. This records the `Choice`, enrols the session, calls `make_ready`, and redirects to
    the session's own page. Its button says `Create session`, because what it makes is a session and
    not yet a conversation.
-2. **The declaring pass.** Plants the worktree, reads what each tier declares out of files, records
+2. **The declaring pass.** Plants the checkout, reads what each tier declares out of files, records
    both halves. Then it reaches `opening_turn`, finds an empty inbox, and comes back `Blocked`.
    **It runs nothing**: at this point the console knows a name, a tier and a path per plugin, and
    nothing else.
@@ -430,7 +430,7 @@ session.
 
 **It is a state of the session page and not a route of its own.** The session id exists from step 1,
 so the URL is stable and bookmarkable while the clone runs, and the console already renders a
-session whose worktree is not yet planted and already has the live connection that fills it in when
+session whose checkout is not yet planted and already has the live connection that fills it in when
 the declaration lands. A second address would be a page somebody can be sitting on when the thing it
 is waiting for arrives somewhere else.
 
@@ -460,7 +460,7 @@ response to ride on, so it goes under `plugins:setup:{n}:refused` and a second p
 somebody just acted on.
 
 The step's own `Try again` is a different button for a different failure. It asks for another
-*declaring* pass, which is what a worktree that would not plant or a `.mainplate/mainplate.yaml` that
+*declaring* pass, which is what a checkout that would not plant or a `.mainplate/mainplate.yaml` that
 would not parse needs; that failure is recorded under `plugins:refused`, unnumbered, because nothing
 about it is per attempt - the files are the same files.
 
@@ -548,8 +548,8 @@ and at `before_turn_end` an injection is what *makes* one, and `end`, which is
 because its answer is a `Described` rather than an `Answered`: what a plugin wants remembered from it
 is a `set` on the first event that carries one.
 
-Every payload also carries `worktree` and, for a confined plugin, `scratch`: where this session's
-files are and where this plugin alone may write. `worktree` is on all of them rather than only the
+Every payload also carries `checkout` and, for a confined plugin, `scratch`: where this session's
+files are and where this plugin alone may write. `checkout` is on all of them rather than only the
 two that act inside a turn, because a plugin composing instructions out of the repository's own files
 reads them at `setup` or not at all.
 
@@ -1030,11 +1030,11 @@ collision the operator can already see and fix.
 
 A repository's plugin is a program this console executes. What makes that safe to offer at all is
 that it is a separate process run behind the confinement [`bash` already uses](sandbox.md): it
-reaches the worktree it was handed and nothing else.
+reaches the checkout it was handed and nothing else.
 
 **Its confinement is fixed and narrow, and is never the session's own.** A session on
 `Filesystem.EVERYTHING` gets `OverEverything`, so its `bash` reaches `/`; a repository's plugin in
-that session still gets `InAWorktree`, whatever the session chose. The isolation a session picked is
+that session still gets `InACheckout`, whatever the session chose. The isolation a session picked is
 a decision about what the **model** may reach, and a plugin is not the model. Inheriting it would
 mean the one control that widens a session quietly widens somebody else's code along with it.
 
@@ -1054,7 +1054,7 @@ runs its checks with - are both downloads.
 
 **What makes it safe to offer is when it happens and who said yes, rather than a check on what is
 fetched.** `setup` runs only after somebody pressed the button on the settings step, and before the
-first message. In a session that began on its own, the worktree holds the commit the repository
+first message. In a session that began on its own, the checkout holds the commit the repository
 supplied and nothing else, so what a connected run there can carry out is the repository's own code,
 run because a person chose to run it. **A fork is the exception, and the press is what answers it**:
 a branch is planted at a tree the model wrote, so its `setup` runs whatever `.mainplate/` that tree
@@ -1099,7 +1099,7 @@ where they look is the point. What it runs out of is still its own directory, at
 including that one, which is the whole of the distinction: populating a directory is not executing
 out of one.
 
-**A plugin outside a worktree is handed none of this, and giving it one would be symmetry for its own
+**A plugin outside a checkout is handed none of this, and giving it one would be symmetry for its own
 sake.** What a scratch answers is having nowhere to write, which is a problem the namespace creates:
 such a plugin has the operator's `$HOME`, their caches, their `/tmp` and their other scripts, and it
 may well need all four to do its job. Something to remember per session it already has, in the
@@ -1113,9 +1113,9 @@ Two costs, both real:
   it once per session. A shared cache would be quicker and would have to be keyed by repository as
   well as by name, or two repositories declaring a plugin under one name would share a directory,
   which is exactly the channel the split above closes.
-- **Nothing removes it.** Neither this nor a session's worktree is collected today, so the disk a
+- **Nothing removes it.** Neither this nor a session's checkout is collected today, so the disk a
   session takes is the disk it keeps. This is a new line item on a bill that already exists rather
-  than a new bill, and whatever eventually answers for worktrees answers for these.
+  than a new bill, and whatever eventually answers for checkouts answers for these.
 
 ### What is in the environment
 
@@ -1124,12 +1124,12 @@ paragraphs that have to be read together to answer one question. The last column
 commands rather than a plugin at all, and it is here because half the point of the table is that
 `scratch` means two directories depending on who is reading it.
 
-| | Plugin outside a worktree | Repository plugin at `setup` | Repository plugin, any later event | A session's own commands |
+| | Plugin outside a checkout | Repository plugin at `setup` | Repository plugin, any later event | A session's own commands |
 |---|---|---|---|---|
 | `PATH` | the console's own | `/usr/local/bin:/usr/bin:/bin` | the same | the same, then whatever `$MAINPLATE_ENV` said |
 | `HOME` | the operator's own | the plugin's scratch | the plugin's scratch | the session's scratch |
 | `TERM` | the console's own | `dumb` | `dumb` | `dumb` |
-| `MAINPLATE_WORKTREE` | the tree, where the session has one | the tree | the tree | the tree |
+| `MAINPLATE_CHECKOUT` | the tree, where the session has one | the tree | the tree | the tree |
 | `MAINPLATE_PLUGIN_SCRATCH` | not set | the plugin's scratch | the plugin's scratch | not set |
 | `MAINPLATE_SCRATCH` | not set | the session's scratch | not set | the session's scratch |
 | `MAINPLATE_ENV` | not set | a file to append `KEY=value` to | not set | not set |
@@ -1139,7 +1139,7 @@ commands rather than a plugin at all, and it is here because half the point of t
 Four things the table is not able to say:
 
 - **A `MAINPLATE_` name is a place, and [the vocabulary](sandbox.md#the-scratch-directory) is one
-  list.** `worktree`, `scratch` and `plugin_scratch` are bound paths and are named here by the thing
+  list.** `checkout`, `scratch` and `plugin_scratch` are bound paths and are named here by the thing
   that binds them, so a name in an environment is a name for a path that namespace actually has.
   `machine` is the fourth name in that list and appears in no environment: it is what a file tool
   calls the root of a session over the whole machine, which has no bind to name.
@@ -1147,7 +1147,7 @@ Four things the table is not able to say:
   name, and its `$HOME` is the tmpfs. Such a session has no scratch to be handed.
 - **The network is not in here**, and it is the third thing that turns on which event this is. See
   [before the conversation, connected](#before-the-conversation-connected-during-it-never).
-- **The payload says most of this again**, on purpose. `worktree` and `scratch` are fields a plugin
+- **The payload says most of this again**, on purpose. `checkout` and `scratch` are fields a plugin
   parses; these are what a plugin that is a line of shell reads without parsing anything. It costs
   two variables and buys a five-line plugin.
 
@@ -1179,14 +1179,14 @@ declaration again and a branch of one that does not still reads nothing.
 
 **Asked blind, in the picker.** [The worker clones and a request handler never
 does](workspace.md#where-a-repository-comes-from), so when somebody picks a repository there is no
-clone and no worktree, and no way to read a file out of it without a network fetch on a POST somebody
+clone and no checkout, and no way to read a file out of it without a network fetch on a POST somebody
 is waiting on. A repository carrying no plugins makes the answer inert, and nothing had to be fetched
 to find that out.
 
 ### What the trust switch is actually guarding
 
 Worth stating plainly, because "runs code" is both true and too vague to decide anything with.
-Behind the confinement a repository's plugin can read and write the worktree and run what is in it,
+Behind the confinement a repository's plugin can read and write the checkout and run what is in it,
 which is what that session's `bash` could already do. The two things it adds are the ones the switch
 is for:
 
@@ -1203,7 +1203,7 @@ run unattended at every turn boundary, and what they write is said to the model"
 **What the switch is genuinely for is the session where the reading above does not hold**: a
 repository somebody is *reading* rather than working in - a stranger's pull request, a dependency
 being triaged. Nothing else a session chooses says so, since picking a repository settles the
-isolation on its worktree and hands the model a shell wherever there is a sandbox, which is why the
+isolation on its checkout and hands the model a shell wherever there is a sandbox, which is why the
 switch is drawn in the picker rather than inferred from anything the session already chose.
 
 **The exposure is made visible rather than the answer made precise.** That is what the [settings
@@ -1224,7 +1224,7 @@ that could only be learned by doing the work, recorded once and replayed after. 
 
 ### Read once, and never from a tree this console wrote
 
-A session's model has `edit` over its worktree, so the file declaring a repository's plugins is a
+A session's model has `edit` over its checkout, so the file declaring a repository's plugins is a
 file the model can write. Two rules keep that from being a way to run code of the model's choosing.
 
 **It is read once, on the session's first pass, and recorded.** Every pass after replays the record
@@ -1234,8 +1234,8 @@ and reads no file. Without this, a model writes a plugin on turn 4 and the conso
 snapshotted.** This is the one that is easy to miss, and "read it out of the recorded tree" sounds
 like it covers the case when it does not. A snapshot is a tree a model wrote: it is captured with
 `git add -A`, so a `.mainplate/` file the model created on turn 4 is *in* the tree recorded for turn
-5. [A fork plants at a recorded tree](workspace.md#what-a-forks-worktree-is), so a fork that re-read
-its own worktree would run a plugin the parent's model authored, one fork away from any session with
+5. [A fork plants at a recorded tree](workspace.md#what-a-forks-checkout-is), so a fork that re-read
+its own checkout would run a plugin the parent's model authored, one fork away from any session with
 files.
 
 **So a fork carries nothing about its parent's plugins, and asks again.** Not the declaration, not
@@ -1246,7 +1246,7 @@ it carries, and the press that answers the step is what runs `setup`.
 **Which means editing `.mainplate/` and forking is how a session iterates on its own plugins.** That
 is the flow rather than a hole in the one above, and [the plugin that installs a session's
 toolchain](#getting-the-repository-ready-is-a-plugin-too) is why it has to be: a branch plants a fresh
-worktree, an ignored directory does not come across in a recorded tree, and a fork that inherited a
+checkout, an ignored directory does not come across in a recorded tree, and a fork that inherited a
 registration would hold tools it has no installation for.
 
 **The press being asked for again is what keeps this a trust boundary.** A branch is planted at a
@@ -1366,7 +1366,7 @@ step.
 
 **And a third tier is exercised by a fixture rather than by a bundled plugin.** `tests/plugins/git-status`
 is a **bash** script a test repository carries, ported from a `SessionStart` hook: it is declared by
-`.mainplate/mainplate.yaml`, it runs behind the sandbox, and it contributes the worktree's git status
+`.mainplate/mainplate.yaml`, it runs behind the sandbox, and it contributes the checkout's git status
 as `instructions`. It is there because it is none of Python, none of ours and none of the console's
 own tiers, so it proves three claims that would otherwise only be asserted in prose - any language,
 reaches nothing it was not handed, and a repository's own script can contribute to what a session is
@@ -1381,7 +1381,7 @@ told.
 console knows what a shim is, where mise keeps them, or that Python has an interpreter directory.
 `just dependencies` and not `just setup`, because the other half of that recipe installs a git hook,
 and whether a session's commits run pre-commit is that session's to decide, with `pre-commit install`
-in its own worktree from `bash` or [the composer's `Run`](composer.md#run), rather than something a
+in its own checkout from `bash` or [the composer's `Run`](composer.md#run), rather than something a
 setup plugin does to every session.
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside

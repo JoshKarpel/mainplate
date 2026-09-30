@@ -47,7 +47,7 @@ from mainplate.conversation import declared_in
 from mainplate.conversation import deferred_in
 from mainplate.conversation import environment_in
 from mainplate.conversation import failure_in
-from mainplate.conversation import latest_tree
+from mainplate.conversation import fork_point
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
@@ -61,6 +61,7 @@ from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
+from mainplate.durability import parse_snapshot
 from mainplate.footprint import Footprints
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
@@ -79,7 +80,7 @@ from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
 from mainplate.reference import resending
-from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import InACheckout
 from mainplate.sandbox import Venue
 from mainplate.sessions import LISTING
 from mainplate.sessions import Attention
@@ -315,12 +316,12 @@ class Conversation:
     thing somebody recognises.
     """
 
-    worktree: Path | None = None
+    checkout: Path | None = None
     """
-    This session's own worktree of it, which is where its files actually are.
+    This session's own checkout of it, which is where its files actually are.
 
     Both, because they answer different questions and a page needs each: the repository is what a
-    reader recognises, and the worktree is where to point an editor. The worktree's own name is the
+    reader recognises, and the checkout is where to point an editor. The checkout's own name is the
     session id, so it is worth nothing on its own.
     """
 
@@ -328,7 +329,7 @@ class Conversation:
     """
     Whether this session can run a command the person types, which needs somewhere to run it.
 
-    Its own field rather than `worktree is not None`, because it is two questions and only one of
+    Its own field rather than `checkout is not None`, because it is two questions and only one of
     them is about the session: whether this session has files, and whether this console was built to
     run anything at all. A console with no `Commands` offers no `Run`, exactly as one with no sandbox
     offers no `bash`, and neither is a session's fault.
@@ -382,13 +383,13 @@ class Conversation:
 
     declared: tuple[Installed, ...] | None = None
     """
-    Every plugin this session *may* run, read out of files, or nothing while its worktree is planted.
+    Every plugin this session *may* run, read out of files, or nothing while its checkout is planted.
 
     What the settings step draws a switch for, and the reason it can be drawn without a single plugin
     having been executed: a name, a tier and a path are all read from a directory listing and two YAML
     mappings. What each of them *is* is not here, because asking is running.
 
-    `None` is the state the step's spinner is drawn for: the choice is recorded, the worktree is being
+    `None` is the state the step's spinner is drawn for: the choice is recorded, the checkout is being
     planted, and what the session even declares is not yet known.
     """
 
@@ -481,8 +482,8 @@ class Service:
     """
     Where sessions' files come from and live, or nothing at all to keep no workspaces.
 
-    Held here so a page can say which repository a session works in and where its worktree is, both
-    of which are questions with no I/O in them. Making the worktree *exist* is the worker's, and it
+    Held here so a page can say which repository a session works in and where its checkout is, both
+    of which are questions with no I/O in them. Making the checkout *exist* is the worker's, and it
     is handed the same value separately: this object answers questions and never runs an agent.
     """
 
@@ -672,7 +673,7 @@ class Service:
             deferred=waiting_out(deferred_in(recorded), self.now()),
             attention=await self.attention(session),
             repository=self.repository_of(chosen),
-            worktree=self.workspaces.at(session) if self.workspaces is not None and working else None,
+            checkout=self.workspaces.at(session) if self.workspaces is not None and working else None,
             runnable=self.commands is not None and self.workspaces is not None and working,
             window=facts.context if facts is not None else None,
             since=since,
@@ -746,12 +747,12 @@ class Service:
 
     async def held(self, session: str) -> bool:
         """
-        Whether something is writing in this session's worktree right now: a pass, or a command a
+        Whether something is writing in this session's checkout right now: a pass, or a command a
         person ran.
 
         Both are live state rather than anything recorded, and both are the same fact from two sides:
-        while either holds the session, the worktree is a moving thing, and what a capture of it
-        would record is a mixture nothing ever saw. The reconciler asks this before taking a worktree
+        while either holds the session, the checkout is a moving thing, and what a capture of it
+        would record is a mixture nothing ever saw. The reconciler asks this before taking a checkout
         away, and a fork from the end asks it before capturing one.
         """
         if isinstance(await self.attention(session), Claimed):
@@ -792,7 +793,7 @@ class Service:
 
         **Creating a session, loading its plugins and saying the first thing in it are three steps
         now**, and the split is forced rather than chosen. A repository's plugins cannot be *named*
-        until its worktree is planted, which the worker does on a pass; and none of them may be *run*
+        until its checkout is planted, which the worker does on a pass; and none of them may be *run*
         until somebody has seen the list, because running one is executing a program somebody may not
         want executed. So creation records the choice, enrols the session, and asks for a pass; that
         pass plants, reads what each tier declares, and blocks on an empty inbox; the page draws the
@@ -824,7 +825,7 @@ class Service:
         # Settled here rather than taken as posted, which is the same stance that stops a form with
         # no repository field moving a branch out of its repository. Everything that depends on the
         # repository is made to agree with it in one place: a session working in one reaches its
-        # worktree and nothing else, and one working in none cannot reach a worktree there is none
+        # checkout and nothing else, and one working in none cannot reach a checkout there is none
         # of, be checked out at a commit, or start a branch. So no reader downstream reconciles
         # anything, and the form cannot record a contradiction. See `Choice.settled`.
         chosen = chosen.settled()
@@ -835,7 +836,7 @@ class Service:
         # own id and `settled` is a rule about a choice rather than about a session.
         chosen = chosen.branching(session.id)
         await enrol(self.database, session)
-        # No cloning and no worktree here, deliberately. Somebody is waiting on this request and a
+        # No cloning and no checkout here, deliberately. Somebody is waiting on this request and a
         # clone is a network fetch that can take minutes; the first pass does both, where slow work
         # already lives. Until then the session renders, names its repository, and has no files.
         await self.checkpointer.supply(session.id, CHOICE_KEY, recorded_choice(chosen))
@@ -902,12 +903,13 @@ class Service:
         held = was.repository if was is not None else None
         chosen = replace(chosen, repository=chosen.repository if held is None else held)
         # Settled *after* the repository is decided, and the order is the whole of it: a fork that
-        # inherits its parent's repository reaches that worktree whatever the form said, and one
-        # attaching a repository to a session that had none moves to `WORKTREE` by the same rule.
+        # inherits its parent's repository reaches that checkout whatever the form said, and one
+        # attaching a repository to a session that had none moves to `CHECKOUT` by the same rule.
         #
-        # `forked` is what drops the base and the branch the parent was started with. A fork plants
-        # at the tree of the turn it re-asks, so a base beside that would be a second answer to where
-        # its files come from; and an inherited branch would be two sessions pushing one history.
+        # `forked` is what drops any base. A fork plants at the commit and the files of the turn it
+        # re-asks, so a base beside that would be a second answer to where its files come from. The
+        # branch is the one the form posted, which is the person's to pick: the parent's, carried on,
+        # or blank for one of the fork's own.
         chosen = chosen.settled(forked=True)
         forked = Session(
             id=mint_session_id(),
@@ -917,9 +919,9 @@ class Service:
             title=parent.title,
             forked=Origin(session=session, turn=at),
         )
-        # And then a branch of the fork's *own*, which is the other half of `settled` dropping the
-        # parent's: dropping it alone would leave every fork on a detached `HEAD`, where a fork is
-        # exactly where somebody carries on working and therefore commits.
+        # And then a branch of the fork's *own* where the form left the box empty: without one the fork
+        # would be on a detached `HEAD`, where a fork is exactly where somebody carries on working and
+        # therefore commits.
         chosen = chosen.branching(forked.id)
         await enrol(self.database, forked)
         # **The switches and not the settings**, which is the one column of the two a fork inherits.
@@ -932,24 +934,22 @@ class Service:
             await switch(self.database, forked.id, parent.tending.enabled)
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
-        # The tree of the turn being re-asked, carried across on its own even though that turn's
-        # prompt and messages are not. It is what makes the branch answer the *same* question: the
-        # first pass plants the fork's worktree at this tree rather than at the repository's head,
-        # so the new model sees the files the original turn saw. Redoing turn 3 against whatever
-        # the disk holds now would be a different question wearing the same words, and the
-        # disagreement would be invisible in the transcript.
+        # The checkout state of the turn being re-asked - its commit, its branch and its files -
+        # carried across on its own even though that turn's prompt and messages are not. It is what
+        # makes the branch answer the *same* question: the first pass plants the fork's checkout at
+        # this state rather than at the repository's head, so the new model sees the repository the
+        # original turn saw. Redoing turn 3 against whatever the disk holds now would be a different
+        # question wearing the same words, and the disagreement would be invisible in the transcript.
         #
         # Recorded here rather than planted here for the reason `start` clones nothing: this is a
-        # request, and planting a worktree is not.
+        # request, and planting a checkout is not.
         #
-        # Forking the *end* has no turn to re-ask and so no opening tree to carry, and planting at the
-        # repository's head there would hand the branch files the conversation never saw. So it
-        # plants at the newest tree the parent recorded - the one the reconciler captured on the way
+        # Forking the *end* has no turn to re-ask and so no opening state to carry, and planting at
+        # the repository's head there would hand the branch files the conversation never saw. So it
+        # plants at the newest state the parent recorded - the one the reconciler captured on the way
         # to archiving it, which is the end the rule offers, or the last request's for an end reached
-        # by URL - which is `latest_tree`'s rule.
-        started_on = recorded.get(opening_tree_key(at))
-        if started_on is None and at > 0:
-            started_on = latest_tree(recorded)
+        # by URL. Both halves are `fork_point`'s rule, which the fork page reads as well.
+        started_on = fork_point(recorded, at)
         if started_on is not None:
             await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
         # **Nothing any plugin declared, contributed, or was confirmed for comes across**, and that is
@@ -958,7 +958,7 @@ class Service:
         # planted at declares, its page draws the settings step over the turns it carries, and the
         # press that answers the step is what runs `setup` again. Editing `.mainplate/` and forking is
         # therefore how a conversation iterates on its own plugins, the one that installs its toolchain
-        # included - which a fork *has* to run again, since it plants a fresh worktree and an ignored
+        # included - which a fork *has* to run again, since it plants a fresh checkout and an ignored
         # directory does not come across in a recorded tree.
         #
         # **The press being asked for again is the trust boundary rather than a papercut.** A fork
@@ -972,10 +972,22 @@ class Service:
             await self.say(forked.id, said)
         else:
             # A fork with nothing to re-ask is queued all the same, because its first pass is what
-            # plants its worktree and registers its plugins. Without this it would sit un-set-up
+            # plants its checkout and registers its plugins. Without this it would sit un-set-up
             # until somebody typed, and the settings step would have nothing to draw.
             await self.durable.scheduler.make_ready(forked.id)
         return forked
+
+    async def branch_at(self, session: str, at: int) -> str | None:
+        """
+        The branch a fork from before turn `at` would carry on, as the parent was on it then.
+
+        What the fork page pre-fills, read from the same recorded state `fork` plants the fork at, so
+        the name offered is the one that state's commit was under. Nothing on a detached `HEAD`, and
+        nothing where the parent recorded no checkout, and the box is then empty and the fork gets a
+        branch of its own.
+        """
+        snapshot = parse_snapshot(fork_point(await self.checkpointer.load(session), at))
+        return None if snapshot is None else snapshot.branch
 
     async def archive(self, session: str) -> Session | None:
         """
@@ -984,7 +996,7 @@ class Service:
         **The press records a fact and the reconciler acts on it**, which is the split every slow
         thing in this console takes. What this writes is one key, so the page it redirects to is
         already the archived one: the box is gone, the rail says so, the row is muted. Taking the
-        worktree and the scratch off the disk is minutes on a big scratch and has to wait for any pass
+        checkout and the scratch off the disk is minutes on a big scratch and has to wait for any pass
         still holding the session, so it is a background loop's, once a minute, reading the same key.
 
         Write-once, so archiving twice is the first press twice over and nothing un-archives a
@@ -999,7 +1011,7 @@ class Service:
 
     async def run(self, session: str, said: str, *, online: bool = False) -> str | None:
         """
-        Run `said` in this session's own worktree, and say which entry recorded it, or nothing at all
+        Run `said` in this session's own checkout, and say which entry recorded it, or nothing at all
         where this session has nowhere to run one.
 
         Delivered to the session's inbox like a message, and read out of it by nobody: a pass passes
@@ -1019,7 +1031,7 @@ class Service:
         Nowhere to run one is `None` and not a raise: it is a state the page can explain, not a fault.
 
         **In the session's sandbox**, under its own network answer and the environment its setup
-        recorded, for the reason `commands.py` opens with: the worktree's git configuration is the
+        recorded, for the reason `commands.py` opens with: the checkout's git configuration is the
         model's to write. `online` turns the network on for this one command whatever the session
         chose, which is `Disposition.ONLINE`, and is recorded on the command so the page says so.
         """
@@ -1029,8 +1041,8 @@ class Service:
         if found is None or found.chosen is None or found.chosen.repository is None:
             return None
         running = Running(
-            confinement=InAWorktree(
-                worktree=self.workspaces.worktree(session, found.chosen.repository),
+            confinement=InACheckout(
+                checkout=self.workspaces.checkout(session, found.chosen.repository),
                 scratch=self.workspaces.scratch_at(session),
             ),
             venue=Venue.CONNECTED if online else found.chosen.isolation.venue,
@@ -1049,7 +1061,7 @@ class Service:
         Push this session's branch to its repository, and say which entry recorded it, or nothing
         where there is no branch here to push or nowhere to push it.
 
-        **The branch is the recorded one**, `Choice.branch`, and never whatever the worktree's `HEAD`
+        **The branch is the recorded one**, `Choice.branch`, and never whatever the checkout's `HEAD`
         is on: the page names that branch beside the button, so it is the only thing the button may
         move. A session with none recorded has nothing to push under and is `None`.
 
@@ -1068,7 +1080,7 @@ class Service:
         entry = await self.checkpointer.append(session, recorded_push(found.chosen.branch))
         self.commands.push(
             Slot(session=session, entry=entry.key),
-            self.workspaces.worktree(session, found.chosen.repository),
+            self.workspaces.checkout(session, found.chosen.repository),
             repository.url,
             found.chosen.branch,
         )
@@ -1100,10 +1112,10 @@ class Service:
             # The tree as a value rather than the path the page prints, because what runs a confined
             # plugin builds a sandbox around it and needs the git directory it was told. See
             # `Speaking`.
-            worktree=(
+            checkout=(
                 None
-                if self.workspaces is None or found.repository is None or found.worktree is None
-                else self.workspaces.worktree(session, found.repository)
+                if self.workspaces is None or found.repository is None or found.checkout is None
+                else self.workspaces.checkout(session, found.repository)
             ),
             delivering=partial(self.note, session),
             storing=partial(set_settings, self.database, session),
@@ -1206,7 +1218,7 @@ class Service:
         Answer the settings step: record the switches, say that somebody pressed, and ask for a pass.
 
         **The press is the confirmation and the pass is what it confirms.** A plugin is a program, so
-        nothing has run one before this: the pass that planted the worktree read what each tier
+        nothing has run one before this: the pass that planted the checkout read what each tier
         declares out of files, and `setup_key` is the recorded fact that a person has since looked at
         that list. The pass that follows sets up exactly the plugins the switches left on.
 

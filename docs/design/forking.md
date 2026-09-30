@@ -49,13 +49,14 @@ session is typing into it, and an archived one can only be carried on this way. 
 the same fork with a message typed, for a while, and it went for that reason; the route still accepts
 `at == turns`, so the end of a live session is reachable by URL and offered by nothing.
 
-**It plants at the tree the conversation ended with.** A turn's own opening tree is the state before
-the turn did anything, which is right for re-asking it and wrong for carrying on after the last one;
-with no turn to re-ask there is no opening tree to carry, and planting at the repository's head would
-hand the branch files the conversation never saw. So `latest_tree` decides: the tree the reconciler
-captured on the way to archiving the worktree, which holds everything, what a person ran after the
-last request and what a plugin fixed at the turn's end included; and the last request's tree of the
-last turn where there is none, which is the end reached by URL on a live session. The cost, stated:
+**It plants at the state the conversation ended with.** A turn's own opening snapshot is the state
+before the turn did anything, which is right for re-asking it and wrong for carrying on after the
+last one; with no turn to re-ask there is no opening snapshot to carry, and planting at the
+repository's head would hand the branch files the conversation never saw. So `latest_tree` decides:
+the snapshot the reconciler captured on the way to archiving the checkout, which holds everything,
+what a person ran or committed after the last request and what a plugin fixed at the turn's end
+included; and the last request's snapshot of the last turn where there is none, which is the end
+reached by URL on a live session. The cost, stated:
 that second case predates both of those, because snapshots are taken before model requests and
 nothing captures after the last one. A capture in the fork request would close it, and was built and
 taken out again, since a control that captured while nothing held the session and fell back while
@@ -63,10 +64,10 @@ something did was two behaviours behind one word, which is what took the compose
 
 ## What a fork does not inherit
 
-- **The base and the branch**, which is `settled(forked=True)`. A fork plants at the tree of the
-  turn it re-asks, so a base beside that is a second answer to where its files come from, and an
-  inherited branch is one a push from the fork would land on the parent's work. See [the
-  workspace](workspace.md#where-in-it-and-on-what-branch).
+- **The base**, which is `settled(forked=True)`. A fork plants at the commit of the turn it
+  re-asks, so a base beside that is a second answer to where its files come from. The *branch* is
+  the fork page's to ask, and it starts out as the parent's; see [the
+  workspace](workspace.md#what-a-forks-checkout-is).
 - **What its plugins are set to**, which start on their own declared defaults. A reserve is a
   decision about how much room one conversation's context has left, and a branch's context is not
   that conversation's. See [handing off without being
@@ -79,9 +80,9 @@ something did was two behaviours behind one word, which is what took the compose
 - **A repository it does not have.** A fork may *attach* one and may not *swap* one; see [the
   workspace](workspace.md#a-fork-may-attach-a-repository-and-may-not-swap-one).
 
-What it *does* inherit, besides the turns, is the worktree state: a fork's worktree is checked out
-at the tree the forked turn originally saw, so a branch re-asks its question against the files that
-question was asked about.
+What it *does* inherit, besides the turns, is the checkout state: a fork's checkout stands on the
+commit the forked turn started on, with that turn's uncommitted changes on top, so a branch re-asks
+its question against the repository that question was asked about.
 
 ## A fork answers the settings step again
 
@@ -97,7 +98,7 @@ survive is a plugin set changing under a request already made, and a branch has 
 **Editing `.mainplate/` and forking is therefore how a session iterates on its own plugins**,
 including [the one that installs its
 toolchain](plugins.md#getting-the-repository-ready-is-a-plugin-too) - which a branch has to run again
-anyway, since it plants a fresh worktree with a scratch of its own and neither carries what the
+anyway, since it plants a fresh checkout with a scratch of its own and neither carries what the
 parent installed.
 
 **And the press is asked for again rather than inherited**, because a branch is planted at a tree a
@@ -111,10 +112,10 @@ re-ask one turn included, and its transcript is withheld until it does.
 
 ## There is no rewind
 
-**That is settled rather than pending.** `Worktree.restore` existed for one and was deleted unused,
+**That is settled rather than pending.** `Checkout.restore` existed for one and was deleted unused,
 because forking already delivers the whole of what a rewind was for: going back to before turn 3
-with the files as they were is `fork(at=3)`, which plants a clean worktree at `turn:3:tree:0` and
-leaves the original readable beside it.
+with the files as they were is `fork(at=3)`, which plants a new checkout at the state recorded in
+`turn:3:tree:0` and leaves the original readable beside it.
 
 Putting a session back *in place* would cost two things this console is built on. `Service.token`
 counts recorded rows and is sound only because the checkpoint is append-only, "the only way this
