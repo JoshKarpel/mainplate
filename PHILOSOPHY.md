@@ -20,7 +20,7 @@ whole test, and it is worth applying in the narrow form rather than the broad on
 against a copy that has to be **kept in step with something that changes**. A copy of something
 already settled is two values that happened to be equal, and those are cheap.
 
-Five things look like exceptions and are not. Each is worth knowing, because a sixth will be
+Six things look like exceptions and are not. Each is worth knowing, because a sixth will be
 proposed and the argument for it has to look like one of these.
 
 ### The session index is one row, and it reaches rather than copies
@@ -128,6 +128,28 @@ Neither is authoritative. No wire reports what it actually charged, so a recorde
 estimate made immutable rather than a bill, and the page says so. Neither is ever overwritten, which
 is how Pydantic AI's own filling is written too: the day a provider reports what it took, its answer
 wins over any estimate of it.
+
+### An artifact is kept beside the conversation
+
+An artifact is an HTML document a session made and the console keeps, in two tables of its own
+beside the checkpoint. It is the one thing a session makes that its checkpoint does not hold, and it
+passes the test on the same two arguments the others do.
+
+**A version is settled when it is kept**, like a fork's turns and a recorded cost: its bytes are
+written once and nothing rewrites them, so the version and the file it was kept from are two values
+that happened to be equal, not two views of one thing. The file moves on; the version does not, and
+is not meant to.
+
+**What moves is a fact nothing else records**, like the session index's title: which version is
+current and what the artifact is called. Neither is written in any checkpoint, so neither is a copy.
+What the checkpoint does hold is the call that kept each version, and the two ends name each other:
+the call's metadata names the version, and the version names the call. That is a reach in both
+directions rather than a copy in either.
+
+It is outside the checkpoint rather than in it because an artifact is not one conversation's: it is
+updated from other sessions, listed across all of them, and wanted after the session that made it is
+archived. [The design note](https://joshkarpel.github.io/mainplate/design/artifacts/) says what that
+costs.
 
 ## The person is driving
 

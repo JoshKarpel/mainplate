@@ -12,11 +12,12 @@ from mainplate.calls import call_body
 from mainplate.calls import changes_by_file
 from mainplate.calls import changes_of
 from mainplate.calls import rows_of
+from mainplate.console import LINKS
 from mainplate.conversation import Returned
 from mainplate.conversation import ToolUse
-from mainplate.pages import LONGEST_OPEN_DIFF
-from mainplate.pages import batch_element
-from mainplate.pages import tool_block
+from mainplate.pages.transcript import LONGEST_OPEN_DIFF
+from mainplate.pages.transcript import batch_element
+from mainplate.pages.transcript import tool_block
 from mainplate.tools.files.tools import diffed
 
 PYTHON_READ = "a.py, 3 lines\n\nqwrt│def f():\n----│\nmkpv│    return 1"
@@ -128,7 +129,7 @@ class TestEveryCallStartsShut:
     @pytest.mark.parametrize("returned", [None, Returned("success", "done")], ids=["out", "back"])
     def test_a_call_is_drawn_shut_and_says_so(self, tool: str, returned: Returned | None) -> None:
         drawn_shut = render(
-            tool_block(ToolUse(tool=tool, arguments='{"path": "a.py"}', returned=returned), "panel-0-1", 0)
+            tool_block(LINKS, ToolUse(tool=tool, arguments='{"path": "a.py"}', returned=returned), "panel-0-1", 0)
         )
         assert 'id="panel-0-1-tool-0" data-opens="shut"' in drawn_shut
 

@@ -314,7 +314,7 @@ place. Every fill reads a custom property: drawn on its own, as the favicon, the
 itself from the OS's scheme, which is all a tab strip knows; drawn by the dashboard as a `<use>` of
 its `#plate`, it inherits them from `.home__mark`, which points them at `--ink` and the speakers'
 tokens, so the mark follows the reader's theme toggle as an `<img>` could not. That is one file
-rather than a second copy of the geometry in `pages.py`, at the cost of the dashboard's mark
+rather than a second copy of the geometry in `pages/shell.py`, at the cost of the dashboard's mark
 depending on the browser fetching and drawing an external `<use>`, which is checked in Chromium
 and nowhere else.
 
@@ -355,7 +355,7 @@ second copy to keep in step with each, and at startup's default they cost hundre
 `htmax.min.js` is htmx 4 core plus every bundled extension in one file, with an allowlist in a meta
 tag deciding which actually register. Why one file rather than core plus separately vendored
 extensions is on [the console's page](console.md#htmx-4), because what reads the allowlist is
-`EXTENSIONS` in `pages.py` rather than anything here.
+`EXTENSIONS` in `pages/document.py` rather than anything here.
 
 `mermaid.min.js` is the diagram library, and it is the one asset no page loads by itself: `<html>`
 carries its address and the script fetches it the first time a `mermaid` fence is on the page, so a

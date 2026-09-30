@@ -37,6 +37,7 @@ from without_web import path_param
 from without_web import post
 from without_web import query_param
 
+from mainplate import artifacts
 from mainplate.agent import Choice
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
@@ -48,26 +49,31 @@ from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
 from mainplate.conversation import commit_command
 from mainplate.conversation import parse_disposition
-from mainplate.pages import PLUGIN_LEADER
-from mainplate.pages import SHAPE_FIELD
-from mainplate.pages import WORKSPACE_FIELD
-from mainplate.pages import ZONE_COOKIE
-from mainplate.pages import Links
-from mainplate.pages import Reader
-from mainplate.pages import Shape
-from mainplate.pages import dashboard_page
-from mainplate.pages import fork_page
-from mainplate.pages import fragment
-from mainplate.pages import model_cards
-from mainplate.pages import new_session_page
-from mainplate.pages import plugin_card
-from mainplate.pages import refusal_page
-from mainplate.pages import renamed
-from mainplate.pages import session_page
-from mainplate.pages import settling
-from mainplate.pages import stalled_by
-from mainplate.pages import starting_at
-from mainplate.pages import transcript_region
+from mainplate.pages.artifacts import RECENT
+from mainplate.pages.artifacts import artifact_page
+from mainplate.pages.artifacts import catalogue_page
+from mainplate.pages.composer import PLUGIN_LEADER
+from mainplate.pages.dashboard import dashboard_page
+from mainplate.pages.document import BEFORE_FIELD
+from mainplate.pages.document import SHAPE_FIELD
+from mainplate.pages.document import VERSION_FIELD
+from mainplate.pages.document import WORKSPACE_FIELD
+from mainplate.pages.document import Links
+from mainplate.pages.document import Shape
+from mainplate.pages.document import fragment
+from mainplate.pages.document import refusal_page
+from mainplate.pages.moments import ZONE_COOKIE
+from mainplate.pages.moments import Reader
+from mainplate.pages.picker import model_cards
+from mainplate.pages.picker import starting_at
+from mainplate.pages.rail import plugin_card
+from mainplate.pages.rail import renamed
+from mainplate.pages.session import fork_page
+from mainplate.pages.session import new_session_page
+from mainplate.pages.session import session_page
+from mainplate.pages.setup import settling
+from mainplate.pages.transcript import stalled_by
+from mainplate.pages.transcript import transcript_region
 from mainplate.plugins.protocol import settings_of
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
@@ -95,6 +101,7 @@ LOCATION = b"location"
 LONGEST_PROMPT = 100_000
 
 session_id = path_param("session", STR)
+artifact_id = path_param("artifact", STR)
 # The endpoint whose models to render, which is the value of the select that asks for them.
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # Which workspace's branches to offer, which is the value of the card that asks for them. A query
@@ -754,7 +761,8 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
 
 @get("/", reading, summary="The dashboard: what wants attention, and where a session can work")
 async def start_here(service: Service, reader: Reader) -> Response:
-    return page_response(200, dashboard_page(LINKS, reader, await service.listed(), service.reachable, service.fetches))
+    listed, recent = await asyncio.gather(service.listed(), artifacts.catalogue(service.database, limit=RECENT))
+    return page_response(200, dashboard_page(LINKS, reader, listed, service.reachable, service.fetches, recent))
 
 
 @get("/sessions/new", of_new_workspace, reading, summary="What a new session in one workspace runs on")
@@ -1227,6 +1235,91 @@ async def archive(service: Service, session: str) -> Response:
     return seeing(LINKS.to_session(session))
 
 
+# What an artifact's bytes are served under, which is the sandbox itself rather than a hope that
+# every page showing them frames them in one. `sandbox allow-scripts` makes the document an opaque
+# origin wherever it is opened, frame or tab, so it cannot read this console's cookies, storage or
+# pages; `connect-src 'none'` and the rest keep it from fetching anything, which is why a page has to
+# carry its scripts, styles, fonts and images inside itself. Nothing here stops the document
+# navigating its own frame or tab away, since no directive governs that; keeping `allow-scripts` is
+# accepting it. See `docs/design/artifacts.md`.
+ARTIFACT_POLICY: Final = (
+    b"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
+    b"style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; "
+    b"connect-src 'none'; form-action 'none'; base-uri 'none'"
+)
+
+# Which version a page is drawn at, and where a listing continues from. Optional, because a bare
+# address is the artifact as it now is and the first page of a listing.
+at_version = query_param(VERSION_FIELD, optional(int), schema={"type": "integer"})
+listed_before = query_param(BEFORE_FIELD, optional(int), schema={"type": "integer"})
+# Required on the two routes serving bytes, so the bytes at an address never change: every link to
+# them is pinned by `Links`, and an unpinned one would be a preview that moved under its page.
+pinned_version = query_param(VERSION_FIELD, once(int), schema={"type": "integer"})
+
+
+@get("/artifacts", listed_before, reading, summary="Every artifact, newest first")
+async def artifact_catalogue(service: Service, before: int | None, reader: Reader) -> Response:
+    shown = await artifacts.catalogue(service.database, before)
+    return page_response(200, catalogue_page(LINKS, reader, await service.listed(), service.reachable, shown))
+
+
+@get(
+    t"/artifacts/{artifact_id}", artifact_id, at_version, listed_before, reading, summary="One artifact, at one version"
+)
+async def show_artifact(
+    service: Service, artifact: str, version: int | None, before: int | None, reader: Reader
+) -> Response:
+    selected = await artifacts.version_of(service.database, artifact, version)
+    if selected is None:
+        named = f"no artifact {artifact}" + ("" if version is None else f" at version {version}")
+        return page_response(404, refusal_page(LINKS, 404, named))
+    history = await artifacts.history(service.database, artifact, before)
+    listed = await service.listed()
+    return page_response(200, artifact_page(LINKS, reader, listed, service.reachable, selected, history))
+
+
+async def served(service: Service, artifact: str, version: int, *, saving: bool) -> Response:
+    """
+    One version's bytes, exactly as kept, under the artifact policy, shown or saved.
+
+    The preview and the download are this one function with one header different, which is the whole
+    of the promise that what is saved is what was shown. A version that does not exist is a bare `404`
+    rather than a page: what asks for these is a frame or a save, and neither shows a page.
+
+    The saved file's name is built from the version the store handed back and never from the path,
+    since a path segment is whatever was typed and a header is no place for that.
+    """
+    found = await artifacts.content(service.database, artifact, version)
+    if found is None:
+        return Response(status=404)
+    kept, html = found
+    disposition = (
+        # A kept id is hex and a version a number, so the name needs no quoting.
+        b'attachment; filename="artifact-%s-v%d.html"' % (kept.artifact.encode(), kept.version) if saving else b"inline"
+    )
+    return Response(
+        status=200,
+        body=html,
+        headers=(
+            (b"content-type", b"text/html; charset=utf-8"),
+            (b"content-security-policy", ARTIFACT_POLICY),
+            (b"content-disposition", disposition),
+            (b"x-content-type-options", b"nosniff"),
+            (b"cache-control", b"no-store"),
+        ),
+    )
+
+
+@get(t"/artifacts/{artifact_id}/content", artifact_id, pinned_version, summary="One version's bytes, to show")
+async def artifact_content(service: Service, artifact: str, version: int) -> Response:
+    return await served(service, artifact, version, saving=False)
+
+
+@get(t"/artifacts/{artifact_id}/download", artifact_id, pinned_version, summary="One version's bytes, to save")
+async def artifact_download(service: Service, artifact: str, version: int) -> Response:
+    return await served(service, artifact, version, saving=True)
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
     new_session,
@@ -1243,6 +1336,10 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     press,
     rename_session,
     archive,
+    artifact_catalogue,
+    show_artifact,
+    artifact_content,
+    artifact_download,
 )
 
 LINKS = Links(
@@ -1261,5 +1358,9 @@ LINKS = Links(
     press=press,
     rename=rename_session,
     archive=archive,
+    artifacts=artifact_catalogue,
+    artifact=show_artifact,
+    artifact_content=artifact_content,
+    artifact_download=artifact_download,
     assets=ASSETS,
 )

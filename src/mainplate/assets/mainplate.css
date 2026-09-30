@@ -804,7 +804,7 @@ pre > .draw[aria-busy] {
 
 /* Every panel folds, so every panel needs a line saying what is in it while it is shut: the front
    of its own prose, or - for a batch of calls or commands, which have no prose to take a front off
-   - what is in it, named. See `panel_opening` in `pages.py`.
+   - what is in it, named. See `panel_opening` in `pages/transcript.py`.
 
    It takes the free space between the role and what sits at the end of the row, which is what makes
    the permalink's `margin-left: auto` unnecessary on a row that has one of these and why the anchor
@@ -1194,6 +1194,14 @@ pre .gs {
     color: var(--ink);
     white-space: nowrap;
     text-overflow: ellipsis;
+}
+
+/* The version a call kept, as a link in the summary: the extent's size and faintness, since it is
+   the same kind of aside, with the underline a link needs to read as one. */
+.tool__kept {
+    color: var(--ink-faint);
+    font-size: 0.68rem;
+    white-space: nowrap;
 }
 
 /* How much of the subject: which lines, how many operations, how deep. Kept whole where the subject
@@ -2361,6 +2369,85 @@ pre.lines > code {
 .dashboard__start:focus-visible {
     border-color: var(--mark);
     color: var(--mark);
+}
+
+/* --- Artifacts ---------------------------------------------------------- */
+
+/* Which version a row is, beside its title and before its moment, in the moment's own faint ink. */
+.dashboard__sessions .artifact__version {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    flex: none;
+}
+
+.dashboard__more a,
+.dashboard__foot a {
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+}
+
+/* The version a history's page is drawn at, in the mark every "you are here" on this page takes. */
+.dashboard__sessions a[aria-current] .name {
+    color: var(--mark);
+}
+
+/* One artifact's page is the dashboard's column: the same measure, and the same scroll, since the
+   preview is taller than a phone and the versions are under it. */
+.artifact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    width: 100%;
+    max-width: var(--wide);
+    margin: 0 auto;
+    padding-block: var(--gap);
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.artifact__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+}
+
+.artifact__title {
+    margin: 0;
+    min-width: 0;
+    font-size: 1.1rem;
+    overflow-wrap: break-word;
+}
+
+.artifact__back {
+    margin-left: auto;
+    flex: none;
+    color: var(--ink-faint);
+    font-size: 0.8rem;
+}
+
+.artifact__from,
+.artifact__download {
+    margin: 0;
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+}
+
+.artifact__from a,
+.artifact__download a {
+    color: var(--ink);
+}
+
+/* The document in its sandbox. Tall enough to read a page in without the frame scrolling inside a
+   page that also scrolls, and never taller than the window, so the download under it stays in reach.
+   No background of its own: a document that sets none is drawn on whatever its browser gives an
+   opaque origin, which is the same ground it gets when it is saved and opened. */
+.artifact__preview {
+    display: block;
+    width: 100%;
+    height: min(75dvh, 60rem);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
 }
 
 /* --- The workspace a new session is in --------------------------------- */

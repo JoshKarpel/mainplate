@@ -20,8 +20,8 @@ the change that gets sent back, whether or not its author opened the file:
   rows, and two tabs agree because they are reading the same thing. **Anything that would keep a
   second copy of what was said is the change to push back on**, and the rule is the narrow one: a
   copy that has to be kept in step with something that *changes*. The session index, the model
-  catalogue, `localStorage`, a fork, and a recorded cost all look like exceptions and are not; a new
-  one has to argue the way theirs do, in `PHILOSOPHY.md`, before it is built.
+  catalogue, `localStorage`, a fork, a recorded cost, and an artifact all look like exceptions and
+  are not; a new one has to argue the way theirs do, in `PHILOSOPHY.md`, before it is built.
 - **The person drives and the model carries.** Nothing in the console decides anything: a recorded
   number is crossed and a message is delivered. Name the trigger, never an actor.
 - **One name per thing, and the same name in the code and on the page.** A second word for one
@@ -194,6 +194,8 @@ change:
   takes, and archiving, which takes it away while keeping the conversation.
 - [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
+- [`docs/design/artifacts.md`](docs/design/artifacts.md): the store of versioned HTML documents
+  beside the checkpoint, the tools that keep and export one, and how a version is served sandboxed.
 - [`docs/design/sandbox.md`](docs/design/sandbox.md): the mount namespace `bash` runs behind, and
   the two isolation axes a session picks.
 - [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
@@ -221,9 +223,10 @@ The toolchain around the source rather than any part of the console is
 [`docs/maintaining.md`](docs/maintaining.md): the dependency choices, the checks, the documentation
 site, and where the prose in this repository goes.
 
-Six directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
+Seven directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
 than having to go and find: `src/mainplate/` for the stylesheet, the script and everything else
 under `assets/`, which cannot carry one of its own because every file there is served;
+`src/mainplate/pages/` for where markup is written and what a page may ask;
 `src/mainplate/tools/` and `src/mainplate/tools/files/` for what a change to a tool must not break,
 `src/mainplate/plugins/` for what a change to the protocol or a bundled plugin must not break,
 `tests/` for how the suite is driven and what has to be a browser, and `scripts/` for the gallery

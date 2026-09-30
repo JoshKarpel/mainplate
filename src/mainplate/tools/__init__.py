@@ -11,6 +11,8 @@
 # its constructor reaching this far out. A second tool is a new package beside `files/` and one
 # more name below, rather than an edit to anything that already imports this one.
 
+from mainplate.tools.artifacts import Artifacts
+from mainplate.tools.artifacts import artifact_tools
 from mainplate.tools.bash import bash_tools
 from mainplate.tools.files import Files
 from mainplate.tools.files import GitTracked
@@ -20,10 +22,12 @@ from mainplate.tools.files import file_tools
 from mainplate.tools.grep import grep_tools
 
 __all__ = [
+    "Artifacts",
     "Files",
     "GitTracked",
     "Scratch",
     "System",
+    "artifact_tools",
     "bash_tools",
     "file_tools",
     "grep_tools",

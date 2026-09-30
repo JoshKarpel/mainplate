@@ -44,6 +44,7 @@ from mainplate.markup import SHELL
 from mainplate.markup import highlighted
 from mainplate.markup import language_of
 from mainplate.markup import linked_text
+from mainplate.tools.artifacts.tools import KEPT
 from mainplate.tools.files.anchors import ALPHABET
 from mainplate.tools.files.anchors import GUTTER
 from mainplate.tools.files.anchors import UNADDRESSABLE
@@ -466,6 +467,31 @@ def recorded_diff(used: ToolUse) -> str | None:
         return None
     found = used.returned.metadata.get(DIFF)
     return found if isinstance(found, str) else None
+
+
+@dataclass(frozen=True, slots=True)
+class Kept:
+    """Which artifact version a `file_to_artifact` call kept, as the call recorded it for the page."""
+
+    artifact: str
+    version: int
+
+
+def recorded_kept(used: ToolUse) -> Kept | None:
+    """
+    The version a `file_to_artifact` call recorded beside its reply, or nothing where it is not one that did.
+
+    Read from the call's metadata rather than out of the words the model was sent, which say the same
+    two numbers for the model's sake: the metadata is the half written for the page, and a change to
+    how the reply is worded then cannot break a link.
+    """
+    if used.tool != "file_to_artifact" or used.returned is None or not isinstance(used.returned.metadata, Mapping):
+        return None
+    match used.returned.metadata.get(KEPT):
+        case {"artifact": str(artifact), "version": int(version)}:
+            return Kept(artifact=artifact, version=version)
+        case _:
+            return None
 
 
 # --- The body ------------------------------------------------------------------------------------

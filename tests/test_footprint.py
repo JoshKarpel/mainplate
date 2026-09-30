@@ -22,9 +22,9 @@ from mainplate.forge import Clones
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
-from mainplate.pages import Reader
-from mainplate.pages import footprint_note
-from mainplate.pages import sized
+from mainplate.pages.figures import footprint_note
+from mainplate.pages.figures import sized
+from mainplate.pages.moments import Reader
 from mainplate.service import Service
 from mainplate.sessions import Footprint
 

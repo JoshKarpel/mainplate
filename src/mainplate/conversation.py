@@ -124,6 +124,7 @@ from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
 from without_durability.stepwise import ScheduledWakeup
 from without_durability.stepwise import StepKey
+from without_durability_sqlite import Database
 
 from mainplate import records
 from mainplate.agent import Choice
@@ -192,6 +193,7 @@ from mainplate.snapshots import parse_commitish
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
 from mainplate.thinking import BY_LEVEL
+from mainplate.tools import Artifacts
 
 CHOICE_KEY: StepKey = "choice"
 
@@ -393,7 +395,7 @@ TRUSTED_FIELD: Final = "trusted"
 
 # Where the message in the box is going, which the composer posts and nothing ever records. It is
 # named here rather than in `console.py` because the page renders the control and the boundary parses
-# it, and `pages.py` cannot import the console without closing a ring.
+# it, and `pages` cannot import the console without closing a ring.
 DISPOSITION_FIELD: Final = "disposition"
 
 
@@ -531,7 +533,7 @@ KEEP: Final = "keep"
 """
 The one composer answer with no disposition behind it, because it sends the text nowhere.
 
-Named beside the dispositions rather than in `pages.py`, where it is drawn, so that every word the
+Named beside the dispositions rather than in `pages/composer.py`, where it is drawn, so that every word the
 console's own composer answers to is spelled in one module: a plugin claiming one of them is refused
 against `LEADERS`, and a refusal that missed `keep` would let a plugin's row sit under the shelf's.
 """
@@ -1554,7 +1556,7 @@ class Panel:
     The command panel is the one exception, and it is worth knowing before building on the address.
     A turn's commands are drawn *after* its model panels, so a response arriving renumbers the panel
     they sit in while everything before it stays put. Anything that has to survive a running turn is
-    named from the turn and the record's own slot instead; see `command_block` in `pages.py`.
+    named from the turn and the record's own slot instead; see `command_block` in `pages/transcript.py`.
     """
 
     turn: int
@@ -3366,6 +3368,7 @@ def conversing(
     storings: Storings | None = None,
     declaring: Declaring | None = None,
     delivering: Callable[[str, records.Note], Awaitable[None]] | None = None,
+    artifacts: Database | None = None,
 ) -> Callable[[Run], Awaitable[Ended]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -3398,6 +3401,9 @@ def conversing(
     value: a switch turned while a turn was being answered would have that turn answered under one
     answer and judged under another, which is precisely the escaping mutation a value is for. What it
     costs is that a change takes effect on the next pass, which is the next turn.
+
+    `artifacts` is the database the artifact store is in, which every turn's agent reaches as that
+    turn: a version records the call that kept it, and a call is keyed by its session and turn.
 
     **The first pass of a session answers nothing, and that is the shape rather than an accident.**
     It plants the checkout and asks every plugin what it is, records both, and then reaches
@@ -3606,6 +3612,7 @@ def conversing(
                 # off the record the setup pass wrote: a value, settled for the session's life.
                 environment=environment_in(run.recorded),
                 output_cap=cap,
+                artifacts=None if artifacts is None else Artifacts(artifacts, run.workflow, at.turn),
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered

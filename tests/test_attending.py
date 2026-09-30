@@ -30,8 +30,8 @@ from mainplate.conversation import deferred_key
 from mainplate.conversation import failed_key
 from mainplate.conversation import failure_in
 from mainplate.conversation import parse_failed
-from mainplate.pages import elapsed
-from mainplate.pages import waiting_for
+from mainplate.pages.moments import elapsed
+from mainplate.pages.transcript import waiting_for
 from mainplate.service import Attended
 from mainplate.service import Conversation
 from mainplate.service import Service

@@ -39,7 +39,7 @@ from mainplate.durability import parse_tree
 from mainplate.footprint import Footprints
 from mainplate.footprint import Places
 from mainplate.forge import Workspaces
-from mainplate.pages import CACHE_ID
+from mainplate.pages.composer import CACHE_ID
 from mainplate.service import Service
 from mainplate.sessions import Footprint
 from mainplate.sessions import read_session

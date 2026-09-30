@@ -18,7 +18,7 @@ ten extensions this console does not want, several of which would change how a p
 being included: `history-cache` puts back the history store htmx 4 deliberately removed, and
 `hx-live` and `alpine-compat` are reactive scripting. `<meta name="htmx-config" content="extensions:
 ...">` is the allowlist, read before any of them register, so a name absent from `EXTENSIONS` in
-`pages.py` is never installed rather than installed and unused.
+`pages/document.py` is never installed rather than installed and unused.
 
 ## Pages, and the one connection
 
@@ -154,7 +154,7 @@ worked; what each copies is decided by where it sits, so the one in a fence hand
 the panel's own hands over what the panel says. Five things there are decided:
 
 - **The script seats them, and the server draws none of them.** A fence is markup the Markdown
-  renderer produced, so `pages.py` has no node to hang a button on inside one; rendering the panel's
+  renderer produced, so `pages` has no node to hang a button on inside one; rendering the panel's
   and seating the code's would be two mechanisms for one thing when the seating has to exist anyway.
   They come off before a swap and go back after it, exactly as the search marks do and for the same
   reason: a node the server never sent is a node a morph should not be reconciling.
@@ -393,7 +393,7 @@ neither half can see the other.
 **Where the line between the two halves falls** is worth saying once, because the countdown beside
 this makes the other choice and the pair reads as an inconsistency otherwise. A fact that reads the
 same in an hour is the server's: a moment, a date, a rule's `09:32`. A figure that is wrong a second
-later is the script's: `Due in 4d 14h`, `warm as of 12m`. So `elapsed` in `pages.py` and `soon` in
+later is the script's: `Due in 4d 14h`, `warm as of 12m`. So `elapsed` in `pages/moments.py` and `soon` in
 `mainplate.js` really do both implement how a duration is worded, and they have to agree unit for
 unit, down to the unit that is zero: the server draws the first figure and the script repaints it a
 second later, so a wait landing on a whole hour written `1h 0m` and repainted `1h` changes shape
@@ -466,7 +466,7 @@ decides what it loads, and the box is on the session's own page once there is a 
 into. See [the settings step](plugins.md#starting-a-session-takes-four-steps).
 
 **Every question the picker asks with a closed set of answers is one component.** `choosing` in
-`pages.py` takes a legend, a toggle id, the names on offer and a body of cards, and gives back a
+`pages/picker.py` takes a legend, a toggle id, the names on offer and a body of cards, and gives back a
 group that folds to what is picked, says how many options it has, and can be narrowed by typing. The
 workspace, the network, the endpoint, the model and the thinking level are all built from it, and
 that is why none of them is a `<select>`: a select renders its options as text in every browser, so
@@ -563,7 +563,7 @@ common case, does not happen at all.
 The picker's controls are **associated with their form by name, not by nesting**, and what makes
 that worth doing is that half of them are also *fragments*. `model_cards` and `starting_at` are
 served both as part of a page and as the answer to a swap, and a fragment is markup with no ancestor
-at all until it lands; `form="choosing"` (`CHOOSING_ID` in `pages.py`) makes a control's association
+at all until it lands; `form="choosing"` (`CHOOSING_ID` in `pages/picker.py`) makes a control's association
 a property of the control rather than of wherever it was put, so one component serves both. Without
 it the console refuses its own page with a 422 saying a message needs an endpoint and a model. The
 fold's own checkbox is the one control that deliberately carries *neither* a `name` nor a `form`: it
@@ -826,7 +826,7 @@ mechanism drawn as a fact about the work, and the line is narrower without it.
 **A panel is a `<details>`, its row of facts is the `<summary>`, and the mark sits immediately right
 of the title.** That is one mechanism for what used to be three folds and five kinds that could not
 fold at all. What a reader wants put away is theirs to decide, so the console says only where each
-kind *starts* (`OPENS` in `pages.py`) and nothing more.
+kind *starts* (`OPENS` in `pages/transcript.py`) and nothing more.
 
 **It began as a complaint about vertical space, and the space was the symptom.** A stretch of
 reasoning, the standing system prompt and a delivered guidance file each carried a `<details>` of
@@ -861,7 +861,7 @@ finished conversation is a conversation that takes less room.
 between the two beside it: those set every fold one way, and this hands out a different answer per
 fold, a call shut and a reply open and a system prompt away. It is the way back from either of the
 others, which without it are one-way presses over a whole conversation. What makes it possible is
-`opens` in `pages.py`, which writes `data-opens` beside the `open` attribute: `open` is the state
+`opens` in `pages/document.py`, which writes `data-opens` beside the `open` attribute: `open` is the state
 and is what makes the page work with no script, `data-opens` is where the console *put* it, and the
 two stop being the same thing the moment anything presses anything. Not a copy that can drift, then,
 but the original beside the current.

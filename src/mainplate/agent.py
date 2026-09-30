@@ -81,10 +81,12 @@ from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
 from mainplate.snapshots import Checkout
 from mainplate.snapshots import branch_named
+from mainplate.tools import Artifacts
 from mainplate.tools import Files
 from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
 from mainplate.tools import System
+from mainplate.tools import artifact_tools
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
 from mainplate.tools import grep_tools
@@ -1039,6 +1041,7 @@ def agent_for(
     plugins: Live | None = None,
     environment: Mapping[str, str] | None = None,
     output_cap: int | None = None,
+    artifacts: Artifacts | None = None,
 ) -> Agent:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -1083,6 +1086,12 @@ def agent_for(
     the OpenAI one - and is the honest answer where neither source knows, since a number guessed too
     high is refused outright. A `Choice.output_override` beats it, by the ordering below and no other
     rule.
+
+    `artifacts` is the console's artifact store as this turn reaches it, and like the plugins' tools
+    **the artifact tools are not conditioned on the isolation**: an artifact is the console's rather
+    than any session's, so every session may list them. Moving one to or from a file is conditioned
+    on there being files, which `artifact_tools` reads off the same `Files` as everything else. Absent
+    is a harness built with no store, which is what a test of the other tools wants.
     """
     wire = wires.for_endpoint(chosen.endpoint)
     # The session's own settings over everything else, so a recorded choice always wins: the thing
@@ -1100,15 +1109,17 @@ def agent_for(
     tools: list[AbstractToolset[None]] = []
     if plugins is not None and (contributed := contributions(plugins)):
         tools.append(PluginTools(contributed, asking_through(plugins)))
-    if reach.roots:
-        # One `Files` for both, so a search and an edit of one file take the same lock. `grep` only
-        # where there is a checkout, which is `list`'s condition inside `file_tools` and for the same
-        # reason: both ask git, and over anything else a tool that can only refuse still costs its
-        # description on every request.
-        files = Files(roots=reach.roots)
+    files = Files(roots=reach.roots) if reach.roots else None
+    if files is not None:
+        # One `Files` for all of them, so a search, an edit and an artifact import of one file take
+        # the same lock. `grep` only where there is a checkout, which is `list`'s condition inside
+        # `file_tools` and for the same reason: both ask git, and over anything else a tool that can
+        # only refuse still costs its description on every request.
         tools.append(file_tools(files))
         if files.has_repository:
             tools.append(grep_tools(files))
+    if artifacts is not None:
+        tools.append(artifact_tools(artifacts, files))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(

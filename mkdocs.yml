@@ -84,6 +84,7 @@ nav:
       - The composer: design/composer.md
       - The workspace: design/workspace.md
       - How a model reaches a file: design/tools.md
+      - Artifacts: design/artifacts.md
       - Where a command runs: design/sandbox.md
       - What runs, and as whom: design/security.md
       - Durability: design/durability.md
